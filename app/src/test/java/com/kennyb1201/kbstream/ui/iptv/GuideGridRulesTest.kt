@@ -431,6 +431,8 @@ class GuideGridRulesTest {
 
         assertEquals("playlist-ch", program.channelKey)
         assertEquals("The day's headlines.", program.description)
+        // Round 3 (F14a): the category rides along for the top block.
+        assertEquals("News", program.category)
         // A zero-length row would be invisible and unfocusable; it is dropped.
         assertEquals(
             emptyList<GridProgram>(),
@@ -439,5 +441,85 @@ class GuideGridRulesTest {
                 listOf(rows.single().copy(endUtcMillis = rows.single().startUtcMillis)),
             ),
         )
+    }
+
+    // ── Round 3: the zoom ─────────────────────────────────────────────────
+
+    @Test
+    fun `the tv grid opens on three hours and the zoom walks three six twelve`() {
+        val window = GridWindow.opening(at(18), windowHours = GuideGrid.DEFAULT_WINDOW_HOURS)
+        assertEquals(3 * hour, window.durationMs)
+        assertEquals(3, GuideGrid.DEFAULT_WINDOW_HOURS)
+        assertEquals(listOf(3, 6, 12), GuideGrid.ZOOM_WINDOW_HOURS)
+        assertEquals(6, GuideGrid.nextZoomHours(3))
+        assertEquals(12, GuideGrid.nextZoomHours(6))
+        assertEquals(3, GuideGrid.nextZoomHours(12))
+    }
+
+    @Test
+    fun `an unknown zoom level opens the cycle at three hours`() {
+        assertEquals(3, GuideGrid.nextZoomHours(9))
+        assertEquals(3, GuideGrid.nextZoomHours(0))
+    }
+
+    @Test
+    fun `a page keeps the window's own span, so a zoomed window stays zoomed`() {
+        val window = GridWindow.opening(at(18), windowHours = 3)
+        val page = window.paged(
+            direction = 1,
+            floorStartUtcMillis = window.startUtcMillis,
+            maxEndUtcMillis = null,
+        )
+        assertEquals(3 * hour, page.durationMs)
+        assertEquals(window.startUtcMillis + GuideGrid.PAGE_MS, page.startUtcMillis)
+    }
+
+    @Test
+    fun `a zoom change keeps the axis where it was and only changes its width`() {
+        val window = GridWindow.opening(at(18), windowHours = 3)
+        val wide = window.withHours(12)
+        assertEquals(window.startUtcMillis, wide.startUtcMillis)
+        assertEquals(12 * hour, wide.durationMs)
+    }
+
+    @Test
+    fun `the scrolled content is the window's own width`() {
+        assertEquals(720, gridContentWidthDp(GridWindow.opening(at(18), windowHours = 3)))
+        assertEquals(1440, gridContentWidthDp(GridWindow.opening(at(18), windowHours = 6)))
+        assertEquals(2880, gridContentWidthDp(GridWindow.opening(at(18), windowHours = 12)))
+    }
+
+    // ── Round 3: the top block's meta line ────────────────────────────────
+
+    @Test
+    fun `the meta names the channel, the time and a starts-in`() {
+        val now = at(18)
+        val cell = GridCell(
+            id = "c1",
+            channelKey = "ch1",
+            startUtcMillis = now + 25 * minute,
+            endUtcMillis = now + 85 * minute,
+            title = "Film",
+            description = null,
+            category = "Movies",
+        )
+        val meta = gridDetailMeta("HBO", cell, now)
+        assertTrue(meta, meta.startsWith("HBO · "))
+        assertTrue(meta, meta.contains("Starts in 25 min"))
+        assertTrue(meta, meta.endsWith(" · Movies"))
+    }
+
+    @Test
+    fun `the meta says on-now for a live program and invents no rating`() {
+        val now = at(18)
+        val cell = GridCell(
+            id = "c1",
+            channelKey = "ch1",
+            startUtcMillis = now - 10 * minute,
+            endUtcMillis = now + 20 * minute,
+            title = "News",
+            description = null,
+        )
+        assertEquals("Sky · On now · 20 min left", gridDetailMeta("Sky", cell, now))
     }
 }

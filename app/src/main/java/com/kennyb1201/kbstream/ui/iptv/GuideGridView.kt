@@ -35,10 +35,10 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -61,14 +61,25 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.PlayerView
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
 import coil3.compose.AsyncImage
+import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.notifications.ReminderRules
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
@@ -82,11 +93,19 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 
-private val GRID_ROW_HEIGHT: Dp = 62.dp
+// F12a: 48dp, TiviMate's own row, down from 62. The program cell is 20 + 16 +
+// 8 = 44dp of content with its 4dp padding, so the optional second line
+// (reminder, score) still fits and no row needs a height exception.
+private val GRID_ROW_HEIGHT: Dp = 48.dp
 
-/** The full window's width in dp - the scrolled content of every row. */
-private val GRID_CONTENT_WIDTH: Dp =
-    (GuideGrid.WINDOW_HOURS * GuideGrid.MINUTES_PER_HOUR * GuideGrid.PX_PER_MIN).dp
+// F13a/F14b: the top band's two heights. 180dp is exactly the preview's own
+// 16:9 box, so the band adds no padding around it; the text height is the
+// block's fixed height when the preview is off, which is what gives that space
+// back to the rows without the band resizing as focus moves.
+private val GRID_BAND_WITH_PREVIEW: Dp = 180.dp
+private val GRID_BAND_TEXT_HEIGHT: Dp = 128.dp
+private val GRID_PREVIEW_WIDTH: Dp = 320.dp
+private val GRID_PREVIEW_HEIGHT: Dp = 180.dp
 
 /**
  * The TiviMate-style timeline grid (spec §2, §2k, §3, §4).
@@ -135,6 +154,22 @@ internal fun GuideGridView(
      */
     sidebarVisible: Boolean,
     onSidebarVisibleChange: (Boolean) -> Unit,
+    /**
+     * The zoom level: how many hours of air time the window draws (F12e). The
+     * screen owns it because the header's zoom button sets it and persists it.
+     */
+    windowHours: Int,
+    /**
+     * The corner preview's on/off (F13d). The screen owns it because the header
+     * toggle sets it and persists it; the grid only draws it.
+     */
+    previewEnabled: Boolean,
+    /**
+     * The channel the preview plays: the last one played, if any (F13b/F13c).
+     * Null means the viewer has never played a live channel, and then there is
+     * no preview to draw at all.
+     */
+    previewChannel: IptvChannel?,
     /** The header control Up out of the first row lands on. */
     headerFocusRequester: FocusRequester,
     onPlay: (IptvChannelWithEpg) -> Unit,
@@ -146,7 +181,7 @@ internal fun GuideGridView(
     val density = LocalDensity.current
     val reducedMotion = rememberReducedMotion()
 
-    var window by remember { mutableStateOf(GridWindow.opening(nowMs)) }
+    var window by remember { mutableStateOf(GridWindow.opening(nowMs, windowHours)) }
     var focusedRow by remember { mutableStateOf(0) }
     var focusedCellId by remember { mutableStateOf<String?>(null) }
     var pendingFocus by remember { mutableStateOf<GridPendingFocus?>(null) }
@@ -199,11 +234,18 @@ internal fun GuideGridView(
         if (ids.isNotEmpty()) onRequestWindow(ids, window.startUtcMillis, window.endUtcMillis)
     }
 
+    // F12e: a zoom change keeps the axis where the viewer left it and only
+    // changes how much of it is drawn.
+    LaunchedEffect(windowHours) {
+        val next = window.withHours(windowHours)
+        if (next != window) window = next
+    }
+
     // Jump to now (F2d): reset the axis to the current hour and re-anchor focus on
     // the live program of the focused channel.
     LaunchedEffect(jumpToNowSignal) {
         if (jumpToNowSignal <= 0) return@LaunchedEffect
-        window = GridWindow.opening(System.currentTimeMillis())
+        window = GridWindow.opening(System.currentTimeMillis(), windowHours)
         focusLiveOnNextWindow = true
     }
 
@@ -221,7 +263,9 @@ internal fun GuideGridView(
     // grid pointing at time that no longer exists.
     LaunchedEffect(scheduleEndMs, window.startUtcMillis) {
         val end = scheduleEndMs ?: return@LaunchedEffect
-        if (window.startUtcMillis >= end) window = GridWindow.opening(System.currentTimeMillis())
+        if (window.startUtcMillis >= end) {
+            window = GridWindow.opening(System.currentTimeMillis(), windowHours)
+        }
     }
 
     // Focus drives scroll on both axes, and only focus does (F3c). The pending
@@ -350,8 +394,8 @@ internal fun GuideGridView(
     }
 
     fun activateCell(item: IptvChannelWithEpg, cell: GridCell) {
-        // A gap has nothing to play, remind or catch up (F2g); the strip has
-        // already said so.
+        // A gap has nothing to play, remind or catch up (F2g); the block above
+        // has already said so.
         if (cell.isGap) return
         when {
             cell.startUtcMillis > nowMs -> onToggleReminder(item, cell)
@@ -379,7 +423,7 @@ internal fun GuideGridView(
                 // program of the new one in this row (F3d).
                 val next = window.paged(
                     direction = 1,
-                    floorStartUtcMillis = GridWindow.opening(nowMs).startUtcMillis,
+                    floorStartUtcMillis = GridWindow.opening(nowMs, windowHours).startUtcMillis,
                     maxEndUtcMillis = scheduleEndMs,
                 )
                 if (next == window) return true
@@ -490,128 +534,144 @@ internal fun GuideGridView(
         rows.getOrNull(focusedRow)?.cells?.firstOrNull { it.id == focusedCellId }
     }
     val focusedItem = rows.getOrNull(focusedRow)?.item
-
-    // F5b: 12dp under the detail strip, so no part of the grid sits flush to
-    // the bottom edge on a panel that crops (the reported cut-off row).
-    Row(modifier = modifier.fillMaxSize().padding(bottom = 12.dp)) {
-        // F1d: the sidebar slides away when focus enters the grid and slides
-        // back on LEFT. Reduced motion is the grid's existing hard cut.
-        AnimatedVisibility(
-            visible = sidebarVisible,
-            enter = if (reducedMotion) {
-                EnterTransition.None
-            } else {
-                slideInHorizontally(initialOffsetX = { -it }) + fadeIn()
-            },
-            exit = if (reducedMotion) {
-                ExitTransition.None
-            } else {
-                slideOutHorizontally(targetOffsetX = { -it }) + fadeOut()
-            },
-        ) {
-            GroupsSidebar(
-                groups = groups,
-                selectedGroup = selectedGroup,
-                groupCount = groupCount,
-                state = sidebarState,
-                requesters = sidebarRequesters,
-                onKey = ::onSidebarKey,
-                onRowFocus = { focusHome = GridFocusHome.SIDEBAR },
-            )
+    // F14c: the block's cell is the focused one, or - for a gap, or before the
+    // grid has focus at all - the focused row's live program, the same rule the
+    // removed strip used.
+    val focusedRowCells = rows.getOrNull(focusedRow)?.cells.orEmpty()
+    val detailCell = focusedCell?.takeUnless { it.isGap }
+        ?: focusedRowCells.firstOrNull {
+            !it.isGap && nowMs >= it.startUtcMillis && nowMs < it.endUtcMillis
         }
 
-        Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
-            // The sticky time header: the same shared scroll state as every row,
-            // so its labels cannot drift from the cells under them (F2e).
-            Row(modifier = Modifier.fillMaxWidth().height(30.dp)) {
-                Spacer(modifier = Modifier.width(GuideGrid.CHANNEL_COLUMN_WIDTH_DP.dp))
-                Box(modifier = Modifier.weight(1f).fillMaxHeight().clipToBounds()) {
-                    Row(
-                        modifier = Modifier.horizontalScroll(timeScroll).height(30.dp),
-                        verticalAlignment = Alignment.Bottom
-                    ) {
-                        hourMarks(window).forEach { mark ->
-                            Box(
-                                modifier = Modifier.width(
-                                    (GuideGrid.MINUTES_PER_HOUR * GuideGrid.PX_PER_MIN).dp
-                                )
-                            ) {
-                                Column {
-                                    mark.dayLabel?.let { day ->
+    // F13/F14: the top band - the preview in the left corner, the focused
+    // program's block beside it. It is chrome, above both columns: no grid cell
+    // sits under it (F13a) and it is not a focus stop (F13f/F14d).
+    Column(modifier = modifier.fillMaxSize().padding(bottom = 12.dp)) {
+        GridTopBand(
+            previewEnabled = previewEnabled,
+            previewChannel = previewChannel,
+            item = focusedItem,
+            cell = detailCell,
+            nowMs = nowMs,
+            hasCatchup = focusedItem?.let {
+                it.channel.catchupSource != null || it.channel.catchup != null
+            } == true,
+        )
+
+        Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            // F1d: the sidebar slides away when focus enters the grid and slides
+            // back on LEFT. Reduced motion is the grid's existing hard cut.
+            AnimatedVisibility(
+                visible = sidebarVisible,
+                enter = if (reducedMotion) {
+                    EnterTransition.None
+                } else {
+                    slideInHorizontally(initialOffsetX = { -it }) + fadeIn()
+                },
+                exit = if (reducedMotion) {
+                    ExitTransition.None
+                } else {
+                    slideOutHorizontally(targetOffsetX = { -it }) + fadeOut()
+                },
+            ) {
+                GroupsSidebar(
+                    groups = groups,
+                    selectedGroup = selectedGroup,
+                    groupCount = groupCount,
+                    state = sidebarState,
+                    requesters = sidebarRequesters,
+                    onKey = ::onSidebarKey,
+                    onRowFocus = { focusHome = GridFocusHome.SIDEBAR },
+                )
+            }
+
+            Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                // The sticky time header: the same shared scroll state as every
+                // row, so its labels cannot drift from the cells under them
+                // (F2e).
+                Row(modifier = Modifier.fillMaxWidth().height(30.dp)) {
+                    Spacer(modifier = Modifier.width(GuideGrid.CHANNEL_COLUMN_WIDTH_DP.dp))
+                    Box(modifier = Modifier.weight(1f).fillMaxHeight().clipToBounds()) {
+                        Row(
+                            modifier = Modifier.horizontalScroll(timeScroll).height(30.dp),
+                            verticalAlignment = Alignment.Bottom
+                        ) {
+                            hourMarks(window).forEach { mark ->
+                                Box(
+                                    modifier = Modifier.width(
+                                        (GuideGrid.MINUTES_PER_HOUR * GuideGrid.PX_PER_MIN).dp
+                                    )
+                                ) {
+                                    Column {
+                                        mark.dayLabel?.let { day ->
+                                            Text(
+                                                text = day,
+                                                color = KBAccent,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                maxLines = 1
+                                            )
+                                        }
                                         Text(
-                                            text = day,
-                                            color = KBAccent,
-                                            style = MaterialTheme.typography.labelSmall,
+                                            text = mark.label,
+                                            color = KBTextLo,
+                                            style = MaterialTheme.typography.labelMedium,
                                             maxLines = 1
                                         )
                                     }
-                                    Text(
-                                        text = mark.label,
-                                        color = KBTextLo,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        maxLines = 1
-                                    )
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            LazyColumn(
-                state = rowListState,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = PaddingValues(bottom = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                itemsIndexed(items = rows, key = { _, row -> row.channelKey }) { index, row ->
-                    Row(modifier = Modifier.fillMaxWidth().height(GRID_ROW_HEIGHT)) {
-                        ChannelCell(
-                            row = row,
-                            isFocusedRow = index == focusedRow,
-                            guidePending = row.item.channel.id !in resolvedGuideIds &&
-                                programsByChannel[row.item.channel.id].isNullOrEmpty(),
-                            requester = remember(row.channelKey) {
-                                FocusRequester().also { channelRequesters[row.channelKey] = it }
-                            },
-                            onKey = { key -> onChannelKey(index, key) },
-                            onFocus = {
-                                focusedRow = index
-                                focusedCellId = null
-                                focusHome = GridFocusHome.CHANNEL
-                            },
-                            onPlay = { onPlay(row.item) },
-                        )
+                LazyColumn(
+                    state = rowListState,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentPadding = PaddingValues(bottom = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    itemsIndexed(items = rows, key = { _, row -> row.channelKey }) { index, row ->
+                        Row(modifier = Modifier.fillMaxWidth().height(GRID_ROW_HEIGHT)) {
+                            ChannelCell(
+                                row = row,
+                                isFocusedRow = index == focusedRow,
+                                guidePending = row.item.channel.id !in resolvedGuideIds &&
+                                    programsByChannel[row.item.channel.id].isNullOrEmpty(),
+                                requester = remember(row.channelKey) {
+                                    FocusRequester().also {
+                                        channelRequesters[row.channelKey] = it
+                                    }
+                                },
+                                onKey = { key -> onChannelKey(index, key) },
+                                onFocus = {
+                                    focusedRow = index
+                                    focusedCellId = null
+                                    focusHome = GridFocusHome.CHANNEL
+                                },
+                                onPlay = { onPlay(row.item) },
+                            )
 
-                        ProgramRow(
-                            modifier = Modifier.weight(1f).fillMaxHeight(),
-                            row = row,
-                            window = window,
-                            nowMs = nowMs,
-                            focusedCellId = if (index == focusedRow) focusedCellId else null,
-                            reminderKeys = reminderKeys,
-                            channelId = row.item.channel.id,
-                            requesters = cellRequesters,
-                            timeScroll = timeScroll,
-                            onCellFocus = { cell ->
-                                focusedRow = index
-                                focusedCellId = cell.id
-                                focusHome = GridFocusHome.CELL
-                            },
-                            onKey = { cell, key -> onCellKey(index, cell, key) },
-                        )
+                            ProgramRow(
+                                modifier = Modifier.weight(1f).fillMaxHeight(),
+                                row = row,
+                                window = window,
+                                nowMs = nowMs,
+                                focusedCellId = if (index == focusedRow) focusedCellId else null,
+                                reminderKeys = reminderKeys,
+                                channelId = row.item.channel.id,
+                                requesters = cellRequesters,
+                                timeScroll = timeScroll,
+                                onCellFocus = { cell ->
+                                    focusedRow = index
+                                    focusedCellId = cell.id
+                                    focusHome = GridFocusHome.CELL
+                                },
+                                onKey = { cell, key -> onCellKey(index, cell, key) },
+                            )
+                        }
                     }
                 }
             }
-
-            GridDetailStrip(
-                item = focusedItem,
-                cell = focusedCell,
-                nowMs = nowMs,
-                hasCatchup = focusedItem?.let {
-                    it.channel.catchupSource != null || it.channel.catchup != null
-                } == true,
-            )
         }
     }
 }
@@ -788,8 +848,10 @@ private fun ChannelCell(
         Row(verticalAlignment = Alignment.CenterVertically) {
             val logoUrl = item.channel.logoUrl ?: item.epgChannel?.iconUrl
             Box(
+                // F12b: 28dp, not 34 - the logo and the two text lines have to
+                // fit 44dp of a 48dp row.
                 modifier = Modifier
-                    .size(34.dp)
+                    .size(28.dp)
                     .clip(KBShapeChip)
                     .background(KBVoid.copy(alpha = 0.6f)),
                 contentAlignment = Alignment.Center
@@ -820,7 +882,9 @@ private fun ChannelCell(
                 Text(
                     text = item.channel.displayName.ifBlank { "Live Channel" },
                     color = if (focused || isFocusedRow) KBTextHi else KBTextLo,
-                    style = MaterialTheme.typography.labelLarge,
+                    // F12b: labelMedium, so the name and the number still fit
+                    // the 48dp row without the second line being clipped.
+                    style = MaterialTheme.typography.labelMedium,
                     fontWeight = if (isFocusedRow) FontWeight.SemiBold else FontWeight.Normal,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -867,7 +931,14 @@ private fun ProgramRow(
 
     Box(modifier = modifier.clipToBounds()) {
         Row(modifier = Modifier.horizontalScroll(timeScroll).height(GRID_ROW_HEIGHT)) {
-            Box(modifier = Modifier.width(GRID_CONTENT_WIDTH).height(GRID_ROW_HEIGHT)) {
+            // The scrolled content is the WINDOW's width (F12e): a 3-hour
+            // window is 720dp, a 12-hour one 2880dp, and the cells are laid
+            // out at their real widths inside it either way.
+            Box(
+                modifier = Modifier
+                    .width(gridContentWidthDp(window).dp)
+                    .height(GRID_ROW_HEIGHT)
+            ) {
                 Row(modifier = Modifier.fillMaxSize()) {
                     row.cells.forEach { cell ->
                         key(cell.id) {
@@ -962,7 +1033,9 @@ private fun ProgramCell(
                 },
                 shape = KBShapeCard
             )
-            .padding(horizontal = 8.dp, vertical = 6.dp)
+            // F12a: 4dp, not 6 - 20 + 16 of text plus 8 of padding is the 44dp
+            // this cell has inside a 48dp row.
+            .padding(horizontal = 8.dp, vertical = 4.dp)
     ) {
         Column {
             Text(
@@ -985,79 +1058,272 @@ private fun ProgramCell(
     }
 }
 
-/** The focused program's title, channel, time and description (F2i). */
+/**
+ * The top band (F13/F14, round 3): the preview in the left corner, the focused
+ * program's block beside it.
+ *
+ * The band is chrome above both columns, so nothing is drawn under it and no
+ * cell moves when it changes (F13a). Its height is the preview's state, not the
+ * content's: 180dp - exactly the preview's 16:9 box - while the preview is
+ * drawn, and the block's own fixed text height when it is not (F14b/T8).
+ */
 @Composable
-private fun GridDetailStrip(
+private fun GridTopBand(
+    previewEnabled: Boolean,
+    previewChannel: IptvChannel?,
     item: IptvChannelWithEpg?,
     cell: GridCell?,
     nowMs: Long,
     hasCatchup: Boolean,
 ) {
+    // F13c: no last-played channel means no preview at all - it never autoplays
+    // a channel nobody chose.
+    val channel = previewChannel?.takeIf { previewEnabled }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 10.dp)
-            .height(112.dp),
+            .height(if (channel != null) GRID_BAND_WITH_PREVIEW else GRID_BAND_TEXT_HEIGHT),
         shape = KBShapePanel,
         colors = SurfaceDefaults.colors(
             containerColor = KBSurface.copy(alpha = 0.92f),
             contentColor = KBTextHi
         )
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 14.dp, vertical = 10.dp)
-                .verticalScroll(rememberScrollState())
-        ) {
-            when {
-                item == null -> Text(
-                    text = "Choose a channel to see its programs.",
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.bodyMedium
+        Row(modifier = Modifier.fillMaxSize()) {
+            if (channel != null) {
+                GridPreview(
+                    channel = channel,
+                    modifier = Modifier
+                        .width(GRID_PREVIEW_WIDTH)
+                        .height(GRID_PREVIEW_HEIGHT)
                 )
-                cell == null -> Text(
-                    text = "${item.channel.displayName} · move right into the grid to pick a program.",
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                else -> {
-                    Text(
-                        text = cell.title ?: "No program data",
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    val channelName = item.channel.displayName.ifBlank { "Live Channel" }
-                    Text(
-                        text = "$channelName · ${gridCellHeadline(cell, nowMs)}",
-                        color = if (cell.isGap) KBTextLo else KBAccent,
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
-                    val hint = when {
-                        cell.isGap -> "Nothing scheduled in this span."
-                        nowMs < cell.startUtcMillis -> "Press OK to set a reminder."
-                        nowMs >= cell.endUtcMillis && hasCatchup -> "Press OK for catch-up."
-                        nowMs >= cell.endUtcMillis -> "Ended · this channel has no catch-up."
-                        else -> "Press OK to watch."
+            }
+            GridDetailBlock(
+                item = item,
+                cell = cell,
+                nowMs = nowMs,
+                hasCatchup = hasCatchup,
+                modifier = Modifier.weight(1f).fillMaxHeight()
+            )
+        }
+    }
+}
+
+/**
+ * F13: the last channel watched, playing in the band's left corner - with
+ * audio, because hearing it while browsing is the point - and never following
+ * focus (F13b: re-tuning on every arrow would rebuffer constantly).
+ *
+ * It is a PREVIEW, not a player (F13e): the channel's own stream URL and
+ * headers, subtitles off the way live TV starts them, no controls, no seek. It
+ * is display-only: nothing here is focusable, so the D-pad chain is unchanged
+ * (F13f).
+ */
+@Composable
+private fun GridPreview(channel: IptvChannel, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    var failed by remember(channel.streamUrl) { mutableStateOf(channel.streamUrl.isBlank()) }
+
+    // F13g: created when the grid opens, released when it closes, when the
+    // toggle turns it off and when full-screen playback starts - the guide
+    // leaves the composition for all three, which is the onDispose below.
+    val previewPlayer = remember(channel.streamUrl) {
+        if (channel.streamUrl.isBlank()) {
+            null
+        } else {
+            runCatching {
+                val dataSource = DefaultHttpDataSource.Factory()
+                    .setAllowCrossProtocolRedirects(true)
+                    .apply {
+                        if (channel.headers.isNotEmpty()) {
+                            setDefaultRequestProperties(channel.headers)
+                        }
                     }
-                    Text(
-                        text = hint,
-                        color = KBTextLo,
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
-                    cell.description?.takeIf { it.isNotBlank() }?.let { description ->
+                ExoPlayer.Builder(context.applicationContext)
+                    .setMediaSourceFactory(DefaultMediaSourceFactory(dataSource))
+                    .build()
+            }.getOrNull()
+        }
+    }
+
+    // F13h: one attempt per grid open. A dead feed leaves the still in place -
+    // no toast, no retry loop - and the player is stopped so it is not
+    // reconnecting behind the still.
+    DisposableEffect(previewPlayer, channel.streamUrl) {
+        val player = previewPlayer ?: return@DisposableEffect onDispose { }
+        val listener = object : Player.Listener {
+            override fun onPlayerError(error: PlaybackException) {
+                failed = true
+                runCatching { player.stop() }
+            }
+        }
+        player.addListener(listener)
+        player.trackSelectionParameters = player.trackSelectionParameters
+            .buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            .build()
+        player.setMediaItem(MediaItem.fromUri(channel.streamUrl))
+        player.prepare()
+        player.playWhenReady = true
+        player.volume = 1f
+        onDispose {
+            runCatching {
+                player.removeListener(listener)
+                player.release()
+            }
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .clip(KBShapeCard)
+            .background(KBVoid),
+        contentAlignment = Alignment.Center
+    ) {
+        if (!failed && previewPlayer != null) {
+            AndroidView(
+                factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        useController = false
+                        setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                        player = previewPlayer
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            // The channel's own still - logo over name - so a dead feed reads
+            // as "this channel", not as a black box.
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(horizontal = 12.dp)
+            ) {
+                val logoUrl = channel.logoUrl
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(KBShapeChip)
+                        .background(KBVoid.copy(alpha = 0.6f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (!logoUrl.isNullOrBlank()) {
+                        AsyncImage(
+                            model = logoUrl,
+                            contentDescription = channel.displayName,
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxSize().padding(6.dp)
+                        )
+                    } else {
                         Text(
-                            text = description,
+                            text = channel.displayName
+                                .split(" ")
+                                .mapNotNull { it.firstOrNull()?.uppercaseChar() }
+                                .take(2)
+                                .joinToString(""),
                             color = KBTextLo,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(top = 6.dp)
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }
+                Text(
+                    text = channel.displayName.ifBlank { "Live Channel" },
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * F14: the focused program, in a block at the top - title, meta line,
+ * description and, while the program is live, its elapsed progress.
+ *
+ * Every element has a fixed number of lines (two, two, two), so the block is
+ * the same height for a one-line description as for a three-line one and the
+ * grid under it never jumps (F14b). The rules are the removed strip's own
+ * (`focusedItem` + `focusedCell`, so a gap cell shows its row's live program,
+ * F14c) and there is no rating badge: our guide data carries no rating and a
+ * placeholder would say more than the data does.
+ */
+@Composable
+private fun GridDetailBlock(
+    item: IptvChannelWithEpg?,
+    cell: GridCell?,
+    nowMs: Long,
+    hasCatchup: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val channelName = item?.channel?.displayName?.ifBlank { "Live Channel" } ?: "Live Channel"
+    val isLive = cell != null && !cell.isGap &&
+        nowMs >= cell.startUtcMillis && nowMs < cell.endUtcMillis
+
+    Column(modifier = modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text(
+            text = when {
+                item == null -> "Choose a channel to see its programs."
+                cell == null -> channelName
+                else -> cell.title ?: "No program data"
+            },
+            color = if (item == null || cell == null) KBTextLo else KBTextHi,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            // F14b: two lines of room, always.
+            minLines = 2,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = when {
+                cell == null -> "Move right into the grid to pick a program."
+                else -> gridDetailMeta(channelName, cell, nowMs)
+            },
+            color = if (cell?.isGap == true || cell == null) KBTextLo else KBAccent,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 2.dp)
+        )
+        Text(
+            text = when {
+                item == null -> "Its programs and times are drawn across the grid."
+                cell == null -> "Then its title, time and description land here."
+                cell.isGap -> "Nothing scheduled in this span."
+                !cell.description.isNullOrBlank() -> cell.description
+                nowMs < cell.startUtcMillis -> "Press OK to set a reminder."
+                nowMs >= cell.endUtcMillis && hasCatchup -> "Press OK for catch-up."
+                nowMs >= cell.endUtcMillis -> "Ended · this channel has no catch-up."
+                else -> "Press OK to watch."
+            },
+            color = KBTextLo,
+            style = MaterialTheme.typography.bodySmall,
+            minLines = 2,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+        if (isLive && cell != null) {
+            // F14a: the live program's elapsed fraction. A future program says
+            // "Starts in ..." on the meta line instead - a bar that never
+            // moves would be a lie - and a past one gets no bar at all.
+            Box(
+                modifier = Modifier
+                    .padding(top = 6.dp)
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .clip(KBShapeChip)
+                    .background(KBSurfaceRaised)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(liveFillFraction(cell, nowMs))
+                        .fillMaxHeight()
+                        .background(KBAccent)
+                )
             }
         }
     }

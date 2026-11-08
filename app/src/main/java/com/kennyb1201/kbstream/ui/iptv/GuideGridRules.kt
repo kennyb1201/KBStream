@@ -21,9 +21,9 @@ import java.util.Locale
  *
  * The geometry constants are the spec's, not tunables invented here: 4dp per
  * minute (a 30-minute program is 120dp), a 56dp floor so a 5-minute short is
- * still a target, a 6-hour window paged 3 hours at a time, 24 programs per
- * channel per window read, and the 80-row page the ViewModel already caps a
- * guide request at.
+ * still a target, a window paged 3 hours at a time (6 hours on the phone,
+ * 3/6/12 on the TV grid's zoom), 24 programs per channel per window read, and
+ * the 80-row page the ViewModel already caps a guide request at.
  */
 
 // The three pinned group labels. The phone guide has its own spellings
@@ -64,8 +64,31 @@ internal enum class GuideViewMode(val prefValue: String) {
 
 internal object GuideGrid {
 
-    /** The visible time window, in hours. */
+    /**
+     * The window the PHONE grid draws, in hours.
+     *
+     * The TV grid's zoom opens on [DEFAULT_WINDOW_HOURS] instead and walks
+     * [ZOOM_WINDOW_HOURS] (F12e); its window is a parameter from then on, and
+     * this constant is only the phone view's own.
+     */
     const val WINDOW_HOURS = 6
+
+    /**
+     * The window the TV grid opens on, in hours (F12e, amending the earlier
+     * six-hour default).
+     *
+     * Three hours is the TiviMate-like view: a two-hour film is 960dp wide, so
+     * its title reads instead of truncating the way it did at six. It is the
+     * default only - the zoom button still reaches every level.
+     */
+    const val DEFAULT_WINDOW_HOURS = 3
+
+    /**
+     * The zoom's levels, in hours, in the order the header button walks them:
+     * 3h -> 6h -> 12h -> 3h. Six and twelve are unchanged; three is new, and is
+     * where a fresh install opens.
+     */
+    val ZOOM_WINDOW_HOURS: List<Int> = listOf(3, 6, 12)
 
     /** How far one page of the time axis moves, in hours. */
     const val PAGE_HOURS = 3
@@ -76,7 +99,7 @@ internal object GuideGrid {
     /**
      * The narrowest a cell may render. A 5-minute program is 20dp at
      * [PX_PER_MIN] - too small to read, focus or hit - so it renders here and
-     * clips its title; its real start/end still drive focus and the strip.
+     * clips its title; its real start/end still drive focus and the top block.
      */
     const val MIN_CELL_WIDTH_DP = 56
 
@@ -108,9 +131,22 @@ internal object GuideGrid {
     /** One hour in milliseconds - the grid's own unit, used by paging. */
     const val HOUR_MS = 3_600_000L
 
-    val WINDOW_MS: Long = WINDOW_HOURS * HOUR_MS
-
     val PAGE_MS: Long = PAGE_HOURS * HOUR_MS
+
+    /**
+     * The window the zoom reaches after [currentHours]: 3 -> 6 -> 12 -> 3.
+     *
+     * An unknown level (a pref written by a build that had another one) opens
+     * the cycle at its first level rather than throwing or sticking.
+     */
+    fun nextZoomHours(currentHours: Int): Int {
+        val index = ZOOM_WINDOW_HOURS.indexOf(currentHours)
+        return if (index < 0) {
+            ZOOM_WINDOW_HOURS.first()
+        } else {
+            ZOOM_WINDOW_HOURS[(index + 1) % ZOOM_WINDOW_HOURS.size]
+        }
+    }
 }
 
 /**
@@ -150,26 +186,52 @@ internal data class GridWindow(
         maxEndUtcMillis: Long?,
     ): GridWindow {
         if (direction == 0) return this
+        // The page keeps the window's OWN span, so a zoomed window pages at
+        // the zoom's width instead of snapping back to six hours (F12e).
+        val span = durationMs
         val nextStart = startUtcMillis + direction * GuideGrid.PAGE_MS
         if (direction < 0 && nextStart < floorStartUtcMillis) {
             return if (startUtcMillis > floorStartUtcMillis) {
-                GridWindow(floorStartUtcMillis, floorStartUtcMillis + GuideGrid.WINDOW_MS)
+                GridWindow(floorStartUtcMillis, floorStartUtcMillis + span)
             } else {
                 this
             }
         }
         if (direction > 0 && maxEndUtcMillis != null && nextStart >= maxEndUtcMillis) return this
-        return GridWindow(nextStart, nextStart + GuideGrid.WINDOW_MS)
+        return GridWindow(nextStart, nextStart + span)
+    }
+
+    /**
+     * The same start, [windowHours] wide - what a zoom change does to the
+     * window (F12e): the axis stays where the viewer left it, only more or less
+     * of it is drawn.
+     */
+    fun withHours(windowHours: Int): GridWindow {
+        val span = windowHours.coerceAtLeast(1) * GuideGrid.HOUR_MS
+        return GridWindow(startUtcMillis, startUtcMillis + span)
     }
 
     companion object {
-        /** The window the grid opens on: the current hour, six hours wide. */
-        fun opening(nowUtcMillis: Long): GridWindow {
+        /**
+         * The window the grid opens on: the current hour, [windowHours] wide.
+         *
+         * The TV grid passes its zoom level; the phone view leaves the default,
+         * which is its own six-hour window.
+         */
+        fun opening(
+            nowUtcMillis: Long,
+            windowHours: Int = GuideGrid.WINDOW_HOURS,
+        ): GridWindow {
             val start = floorToHour(nowUtcMillis)
-            return GridWindow(start, start + GuideGrid.WINDOW_MS)
+            val span = windowHours.coerceAtLeast(1) * GuideGrid.HOUR_MS
+            return GridWindow(start, start + span)
         }
     }
 }
+
+/** The width of [window]'s scrolled content in dp - one dp width per minute. */
+internal fun gridContentWidthDp(window: GridWindow): Int =
+    ((window.durationMs / 60_000L) * GuideGrid.PX_PER_MIN).toInt()
 
 /** The top of the hour [millis] falls in, in the device's zone. */
 internal fun floorToHour(millis: Long): Long {
@@ -195,6 +257,8 @@ internal data class GridProgram(
     val description: String?,
     val startUtcMillis: Long,
     val endUtcMillis: Long,
+    /** The guide's own category, when the source carries one (F14a). */
+    val category: String? = null,
 )
 
 /** [programs] as grid cells for [channelKey], in start order. */
@@ -211,6 +275,7 @@ internal fun gridProgramsOf(
             description = it.description,
             startUtcMillis = it.startUtcMillis,
             endUtcMillis = it.endUtcMillis,
+            category = it.category,
         )
     }
 
@@ -230,6 +295,8 @@ internal data class GridCell(
     val endUtcMillis: Long,
     val title: String? = null,
     val description: String? = null,
+    /** The program's guide category, when it has one (F14a). */
+    val category: String? = null,
 ) {
     val isGap: Boolean get() = title == null
 
@@ -252,7 +319,7 @@ internal data class GridCell(
  *
  * Programs are clipped to the window: a two-hour film that started before the
  * window opens renders from the left edge, at the width of the part that is
- * actually on screen, and keeps its real start for the detail strip and for
+ * actually on screen, and keeps its real start for the detail block and for
  * focus. A program entirely outside the window is dropped.
  */
 internal fun rowCells(
@@ -281,6 +348,7 @@ internal fun rowCells(
             endUtcMillis = end,
             title = program.title,
             description = program.description,
+            category = program.category,
         )
         cursor = maxOf(cursor, end)
     }
@@ -300,7 +368,7 @@ internal fun rowCells(
  *
  * [startUtcMillis] and [endUtcMillis] are the cell's CLIPPED span, i.e. the part
  * on screen, because the width has to match the geometry of the axis; the
- * program's real span is carried by the cell and shown in the strip.
+ * program's real span is carried by the cell and shown in the top block.
  */
 internal fun cellWidthDp(
     startUtcMillis: Long,
@@ -324,7 +392,7 @@ internal data class GridHourMark(
 
 /** The hour labels across [window], with a day label where the day changes. */
 internal fun hourMarks(window: GridWindow): List<GridHourMark> {
-    val marks = ArrayList<GridHourMark>(GuideGrid.WINDOW_HOURS + 1)
+    val marks = ArrayList<GridHourMark>((window.durationMs / GuideGrid.HOUR_MS).toInt() + 1)
     val cal = Calendar.getInstance()
     cal.timeInMillis = window.startUtcMillis
     var lastDay: Int? = null
@@ -534,11 +602,38 @@ internal fun decodeGroupOrder(raw: String?): List<String> {
 }
 
 /**
- * The label the detail strip shows under the grid for [cell].
+ * The detail block's one-line meta: the channel, when the program is on, and the
+ * guide's category when it carries one (F14a).
  *
- * A gap says what it is; a program says when it is on and whether that press can
- * do anything at all (`Ended` is the one that cannot, where the channel has no
- * catch-up).
+ * A future program says `Starts in 25 min` - the block draws no progress bar for
+ * it, because a bar would be an empty rail that never moves - a live one says
+ * `On now · 12 min left`, and an ended one says `Ended`. There is no score and
+ * no rating: the guide carries neither, and a placeholder says more than the
+ * data does.
+ */
+internal fun gridDetailMeta(
+    channelName: String,
+    cell: GridCell,
+    nowUtcMillis: Long,
+): String {
+    val whenLabel = if (!cell.isGap && nowUtcMillis < cell.startUtcMillis) {
+        val range = formatTimeRange(cell.startUtcMillis, cell.endUtcMillis)
+        val starts = formatStartsInLabel(cell.startUtcMillis - nowUtcMillis)
+        if (starts == "starting") "$range · Starting now" else "$range · Starts $starts"
+    } else {
+        gridCellHeadline(cell, nowUtcMillis)
+    }
+    return listOfNotNull(
+        channelName.takeIf { it.isNotBlank() },
+        whenLabel,
+        cell.category?.trim()?.takeIf { it.isNotBlank() },
+    ).joinToString(" · ")
+}
+
+/**
+ * The label the grid's own cells fall back to for [cell] - the time range and
+ * whether that press can do anything at all (`Ended` is the one that cannot,
+ * where the channel has no catch-up).
  */
 internal fun gridCellHeadline(cell: GridCell, nowUtcMillis: Long): String = when {
     cell.isGap -> "No program data"

@@ -146,9 +146,13 @@ class GuideGridWiringTest {
                 rules.contains("const val WINDOW_HOURS = 6")
         )
         // F2k-d: a group change keeps the window, so the axis does not jump.
+        // Round 3 (F12e) made the window's WIDTH the zoom level; the key is
+        // still neither the group nor anything else that moves under focus.
         assertTrue(
             "the time window is not keyed by the group",
-            grid.contains("var window by remember { mutableStateOf(GridWindow.opening(nowMs)) }")
+            grid.contains(
+                "var window by remember { mutableStateOf(GridWindow.opening(nowMs, windowHours)) }"
+            )
         )
     }
 

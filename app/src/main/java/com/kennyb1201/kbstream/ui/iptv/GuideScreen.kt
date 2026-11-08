@@ -39,6 +39,9 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
@@ -290,6 +293,27 @@ fun GuideScreen(
     // Bumped by the header's Down, so the grid can return focus to the home it
     // left (F1e).
     var gridReturnFocusSignal by remember { mutableStateOf(0) }
+    /**
+     * The grid's zoom, in hours (F12e): three by default, then six and twelve
+     * as the header's zoom button walks the cycle. Per profile, device-local,
+     * in the same store as the view toggle. A level this build does not know
+     * (a pref left by a build that had another one) opens the cycle at three
+     * instead of leaving the grid with no level it can draw.
+     */
+    var gridWindowHours by remember(activeProfileId) {
+        mutableStateOf(
+            guidePreferences.getInt("grid_window_hours", GuideGrid.DEFAULT_WINDOW_HOURS)
+                .takeIf { it in GuideGrid.ZOOM_WINDOW_HOURS }
+                ?: GuideGrid.DEFAULT_WINDOW_HOURS
+        )
+    }
+    /**
+     * The grid's corner preview (F13d): on by default, per profile and
+     * device-local. Grid view only - the list has no preview to show.
+     */
+    var gridPreviewEnabled by remember(activeProfileId) {
+        mutableStateOf(guidePreferences.getBoolean("grid_preview", true))
+    }
     val viewToggleFocusRequester = remember { FocusRequester() }
 
     // Hidden groups and favorites are also written by the sync applier. Without
@@ -605,6 +629,15 @@ fun GuideScreen(
 
     val groupedChannels = remember(unhiddenChannels, selectedGroup, favorites, recentChannelKeys) {
         groupChannels(selectedGroup)
+    }
+
+    // F13b: the preview plays the LAST channel watched - the head of the recents
+    // queue the guide already keeps per profile - and not the focused one, so
+    // moving around the grid never re-tunes it. Null when nothing has been
+    // played yet, or when that channel is no longer in the playlist.
+    val gridPreviewChannel = remember(visibleChannels, recentChannelKeys) {
+        val key = recentChannelKeys.firstOrNull() ?: return@remember null
+        visibleChannels.firstOrNull { channelKey(it) == key }?.channel
     }
 
     // The grid's hard right edge: the newest program the guide has actually
@@ -1523,6 +1556,30 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                         // F3: no "49 in MLB.tv" on grid - every sidebar row
                         // already carries its own count.
                         showMeta = guideView != GuideViewMode.GRID,
+                        windowHours = gridWindowHours,
+                        previewEnabled = gridPreviewEnabled,
+                        onCycleWindow = if (guideView == GuideViewMode.GRID) {
+                            {
+                                val next = GuideGrid.nextZoomHours(gridWindowHours)
+                                gridWindowHours = next
+                                guidePreferences.edit()
+                                    .putInt("grid_window_hours", next)
+                                    .apply()
+                            }
+                        } else {
+                            null
+                        },
+                        onTogglePreview = if (guideView == GuideViewMode.GRID) {
+                            {
+                                val next = !gridPreviewEnabled
+                                gridPreviewEnabled = next
+                                guidePreferences.edit()
+                                    .putBoolean("grid_preview", next)
+                                    .apply()
+                            }
+                        } else {
+                            null
+                        },
                         onSetupClick = { showSetup = !showSetup },
                         onSearchClick = { showSearch = true },
                         onSportsClick = onOpenSports,
@@ -1600,6 +1657,9 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                             returnFocusSignal = gridReturnFocusSignal,
                             sidebarVisible = gridSidebarVisible,
                             onSidebarVisibleChange = { gridSidebarVisible = it },
+                            windowHours = gridWindowHours,
+                            previewEnabled = gridPreviewEnabled,
+                            previewChannel = gridPreviewChannel,
                             headerFocusRequester = viewToggleFocusRequester,
                             onPlay = { item ->
                                 selectedChannelId = item.channel.id
@@ -2927,6 +2987,18 @@ private fun GuideHeader(
      * title itself becomes the group name once the sidebar is away (F1f).
      */
     showMeta: Boolean = true,
+    /**
+     * The grid's zoom level in hours, and the button that walks it (F12e).
+     * Grid view only: a zoom on the list would be a control with nothing to do.
+     */
+    windowHours: Int = GuideGrid.DEFAULT_WINDOW_HOURS,
+    onCycleWindow: (() -> Unit)? = null,
+    /**
+     * The corner preview's state and its header toggle (F13d). Grid view only -
+     * the list has no preview to show or hide.
+     */
+    previewEnabled: Boolean = true,
+    onTogglePreview: (() -> Unit)? = null,
     onSetupClick: () -> Unit,
     onSearchClick: (() -> Unit)? = null,
     onSportsClick: (() -> Unit)? = null,
@@ -3021,6 +3093,60 @@ private fun GuideHeader(
                             text = "NOW",
                             color = KBTextHi,
                             style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                }
+            }
+            // F12e: the window's zoom, 3h -> 6h -> 12h -> 3h. The glyph says
+            // what it does and the level beside it says which window is on
+            // screen - a D-pad press that silently changed the zoom would leave
+            // the viewer guessing. Same card, 24dp glyph and 12/9 padding as the
+            // rest of the row.
+            if (onCycleWindow != null) {
+                KBCard(onClick = onCycleWindow) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.ZoomIn,
+                            contentDescription =
+                                "Window: $windowHours hours. Switch to " +
+                                    "${GuideGrid.nextZoomHours(windowHours)} hours",
+                            tint = KBTextHi,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Text(
+                            text = "${windowHours}H",
+                            color = KBTextHi,
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.padding(start = 6.dp)
+                        )
+                    }
+                }
+            }
+            // F13d: the preview's only control. The eye is filled while the
+            // preview is playing and struck through while it is off, so the
+            // button says the state as well as the action.
+            if (onTogglePreview != null) {
+                KBCard(onClick = onTogglePreview) {
+                    Box(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (previewEnabled) {
+                                Icons.Filled.Visibility
+                            } else {
+                                Icons.Filled.VisibilityOff
+                            },
+                            contentDescription = if (previewEnabled) {
+                                "Preview on"
+                            } else {
+                                "Preview off"
+                            },
+                            tint = if (previewEnabled) KBAccent else KBTextHi,
+                            modifier = Modifier.size(24.dp)
                         )
                     }
                 }
