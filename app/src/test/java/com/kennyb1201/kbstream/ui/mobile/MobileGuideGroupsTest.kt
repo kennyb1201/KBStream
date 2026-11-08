@@ -2,7 +2,9 @@ package com.kennyb1201.kbstream.ui.mobile
 
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
+import com.kennyb1201.kbstream.ui.iptv.GuideViewMode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -152,6 +154,37 @@ class MobileGuideGroupsTest {
             listOf("1"),
             nextRecentKeys(listOf("1"), "")
         )
+    }
+
+    @Test
+    fun `the chips belong to the list, so the grid hides them`() {
+        // Grid view with nothing searched for: the grid is the surface, and its
+        // drawer is the group switcher, so the chips are hidden (F1a).
+        assertFalse(
+            "the chips must be gone in grid view",
+            guideShowsGroupChips(GuideViewMode.GRID, "")
+        )
+        // List view keeps them - they are the group filter for the rows there.
+        assertTrue(guideShowsGroupChips(GuideViewMode.LIST, ""))
+        // A search in grid view shows the LIST's rows, so the chips stay for
+        // them (F1b), and clearing it hides them again with the grid.
+        assertTrue(guideShowsGroupChips(GuideViewMode.GRID, "news"))
+        assertTrue(guideShowsGroupChips(GuideViewMode.LIST, "news"))
+        assertFalse(guideShowsGroupChips(GuideViewMode.GRID, "   "))
+    }
+
+    @Test
+    fun `the chips and the grid are never on screen together`() {
+        // One predicate, two readings: every view/query pair gives exactly one
+        // surface, which is what keeps F1a's gate and the grid's branch honest.
+        GuideViewMode.entries.forEach { view ->
+            listOf("", " ", "news", "  news  ").forEach { query ->
+                assertTrue(
+                    "$view / \"$query\" showed neither the chips nor the grid",
+                    guideShowsGrid(view, query) != guideShowsGroupChips(view, query)
+                )
+            }
+        }
     }
 
     @Test

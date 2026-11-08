@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.mobile
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -325,6 +326,80 @@ class GuideScreenMobileContractTest {
             "mobile has no D-pad here, so the toggle takes no focus requester",
             !header.contains("focusRequester")
         )
+    }
+
+    @Test
+    fun `the group chips are list-only, and the grid keeps the groups drawer`() {
+        val mobile = mobileGuide()
+
+        // T1: one predicate decides both surfaces. The chips' gate is the
+        // negation of the grid's own branch, so a chip row and the grid can
+        // never be on screen together (F1a).
+        assertTrue(
+            "the grid's branch must be the predicate the chips' gate negates",
+            mobile.contains("val showGrid = guideShowsGrid(guideView, query)") &&
+                mobile.contains("showGrid -> {") &&
+                mobile.contains("if (guideShowsGroupChips(guideView, query)) {")
+        )
+        assertEquals(
+            "exactly one chip row, and it sits behind that gate - grid view " +
+                "must not have a second one",
+            1,
+            Regex("items\\(groups, key = \\{ \"group:\" \\+ it \\}\\)").findAll(mobile).count()
+        )
+        val gate = mobile.substringAfter("if (guideShowsGroupChips(guideView, query)) {")
+            .substringBefore("if (guideImportLabel.isNotBlank()) {")
+        assertTrue(
+            "the gate must hold the chip row and nothing else",
+            gate.contains("items(groups, key = { \"group:\" + it })") &&
+                gate.contains("MobileFilterChip(") &&
+                gate.contains("selected = label == currentGroup")
+        )
+        // F1c: the freed height goes to the grid - no spacer, no reserved gap.
+        assertFalse(
+            "nothing may take the chips' place in grid view",
+            gate.contains("Spacer(") || gate.contains("height(")
+        )
+
+        // T2: the drawer stays the grid's group switcher (F2a), and it writes
+        // the same `selectedGroup` the chips write (F2b) - one state, so the
+        // two controls cannot disagree about which group is up.
+        assertTrue(
+            "the hamburger must still open the drawer in grid view",
+            mobile.contains("onOpenGroups = if (guideView == GuideViewMode.GRID) {") &&
+                mobile.contains("showGroupDrawer = true")
+        )
+        val drawer = mobile.substringAfter("items(groups, key = { \"drawer:\" + it })")
+            .substringBefore("GuideGridMobileView(")
+        assertTrue(
+            "a drawer row must select its group and close the drawer",
+            drawer.contains("selectedGroup = label") &&
+                drawer.contains("showGroupDrawer = false")
+        )
+        assertTrue(
+            "the drawer must mark the group the chips mark",
+            drawer.contains("val selected = label == currentGroup")
+        )
+        assertTrue(
+            "the grid must draw the selection's members, so a drawer pick re-filters it",
+            mobile.contains("GuideGridMobileView(") &&
+                mobile.contains("items = filtered,") &&
+                mobile.contains("initialValue = groupChannels,")
+        )
+
+        // T3: the lines under the chips are not group chips and are not gated -
+        // they render in both views, unchanged.
+        val gateAt = mobile.indexOf("if (guideShowsGroupChips(guideView, query)) {")
+        listOf(
+            "if (guideImportLabel.isNotBlank()) {",
+            "if (guideStatus.lastGoodLabel().isNotBlank()) {",
+            "if (guideStatus.failing) {",
+            "MobileGuideErrorLine(message)"
+        ).forEach { line ->
+            val at = mobile.indexOf(line)
+            assertTrue("$line must still render", at > 0)
+            assertTrue("$line must not be behind the chips' gate", at > gateAt)
+        }
     }
 
     @Test

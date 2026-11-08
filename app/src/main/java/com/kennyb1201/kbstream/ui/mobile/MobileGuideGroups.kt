@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.mobile
 
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
+import com.kennyb1201.kbstream.ui.iptv.GuideViewMode
 import com.kennyb1201.kbstream.ui.iptv.applyGroupOrder
 
 /*
@@ -96,6 +97,26 @@ internal fun guideGroupChannels(
     }
     else -> channels.filter { it.channel.groupTitle?.trim() == label }
 }
+
+/**
+ * Whether the grid is the surface on screen: grid view with nothing searched
+ * for. A search yields the grid to the list - the search overlay promises the
+ * rows it names, and a program hit is a row (F1b).
+ */
+internal fun guideShowsGrid(view: GuideViewMode, query: String): Boolean =
+    view == GuideViewMode.GRID && query.isBlank()
+
+/**
+ * Whether the group chip row is shown.
+ *
+ * The chips are the group filter for the rows on screen, so they are as
+ * list-only as the list is - in grid view the groups drawer is the switcher,
+ * exactly as the TV sidebar is (F1a). Defined as the negation of
+ * [guideShowsGrid] rather than as its own expression, so the chips and the
+ * grid can never both be on screen: one predicate, two readings.
+ */
+internal fun guideShowsGroupChips(view: GuideViewMode, query: String): Boolean =
+    !guideShowsGrid(view, query)
 
 /**
  * The Recent queue after [playedKey] is tuned: that channel first, no

@@ -767,19 +767,31 @@ fun GuideScreenMobile(
                 )
             }
 
+            // One predicate for the chips' gate and for the branch that draws
+            // the grid, so the chips and the grid can never share the screen.
+            val showGrid = guideShowsGrid(guideView, query)
+
             // The TV group strip, for a thumb. A horizontal scroll is the right
             // control here too: a wrapped row of a provider's forty categories
             // would push the channels off the screen.
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(groups, key = { "group:" + it }) { label ->
-                    MobileFilterChip(
-                        label = label,
-                        selected = label == currentGroup,
-                        onClick = { selectedGroup = label }
-                    )
+            //
+            // List-only, as on TV (F1a): the grid carries the groups drawer, so
+            // a chip row above it would be the same control twice, spending
+            // rows the grid wants. A search is the exception the grid already
+            // makes - it shows the list's rows, and the chips are those rows'
+            // group filter - so the chips follow the rows, not the toggle.
+            if (guideShowsGroupChips(guideView, query)) {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(groups, key = { "group:" + it }) { label ->
+                        MobileFilterChip(
+                            label = label,
+                            selected = label == currentGroup,
+                            onClick = { selectedGroup = label }
+                        )
+                    }
                 }
             }
 
@@ -841,7 +853,7 @@ fun GuideScreenMobile(
                 // The grid (F5a). Searching keeps the LIST's results: a program
                 // hit is a row, and the search overlay's promise is the rows it
                 // names - so the grid yields to it rather than hiding it.
-                guideView == GuideViewMode.GRID && query.isBlank() -> {
+                showGrid -> {
                     ModalNavigationDrawer(
                         drawerState = groupDrawerState,
                         drawerContent = {
