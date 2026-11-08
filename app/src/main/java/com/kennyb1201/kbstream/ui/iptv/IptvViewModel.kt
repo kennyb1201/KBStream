@@ -1089,7 +1089,8 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      */
     private val _gridPrograms =
         MutableStateFlow<Map<String, List<GridProgram>>>(emptyMap())
-    val gridPrograms: StateFlow<Map<String, List<GridProgram>>> = _gridPrograms.asStateFlow()
+    internal val gridPrograms: StateFlow<Map<String, List<GridProgram>>> =
+        _gridPrograms.asStateFlow()
 
     /**
      * Channels whose grid window is being read right now.
@@ -1099,7 +1100,8 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      * is the slide, not a reload).
      */
     private val _gridLoadingChannelIds = MutableStateFlow<Set<String>>(emptySet())
-    val gridLoadingChannelIds: StateFlow<Set<String>> = _gridLoadingChannelIds.asStateFlow()
+    internal val gridLoadingChannelIds: StateFlow<Set<String>> =
+        _gridLoadingChannelIds.asStateFlow()
 
     /**
      * `(channel, windowStart, windowEnd)` triples already read. Bounded: a long
