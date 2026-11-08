@@ -36,7 +36,9 @@ class GuideGridHeaderTrapContractTest {
     /** The return effect: DOWN out of the header, all three of its paths. */
     private val returnEffect = grid.slice(
         "LaunchedEffect(returnFocusSignal, sidebarVisible)",
-        "F1a/F1b: delivers one in-grid move"
+        // The entry grab's effect follows the return's, and is a different
+        // effect with its own exits - the slice stops where that one starts.
+        "// ENTRY-FOCUS F1b/F1c: the grab itself"
     )
 
     // ── T1: every button drives the return itself ──────────────────────────

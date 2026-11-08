@@ -1251,6 +1251,34 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         _liveScores.value = emptyList()
     }
 
+    /**
+     * ENTRY-FOCUS F2c: whether the last thing the guide did was hand the viewer
+     * to a player.
+     *
+     * The guide is torn down while a player is up and composed again on the way
+     * back, so its entry effects cannot tell that return from a fresh guide open
+     * on their own. This marker is the difference: the grid's entry grab must not
+     * fire on it (the playback return owns that landing), and it may only fire
+     * when the guide has just been opened.
+     *
+     * In memory on purpose. An activity-scoped ViewModel outlives the player, so
+     * the marker survives exactly the trip it describes, with no disk write that
+     * a crash could leave behind set.
+     */
+    private var guideLeftForPlayback = false
+
+    /** Called wherever the guide hands off to a player. */
+    internal fun noteGuideHandedOffToPlayer() {
+        guideLeftForPlayback = true
+    }
+
+    /** Consumes the marker: true means this guide entry came back from a player. */
+    internal fun consumeGuidePlaybackReturn(): Boolean {
+        val was = guideLeftForPlayback
+        guideLeftForPlayback = false
+        return was
+    }
+
     private suspend fun resolveLiveScores(
         games: List<SportsGame>,
         programsByChannel: Map<String, List<GridProgram>>,

@@ -66,8 +66,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -95,6 +98,7 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.launch
 
 // F12a: 48dp, TiviMate's own row, down from 62. The program cell is 20 + 16 +
@@ -125,6 +129,11 @@ private val GRID_TIME_HEADER_HEIGHT: Dp = 24.dp
 // remembered home's requester before it hands the direction to the platform's
 // focus search - the same eight frames the grid's own pending moves get.
 private const val HEADER_RETURN_ATTEMPTS = 8
+
+// ENTRY-FOCUS F1c: the entry grab's retry, the same eight frames the screen's
+// channel-list entry loop runs - the target row may still be composing when the
+// rows first arrive.
+private const val ENTRY_FOCUS_ATTEMPTS = 8
 
 /**
  * The TiviMate-style timeline grid (spec §2, §2k, §3, §4).
@@ -171,6 +180,19 @@ internal fun GuideGridView(
      * The screen owns the header, this grid owns the focus homes.
      */
     returnFocusSignal: Int,
+    /**
+     * ENTRY-FOCUS F1a: the guide has just been opened on this grid, so the grid
+     * owes one entry focus grab. The list has always had one; the grid had none,
+     * so a guide that opened straight into the persisted grid view started with
+     * focus nowhere and every D-pad press found no handler at all.
+     *
+     * Armed by the SCREEN, not here: the grid is composed and disposed by the
+     * view toggle, so an entry effect in this file would also fire on a
+     * list->grid toggle (F2a) and fight the header path that already works.
+     */
+    entryFocusArmed: Boolean = false,
+    /** Consumes [entryFocusArmed] once the grab lands or gives up (F1a). */
+    onEntryFocusDone: () -> Unit = {},
     /**
      * Whether the groups sidebar is showing. Owned by the screen because the
      * header names the current group while it is hidden (F1f).
@@ -502,6 +524,76 @@ internal fun GuideGridView(
         )
     }
 
+    // ENTRY-FOCUS F1b/F1c: the grab itself - the list's entry loop, for the
+    // grid. Keyed on (armed, rows) because the rows do not exist when the grid
+    // first composes on a straight entry: the window request fills them a
+    // moment later, so a one-shot grab at composition time would ask for a
+    // requester that is not attached and fail exactly like the in-grid moves
+    // that used to die silently. The armed flag is consumed either way, so the
+    // grab is for guide entry and cannot re-fire mid-session (F1a).
+    LaunchedEffect(entryFocusArmed, rows) {
+        if (!entryFocusArmed || rows.isEmpty()) return@LaunchedEffect
+
+        // F2b: a header return or an in-grid handoff in flight owns focus in
+        // those moments; the grab stands down for good rather than racing it.
+        if (pendingFocus != null || pendingSidebarFocus || returnFocusSignal > 0) {
+            onEntryFocusDone()
+            return@LaunchedEffect
+        }
+
+        // F1b: the return effect's own home rule - the selected group's sidebar
+        // row while the sidebar is showing, else the first row's channel cell.
+        val groupIndex = groups.indexOf(selectedGroup).coerceAtLeast(0)
+        val label = groups.getOrNull(groupIndex)
+        val home = if (sidebarVisible) "sidebar" else "channel"
+        val firstRow = rows.first()
+        val target = if (home == "sidebar") {
+            "sidebar group=$label"
+        } else {
+            "channel row=0 key=${firstRow.channelKey}"
+        }
+
+        fun requesterFor(): FocusRequester? = if (home == "sidebar") {
+            label?.let { sidebarRequesters[it] }
+        } else {
+            channelRequesters[firstRow.channelKey]
+        }
+
+        var attempts = 0
+        var landed = false
+        while (attempts < ENTRY_FOCUS_ATTEMPTS) {
+            val requester = requesterFor()
+            if (requester != null &&
+                runCatching { requester.requestFocus() }.getOrDefault(false)
+            ) {
+                landed = true
+                break
+            }
+            // A selected group the sidebar has not composed yet (it opens at the
+            // top, and the selection can be far down) has no requester until it
+            // is scrolled into place - the same reason the in-grid handoffs
+            // scroll before they retry.
+            if (attempts == 0 && home == "sidebar" && requester == null) {
+                sidebarState.scrollToItem(groupIndex)
+            }
+            awaitFrame()
+            attempts++
+        }
+
+        if (landed) {
+            focusedRow = 0
+            focusedCellId = null
+            focusHome = if (home == "sidebar") GridFocusHome.SIDEBAR else GridFocusHome.CHANNEL
+            pendingSidebarFocus = false
+            Log.i("GUIDE", "grid entry-focus landed=$target attempts=$attempts")
+        } else {
+            // F1c: a still-dead entry has to be readable in COPY DIAGNOSTICS,
+            // not silent - which is what the field report was.
+            Log.i("GUIDE", "grid entry-focus exhausted home=$home attempts=$attempts")
+        }
+        onEntryFocusDone()
+    }
+
     /**
      * F1a/F1b: delivers one in-grid move the way [enterGrid] already delivers a
      * sidebar one - the target's own requester FIRST, the pending path as the
@@ -812,22 +904,33 @@ internal fun GuideGridView(
                                         (GuideGrid.MINUTES_PER_HOUR * GuideGrid.PX_PER_MIN).dp
                                     )
                                 ) {
-                                    Column {
-                                        mark.dayLabel?.let { day ->
-                                            Text(
-                                                text = day,
-                                                color = KBAccent,
-                                                style = MaterialTheme.typography.labelSmall,
-                                                maxLines = 1
-                                            )
-                                        }
-                                        Text(
-                                            text = mark.label,
-                                            color = KBTextLo,
-                                            style = MaterialTheme.typography.labelMedium,
-                                            maxLines = 1
-                                        )
-                                    }
+                                    // Header-clip F1a: the day rides on the hour's
+                                    // OWN line - `Sun Nov 8 · 3 PM`, accent for the
+                                    // day, plain for the hour. Stacking them needed
+                                    // ~28-31dp of Inter in a 24dp strip, so the
+                                    // boundary mark's hour was clipped at the bottom
+                                    // edge; every other mark was one line and fit,
+                                    // which is why only the first one was cut. The
+                                    // phone has drawn this line all along.
+                                    val line = hourMarkLine(mark)
+                                    val day = mark.dayLabel
+                                    Text(
+                                        text = buildAnnotatedString {
+                                            if (day != null) {
+                                                withStyle(SpanStyle(color = KBAccent)) {
+                                                    append(day)
+                                                }
+                                                append(line.substring(day.length))
+                                            } else {
+                                                append(line)
+                                            }
+                                        },
+                                        color = KBTextLo,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
                                 }
                             }
                         }

@@ -84,9 +84,11 @@ class GuideGridDensityContractTest {
             grid.contains("height(30.dp)")
         )
         assertTrue(
-            "F2a: the hour labels are still labelMedium with a day line above",
+            "F2a: the hour labels are still labelMedium - and the day now rides on " +
+                "their own line, because two stacked lines did not fit 24dp " +
+                "(header-clip F1a)",
             grid.contains("style = MaterialTheme.typography.labelMedium") &&
-                grid.contains("mark.dayLabel?.let { day ->")
+                grid.contains("val line = hourMarkLine(mark)")
         )
         assertTrue(
             "F3a: the rows list has no 2dp gap left (the sidebar's own 4dp stays)",

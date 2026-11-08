@@ -421,6 +421,20 @@ internal data class GridHourMark(
     val dayLabel: String?,
 )
 
+/**
+ * The hour mark's single line (header-clip F1a): `Sun Nov 8 · 3 PM` where the
+ * day turns, `4 PM` everywhere else.
+ *
+ * The day used to sit ABOVE the hour in a two-line column, which needs ~28-31dp
+ * of Inter at the header's type sizes; the compaction left the strip 24dp, so
+ * the day-boundary mark's hour was clipped at the bottom edge - it was the only
+ * mark carrying a date, which is why the hours beside it read clean. One line
+ * fits the strip, and it is the shape the phone has always drawn, so the two
+ * guides now say the same thing.
+ */
+internal fun hourMarkLine(mark: GridHourMark): String =
+    mark.dayLabel?.let { day -> "$day · ${mark.label}" } ?: mark.label
+
 /** The hour labels across [window], with a day label where the day changes. */
 internal fun hourMarks(window: GridWindow): List<GridHourMark> {
     val marks = ArrayList<GridHourMark>((window.durationMs / GuideGrid.HOUR_MS).toInt() + 1)

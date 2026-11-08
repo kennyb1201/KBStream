@@ -304,6 +304,29 @@ fun GuideScreen(
     // left (F1e).
     var gridReturnFocusSignal by remember { mutableStateOf(0) }
     /**
+     * ENTRY-FOCUS F1a: armed when the guide is opened straight onto the grid,
+     * consumed by the grid's own grab.
+     *
+     * The list has had an 8-frame entry grab for a while; the grid had none, so
+     * a guide that opened on the persisted grid view started with focus nowhere
+     * and every D-pad press fell on no handler at all, while a list->grid toggle
+     * worked (focus was on the toggle it pressed).
+     *
+     * The flag lives here rather than in the grid because the grid is composed
+     * and disposed by the view toggle: an entry effect in there would arm on
+     * every toggle (F2a) and fight the header path that already works.
+     */
+    var gridEntryFocusArmed by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        // F2c: coming back from a player is not guide entry. The marker is
+        // consumed either way, so a stale one cannot disarm a later entry.
+        val fromPlayback = viewModel.consumeGuidePlaybackReturn()
+        // F2a: on a list->grid toggle this screen is already composed, so this
+        // effect never runs for it - focus stays on the header toggle and DOWN
+        // lands through the header return, exactly as it does today.
+        if (guideView == GuideViewMode.GRID && !fromPlayback) gridEntryFocusArmed = true
+    }
+    /**
      * The grid's zoom, in hours (F12e): three by default, then six and twelve
      * as the header's zoom button walks the cycle. Per profile, device-local,
      * in the same store as the view toggle. A level this build does not know
@@ -737,6 +760,10 @@ fun GuideScreen(
         val wanted = PendingChannelTune.consume() ?: return@LaunchedEffect
         val item = unhiddenChannels.firstOrNull { channelKey(it) == wanted }
             ?: return@LaunchedEffect
+        // ENTRY-FOCUS F2c: this is a player handoff too, without a saved
+        // position - mark it so the guide the viewer comes back to does not
+        // grab entry focus.
+        viewModel.noteGuideHandedOffToPlayer()
         latestOnPlayChannel?.invoke(item)
     }
 
@@ -812,6 +839,12 @@ fun GuideScreen(
     // clicked. Group is saved with it so the restore lands in the same
     // group's lineup (and therefore the same channel order) too.
     fun rememberGuidePosition(item: IptvChannelWithEpg) {
+        // ENTRY-FOCUS F2c: every way out of the guide into a live player passes
+        // through here, so this is also where the return is marked - the grid's
+        // entry grab must not fire on it (S4: the return path owns the
+        // landing). Kept beside the position save because both describe the
+        // same handoff.
+        viewModel.noteGuideHandedOffToPlayer()
         guidePreferences.edit()
             .putString("last_group", selectedGroup)
             .putString("last_channel", channelKey(item))
@@ -1671,6 +1704,10 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                             scheduleEndMs = guideScheduleEndMs,
                             scores = liveScores,
                             returnFocusSignal = gridReturnFocusSignal,
+                            // ENTRY-FOCUS F1a: the guide opened on this grid, so
+                            // it owes it the one grab the list already has.
+                            entryFocusArmed = gridEntryFocusArmed,
+                            onEntryFocusDone = { gridEntryFocusArmed = false },
                             sidebarVisible = gridSidebarVisible,
                             onSidebarVisibleChange = { gridSidebarVisible = it },
                             windowHours = gridWindowHours,
@@ -2240,6 +2277,10 @@ Spacer(modifier = Modifier.height(14.dp))
                         onDismiss = { catchupChannel = null },
                         onPlay = { program ->
                             catchupChannel = null
+                            // ENTRY-FOCUS F2c: a DVR recording is a player
+                            // handoff as well - the guide it returns to must not
+                            // grab entry focus.
+                            viewModel.noteGuideHandedOffToPlayer()
                             onPlayCatchup?.invoke(catchupItem, program)
                         }
                     )
