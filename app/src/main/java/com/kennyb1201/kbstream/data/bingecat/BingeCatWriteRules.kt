@@ -71,6 +71,19 @@ object BingeCatWriteRules {
     fun hasPublicListsScope(scope: String?): Boolean =
         grants(scope, BingeCatConfig.PUBLIC_LISTS_SCOPE)
 
+    /**
+     * Whether [scope] allows the watched-history read.
+     *
+     * The read leg's own gate, parsed by this same exact-value parser: a grant
+     * without `history:read` makes no request at all, so the Upcoming rail
+     * degrades by one source rather than earning a 403 it would have to swallow.
+     * It lives beside the write gates because the parser has to be the same one -
+     * a second implementation is how a scope reads as granted to one leg and not
+     * the other.
+     */
+    fun hasHistoryReadScope(scope: String?): Boolean =
+        grants(scope, BingeCatConfig.HISTORY_READ_SCOPE)
+
     /** [scope] as a set, parsed leniently on separators but exactly on values. */
     private fun grants(scope: String?, wanted: String): Boolean =
         scope.orEmpty()

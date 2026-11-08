@@ -4,6 +4,15 @@ package com.kennyb1201.kbstream.data.simkl
  * How long a show-library blob minted AFTER a watched write is still treated as
  * unsettled.
  *
+ * The window is a FALLBACK, not the rail's gate (upcoming-caught-up spec F3c).
+ * It decides only what this Simkl leg may serve for the shows this leg is the
+ * only evidence for; a show another source proves caught up is on the rail
+ * whatever this leg's blob says, so the window can be wrong about Simkl's apply
+ * lag without hiding it. That is the only honest role left for a settle guess:
+ * the field proved the 60s assumption wrong (a refresh minted two minutes after
+ * the finish still carried the pre-finish counts), while a union of sources does
+ * not need the guess to be right at all.
+ *
  * The write path already drops the cached library
  * (`SimklRepository.invalidateWatchedSnapshots`), but the fetch that follows it
  * can land before Simkl's own read API has applied the write: the blob then
@@ -32,9 +41,12 @@ internal const val SHOW_LIBRARY_WRITE_SETTLE_MS =
  * - No blob at all ([blobUpdatedAt] null): untrusted - i.e. the caller passes
  *   `forceRefresh = true`, which changes nothing, because a read is happening
  *   anyway. Saying "trusted" here would only be a way to forget.
- * - No watched write on this profile ([lastWatchedWriteAt] 0 or less): trusted.
- *   There is no write the blob could have missed, and an untouched library is
- *   the cold-start case the cache exists for.
+ * - No watched write on this profile ([lastWatchedWriteAt] 0 or less): trusted
+ *   FOR THIS LEG. The stamp is device-local, so a zero says only "this device
+ *   has not written", never "nothing was watched" - a finish made on another
+ *   device leaves it at zero (R1). Trusting the blob here is therefore only
+ *   safe because the rail no longer depends on this answer: another source
+ *   proves such a show itself, and the leg that proves it builds the card.
  * - Otherwise: trusted only when it was minted at least [settleMs] after that
  *   write - before it is the reported miss (the blob predates the finish), and
  *   just after it is a fetch that may have raced Simkl's own apply (see

@@ -1548,6 +1548,66 @@ class BingeCatRepository private constructor(private val context: Context?) {
     }
 
     /**
+     * The profile's watched timeline, every page of it, folded for the Upcoming
+     * rail (F2a).
+     *
+     * The rail's third tracker leg, and the reason it is read from here rather
+     * than from the badge's snapshot: the badge needs keys ('this row was
+     * watched'), while a caught-up card needs the EPISODES, which is what the
+     * feed's `episodes[]` carries. Without them a tracker can only say "watched
+     * sometime" and the rail's gate - last aired episode watched - has nothing
+     * to test.
+     *
+     * Three gates and one soft failure, all of them states rather than errors:
+     *
+     *  - not [isReady] (unconfigured, no token, no mapped profile) -> null, no
+     *    request;
+     *  - a grant without `history:read` -> null, no request, because the 403 it
+     *    would earn says nothing a reconnect prompt does not already say;
+     *  - a failed page (network, 401 after one refresh, 429, any non-2xx) ->
+     *    null. A PARTIAL timeline is worse than none here: a show whose plays
+     *    are on the page that failed would read as not caught up, and the rail
+     *    would hide a card the evidence supports - the field report's own
+     *    failure mode, arriving from the other direction.
+     *
+     * Costs the account-wide read the badges already make, on the same route,
+     * and no new cache: the caller asks once per rail build and folds it.
+     */
+    suspend fun watchedHistorySnapshot(): BingeCatWatchedSnapshot? {
+        if (!isReady()) return null
+
+        if (!BingeCatWriteRules.hasHistoryReadScope(store.scope())) return null
+
+        val mapped = mappedProfileId() ?: return null
+
+        val items = mutableListOf<BingeCatHistoryItem>()
+        var cursor: String? = null
+        var pages = 0
+
+        while (pages < MAX_PAGES) {
+            val body = authorizedBody { auth ->
+                service.history(
+                    authorization = auth,
+                    profileId = mapped,
+                    cursor = cursor,
+                    limit = PAGE_SIZE
+                )
+            } ?: return null
+
+            items += body.items
+
+            val next = body.nextCursor?.takeIf { it.isNotBlank() } ?: break
+            // A cursor that does not move would spin the loop on the same page;
+            // MAX_PAGES bounds it either way, but stopping is the honest answer.
+            if (next == cursor) break
+            cursor = next
+            pages++
+        }
+
+        return bingeCatWatchedSnapshot(items)
+    }
+
+    /**
      * The recently watched rows, for the BingeCat section's own watched marker.
      *
      * One page: this is a badge hint, not a history mirror, and the marker only

@@ -168,8 +168,16 @@ data class BingeCatListItem(
 /**
  * `GET /api/v1/profiles/{id}/history` - a cursor-paged feed.
  *
- * v1 reads it for one job only: knowing which BingeCat rows this profile has
- * watched, so the BingeCat section can badge its own rows.
+ * Two jobs read it: the BingeCat section's own watched badge, and the Upcoming
+ * rail's tracker-agnostic leg, which needs the EPISODES a show's rows watched -
+ * see [BingeCatHistoryItem.episodes] and
+ * [com.kennyb1201.kbstream.data.bingecat.bingeCatWatchedSnapshot].
+ *
+ * The contract's description of the route is the shape worth remembering:
+ * "Newest first, episodes grouped per show and local day, keyset-paginated by
+ * `next_cursor`". One row is therefore one show's plays on one day, never one
+ * play, which is why the pairs have to be unioned per show rather than read off
+ * a row.
  */
 @JsonClass(generateAdapter = true)
 data class BingeCatHistoryFeed(
@@ -185,10 +193,36 @@ data class BingeCatHistoryItem(
     @Json(name = "watched_at") val watchedAt: String? = null,
     @Json(name = "type") val type: String? = null,
     @Json(name = "movie") val movie: BingeCatMedia? = null,
-    @Json(name = "show") val show: BingeCatMedia? = null
+    @Json(name = "show") val show: BingeCatMedia? = null,
+    /**
+     * The episodes this row watched - the feed's own `episodes[]`, which the
+     * contract marks required (`season` and `number`, either of which can be
+     * null on a row the server could not place). Empty on a movie row.
+     *
+     * Read for the Upcoming leg only: a show's watched pairs are the evidence
+     * that its last aired episode is finished, and without them a history row
+     * could only say "this show was watched sometime", which proves nothing.
+     */
+    @Json(name = "episodes") val episodes: List<BingeCatHistoryEpisodeEntry> = emptyList()
 ) {
     val media: BingeCatMedia? get() = if (type == "movie") movie else show
 }
+
+/**
+ * One play inside a history row's `episodes[]`.
+ *
+ * Named apart from [BingeCatHistoryEpisode] on purpose: that one is the WRITE
+ * selector (`season`/`episode`, both required and non-null), while this is the
+ * read's own row, where the server may send a null season or number for a play
+ * it could not place - and `number` is the wire's name for the episode number.
+ */
+@JsonClass(generateAdapter = true)
+data class BingeCatHistoryEpisodeEntry(
+    @Json(name = "season") val season: Int? = null,
+    @Json(name = "number") val number: Int? = null,
+    @Json(name = "title") val title: String? = null,
+    @Json(name = "watched_at") val watchedAt: String? = null
+)
 
 // ── History writes (step 2) ───────────────────────────────────────────
 //

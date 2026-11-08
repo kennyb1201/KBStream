@@ -67,6 +67,16 @@ object BingeCatConfig {
     const val WRITE_SCOPE = "history:write"
 
     /**
+     * The scope the watched-history READ needs - the Upcoming rail's leg (see
+     * `BingeCatRepository.watchedHistorySnapshot`).
+     *
+     * Its own constant even though it shares a prefix with [WRITE_SCOPE]: a
+     * grant approved under step 1 carries `history:read` and not
+     * `history:write`, and that grant can still feed the rail.
+     */
+    const val HISTORY_READ_SCOPE = "history:read"
+
+    /**
      * The scope saving needs: the watchlist and user-list writes (step 3).
      *
      * A separate name from [WRITE_SCOPE] because the two legs fail

@@ -632,6 +632,21 @@ class HomeViewModel(
                             // cards' field is a cached copy that can be a week
                             // stale, while each card's season/episode is the
                             // fresh answer (see repairCaughtUpAirDates).
+                            // F3a/F3d: one per-show set built from EVERY
+                            // source, and no source can veto another. The
+                            // Simkl leg below contributes the shows its blob
+                            // calls caught up, but a show the local/tracker leg
+                            // proves caught up is built there whether or not
+                            // that blob agrees - which is why a stale Simkl
+                            // tally can no longer hide a show the other
+                            // evidence has. The collapse to one card per show
+                            // is the schedule builder's own
+                            // (selectUpcomingPerShow, by resolved TMDB id), so
+                            // the same show arriving in both legs is one card.
+                            //
+                            // The union IS the retry (F3d): a failed push to
+                            // any one tracker leaves the finish visible through
+                            // the others and through this device's own rows.
                             repairCaughtUpAirDates(caughtUp) +
                                 loadCaughtUpUpcomingItems() +
                                 loadLocalCaughtUpUpcomingItems()
@@ -3303,6 +3318,15 @@ Log.d(
      *
      * Kids Mode and the rail's dismissals apply to these cards exactly as
      * they do to the Continue Watching ones (one shared gate).
+     *
+     * F3: this leg's verdict is ADVISORY for the rail. It is built from a cached
+     * library blob whose counts can lag Simkl's own writes (and whose freshness
+     * input, this device's write stamp, says nothing about a finish made
+     * elsewhere), so a show it filters out must not disappear from the rail when
+     * another source proves the same show caught up - which is exactly what the
+     * union at the call site guarantees. The blob's refresh guard keeps running
+     * for the shows this leg is the only evidence for (a Simkl-only show), where
+     * a stale tally is the only thing there is to go on.
      */
     private suspend fun loadCaughtUpUpcomingItems(): List<UpNextItem> {
 
@@ -3494,12 +3518,15 @@ Log.d(
         if (
             UPCOMING_DIAGNOSTICS
         ) {
+            // F2c: the SOURCE rides with each candidate. The rail is a union,
+            // so "no card" and "no source knew the show" are different reports
+            // and this line is what tells them apart in COPY DIAGNOSTICS.
             Log.d(
                 "UPCOMING_DIAG",
-                "caught-up candidates (local+mdb)=" +
+                "caught-up candidates (local+mdb+trakt+bingecat)=" +
                     candidates.size + " " +
                     candidates.joinToString {
-                        "'${it.parentId}'"
+                        "'${it.parentId}'@${it.source}"
                     }
             )
         }
@@ -3653,22 +3680,30 @@ Log.d(
                 emptyList()
             }
 
-        if (mdbList.isEmpty() && trakt.isEmpty()) return local
+        // BingeCat: the fourth source (F2a), and the one a viewer with no Simkl
+        // keeps the rail from (R2). Read from the watched feed the tracker
+        // already exposes (`watchedHistorySnapshot`), gated on its own read
+        // scope and failing soft like the other two: no token, no `history:read`,
+        // a failed page - an empty half.
+        val bingecat =
+            runCatchingCancellable {
+                BingeCatRepository.getInstance(getApplication())
+                    .watchedHistorySnapshot()
+            }.getOrNull()
+                ?.let { snapshot ->
+                    bingeCatCaughtUpCandidates(
+                        snapshot = snapshot,
+                        max = MAX_BINGECAT_CAUGHT_UP_UPCOMING_ITEMS
+                    )
+                }
+                .orEmpty()
 
-        // A show any two halves know is one card, and the local one carries
-        // this profile's own name and artwork, so it wins.
-        val known =
-            local
-                .map { upNextIdentifier(it.parentId) ?: it.parentId }
-                .toMutableSet()
-
-        val trackers = (mdbList + trakt).filter { candidate ->
-            known.add(
-                upNextIdentifier(candidate.parentId) ?: candidate.parentId
-            )
-        }
-
-        return local + trackers
+        // F2b/F3a: the union, one entry per show. No source is required and no
+        // source can veto another - see mergeCaughtUpCandidates.
+        return mergeCaughtUpCandidates(
+            local = local,
+            trackers = mdbList + trakt + bingecat
+        )
     }
 
     /**
@@ -3722,23 +3757,23 @@ Log.d(
             return null
         }
 
+        // Caught up means the LAST AIRED episode is in the evidence this
+        // candidate's source holds - not that every episode up to it is. The
+        // stricter full-run rule is the badge's and the detail page's (see
+        // LocalSeriesProgress.isCaughtUp, which keeps those callers); here it
+        // rejected shows whose early rows had long been pruned or never existed,
+        // hiding MobLand and Tulsa King from the rail with the decisive evidence
+        // - the finished last aired episode - sitting in the rows.
+        //
+        // F3: the verdict belongs to the SOURCE that carries the evidence.
+        // Nothing outside this candidate can veto it - not another tracker's
+        // cached tally, not this device's write stamps - which is what makes the
+        // rail the union of every source instead of the intersection of their
+        // opinions.
         val caughtUp =
-            LocalSeriesProgress.isCaughtUp(
+            LocalSeriesProgress.isCaughtUpOnLastAired(
                 completedEpisodes =
                     candidate.watchedEpisodes,
-
-                seasonEpisodeCounts =
-                    detail.seasons
-                        .mapNotNull { season ->
-                            val number = season.seasonNumber
-                            val count = season.episodeCount
-                            if (number > 0 && count != null && count > 0) {
-                                number to count
-                            } else {
-                                null
-                            }
-                        }
-                        .toMap(),
 
                 lastAiredSeason =
                     detail.lastEpisodeToAir?.seasonNumber,

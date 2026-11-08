@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.home
 
+import com.kennyb1201.kbstream.data.bingecat.BingeCatWatchedSnapshot
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.trakt.TraktWatchedSnapshot
@@ -54,6 +55,15 @@ internal const val MAX_MDBLIST_CAUGHT_UP_UPCOMING_ITEMS =
 internal const val MAX_TRAKT_CAUGHT_UP_UPCOMING_ITEMS =
     25
 
+/**
+ * Ceiling on the BingeCat half, mirroring the other tracker halves.
+ *
+ * BingeCat's feed is newest first, so this trims the shows this account has not
+ * touched in the longest time rather than an arbitrary slice.
+ */
+internal const val MAX_BINGECAT_CAUGHT_UP_UPCOMING_ITEMS =
+    25
+
 /** Parallel TMDB resolutions while building the caught-up Upcoming cards. */
 internal const val CAUGHT_UP_UPCOMING_CONCURRENCY =
     4
@@ -74,6 +84,17 @@ internal data class CaughtUpShowCandidate(
     val poster: String? = null,
     val backdrop: String? = null,
     val clearLogo: String? = null,
+    /**
+     * Which source proved this candidate: `local`, `mdblist`, `trakt` or
+     * `bingecat`.
+     *
+     * Carried for the rail's own trace line (F2c), so a future miss reads as
+     * "this show was known by nobody" or "only this tracker knew it" instead of
+     * a bare count. Nothing branches on it: the card is built from
+     * [watchedEpisodes] whichever source supplied it, which is the point of the
+     * union.
+     */
+    val source: String = "local",
     /**
      * True when the candidate came from a tracker ACCOUNT rather than this
      * profile's own history. The card is then built as a tracker card, so the
@@ -240,7 +261,8 @@ internal fun localCaughtUpCandidates(
                 title = newest.name?.takeIf { it.isNotBlank() },
                 poster = newest.poster?.takeIf { it.isNotBlank() },
                 backdrop = newest.backdropUrl?.takeIf { it.isNotBlank() },
-                clearLogo = newest.clearLogo?.takeIf { it.isNotBlank() }
+                clearLogo = newest.clearLogo?.takeIf { it.isNotBlank() },
+                source = "local"
             )
         }
         .take(max)
@@ -293,6 +315,7 @@ internal fun mdbListCaughtUpCandidates(
         out += CaughtUpShowCandidate(
             parentId = key,
             watchedEpisodes = watched,
+            source = "mdblist",
             fromTracker = true
         )
 
@@ -345,6 +368,7 @@ internal fun traktCaughtUpCandidates(
         out += CaughtUpShowCandidate(
             parentId = parentId,
             watchedEpisodes = row.episodes,
+            source = "trakt",
             fromTracker = true
         )
 
@@ -352,6 +376,79 @@ internal fun traktCaughtUpCandidates(
     }
 
     return out
+}
+
+/**
+ * The rail's candidate set: this profile's own history, plus every tracker's,
+ * one entry per show (F2b/F3a).
+ *
+ * The union is the whole rule. A show is a candidate when ANY source lists it,
+ * so no tracker can veto another and none is required: with Simkl unconfigured
+ * the rail is still built from the local rows and the other trackers' snapshots.
+ *
+ * The local candidate wins a collision because it carries this profile's own
+ * name and artwork, and the two are the same show otherwise - the same choice
+ * the MDBList half has always made. A tracker duplicate loses to the earlier
+ * tracker for the same reason: the first source that named the show supplies its
+ * evidence, and the card is built from that. The schedule builder collapses any
+ * leftovers by resolved TMDB id (see `selectUpcomingPerShow`).
+ */
+internal fun mergeCaughtUpCandidates(
+    local: List<CaughtUpShowCandidate>,
+    trackers: List<CaughtUpShowCandidate>
+): List<CaughtUpShowCandidate> {
+    if (trackers.isEmpty()) return local
+
+    val known =
+        local
+            .mapTo(mutableSetOf()) { candidate ->
+                upNextIdentifier(candidate.parentId) ?: candidate.parentId
+            }
+
+    val fresh = trackers.filter { candidate ->
+        known.add(
+            upNextIdentifier(candidate.parentId) ?: candidate.parentId
+        )
+    }
+
+    return local + fresh
+}
+
+/**
+ * BingeCat's caught-up candidates (F2a): the shows its watched feed holds
+ * episode plays for, with those episodes as the evidence.
+ *
+ * The fourth source, and the one R2 is about: a viewer who runs no Simkl, or
+ * whose Simkl library is stale, still has a tracker's own record of what was
+ * watched - provided the grant carries `history:read`, which the repository
+ * gates before it reads. Nothing about the SHOW changes here: its identity is
+ * the same IMDb-first key the other halves use (see
+ * `bingeCatWatchedSnapshot`), and its evidence is a set of (season, episode)
+ * pairs, so the rail's gate reads it exactly as it reads Trakt's.
+ *
+ * A snapshot that never arrived (no token, no scope, a failed page) is not
+ * passed here at all: the caller's `orEmpty()` makes this half empty, and the
+ * rail is what the other sources proved.
+ */
+internal fun bingeCatCaughtUpCandidates(
+    snapshot: BingeCatWatchedSnapshot,
+    max: Int
+): List<CaughtUpShowCandidate> {
+    if (max <= 0) return emptyList()
+
+    return snapshot.shows
+        .asSequence()
+        .filter { show -> show.episodes.isNotEmpty() }
+        .take(max)
+        .map { show ->
+            CaughtUpShowCandidate(
+                parentId = show.parentId,
+                watchedEpisodes = show.episodes,
+                source = "bingecat",
+                fromTracker = true
+            )
+        }
+        .toList()
 }
 
 /**
