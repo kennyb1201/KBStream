@@ -230,7 +230,7 @@ internal object PlaybackHistoryWriter {
             val db = WatchHistoryDatabase.openForProfile(context, target)
             try {
                 val dao = db.watchHistoryDao()
-                val row = preserveCompletion(entry, dao)
+                val row = preserveCompletion(context, entry, dao)
                 dao.upsert(row)
                 val cleared = supersededResumeIds(row, dao)
                 // Already session-scoped: the cloud row carries the same
