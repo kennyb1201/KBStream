@@ -65,7 +65,9 @@ class GuideHeaderButtonsContractTest {
             Quad("onSetupClick", "Icons.Filled.Settings", "Playlist setup", "KBTextHi")
         )
         buttons.forEach { button ->
-            val cardAt = header.indexOf("KBCard(onClick = ${button.callback})")
+            // The call's prefix, not its whole argument list: the cards also
+            // carry the DOWN return modifier now (header-trap F1a).
+            val cardAt = header.indexOf("KBCard(onClick = ${button.callback}")
             assertTrue(
                 "${button.callback} must still be the card's onClick - the callback is " +
                     "the wiring, the icon is only the face",
