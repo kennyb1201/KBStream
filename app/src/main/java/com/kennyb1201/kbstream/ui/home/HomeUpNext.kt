@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.home
 
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.bingecat.BingeCatWatchedSnapshot
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.history.titleIdentityName
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
@@ -148,7 +149,20 @@ enum class ResumeSource {
     LOCAL,
     SIMKL,
     MDBLIST,
-    TRAKT
+    TRAKT,
+
+    /**
+     * BingeCat's watched history, read as a next-episode leg.
+     *
+     * Added for the leg itself: its cards have to seed their own feed slot and
+     * cluster with their twins like any other tracker card. Deliberately NOT
+     * added to [com.kennyb1201.kbstream.data.settings.ResumeAuthority] - that
+     * enum is the viewer's choice of whose position wins, BingeCat is not
+     * offered as one, and a BINGECAT card therefore never wins a cluster as the
+     * authority's pick; it competes on the ordinary order like any other
+     * unpreferred card.
+     */
+    BINGECAT
 }
 
 data class UpNextItem(
@@ -880,7 +894,8 @@ private fun UpNextItem.historyShowName(
 internal fun isTrackerSourcedCard(item: UpNextItem): Boolean =
     item.id.startsWith("simkl:", ignoreCase = true) ||
         item.id.startsWith("mdblist:", ignoreCase = true) ||
-        item.id.startsWith("trakt:", ignoreCase = true)
+        item.id.startsWith("trakt:", ignoreCase = true) ||
+        item.id.startsWith("bingecat:", ignoreCase = true)
 
 /**
  * The time fields an ADVANCE ("next up") card carries.
@@ -935,29 +950,127 @@ internal fun upNextShowParentKeys(
 }
 
 /**
- * True when a tracker card (Simkl, MDBList) names a show this profile has
- * already finished locally.
+ * One show the local pass proved caught up, plus the furthest episode it can
+ * prove watched (Slice B, ii-1).
  *
- * The local pass proves a show is caught up - every aired episode it counted
- * is watched and nothing is left to resume (see [hasNothingLeftToWatch]) -
- * while the tracker feed keeps listing the show until the local completion is
- * pushed AND the tracker's own feed catches up. That gap is what kept a
- * finished title on Continue Watching for as long as another server took to
- * agree.
+ * The pair is what lets the tracker filter tell the two cards apart that the
+ * show-key-only record could not: the card for the episode just finished (a
+ * stale twin the rule exists for) and the card for an episode that aired after
+ * the verdict was formed (the one the viewer is owed). [furthestWatched] is null
+ * when no watched-state source named a placeable episode - then the record is the
+ * old show-key-only verdict and suppresses every card for the show.
+ */
+internal data class LocallyFinishedShow(
+    /** Every identity key the show answers to (see [upNextShowParentKeys]). */
+    val keys: Set<String>,
+    /**
+     * Furthest (season, episode) the local pass positively proved watched, or
+     * null when it could not prove one.
+     */
+    val furthestWatched: Pair<Int, Int>?
+)
+
+/**
+ * True when a tracker card (Simkl, MDBList, Trakt, BingeCat) names a show this
+ * profile has already finished locally, and the card does not point PAST what
+ * was finished.
  *
- * Making the local verdict authoritative here removes that dependency: the card
- * leaves the rail the moment the last watched episode is filed, whatever the
- * tracker still says. Matching is by the id vocabulary the duplicate collapse
- * already uses, so the card still pairs with the caught-up show across the
- * "tt..." / "tmdb:<n>" flavors.
+ * The local pass proves a show is caught up - every aired episode it counted is
+ * watched and nothing is left to resume (see [hasNothingLeftToWatch]) - while the
+ * tracker feed keeps listing the show until the local completion is pushed AND
+ * the tracker's own feed catches up. That gap is what kept a finished title on
+ * Continue Watching for as long as another server took to agree, so the local
+ * verdict is authoritative here.
+ *
+ * Authoritative about the EPISODES IT COUNTED, not about every episode forever:
+ * the verdict can be formed against a series detail that is up to 30 days old
+ * (Slice B, F2), and then the show has aired an episode the verdict never saw.
+ * A card pointing at that episode is exactly what the viewer is owed, so the
+ * comparison is season-major "at or before the furthest watched episode" - the
+ * shape [trackerCardJustCompletedByProfile] already uses, generalised from
+ * equality to `<=` because caught-up means every episode THROUGH the furthest is
+ * watched, not just one.
+ *
+ * The conservative cases stay conservative:
+ *  - a show recorded with no pair suppresses every card for it (today's
+ *    behaviour: unknown evidence is not a licence to re-admit a card);
+ *  - a card naming no episode cannot be told apart from the finished one, so it
+ *    is suppressed, exactly as the sibling does;
+ *  - a card at or before the furthest watched episode is a watched episode's
+ *    stale twin, whatever the detail said.
+ *
+ * Matching is by the id vocabulary the duplicate collapse already uses, so the
+ * card still pairs with the caught-up show across the "tt..." / "tmdb:<n>"
+ * flavors.
  */
 internal fun trackerCardLocallyFinished(
     item: UpNextItem,
-    finishedShowKeys: Set<String>
+    finishedShows: Map<String, LocallyFinishedShow>
+): Boolean {
+    if (!isTrackerSourcedCard(item)) return false
+    if (finishedShows.isEmpty()) return false
+
+    val show =
+        upNextGroupingKeys(item).firstNotNullOfOrNull { key -> finishedShows[key] }
+            ?: return false
+
+    // No pair: the old show-key verdict, unchanged.
+    val furthest = show.furthestWatched ?: return true
+
+    // A card that cannot name its episode is indistinguishable from the one
+    // just finished (the sibling's rule).
+    val cardSeason = namedEpisodeNumber(item.season) ?: return true
+    val cardEpisode = namedEpisodeNumber(item.episode) ?: return true
+
+    return cardSeason < furthest.first ||
+        (cardSeason == furthest.first && cardEpisode <= furthest.second)
+}
+
+/**
+ * The furthest (season, episode) any watched-state source positively lists for
+ * one show, or null when none of them names a placeable episode.
+ *
+ * This is the pair a local "caught up" verdict is recorded with (see
+ * [LocallyFinishedShow]): the furthest episode the pass can PROVE watched, not
+ * the latest one the detail claims. Season-major, the order the rail compares
+ * episodes in - a later season wins whatever its episode number - and a pair
+ * numbering 0 in either field is not an episode at all, exactly as the `S1E1`
+ * and specials rules already say elsewhere.
+ *
+ * Kept here, pure and top-level, because the episode-aware suppression is only
+ * as good as this pair: a wrong further episode would either hide the card the
+ * viewer is owed or keep a watched one alive.
+ */
+internal fun furthestWatchedPair(
+    mergedWatchedKeys: Set<String>,
+    trackerWatchedEpisodes: Set<Pair<Int, Int>>
+): Pair<Int, Int>? {
+    val mergedPairs =
+        mergedWatchedKeys.mapNotNull { key ->
+            parseEpisodeKey(key)?.let { (_, season, episode) -> season to episode }
+        }
+
+    val trackerPairs =
+        trackerWatchedEpisodes.filter { (season, episode) ->
+            season > 0 && episode > 0
+        }
+
+    return (mergedPairs + trackerPairs).maxWithOrNull(
+        compareBy<Pair<Int, Int>> { it.first }.thenBy { it.second }
+    )
+}
+
+/** Whether [pair] is one the merged watched state positively lists. */
+internal fun isEpisodeInWatchedEvidence(
+    pair: Pair<Int, Int>,
+    mergedWatchedKeys: Set<String>,
+    trackerWatchedEpisodes: Set<Pair<Int, Int>>
 ): Boolean =
-    isTrackerSourcedCard(item) &&
-        finishedShowKeys.isNotEmpty() &&
-        upNextGroupingKeys(item).any { it in finishedShowKeys }
+    pair in trackerWatchedEpisodes ||
+        mergedWatchedKeys.any { key ->
+            val parsed = parseEpisodeKey(key) ?: return@any false
+            parsed.second == pair.first && parsed.third == pair.second
+        }
 
 /**
  * How long after a completion on THIS device the tracker feeds are still
@@ -1712,6 +1825,30 @@ internal fun hasNothingLeftToWatch(
         watchedAiredEpisodes >= totalAiredEpisodes
 
 /**
+ * The next-episode legs' admission rule (Slice A, X1b/X3b): a tracker row is a
+ * Continue Watching candidate only while the show still has an aired episode the
+ * profile has not watched.
+ *
+ * [resolveSeriesTargetFromSharedWatchedState] answers that from the same season
+ * walk the local and Simkl legs use, and its null IS the caught-up answer, so a
+ * leg drops a null target. But the walk is handed the tracker's own
+ * furthest-watched pair as its hint, which is exactly what keeps a tracker card
+ * alive for a show whose own queued episode is AHEAD of TMDB's aired set - on
+ * that path the resolver does not answer null, it answers the known pair with
+ * the totals that say nothing is left (see `hasNothingLeftToWatch`). This is the
+ * second test the newer legs need, kept here so both of them read the same one.
+ *
+ * Conservative on purpose: a walk that could not count the show (no totals - an
+ * offline device, or a watched state it could not read completely) keeps the
+ * card, because an unreadable state cannot prove a backlog is finished.
+ */
+internal fun ResolvedHomeSeriesTarget.isCaughtUpByTotals(): Boolean {
+    val watched = episodesWatched ?: return false
+    val total = episodesTotal ?: return false
+    return total > 0 && watched >= total
+}
+
+/**
  * Upcoming's INCLUSION rule: only a show the viewer is CAUGHT UP on advertises
  * its next unaired episode.
  *
@@ -1979,6 +2116,56 @@ internal data class ShowEpisodeTotals(
     val total: Int
 )
 
+/**
+ * One card per show from a leg whose enumeration can name the same show twice.
+ *
+ * MDBList's watched index keeps the tracker's two id forms apart (see
+ * `mdbListWatchedEpisodesByShow`), so one show can be enumerated as `tt1234567`
+ * and again as `tmdb:456`. Both resolve to the same TMDB show, and two rail
+ * slots for one show is exactly what [com.kennyb1201.kbstream.ui.home
+ * .dedupeAndSortUpNext]'s funnel exists to prevent - but the funnel must be a
+ * backstop, not the plan: the surviving card's identity would then be whichever
+ * twin the cluster winner happened to pick, instead of a rule.
+ *
+ * So the leg dedupes itself, on the TMDB id the two forms share, preferring the
+ * IMDb-form card (the app's identity rule - the same preference
+ * `traktNextEpisodeParentId` states). A card with no TMDB id cannot be paired
+ * with anything, because nothing says it is the same show, so it is kept as it
+ * is.
+ */
+internal fun dedupeTrackerNextEpisodeCards(
+    cards: List<UpNextItem>
+): List<UpNextItem> {
+    if (cards.size < 2) return cards
+
+    val byTmdbId = LinkedHashMap<Int, UpNextItem>()
+    val unpaired = ArrayList<UpNextItem>()
+
+    cards.forEach { card ->
+        val tmdbId = card.tmdbId ?: 0
+        if (tmdbId <= 0) {
+            unpaired += card
+            return@forEach
+        }
+
+        val existing = byTmdbId[tmdbId]
+        byTmdbId[tmdbId] =
+            when {
+                existing == null -> card
+                // IMDb-first, deterministically: the surviving card must not
+                // depend on which twin was enumerated first.
+                !existing.isImdbFormCard() && card.isImdbFormCard() -> card
+                else -> existing
+            }
+    }
+
+    return byTmdbId.values.toList() + unpaired
+}
+
+/** True when this card's parent id is the IMDb form (`tt…`). */
+internal fun UpNextItem.isImdbFormCard(): Boolean =
+    parentId?.startsWith("tt", ignoreCase = true) == true
+
 internal sealed interface SimklUpNextResult {
 
     data class Success(
@@ -1990,5 +2177,106 @@ internal sealed interface SimklUpNextResult {
     data class Failed(
         val error: Throwable
     ) : SimklUpNextResult
+}
+
+/**
+ * What Trakt's next-episode leg answered.
+ *
+ * The tri-state is the Simkl one, and it is a sealed result rather than a bare
+ * `List<UpNextItem>` because the caller has to tell two "nothing"s apart:
+ *
+ *  - [NotConfigured] - no Trakt account. Its cards are stale by definition, so
+ *    the slot is arrived with the paused half alone - which is empty when there
+ *    is no account - rather than left holding them.
+ *  - [Failed] - the account is there but the read threw. No answer is not an
+ *    empty answer: the caller does not arrive at all, and the previous cards
+ *    stay on screen.
+ *
+ * The paused Trakt leg keeps its own swallow-to-empty shape (it is not part of
+ * this slice's change); the two halves arrive together under this result.
+ */
+internal sealed interface TraktNextUpResult {
+
+    data class Success(
+        val items: List<UpNextItem>
+    ) : TraktNextUpResult
+
+    data object NotConfigured : TraktNextUpResult
+
+    data class Failed(
+        val error: Throwable
+    ) : TraktNextUpResult
+}
+
+/**
+ * What BingeCat's next-episode leg answered (Slice A, X3).
+ *
+ * Same three states as [TraktNextUpResult], with one wrinkle that belongs to
+ * BingeCat's read: the repository answers `null` BOTH for a failed page and for
+ * its own gates (see `watchedHistorySnapshot`), so the leg checks the gates
+ * itself first. Past those gates a `null` can only mean the read failed, and it
+ * is reported as [Failed] rather than as an empty history.
+ */
+internal sealed interface BingeCatNextUpResult {
+
+    data class Success(
+        val items: List<UpNextItem>
+    ) : BingeCatNextUpResult
+
+    data object NotConfigured : BingeCatNextUpResult
+
+    data class Failed(
+        val error: Throwable
+    ) : BingeCatNextUpResult
+}
+
+/**
+ * What MDBList's next-episode leg answered (Slice A extension, X1).
+ *
+ * The same tri-state as [TraktNextUpResult] and [BingeCatNextUpResult], for the
+ * same reason: the caller has to tell two "nothing"s apart.
+ *
+ *  - [NotConfigured] - no MDBList key. Its cards are stale by definition, so
+ *    the slot is arrived with the paused half alone (empty without a key)
+ *    rather than left holding them.
+ *  - [Failed] - the key is there but the read threw. No answer is not an empty
+ *    answer: the caller does not arrive at all, and the previous cards stay.
+ *    The snapshot layer already serves its last good copy on a mid-walk
+ *    failure, so this arm is a throw and nothing less.
+ */
+internal sealed interface MdbListNextUpResult {
+
+    data class Success(
+        val items: List<UpNextItem>
+    ) : MdbListNextUpResult
+
+    data object NotConfigured : MdbListNextUpResult
+
+    data class Failed(
+        val error: Throwable
+    ) : MdbListNextUpResult
+}
+
+/**
+ * What a BingeCat history read answered, carried into the watched-state union
+ * (Slice A, X3c).
+ *
+ * A value rather than a nullable snapshot because "this caller never read
+ * BingeCat's history" and "the read failed" are different answers: the first
+ * contributes nothing and marks nothing, while the second is NO EVIDENCE and has
+ * to mark the show incomplete - otherwise a BingeCat-only show would be resolved
+ * against a map that says nothing was watched and land on S1E1.
+ *
+ * Passing it in is also what keeps the leg to ONE paged read per build: the
+ * history feed has no cache of its own, so asking it per show would re-page the
+ * account's whole timeline for every card.
+ */
+internal sealed interface BingeCatHistoryRead {
+
+    data class Read(
+        val snapshot: BingeCatWatchedSnapshot
+    ) : BingeCatHistoryRead
+
+    data object Failed : BingeCatHistoryRead
 }
 

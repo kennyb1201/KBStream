@@ -40,11 +40,19 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 /**
  * The smallest echo worth acting on.
  *
- * A one-title "search" that happens to be the head of the ranking is also
- * exactly what a real query for that title looks like - searching a chart's own
- * number one - so a single hit is never treated as an echo.
+ * A "search" that answers with the head of the ranking is also exactly what a
+ * real query looks like when the catalog genuinely has only a few matches - a
+ * short query against a small Top-2 list is the same shape as a real answer, and
+ * the two are indistinguishable from the outside. Below this many hits the
+ * answer is kept: a rail wrongly dropped is a result the viewer never learns
+ * existed, which is the more expensive mistake here.
+ *
+ * Five, not two: at two, a two-item list that matched the query was dropped as
+ * an echo purely because the catalog had nothing else to show (S2). A real
+ * ranking echo still answers with its browsing list, which is longer than this
+ * in every catalog the guard has been reported against.
  */
-internal const val CATALOG_ECHO_MIN_HITS = 2
+internal const val CATALOG_ECHO_MIN_HITS = 5
 
 /** The identity two titles are compared by: the pair the screen keys a row on. */
 private fun identity(meta: MetaPreview): String = "${meta.type}:${meta.id}"

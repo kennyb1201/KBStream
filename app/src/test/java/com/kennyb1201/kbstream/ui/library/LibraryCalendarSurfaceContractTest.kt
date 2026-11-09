@@ -180,7 +180,7 @@ class LibraryCalendarSurfaceContractTest {
             "the candidate set is source-fair, so a long history cannot crowd the " +
                 "tracker-only (currently airing) shows out of the calendar",
             viewModel.contains("showIds = calendarCandidates(") &&
-                viewModel.contains("sources = listOf(local, simkl, mdbList, trakt)")
+                viewModel.contains("sources = listOf(local, simkl, mdbList, trakt, bingecat)")
         )
     }
 

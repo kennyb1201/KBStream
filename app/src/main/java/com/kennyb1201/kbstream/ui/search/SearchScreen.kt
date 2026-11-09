@@ -33,11 +33,13 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
+import com.kennyb1201.kbstream.data.tmdb.TmdbSearchKeywordResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
-import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_STEPS
 import com.kennyb1201.kbstream.ui.browse.rememberFocusHandBack
+import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
+import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
@@ -62,7 +64,7 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 fun SearchScreen(
     onItemClick: (MetaPreview) -> Unit,
     onPersonClick: ((TmdbSearchPersonResult) -> Unit)? = null,
-    onStudioClick: ((TmdbSearchStudioResult) -> Unit)? = null,
+    onStudioClick: ((StudioSearchHit) -> Unit)? = null,
     onCollectionClick: ((TmdbSearchCollectionResult) -> Unit)? = null,
     // Browse-browser entries that drill into dedicated discover screens
     // (genres/keywords -> Tag, networks/services -> Studio, studios ->
@@ -101,6 +103,7 @@ fun SearchScreen(
     val actorResults by viewModel.actorResults.collectAsStateWithLifecycle()
     val studioResults by viewModel.studioResults.collectAsStateWithLifecycle()
     val collectionResults by viewModel.collectionResults.collectAsStateWithLifecycle()
+    val keywordResults by viewModel.keywordResults.collectAsStateWithLifecycle()
     val addonResultGroupsRaw by viewModel.addonResultGroups.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
@@ -109,6 +112,18 @@ fun SearchScreen(
     // search deep dive): the phone has read this since the error state was
     // added; the TV page never did, so offline read as "No matches found."
     val searchError by viewModel.searchError.collectAsStateWithLifecycle()
+    // Titles paging state: how many the query really has, whether the rail has
+    // a next page, whether that page is in flight, and why it failed. The
+    // Titles rail is the only one that pages.
+    val titlesTotal by viewModel.titlesTotal.collectAsStateWithLifecycle()
+    val titlesHaveMore by viewModel.titlesHaveMore.collectAsStateWithLifecycle()
+    val titlesLoadingMore by viewModel.titlesLoadingMore.collectAsStateWithLifecycle()
+    val titlesPageError by viewModel.titlesPageError.collectAsStateWithLifecycle()
+    // The rail's own view controls: which type it shows and how it is ordered.
+    // Both are views of the results already loaded, so they never re-query.
+    val titlesAvailable by viewModel.titlesAvailable.collectAsStateWithLifecycle()
+    val titleTypeFilter by viewModel.titleTypeFilter.collectAsStateWithLifecycle()
+    val titleSort by viewModel.titleSort.collectAsStateWithLifecycle()
     val recentSearches by viewModel.recentSearches.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
     // Hidden titles are dropped as Search reads its own results, so a
@@ -163,6 +178,12 @@ fun SearchScreen(
     }
     val showRailAddon by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getSearchRailShowAddonName(context))
+    }
+
+    // The recent-search chip whose long-press menu is open. A tap re-runs the
+    // query, so the only thing the menu can offer is forgetting that one chip.
+    var recentMenu by remember {
+        mutableStateOf<String?>(null)
     }
 
     // Long-press context menu for title tiles (trending/search/add-on rails).
@@ -325,8 +346,13 @@ fun SearchScreen(
     // Counted from the RAW lists, before the hidden filter drops rows: a viewer
     // who has hidden every hit still MATCHED something, so the "No matches
     // found" card must not stand in for results they chose to hide (LS-P2-6).
-    val totalCount = resultsRaw.size + actorResults.size + studioResults.size +
-        collectionResults.size + addonResultGroupsRaw.sumOf { it.results.size }
+    // Counted from the RAW lists, before the hidden filter AND before the type
+    // filter ([titlesAvailable] is the unfiltered loaded count): a viewer who
+    // filtered to Series did not search for something that does not exist, and
+    // the generic no-results card must not say they did.
+    val totalCount = titlesAvailable + actorResults.size + studioResults.size +
+        collectionResults.size + keywordResults.size +
+        addonResultGroupsRaw.sumOf { it.results.size }
 
     // Full-bleed screen: edge spacing lives in the LazyColumn's
     // contentPadding, not on the container, so the poster rails can draw
@@ -356,9 +382,12 @@ fun SearchScreen(
                     onSubmit = { viewModel.commitSearch() },
                     totalCount = totalCount,
                     catalogCount = results.size,
+                    titlesTotal = titlesTotal,
+                    titleTypeFilter = titleTypeFilter,
                     actorCount = actorResults.size,
                     studioCount = studioResults.size,
                     collectionCount = collectionResults.size,
+                    keywordCount = keywordResults.size,
                     addonCount = addonResultGroups.sumOf { it.results.size },
                     isLoading = isLoading
                 )
@@ -421,7 +450,9 @@ fun SearchScreen(
                             ) { recent: String ->
                                 SearchChip(
                                     label = recent,
-                                    onClick = { viewModel.onRecentSearchClicked(recent) }
+                                    onClick = { viewModel.onRecentSearchClicked(recent) },
+                                    // Hold Select to forget just this one.
+                                    onLongClick = { recentMenu = recent }
                                 )
                             }
 
@@ -537,10 +568,29 @@ fun SearchScreen(
                 }
             }
 
-            if (!isLoading && results.isNotEmpty()) {
+            // The section exists whenever titles were LOADED, not whenever the
+            // current view of them is non-empty: a type filter that excludes
+            // everything still has to leave its chips on screen, or the viewer
+            // would be stuck in an empty filter with no way back to All.
+            //
+            // `results` is in the gate too because it is what the PREVIOUS
+            // query left on screen through the next search's debounce - the
+            // loaded count has already been reset by then.
+            if (!isLoading && (results.isNotEmpty() || titlesAvailable > 0)) {
                 item(key = "titles_section") {
                     Column(modifier = Modifier.animateItem()) {
                         KBSectionHeader(title = "Titles")
+                        // The rail's own controls, directly above it: type
+                        // filter and order. Both are views of the results
+                        // already loaded (see setTitleTypeFilter/TitleSort), so
+                        // activating one never re-queries TMDB. Chip labels
+                        // take the app's all-caps control casing.
+                        //
+                        // Selecting a chip hands the D-pad back to the rail -
+                        // focus that stayed in the chip row would leave the
+                        // viewer pressing DOWN to get back to the results they
+                        // just filtered (see the pulse below).
+                        //
                         // Back from a Detail opened here puts this rail back on
                         // the tile that was pressed (see SearchReturnFocus).
                         // The state is created with that tile's index because
@@ -555,6 +605,125 @@ fun SearchScreen(
                                 } else {
                                     0
                                 }
+                        )
+                        var railFocusPulse by remember { mutableStateOf(0) }
+                        val returnToRail = {
+                            railFocusPulse++
+                        }
+                        LaunchedEffect(railFocusPulse) {
+                            if (railFocusPulse == 0) return@LaunchedEffect
+                            // Put the row back at its start first: after a
+                            // filter or sort change the old offset means
+                            // nothing, and a card that is not composed has no
+                            // node to focus.
+                            titlesRailState.scrollToItem(0)
+                            repeat(BROWSE_RETURN_FOCUS_STEPS) {
+                                awaitFrame()
+                                val first = results.firstOrNull()
+                                    ?: return@LaunchedEffect
+                                val requester = titleTileFocusRequesters[
+                                    searchTileFocusKey(
+                                        TITLES_RAIL_FOCUS_KEY,
+                                        "${first.type}:${first.id}"
+                                    )
+                                ]
+                                if (requester != null && runCatching {
+                                        requester.requestFocus()
+                                    }.getOrDefault(false)
+                                ) {
+                                    return@LaunchedEffect
+                                }
+                            }
+                        }
+                        LazyRow(
+                            contentPadding = PaddingValues(
+                                top = 2.dp,
+                                bottom = 2.dp,
+                                start = KBFocusChipInset,
+                                end = KBFocusChipInset
+                            ),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.offset(x = -KBFocusChipInset)
+                        ) {
+                            item(key = "titles_filter_all") {
+                                SearchChip(
+                                    label = "ALL",
+                                    accent = titleTypeFilter == TitleTypeFilter.ALL,
+                                    onClick = {
+                                        viewModel.setTitleTypeFilter(TitleTypeFilter.ALL)
+                                        returnToRail()
+                                    }
+                                )
+                            }
+                            item(key = "titles_filter_movies") {
+                                SearchChip(
+                                    label = "MOVIES",
+                                    accent = titleTypeFilter == TitleTypeFilter.MOVIES,
+                                    onClick = {
+                                        viewModel.setTitleTypeFilter(TitleTypeFilter.MOVIES)
+                                        returnToRail()
+                                    }
+                                )
+                            }
+                            item(key = "titles_filter_series") {
+                                SearchChip(
+                                    label = "SERIES",
+                                    accent = titleTypeFilter == TitleTypeFilter.SERIES,
+                                    onClick = {
+                                        viewModel.setTitleTypeFilter(TitleTypeFilter.SERIES)
+                                        returnToRail()
+                                    }
+                                )
+                            }
+                            item(key = "titles_sort_best") {
+                                SearchChip(
+                                    label = "BEST MATCH",
+                                    accent = titleSort == TitleSort.BEST_MATCH,
+                                    onClick = {
+                                        viewModel.setTitleSort(TitleSort.BEST_MATCH)
+                                        returnToRail()
+                                    }
+                                )
+                            }
+                            item(key = "titles_sort_newest") {
+                                SearchChip(
+                                    label = "NEWEST",
+                                    accent = titleSort == TitleSort.NEWEST,
+                                    onClick = {
+                                        viewModel.setTitleSort(TitleSort.NEWEST)
+                                        returnToRail()
+                                    }
+                                )
+                            }
+                            item(key = "titles_sort_az") {
+                                SearchChip(
+                                    label = "A-Z",
+                                    accent = titleSort == TitleSort.AZ,
+                                    onClick = {
+                                        viewModel.setTitleSort(TitleSort.AZ)
+                                        returnToRail()
+                                    }
+                                )
+                            }
+                        }
+                        // Ask for the next page as the rail nears its end.
+                        // This is the app's shared sentinel (see
+                        // InfiniteScrollEffect), so the Titles rail prefetches
+                        // exactly as far from the end as every other paged
+                        // surface does. The LazyRow's own layout is the signal
+                        // because it is the one both ways of arriving produce:
+                        // a D-pad focus on a late card scrolls it into view,
+                        // and a swipe simply scrolls.
+                        //
+                        // A page that FAILED is not retried by the sentinel:
+                        // hasMore is false to it while the error stands, and
+                        // the tail item's TRY AGAIN is the retry.
+                        InfiniteScrollEffect(
+                            listState = titlesRailState,
+                            itemCount = results.size,
+                            hasMore = titlesHaveMore && titlesPageError == null,
+                            isLoadingMore = titlesLoadingMore,
+                            onLoadMore = viewModel::loadMoreTitles
                         )
                         LazyRow(
                             state = titlesRailState,
@@ -571,6 +740,26 @@ fun SearchScreen(
                             ),
                             modifier = Modifier.offset(x = -KBFocusChipInset)
                         ) {
+                            if (results.isEmpty()) {
+                                // Only a type filter can empty the rail here:
+                                // with All, a non-zero loaded count means there
+                                // are cards. The message says WHICH filter came
+                                // up empty rather than claiming the search
+                                // found nothing, and the chips above stay
+                                // mounted so the viewer can go back to All.
+                                item(key = "titles_type_empty") {
+                                    KBStatusMessage(
+                                        icon = KB_STATUS_ICON_EMPTY,
+                                        message = titlesEmptyLabel(titleTypeFilter),
+                                        // A row item, so it needs the row's own
+                                        // viewport width to sit in the rail's
+                                        // place rather than shrink to the text.
+                                        modifier = Modifier
+                                            .fillParentMaxWidth()
+                                            .padding(vertical = 8.dp)
+                                    )
+                                }
+                            }
                             itemsIndexed(
                                 items = results,
                                 // Type-qualified: a movie and a series can share
@@ -639,6 +828,16 @@ fun SearchScreen(
                                     modifier = Modifier
                                         .focusRequester(requester)
                                 )
+                            }
+
+                            if (titlesLoadingMore || titlesPageError != null) {
+                                item(key = "titles_tail") {
+                                    SearchRailTail(
+                                        loading = titlesLoadingMore,
+                                        error = titlesPageError,
+                                        onRetry = viewModel::loadMoreTitles
+                                    )
+                                }
                             }
                         }
                     }
@@ -831,11 +1030,14 @@ fun SearchScreen(
                     SearchRail(title = "Studios", state = studiosRailState) {
                         itemsIndexed(
                             items = studioResults,
-                            key = { _, studio: TmdbSearchStudioResult -> "studio:${studio.id}" }
+                            // The kind is part of the key: a company id and a
+                            // network id are different id spaces and collide
+                            // (see [StudioSearchHit.key]).
+                            key = { _, studio: StudioSearchHit -> studio.key }
                         ) { index, studio ->
                             val tileKey = searchTileFocusKey(
                                 STUDIOS_RAIL_FOCUS_KEY,
-                                "studio:${studio.id}"
+                                studio.key
                             )
                             val requester = remember(tileKey) {
                                 titleTileFocusRequesters.getOrPut(tileKey) {
@@ -909,6 +1111,77 @@ fun SearchScreen(
                     }
                 }
             }
+
+            if (!isLoading && keywordResults.isNotEmpty()) {
+                item(key = "keywords_rail") {
+                    // And again for the Tag page a keyword opens.
+                    val railReturn = SearchReturnFocus.peek()
+                    val keywordsRailState = rememberLazyListState(
+                        initialFirstVisibleItemIndex =
+                            if (railReturn?.railKey == KEYWORDS_RAIL_FOCUS_KEY) {
+                                railReturn.position
+                            } else {
+                                0
+                            }
+                    )
+                    SearchRail(title = "Keywords", state = keywordsRailState) {
+                        itemsIndexed(
+                            items = keywordResults,
+                            key = { _, keyword: TmdbSearchKeywordResult ->
+                                "keyword:${keyword.id}"
+                            }
+                        ) { index, keyword ->
+                            val tileKey = searchTileFocusKey(
+                                KEYWORDS_RAIL_FOCUS_KEY,
+                                "keyword:${keyword.id}"
+                            )
+                            val requester = remember(tileKey) {
+                                titleTileFocusRequesters.getOrPut(tileKey) {
+                                    FocusRequester()
+                                }
+                            }
+                            // A keyword is a tag, so it draws as the app's chip -
+                            // the same pill the Keywords browse row and the
+                            // detail page's tag rails use - rather than as a card
+                            // around art it does not have.
+                            SearchChip(
+                                label = "#${keyword.name}",
+                                onClick = {
+                                    SearchReturnFocus.record(
+                                        SearchReturnTarget(
+                                            tileKey = tileKey,
+                                            railKey = KEYWORDS_RAIL_FOCUS_KEY,
+                                            position = index
+                                        )
+                                    )
+                                    viewModel.onKeywordOpened(keyword)
+                                },
+                                chipFocusRequester = requester
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // A recent-search chip: a tap runs the query again, so the long press
+        // holds the one thing a tap cannot say - forget this one.
+        recentMenu?.let { recent ->
+            PosterContextMenu(
+                title = recent,
+                subtitle = "Recent search",
+                actions = listOf(
+                    PosterContextAction(
+                        label = "Remove from recents",
+                        description = "Forget this search; the other recents stay",
+                        isDestructive = true
+                    ) {
+                        viewModel.removeRecentSearch(recent)
+                        recentMenu = null
+                    }
+                ),
+                onDismiss = { recentMenu = null }
+            )
         }
 
         // Long-press context menu for title tiles.
@@ -1165,6 +1438,7 @@ private const val TITLES_RAIL_FOCUS_KEY = "tmdb\u0001titles"
 private const val ACTORS_RAIL_FOCUS_KEY = "tmdb\u0001actors"
 private const val STUDIOS_RAIL_FOCUS_KEY = "tmdb\u0001studios"
 private const val COLLECTIONS_RAIL_FOCUS_KEY = "tmdb\u0001collections"
+private const val KEYWORDS_RAIL_FOCUS_KEY = "tmdb\u0001keywords"
 
 /**
  * One search card's key in [titleTileFocusRequesters].

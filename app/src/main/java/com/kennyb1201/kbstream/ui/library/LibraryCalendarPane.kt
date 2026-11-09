@@ -795,7 +795,7 @@ private fun CalendarDayList(
     if (!state.hasShows && !state.loading) {
         CalendarNotice(
             text = "Nothing to schedule yet. Watch something, or connect " +
-                "Simkl, MDBList or Trakt, and its episodes appear here.",
+                "Simkl, MDBList, Trakt or BingeCat, and its episodes appear here.",
             modifier = modifier
         )
         return

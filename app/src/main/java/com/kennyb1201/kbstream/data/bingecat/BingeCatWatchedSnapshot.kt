@@ -15,7 +15,53 @@ package com.kennyb1201.kbstream.data.bingecat
  */
 data class BingeCatWatchedSnapshot(
     val shows: List<BingeCatWatchedShow>
-)
+) {
+
+    /**
+     * The watched episodes of the show addressed by any of [showKeys].
+     *
+     * The sibling of Trakt's `watchedEpisodesFor`, and the reason the
+     * Continue Watching leg can put BingeCat's plays into the per-show watched
+     * union without a second paged read: the snapshot the leg already fetched
+     * is asked here for one show's episodes.
+     *
+     * Matched on the whole key, so `tt123` can never pick up `tt1234`'s plays.
+     * An empty set is both "the show is unknown" and "nothing is watched" -
+     * the caller distinguishes "the feed did not answer" by holding a null
+     * snapshot, not by reading this return value.
+     */
+    fun watchedEpisodesFor(showKeys: Collection<String>): Set<Pair<Int, Int>> {
+        if (shows.isEmpty() || showKeys.isEmpty()) return emptySet()
+        val wanted = showKeys.mapNotNull(::canonicalBingeCatShowKey).toSet()
+        if (wanted.isEmpty()) return emptySet()
+        return shows
+            .asSequence()
+            .filter { show -> show.parentId in wanted }
+            .flatMap { show -> show.episodes.asSequence() }
+            .toSet()
+    }
+}
+
+/**
+ * One id in the form [bingeCatShowKey] produces, or null when there is nothing
+ * to compare: a bare numeric id is TMDB's, `imdb:` is the bare `tt…` value, and
+ * a `tt…` id is already canonical.
+ */
+private fun canonicalBingeCatShowKey(raw: String?): String? {
+    val value = raw?.trim()?.takeIf { it.isNotBlank() } ?: return null
+    val lower = value.lowercase()
+    return when {
+        lower.startsWith("imdb:") -> canonicalBingeCatShowKey(value.substringAfter(':'))
+        lower.startsWith("tt") -> lower.substringBefore(':')
+        lower.startsWith("tmdb:") -> {
+            val rest = value.substringAfter(':').trim()
+            rest.toIntOrNull()?.let { "tmdb:$it" } ?: canonicalBingeCatShowKey(rest)
+        }
+
+        value.all(Char::isDigit) -> "tmdb:$value"
+        else -> null
+    }
+}
 
 /** One show in [BingeCatWatchedSnapshot], by an id the rest of the app uses. */
 data class BingeCatWatchedShow(

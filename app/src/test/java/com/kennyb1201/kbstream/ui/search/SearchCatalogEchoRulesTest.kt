@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.search
 
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -89,6 +90,48 @@ class SearchCatalogEchoRulesTest {
             "searching a chart's own number one is a real search result, and " +
                 "the old comparison would have dropped it",
             catalogEchoesItsBrowseList(chart, listOf(chart[0]))
+        )
+    }
+
+    // ── the threshold: a short answer is kept, a long one still drops ────
+
+    @Test
+    fun `a two-item exact match is kept`() {
+        // S2: a small top-2 list that matched the query is indistinguishable
+        // from a real answer with two matches, and dropping it cost the viewer
+        // the only two hits the catalog had.
+        val top2 = chart.take(2)
+        assertFalse(
+            "two hits are below the echo threshold and must be kept",
+            catalogEchoesItsBrowseList(chart, top2)
+        )
+        assertFalse(
+            "even when the browse page is exactly those two",
+            catalogEchoesItsBrowseList(top2, top2)
+        )
+    }
+
+    @Test
+    fun `an eight-item exact match still drops`() {
+        // The behaviour the guard exists for: a rank catalog answering any
+        // query with its own eight-item list.
+        val top8 = chart.take(8)
+        assertTrue(
+            "eight hits of the chart's own head is an echo",
+            catalogEchoesItsBrowseList(chart, top8)
+        )
+        assertTrue(
+            "and an eight-item chart echoed whole is still an echo",
+            catalogEchoesItsBrowseList(top8, top8)
+        )
+    }
+
+    @Test
+    fun `the threshold is a named constant, and it is five`() {
+        assertEquals(
+            "the boundary the two cases above straddle",
+            5,
+            CATALOG_ECHO_MIN_HITS
         )
     }
 

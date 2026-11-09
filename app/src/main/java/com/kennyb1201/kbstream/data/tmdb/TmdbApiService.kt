@@ -295,16 +295,22 @@ suspend fun searchCollection(
     @Query("api_key") apiKey: String
 ): TmdbSearchCollectionResponse
 
+    // TMDB pages both title searches (20 hits a page, `total_results` /
+    // `total_pages` in the body). The page is explicit here for the same reason
+    // it already is on searchKeyword above: a broad query's first page used to
+    // be the whole result set, and nothing on screen said so.
     @GET("search/movie")
     suspend fun searchMovie(
         @Query("query") query: String,
-        @Query("api_key") apiKey: String
+        @Query("api_key") apiKey: String,
+        @Query("page") page: Int = 1
     ): TmdbSearchTitleResponse
 
     @GET("search/tv")
     suspend fun searchTv(
         @Query("query") query: String,
-        @Query("api_key") apiKey: String
+        @Query("api_key") apiKey: String,
+        @Query("page") page: Int = 1
     ): TmdbSearchTitleResponse
 
     @GET("genre/movie/list")

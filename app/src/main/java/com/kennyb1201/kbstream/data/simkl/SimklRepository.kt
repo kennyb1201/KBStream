@@ -21,6 +21,7 @@ import com.kennyb1201.kbstream.data.BackgroundWork
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.kennyb1201.kbstream.data.reporting.NetworkTraceInterceptor
+import com.kennyb1201.kbstream.data.reporting.UpcomingDiagTrace
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import com.kennyb1201.kbstream.data.runCatchingCancellable
@@ -2960,6 +2961,35 @@ class SimklRepository(
     }
 
     /**
+     * Why the CW rule refused a show, in the words the skip line prints.
+     *
+     * Derived from the ITEM's fields at the log site rather than by calling
+     * [isContinueWatchingCandidate] again: the rule stays exactly as it is, and
+     * the token names the branch a reader of a diagnostics paste would otherwise
+     * have to re-run the rule in their head to find. The branches mirror it one
+     * for one - dropped first, then never started, then the tally that says
+     * caught up, else the finished status that left no next episode.
+     */
+    private fun cwSkipReason(
+        item: SimklWatchingShowItem,
+        watched: Int,
+        aired: Int
+    ): String =
+        when {
+            item.status?.trim()?.lowercase() == "dropped" ->
+                "dropped"
+
+            watched == 0 && item.lastWatched.isNullOrBlank() ->
+                "not-started"
+
+            aired > 0 && watched >= aired ->
+                "caught-up"
+
+            else ->
+                "finished"
+        }
+
+    /**
      * One tracker show as a Continue Watching card, or null when it is not a
      * candidate or cannot be identified.
      *
@@ -2998,10 +3028,13 @@ class SimklRepository(
         // resume), so the reason is worth logging: the usual one is a
         // perfectly healthy show whose card now comes from the Upcoming rail
         // instead. See UPCOMING_DIAGNOSTICS. Runs for both legs.
-        if (
-            !candidate &&
-            UPCOMING_DIAGNOSTICS
-        ) {
+        //
+        // Both verdicts are lines, not just the skip: a paste with only skips
+        // cannot tell "every show was kept" from "the leg never ran", which is
+        // the fork the Nov 8 report needed answered. The same string goes to the
+        // log and to [UpcomingDiagTrace] - the release APK has no logcat and a TV
+        // cannot read one, so the ring is what makes the verdict travel.
+        if (UPCOMING_DIAGNOSTICS) {
 
             val total =
                 item.totalEpisodesCount ?: 0
@@ -3009,14 +3042,30 @@ class SimklRepository(
             val notAired =
                 item.notAiredEpisodesCount ?: 0
 
-            Log.d(
-                "UPCOMING_DIAG",
-                "cw skip title='${item.show?.title}' " +
-                    "status=${item.status} " +
-                    "watched=${item.watchedEpisodesCount ?: 0} " +
-                    "aired=${if (total > 0) total - notAired else 0} " +
-                    "nextToWatch=${item.nextToWatch}"
-            )
+            val watched =
+                item.watchedEpisodesCount ?: 0
+
+            val aired =
+                if (total > 0) total - notAired else 0
+
+            val cwLine =
+                if (candidate) {
+                    "cw kept title='${item.show?.title}' " +
+                        "status=${item.status} " +
+                        "watched=$watched " +
+                        "aired=$aired " +
+                        "nextToWatch=${item.nextToWatch}"
+                } else {
+                    "cw skip title='${item.show?.title}' " +
+                        "status=${item.status} " +
+                        "watched=$watched " +
+                        "aired=$aired " +
+                        "nextToWatch=${item.nextToWatch} " +
+                        "reason=${cwSkipReason(item, watched, aired)}"
+                }
+
+            Log.d("UPCOMING_DIAG", cwLine)
+            UpcomingDiagTrace.note(cwLine)
         }
 
         if (

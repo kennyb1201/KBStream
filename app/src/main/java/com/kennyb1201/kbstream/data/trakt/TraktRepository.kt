@@ -869,10 +869,13 @@ class TraktRepository private constructor(private val context: Context?) {
     /**
      * The account's paused sessions, flattened into resume candidates.
      *
-     * Read only when the viewer has made Trakt the authoritative resume source
-     * - there is no point spending a request on every Home rebuild otherwise.
-     * Failures answer an empty list: a tracker outage may never empty the rail
-     * (the other sources still speak).
+     * Read whenever Trakt is configured. The resume authority is a
+     * winner-picker, not a feed switch: it decides which card wins a title the
+     * sources all know (see `ResumeAuthorityRules`), while the cards of every
+     * other configured source stay in the merge as the fallback - so gating this
+     * read on the authority left a Trakt-only show with no card at all under the
+     * default LOCAL setting. Failures answer an empty list: a tracker outage may
+     * never empty the rail (the other sources still speak).
      */
     suspend fun playbackSessions(): List<TraktPlaybackSession> {
         if (!TraktConfig.isConfigured) return emptyList()

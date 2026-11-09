@@ -174,9 +174,10 @@ class SearchScreenMobileContractTest {
                 mobile.contains("group.results.filterNot(::resultIsHidden)")
         )
         assertTrue(
-            "the empty state counts the RAW matches, so hiding hits does not " +
-                "read as 'no matches'",
-            mobile.contains("resultsRaw.size + actorResults.size + studioResults.size")
+            "the empty state counts the RAW matches, so hiding hits - or a type " +
+                "filter that came up empty - does not read as 'no matches'",
+            mobile.contains("titlesAvailable + actorResults.size + studioResults.size") &&
+                mobile.contains("val titlesAvailable by viewModel.titlesAvailable")
         )
     }
 

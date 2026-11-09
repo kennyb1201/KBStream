@@ -612,7 +612,14 @@ data class TmdbSearchTitleResult(
 
 @JsonClass(generateAdapter = true)
 data class TmdbSearchTitleResponse(
-    val results: List<TmdbSearchTitleResult> = emptyList()
+    val page: Int = 1,
+    val results: List<TmdbSearchTitleResult> = emptyList(),
+    // The two fields that make a result set finite rather than "whatever fit
+    // in the first page". Modelled exactly like
+    // [TmdbSearchKeywordResponse]'s totalResults; both are absent from a
+    // failed/unknown body, and 0 then means "no total to show".
+    @Json(name = "total_results") val totalResults: Int = 0,
+    @Json(name = "total_pages") val totalPages: Int = 0
 )
 
 @JsonClass(generateAdapter = true)

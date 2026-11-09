@@ -68,6 +68,7 @@ import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.backup.BackupManager
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
+import com.kennyb1201.kbstream.data.debrid.CloudMatch
 import com.kennyb1201.kbstream.data.debrid.TORBOX_VERIFIED_MARKER
 import com.kennyb1201.kbstream.data.debrid.TorBoxClient
 import com.kennyb1201.kbstream.data.debrid.TorBoxCloudStore
@@ -205,9 +206,19 @@ fun SettingsScreenMobile(
     onOpenCatalogManager: () -> Unit = {},
     onOpenCatalogBuilder: () -> Unit = {},
     onOpenStats: () -> Unit = {},
-    /** Opens a title found in the viewer's TorBox cloud (spec F2b). */
-    onOpenTorBoxFile: (type: String, id: String, title: String, season: Int?, episode: Int?) -> Unit =
-        { _, _, _, _, _ -> }
+    /**
+     * Plays a file found in the viewer's TorBox cloud, or opens the title it
+     * belongs to. `file` is the tapped row's identity, attempted first.
+     */
+    onOpenTorBoxFile: (
+        type: String,
+        id: String,
+        title: String,
+        season: Int?,
+        episode: Int?,
+        file: CloudMatch
+    ) -> Unit =
+        { _, _, _, _, _, _ -> }
 ) {
     val context = LocalContext.current
     // Reopen on the pane last read, exactly as the TV rail does (device-local,
@@ -811,7 +822,14 @@ private fun IntegrationsPaneMobile(
     onOpenBingeCatPublicLists: () -> Unit,
     onOpenPublicLists: (String) -> Unit,
     onOpenProfiles: () -> Unit,
-    onOpenTorBoxFile: (type: String, id: String, title: String, season: Int?, episode: Int?) -> Unit
+    onOpenTorBoxFile: (
+        type: String,
+        id: String,
+        title: String,
+        season: Int?,
+        episode: Int?,
+        file: CloudMatch
+    ) -> Unit
 ) {
     val context = LocalContext.current
     val activeProfile by ProfileManager.activeProfile.collectAsStateWithLifecycle()
@@ -1264,15 +1282,15 @@ private fun IntegrationsPaneMobile(
             onClick = { torboxCloudOpen = true }
         )
         SettingsCaptionMobile(
-            "Every finished file in your TorBox cloud. Tap one to open the title it " +
-                "belongs to."
+            "Every finished file in your TorBox cloud. Tap one to play it - or to open " +
+                "the title it belongs to."
         )
         if (torboxCloudOpen) {
             TorBoxCloudListDialog(
                 onDismiss = { torboxCloudOpen = false },
-                onOpen = { type, id, title, season, episode ->
+                onOpen = { type, id, title, season, episode, file ->
                     torboxCloudOpen = false
-                    onOpenTorBoxFile(type, id, title, season, episode)
+                    onOpenTorBoxFile(type, id, title, season, episode, file)
                 }
             )
         }

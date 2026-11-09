@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.simkl
 
 import android.util.Log
+import com.kennyb1201.kbstream.data.reporting.UpcomingDiagTrace
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /*
@@ -750,8 +751,7 @@ suspend fun SimklRepository.getCaughtUpUnreleasedShowsImpl():
         val now =
             System.currentTimeMillis()
 
-        Log.d(
-            "UPCOMING_DIAG",
+        val blobLine =
             "caught-up blob source=" +
                 blobBefore.source + " ageMs=" +
                 (blobBefore.updatedAt?.let { now - it } ?: -1L) +
@@ -762,7 +762,9 @@ suspend fun SimklRepository.getCaughtUpUnreleasedShowsImpl():
                 caughtUp.joinToString {
                     "'${it.imdbId ?: it.tmdbId ?: it.simklId ?: "?"}'"
                 }
-        )
+
+        Log.d("UPCOMING_DIAG", blobLine)
+        UpcomingDiagTrace.note(blobLine)
     }
 
     return caughtUp

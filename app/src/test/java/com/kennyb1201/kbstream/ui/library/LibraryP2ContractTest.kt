@@ -99,8 +99,10 @@ class LibraryP2ContractTest {
     fun `the no-matches card counts raw hits, not the hidden-filtered ones`() {
         val src = source(SEARCH_SCREEN)
         assertTrue(
-            "totalCount must be computed from the raw result lists",
-            src.contains("resultsRaw.size + actorResults.size")
+            "totalCount must be computed from the raw result lists - including the " +
+                "unfiltered title count, so a type filter that came up empty cannot " +
+                "be reported as 'no matches'",
+            src.contains("titlesAvailable + actorResults.size")
         )
     }
 

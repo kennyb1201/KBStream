@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
@@ -42,6 +43,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -55,15 +57,18 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
+import com.kennyb1201.kbstream.data.tmdb.TmdbSearchKeywordResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
-import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
+import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRail
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.VoiceSearchChip
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
 import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscape
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
+import com.kennyb1201.kbstream.ui.components.voiceSearchAvailable
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
 import com.kennyb1201.kbstream.ui.components.touch.MobileStatus
 import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterCard
@@ -81,6 +86,9 @@ import com.kennyb1201.kbstream.ui.search.BrowseEntry
 import com.kennyb1201.kbstream.ui.search.SearchSeed
 import com.kennyb1201.kbstream.ui.search.SearchTitleResult
 import com.kennyb1201.kbstream.ui.search.SearchViewModel
+import com.kennyb1201.kbstream.ui.search.StudioSearchHit
+import com.kennyb1201.kbstream.ui.search.TitleSort
+import com.kennyb1201.kbstream.ui.search.TitleTypeFilter
 import com.kennyb1201.kbstream.ui.search.addonRailIdentity
 import com.kennyb1201.kbstream.ui.search.browseCategoryBlurb
 import com.kennyb1201.kbstream.ui.search.browseCategoryNounPlural
@@ -88,8 +96,11 @@ import com.kennyb1201.kbstream.ui.search.browseCountLabel
 import com.kennyb1201.kbstream.ui.search.filterBrowseEntries
 import com.kennyb1201.kbstream.ui.search.partialWatchedTile
 import com.kennyb1201.kbstream.ui.search.searchRailTitle
+import com.kennyb1201.kbstream.ui.search.titleCountLabel
+import com.kennyb1201.kbstream.ui.search.titlesEmptyLabel
 import com.kennyb1201.kbstream.ui.search.watchedTile
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -123,7 +134,8 @@ import com.kennyb1201.kbstream.ui.theme.MobileTheme
  *    it;
  *  - **the results** are the TV's rails - Titles, one per add-on source
  *    (honouring the two synced rail-label toggles), Actors, Studios,
- *    Collections - drawn as touch cards with the same watched/partial badges;
+ *    Collections, Keywords - drawn as touch cards with the same
+ *    watched/partial badges, except keywords, which are tag chips;
  *  - **the title long press** is the TV menu: Go to Details, watched toggle,
  *    Add to Library and Hide - with the same id pair the tile's badge uses.
  *
@@ -136,7 +148,7 @@ import com.kennyb1201.kbstream.ui.theme.MobileTheme
 fun SearchScreenMobile(
     onItemClick: (MetaPreview) -> Unit,
     onPersonClick: ((TmdbSearchPersonResult) -> Unit)? = null,
-    onStudioClick: ((TmdbSearchStudioResult) -> Unit)? = null,
+    onStudioClick: ((StudioSearchHit) -> Unit)? = null,
     onCollectionClick: ((TmdbSearchCollectionResult) -> Unit)? = null,
     onOpenTagScreen: ((Int, String, Boolean, String) -> Unit)? = null,
     onOpenStudioScreen: ((Int, String, Boolean, Int?, Int?, Boolean, Int?) -> Unit)? = null,
@@ -152,17 +164,36 @@ fun SearchScreenMobile(
         val context = LocalContext.current
         val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
         val fieldFocus = remember { FocusRequester() }
+        // The phone's own voice chip (S3). The shared chip already knows where a
+        // recognizer exists, so a device whose IME mic is all it has (or a bare
+        // AOSP build) draws no dead button - the same rule the TV hero uses.
+        val focusManager = LocalFocusManager.current
+        val voiceSearchHere = remember(context) { voiceSearchAvailable(context) }
 
         val query by viewModel.searchQuery.collectAsStateWithLifecycle()
         val resultsRaw by viewModel.results.collectAsStateWithLifecycle()
         val actorResults by viewModel.actorResults.collectAsStateWithLifecycle()
         val studioResults by viewModel.studioResults.collectAsStateWithLifecycle()
         val collectionResults by viewModel.collectionResults.collectAsStateWithLifecycle()
+        val keywordResults by viewModel.keywordResults.collectAsStateWithLifecycle()
         val addonResultGroupsRaw by viewModel.addonResultGroups.collectAsStateWithLifecycle()
         val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
         val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
         val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
         val searchError by viewModel.searchError.collectAsStateWithLifecycle()
+        // Titles paging: the rail's real total, whether another page exists,
+        // that page's in-flight state, and its failure. Only the Titles rail
+        // pages - the add-on, actor, studio and collection rails keep their
+        // own caps for now.
+        val titlesTotal by viewModel.titlesTotal.collectAsStateWithLifecycle()
+        val titlesHaveMore by viewModel.titlesHaveMore.collectAsStateWithLifecycle()
+        val titlesLoadingMore by viewModel.titlesLoadingMore.collectAsStateWithLifecycle()
+        val titlesPageError by viewModel.titlesPageError.collectAsStateWithLifecycle()
+        // The rail's view controls: type filter and order. Views of the results
+        // already loaded, so a tap never re-queries.
+        val titlesAvailable by viewModel.titlesAvailable.collectAsStateWithLifecycle()
+        val titleTypeFilter by viewModel.titleTypeFilter.collectAsStateWithLifecycle()
+        val titleSort by viewModel.titleSort.collectAsStateWithLifecycle()
         val recentSearches by viewModel.recentSearches.collectAsStateWithLifecycle()
         val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
         val suggestions by viewModel.suggestions.collectAsStateWithLifecycle()
@@ -219,12 +250,18 @@ fun SearchScreenMobile(
         // Counted from the RAW lists, before the hidden filter: a viewer who hid
         // every hit still MATCHED something, so the empty state must not stand
         // in for results they chose to hide.
-        val totalCount = resultsRaw.size + actorResults.size + studioResults.size +
-            collectionResults.size + addonResultGroupsRaw.sumOf { it.results.size }
+        // From the RAW title count ([titlesAvailable], before the type filter):
+        // filtering to a type that came up empty is not the same as finding
+        // nothing, so the generic empty state must not stand in for it.
+        val totalCount = titlesAvailable + actorResults.size + studioResults.size +
+            collectionResults.size + keywordResults.size +
+            addonResultGroupsRaw.sumOf { it.results.size }
 
         var menuResult by remember { mutableStateOf<SearchTitleResult?>(null) }
         var chipMenu by remember { mutableStateOf<Pair<String, BrowseEntry>?>(null) }
         var categoryMenu by remember { mutableStateOf<BrowseCategory?>(null) }
+        // The recent-search chip whose long-press sheet is open.
+        var recentMenu by remember { mutableStateOf<String?>(null) }
 
         LaunchedEffect(Unit) {
             // Which chips are mirrored to Home can have changed while this
@@ -279,33 +316,51 @@ fun SearchScreenMobile(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 item(key = "searchbar") {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 4.dp, end = 12.dp, top = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        MobileBackButton(onBack = { backDispatcher?.onBackPressed() })
-                        KBTextField(
-                            value = query,
-                            onValueChange = viewModel::onQueryChanged,
-                            placeholder = "Search titles, people, collections…",
-                            focusRequester = fieldFocus,
-                            modifier = Modifier.weight(1f),
-                            onDone = { viewModel.commitSearch() },
-                            onClear = {
-                                viewModel.onQueryChanged("")
-                                fieldFocus.requestFocus()
-                            },
-                            leading = {
-                                Icon(
-                                    imageVector = Icons.Default.Search,
-                                    contentDescription = null,
-                                    tint = KBTextLo,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        )
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 4.dp, end = 12.dp, top = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            MobileBackButton(onBack = { backDispatcher?.onBackPressed() })
+                            KBTextField(
+                                value = query,
+                                onValueChange = viewModel::onQueryChanged,
+                                placeholder = "Search titles, people, collections…",
+                                focusRequester = fieldFocus,
+                                modifier = Modifier.weight(1f),
+                                onDone = { viewModel.commitSearch() },
+                                onClear = {
+                                    viewModel.onQueryChanged("")
+                                    fieldFocus.requestFocus()
+                                },
+                                leading = {
+                                    Icon(
+                                        imageVector = Icons.Default.Search,
+                                        contentDescription = null,
+                                        tint = KBTextLo,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            )
+                        }
+
+                        // Voice search, the same chip the TV hero draws: a
+                        // transcript is submitted exactly as if it had been
+                        // typed, so the results are already loading when the
+                        // keyboard goes away.
+                        if (voiceSearchHere) {
+                            VoiceSearchChip(
+                                onTranscript = { spoken ->
+                                    viewModel.onQueryChanged(spoken)
+                                    viewModel.commitSearch()
+                                    focusManager.clearFocus()
+                                },
+                                onUnavailable = { focusManager.clearFocus() },
+                                modifier = Modifier.padding(start = 16.dp, top = 8.dp)
+                            )
+                        }
                     }
                 }
 
@@ -332,7 +387,13 @@ fun SearchScreenMobile(
                                     text = buildString {
                                         val chips = buildList {
                                             if (results.isNotEmpty()) {
-                                                add("${results.size} titles")
+                                                add(
+                                                    titleCountLabel(
+                                                        results.size,
+                                                        titleTypeFilter,
+                                                        titlesTotal
+                                                    )
+                                                )
                                             }
                                             val addonCount = addonResultGroups
                                                 .sumOf { it.results.size }
@@ -347,6 +408,9 @@ fun SearchScreenMobile(
                                             }
                                             if (studioResults.isNotEmpty()) {
                                                 add("${studioResults.size} studios")
+                                            }
+                                            if (keywordResults.isNotEmpty()) {
+                                                add("${keywordResults.size} keywords")
                                             }
                                         }
                                         append(chips.joinToString(" · "))
@@ -403,7 +467,9 @@ fun SearchScreenMobile(
                                         selected = false,
                                         onClick = {
                                             viewModel.onRecentSearchClicked(recent)
-                                        }
+                                        },
+                                        // Hold a chip to forget just that one.
+                                        onLongClick = { recentMenu = recent }
                                     )
                                 }
                                 item(key = "clear_recent") {
@@ -660,9 +726,95 @@ fun SearchScreenMobile(
                     }
                 }
 
-                if (!isLoading && results.isNotEmpty()) {
+                // The section is drawn whenever titles were LOADED, not
+                // whenever the current view of them is non-empty: a filter that
+                // excludes everything must leave its chips on screen, or the
+                // viewer is stuck in an empty filter with no way back to All.
+                // `results` is in the gate because it is what the previous
+                // query left on screen through the next search's debounce.
+                if (!isLoading && (results.isNotEmpty() || titlesAvailable > 0)) {
                     item(key = "titles_section") {
-                        MobileSearchRail(title = "Titles") {
+                        // The rail's own controls, directly above it: which
+                        // type it shows and how it is ordered. Both are views
+                        // of the results already loaded, so a tap never
+                        // re-queries. Same labels and order as the TV row.
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            item(key = "titles_filter_all") {
+                                TouchChoiceChip(
+                                    label = "ALL",
+                                    selected = titleTypeFilter == TitleTypeFilter.ALL,
+                                    onClick = {
+                                        viewModel.setTitleTypeFilter(TitleTypeFilter.ALL)
+                                    }
+                                )
+                            }
+                            item(key = "titles_filter_movies") {
+                                TouchChoiceChip(
+                                    label = "MOVIES",
+                                    selected = titleTypeFilter == TitleTypeFilter.MOVIES,
+                                    onClick = {
+                                        viewModel.setTitleTypeFilter(TitleTypeFilter.MOVIES)
+                                    }
+                                )
+                            }
+                            item(key = "titles_filter_series") {
+                                TouchChoiceChip(
+                                    label = "SERIES",
+                                    selected = titleTypeFilter == TitleTypeFilter.SERIES,
+                                    onClick = {
+                                        viewModel.setTitleTypeFilter(TitleTypeFilter.SERIES)
+                                    }
+                                )
+                            }
+                            item(key = "titles_sort_best") {
+                                TouchChoiceChip(
+                                    label = "BEST MATCH",
+                                    selected = titleSort == TitleSort.BEST_MATCH,
+                                    onClick = {
+                                        viewModel.setTitleSort(TitleSort.BEST_MATCH)
+                                    }
+                                )
+                            }
+                            item(key = "titles_sort_newest") {
+                                TouchChoiceChip(
+                                    label = "NEWEST",
+                                    selected = titleSort == TitleSort.NEWEST,
+                                    onClick = {
+                                        viewModel.setTitleSort(TitleSort.NEWEST)
+                                    }
+                                )
+                            }
+                            item(key = "titles_sort_az") {
+                                TouchChoiceChip(
+                                    label = "A-Z",
+                                    selected = titleSort == TitleSort.AZ,
+                                    onClick = {
+                                        viewModel.setTitleSort(TitleSort.AZ)
+                                    }
+                                )
+                            }
+                        }
+                        // The rail's state is hoisted out of MobileSearchRail
+                        // so its end can be watched: reaching it asks for the
+                        // next page. The same sentinel the TV rail uses, so a
+                        // swipe prefetches the page as far from the end as
+                        // every other paged surface.
+                        //
+                        // A page that failed is not retried by the sentinel -
+                        // the tail's TRY AGAIN is the retry - so hasMore is
+                        // false to it while the error stands.
+                        val titlesRailState = rememberLazyListState()
+                        InfiniteScrollEffect(
+                            listState = titlesRailState,
+                            itemCount = results.size,
+                            hasMore = titlesHaveMore && titlesPageError == null,
+                            isLoadingMore = titlesLoadingMore,
+                            onLoadMore = viewModel::loadMoreTitles
+                        )
+                        MobileSearchRail(title = "Titles", state = titlesRailState) {
                             items(
                                 results,
                                 key = { result: SearchTitleResult ->
@@ -700,6 +852,31 @@ fun SearchScreenMobile(
                                     },
                                     onLongClick = { menuResult = result }
                                 )
+                            }
+
+                            if (results.isEmpty()) {
+                                // A type filter that excludes every hit is an
+                                // answer, not an empty result set - and the
+                                // chips above stay mounted so the viewer can
+                                // switch back to All.
+                                item(key = "titles_type_empty") {
+                                    MobileStatus(
+                                        message = titlesEmptyLabel(titleTypeFilter),
+                                        // A row item: give it the row's viewport
+                                        // width so it sits where the rail would.
+                                        modifier = Modifier.fillParentMaxWidth()
+                                    )
+                                }
+                            }
+
+                            if (titlesLoadingMore || titlesPageError != null) {
+                                item(key = "titles_tail") {
+                                    MobileSearchRailTail(
+                                        loading = titlesLoadingMore,
+                                        error = titlesPageError,
+                                        onRetry = viewModel::loadMoreTitles
+                                    )
+                                }
                             }
                         }
                     }
@@ -783,9 +960,10 @@ fun SearchScreenMobile(
                         MobileSearchRail(title = "Studios") {
                             items(
                                 studioResults,
-                                key = { studio: TmdbSearchStudioResult ->
-                                    "studio:${studio.id}"
-                                },
+                                // Kind + id: company and network ids are
+                                // different id spaces and collide (see
+                                // [StudioSearchHit.key]).
+                                key = { studio: StudioSearchHit -> studio.key },
                                 contentType = { "studio" }
                             ) { studio ->
                                 StudioTile(
@@ -818,6 +996,26 @@ fun SearchScreenMobile(
                                         viewModel.onCollectionOpened(collection)
                                         onCollectionClick?.invoke(collection)
                                     }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (!isLoading && keywordResults.isNotEmpty()) {
+                    item(key = "keywords_rail") {
+                        MobileSearchRail(title = "Keywords") {
+                            items(
+                                keywordResults,
+                                key = { keyword: TmdbSearchKeywordResult ->
+                                    "keyword:${keyword.id}"
+                                },
+                                contentType = { "keyword" }
+                            ) { keyword ->
+                                KeywordTile(
+                                    modifier = Modifier.animateItem(),
+                                    keyword = keyword,
+                                    onClick = { viewModel.onKeywordOpened(keyword) }
                                 )
                             }
                         }
@@ -889,6 +1087,26 @@ fun SearchScreenMobile(
                         }
                     ),
                     onDismiss = { menuResult = null }
+                )
+            }
+
+            // A recent-search chip: a tap re-runs the query, so the long press
+            // holds the one thing a tap cannot say - forget this one.
+            recentMenu?.let { recent ->
+                PosterContextMenu(
+                    title = recent,
+                    subtitle = "Recent search",
+                    actions = listOf(
+                        PosterContextAction(
+                            label = "Remove from recents",
+                            description = "Forget this search; the other recents stay",
+                            isDestructive = true
+                        ) {
+                            viewModel.removeRecentSearch(recent)
+                            recentMenu = null
+                        }
+                    ),
+                    onDismiss = { recentMenu = null }
                 )
             }
 
@@ -1001,16 +1219,64 @@ private fun MobileSectionHeading(text: String, trailing: String? = null) {
 @Composable
 private fun MobileSearchRail(
     title: String,
+    // Hoisted only where the row's end has to be watched (the Titles rail, for
+    // its next page); every other rail lets the row make its own.
+    state: LazyListState = rememberLazyListState(),
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         MobileSectionHeading(title)
         LazyRow(
+            state = state,
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             content()
         }
+    }
+}
+
+/**
+ * The end of the phone's Titles rail: a loading line while a further page is in
+ * flight, or the message plus a tap to retry after one failed.
+ *
+ * Same job as the TV's SearchRailTail, laid out for touch.
+ */
+@Composable
+private fun MobileSearchRailTail(
+    loading: Boolean,
+    error: String?,
+    onRetry: () -> Unit
+) {
+    when {
+        error != null -> Column(
+            modifier = Modifier
+                .widthIn(max = 220.dp)
+                .padding(vertical = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = error,
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                text = "TRY AGAIN",
+                color = KBAccent,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier
+                    .clip(KBShapeChip)
+                    .clickable(onClick = onRetry)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+        }
+
+        loading -> Text(
+            text = "Loading more…",
+            color = KBTextLo,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(vertical = 24.dp)
+        )
     }
 }
 
@@ -1113,10 +1379,17 @@ private fun PersonTile(
     }
 }
 
-/** One studio result: its logo on the white plate where TMDB has one. */
+/**
+ * One studio result: its logo on the white plate where TMDB has one.
+ *
+ * A catalog network hit carries no logo path (fetching one would be a
+ * `/network/{id}` read per row), so it renders name-only - the same shape a
+ * company result with no logo already takes. The opened page resolves the
+ * network's logo at open time, which is where it is actually needed.
+ */
 @Composable
 private fun StudioTile(
-    studio: TmdbSearchStudioResult,
+    studio: StudioSearchHit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1129,7 +1402,8 @@ private fun StudioTile(
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        if (studio.logoPath != null) {
+        val logoPath = studio.logoPath
+        if (logoPath != null) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1140,8 +1414,8 @@ private fun StudioTile(
                 contentAlignment = Alignment.Center
             ) {
                 AsyncImage(
-                    model = TmdbRepository.LOGO_BASE + studio.logoPath,
-                    contentDescription = studio.name,
+                    model = TmdbRepository.LOGO_BASE + logoPath,
+                    contentDescription = studio.displayName,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1150,7 +1424,7 @@ private fun StudioTile(
             }
         }
         Text(
-            text = studio.name,
+            text = studio.displayName,
             color = KBTextHi,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
@@ -1189,6 +1463,36 @@ private fun CollectionTile(
             artType = "collection",
             posterWidth = posterSize.width,
             posterHeight = posterSize.height
+        )
+    }
+}
+
+/**
+ * One keyword result: a tag, so it draws as a chip rather than as a card with
+ * art it does not have. A tap opens the keyword's Tag page - the same screen
+ * the Keywords browse chip opens.
+ */
+@Composable
+private fun KeywordTile(
+    keyword: TmdbSearchKeywordResult,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .height(44.dp)
+            .clip(KBShapeCard)
+            .background(KBSurface)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "#${keyword.name}",
+            color = KBTextHi,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

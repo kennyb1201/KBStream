@@ -204,8 +204,8 @@ class SouthParkCaughtUpTwinTest {
         )
         assertTrue(
             "both the resolver-null path and the merged-state path record caught up",
-            viewModel.windowed("caughtUpShowKeys += upNextShowParentKeys(".length)
-                .count { it == "caughtUpShowKeys += upNextShowParentKeys(" } >= 2
+            viewModel.windowed("recordLocallyFinishedShow(".length)
+                .count { it == "recordLocallyFinishedShow(" } >= 2
         )
     }
 
@@ -322,7 +322,7 @@ class SouthParkCaughtUpTwinTest {
 
         assertTrue(
             "a show with nothing left must still be recorded as finished",
-            slice.contains("caughtUpShowKeys += upNextShowParentKeys(")
+            slice.contains("recordLocallyFinishedShow(")
         )
     }
 

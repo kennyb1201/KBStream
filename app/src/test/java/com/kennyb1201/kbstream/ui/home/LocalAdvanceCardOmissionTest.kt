@@ -199,7 +199,7 @@ class LocalAdvanceCardOmissionTest {
         assertFalse(
             "the omission must not record the show as caught up - unknown is not " +
                 "finished, and that would suppress its tracker card too: $omission",
-            omission.contains("caughtUpShowKeys")
+            omission.contains("recordLocallyFinishedShow(")
         )
     }
 

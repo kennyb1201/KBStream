@@ -258,6 +258,124 @@ class ContinueWatchingArrivalsTest {
             )
         }
 
+    // ── T5: the BingeCat slot and per-feed seeding (Slice A, X5b) ─────────
+
+    @Test
+    fun `a feed is seeded with its own previous cards, not another feed's slot`() =
+        runBlocking {
+
+            // What is on screen from the last pass, one card per tracker.
+            val previousSimkl = trackerCard(ResumeSource.SIMKL, "tt20", "Previous Simkl")
+            val previousTrakt = trackerCard(ResumeSource.TRAKT, "tt21", "Previous Trakt")
+            val previousBingeCat =
+                trackerCard(ResumeSource.BINGECAT, "tt22", "Previous BingeCat")
+
+            val published = mutableListOf<List<UpNextItem>>()
+
+            val arrivals =
+                arrivals(
+                    published = published,
+                    localCards = listOf(local),
+                    previousTrackerCards =
+                        listOf(previousSimkl, previousTrakt, previousBingeCat)
+                )
+
+            arrivals.publishLocal()
+
+            assertTrue(
+                "every feed's cards survive the local-first publish, including " +
+                    "the newest feed's - a slot seeded with nothing flashes its " +
+                    "cards out until that feed answers",
+                titles(published.last()).containsAll(
+                    listOf("Previous Simkl", "Previous Trakt", "Previous BingeCat")
+                )
+            )
+
+            // One feed answers with a fresh card. Nothing else may move: an
+            // unanswered feed keeps its own cards exactly where they were.
+            arrivals.arrive(
+                TrackerFeed.SIMKL,
+                listOf(trackerCard(ResumeSource.SIMKL, "tt23", "Fresh Simkl"))
+            )
+
+            val afterSimkl = titles(published.last())
+            assertTrue("the fresh Simkl answer replaced Simkl's cards", afterSimkl.contains("Fresh Simkl"))
+            assertFalse("including the one it no longer carries", afterSimkl.contains("Previous Simkl"))
+            assertTrue(
+                "and the other feeds' previous cards are untouched",
+                afterSimkl.containsAll(listOf("Previous Trakt", "Previous BingeCat"))
+            )
+        }
+
+    @Test
+    fun `BingeCat merges last, so the older feeds keep their precedence`() =
+        runBlocking {
+
+            val published = mutableListOf<List<UpNextItem>>()
+            val arrivals = arrivals(published = published, localCards = emptyList())
+
+            // The same show from two trackers, BingeCat answering FIRST.
+            val bingeCatTwin =
+                trackerCard(ResumeSource.BINGECAT, "tt30", "Shared Show", episode = 4)
+            val simklTwin =
+                trackerCard(ResumeSource.SIMKL, "tt30", "Shared Show", episode = 4)
+
+            arrivals.arrive(TrackerFeed.BINGECAT, listOf(bingeCatTwin))
+            arrivals.arrive(TrackerFeed.SIMKL, listOf(simklTwin))
+
+            assertEquals(
+                "one card for the show",
+                1,
+                published.last().count { showDedupeKey(it) == showDedupeKey(simklTwin) }
+            )
+            assertEquals(
+                "and it is the Simkl one: the merge order, not the arrival order, " +
+                    "keeps the precedence the feeds had before BingeCat existed",
+                simklTwin,
+                published.last().single { showDedupeKey(it) == showDedupeKey(simklTwin) }
+            )
+        }
+
+    @Test
+    fun `Trakt's two halves arrive in one slot, and one answer replaces both`() =
+        runBlocking {
+
+            val published = mutableListOf<List<UpNextItem>>()
+            val arrivals = arrivals(published = published, localCards = emptyList())
+
+            val paused =
+                trackerCard(ResumeSource.TRAKT, "tt40", "Paused On Trakt", episode = 2)
+            val next =
+                trackerCard(ResumeSource.TRAKT, "tt41", "Next On Trakt", episode = 7)
+
+            // What the merge does for a Success: ONE arrive carrying both.
+            arrivals.arrive(TrackerFeed.TRAKT, listOf(paused, next))
+
+            assertEquals(
+                "both halves are on the rail from a single Trakt arrival",
+                listOf("Paused On Trakt", "Next On Trakt").sorted(),
+                titles(published.last()).sorted()
+            )
+
+            // The next pass answers with the next-episode half only: the whole
+            // slot is replaced, so the paused card the session feed dropped is
+            // gone rather than lingering beside the fresh answer.
+            val refreshed =
+                trackerCard(ResumeSource.TRAKT, "tt41", "Next On Trakt", episode = 8)
+            arrivals.arrive(TrackerFeed.TRAKT, listOf(refreshed))
+
+            assertEquals(
+                "one Trakt slot: the fresh answer is all of it",
+                listOf("Next On Trakt"),
+                titles(published.last())
+            )
+            assertEquals(
+                "and it is the refreshed card",
+                8,
+                published.last().single().episode
+            )
+        }
+
     // ── helpers ────────────────────────────────────────────────────────────
 
     private fun arrivals(

@@ -191,8 +191,12 @@ class SearchCollectionsKidsFilterTest {
             search.contains(".map { it.copy(knownFor = emptyList()) }")
         )
         assertTrue(
-            "same for studios: a company name is not content",
-            search.contains("_studioResults.value = studioResults.distinctBy { it.id }.take(MAX_STUDIO_RESULTS)")
+            "same for studios: a company name is not content - and the catalog's " +
+                "network/service hits now share that publish, so a network name is not " +
+                "vetted either (it is the same judgement, not a second rule)",
+            search.contains("_studioResults.value = mergeStudioHits(") &&
+                search.contains("companies = studioResults,") &&
+                search.contains("max = MAX_STUDIO_RESULTS")
         )
     }
 

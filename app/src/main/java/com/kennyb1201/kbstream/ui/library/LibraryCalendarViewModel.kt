@@ -5,6 +5,8 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.airdates.TvmazeAirDateRepository
+import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
+import com.kennyb1201.kbstream.data.bingecat.BingeCatWatchedSnapshot
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
@@ -20,9 +22,11 @@ import com.kennyb1201.kbstream.data.trakt.TraktIdKeys
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.trakt.TraktWatchedSnapshot
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.ui.home.MAX_BINGECAT_CAUGHT_UP_UPCOMING_ITEMS
 import com.kennyb1201.kbstream.ui.home.MAX_LOCAL_CAUGHT_UP_UPCOMING_ITEMS
 import com.kennyb1201.kbstream.ui.home.MAX_MDBLIST_CAUGHT_UP_UPCOMING_ITEMS
 import com.kennyb1201.kbstream.ui.home.MAX_TRAKT_CAUGHT_UP_UPCOMING_ITEMS
+import com.kennyb1201.kbstream.ui.home.bingeCatCaughtUpCandidates
 import com.kennyb1201.kbstream.ui.home.localCaughtUpCandidates
 import com.kennyb1201.kbstream.ui.home.mdbListCaughtUpCandidates
 import com.kennyb1201.kbstream.ui.home.mdbListEpisodePairs
@@ -96,6 +100,7 @@ class LibraryCalendarViewModel(
     private val tmdbRepository = TmdbRepository.getInstance(application)
     private val simklRepository = SimklRepository.getInstance(application)
     private val traktRepository = TraktRepository.getInstance(application)
+    private val bingeCatRepository = BingeCatRepository.getInstance(application)
     private val airDateRepository = TvmazeAirDateRepository.getInstance(application)
 
     private val _uiState = MutableStateFlow(LibraryCalendarUiState())
@@ -122,12 +127,31 @@ class LibraryCalendarViewModel(
     /**
      * The session's tracked shows, as the ids the sources name them by.
      *
-     * Reloaded on [SHOW_SET_TTL_MS] and on a profile switch - the set is four
-     * repository reads over cached blobs, so it is cheap, but it is not free
-     * enough to redo for every month the viewer pages through.
+     * Reloaded on [SHOW_SET_TTL_MS] and on a profile switch - the set is five
+     * source reads, four of them over cached blobs, so it is cheap, but it is
+     * not free enough to redo for every month the viewer pages through.
      */
     private var showIds: List<String> = emptyList()
     private var showsLoadedAt = 0L
+
+    /**
+     * The BingeCat feed read for [showIds], held so the watched tinting does not
+     * page it a second time.
+     *
+     * `watchedHistorySnapshot()` is the one uncached tracker read this model
+     * makes - up to ten pages of 100 rows - and it is needed twice: once for the
+     * show set, once for [mergeWatched]. Re-reading it per tinting pass would
+     * double that live paged call on every reserve and every month build, so the
+     * snapshot is read once here and reused. Null means "the feed did not answer"
+     * (not connected, no `history:read`, no mapped profile, or a failed page);
+     * BingeCat then contributes neither shows nor tinting, and the other four
+     * sources are unaffected.
+     *
+     * Sharing [showIds]' lifetime is the accepted consequence: a BingeCat mark
+     * made in Detail tints through local rows at once but through BingeCat only
+     * after the next show-set refresh, the same staleness the set itself has.
+     */
+    private var bingeCatSnapshot: BingeCatWatchedSnapshot? = null
 
     /**
      * The shows Upcoming can advertise, which [showIds] always carries - see
@@ -199,7 +223,7 @@ class LibraryCalendarViewModel(
         // The cached month paints FIRST, stale set or not.
         //
         // It used to sit behind the staleness check, so past the TTL a month
-        // that was already built waited on four tracker reads (plus Simkl's
+        // that was already built waited on five source reads (plus Simkl's
         // uncapped caught-up list) before a single row could appear - the
         // reported "the calendar does not seem to cache" (field 2026-10-28).
         // The rows cannot be wrong: they are this session's own build, and the
@@ -461,6 +485,7 @@ class LibraryCalendarViewModel(
         showSetGeneration += 1
         showIds = emptyList()
         priorityIds = emptyList()
+        bingeCatSnapshot = null
         showsLoadedAt = 0L
         details.clear()
         monthCache.clear()
@@ -468,16 +493,18 @@ class LibraryCalendarViewModel(
     }
 
     /**
-     * The tracked-show set, from all four sources, with no caught-up filter.
+     * The tracked-show set, from all five sources, with no caught-up filter.
      *
-     * This is the union the spec asks for: this profile's own history (its
+     * This is the union the principle asks for: this profile's own history (its
      * completed series rows and its resume rows), Simkl's library (the completed
      * and partially-watched show sets the watched markers already load - NOT the
-     * rail's unaired-flagged subset), MDBList's started shows, and Trakt's
-     * watched shows. Every read fails soft: a tracker that is down contributes
-     * nothing and the calendar shows the rest.
+     * rail's unaired-flagged subset), MDBList's started shows, Trakt's watched
+     * shows, and BingeCat's watched shows. Every read fails soft: a tracker that
+     * is down contributes nothing and the calendar shows the rest. No source is
+     * required, none can veto another, and with none of them connected the local
+     * history alone still fills the month.
      *
-     * The four lists are then interleaved by [calendarCandidates] rather than
+     * The five lists are then interleaved by [calendarCandidates] rather than
      * concatenated, so a long local history cannot consume the whole resolution
      * allowance and leave the tracker-sourced - i.e. currently airing - shows
      * out of the calendar entirely.
@@ -544,13 +571,33 @@ class LibraryCalendarViewModel(
             ?.mapNotNull { row -> preferredId(row.idKeys) }
             .orEmpty()
 
+        // BingeCat: read ONCE for both halves of this function (the show set
+        // below and the watched tinting later), because this is the one tracker
+        // read with no cache behind it - see [bingeCatSnapshot]. No gating here
+        // on purpose: `isReady()` (configured, token, mapped profile) and the
+        // `history:read` scope are enforced inside `watchedHistorySnapshot()`,
+        // which also discards a partly-read timeline rather than reporting a
+        // show as caught up from a failed page. Not ready / no scope / failed
+        // page -> null -> BingeCat simply contributes nothing.
+        val bingeCatSnapshot = runCatchingCancellable {
+            bingeCatRepository.watchedHistorySnapshot()
+        }.getOrNull()
+
+        // A BingeCat parent id is ALREADY the id form this calendar speaks (IMDb
+        // first, else `tmdb:<n>` - see bingeCatShowKey), so no mapping: the same
+        // string the fold built indexes the show set and the detail lookup.
+        val bingecat = bingeCatSnapshot
+            ?.shows
+            ?.map { show -> show.parentId }
+            .orEmpty()
+
         // Upcoming's caught-up candidates, in the order Upcoming builds them:
         // Simkl first (uncapped at source, unaired-first), then the local /
-        // MDBList / Trakt halves under their own work caps. These are exactly the
-        // shows whose next episode the rail can advertise, so the calendar must
-        // carry every one of them however long the tracked tail is. Every read
-        // fails soft: a source that is down contributes no priority at all,
-        // never an empty calendar.
+        // MDBList / Trakt / BingeCat halves under their own work caps. These are
+        // exactly the shows whose next episode the rail can advertise, so the
+        // calendar must carry every one of them however long the tracked tail
+        // is. Every read fails soft: a source that is down contributes no
+        // priority at all, never an empty calendar.
         val caughtUp = caughtUpPriorityShows(
             localCaughtUpCandidates(
                 rows = completedRows,
@@ -564,7 +611,15 @@ class LibraryCalendarViewModel(
                 traktCaughtUpCandidates(
                     snapshot = traktSnapshot ?: TraktWatchedSnapshot(),
                     max = MAX_TRAKT_CAUGHT_UP_UPCOMING_ITEMS
-                )
+                ) +
+                (bingeCatSnapshot
+                    ?.let { snapshot ->
+                        bingeCatCaughtUpCandidates(
+                            snapshot = snapshot,
+                            max = MAX_BINGECAT_CAUGHT_UP_UPCOMING_ITEMS
+                        )
+                    }
+                    .orEmpty())
         )
 
         val simklPriority = if (simklReady) {
@@ -575,12 +630,18 @@ class LibraryCalendarViewModel(
 
         // A newer read (a profile switch, another open) owns the set now; this
         // one's answer is stale by definition and must not land on top of it.
+        // That includes the BingeCat snapshot: it belongs to the profile being
+        // left, and tinting the incoming profile's months from it would leak one
+        // profile's plays onto another's calendar.
         if (generation != showSetGeneration) return generation
 
         priorityIds = calendarPriorityIds(simklPriority + caughtUp)
 
+        // Held for [mergeWatched], which must not re-page the feed (F8).
+        this.bingeCatSnapshot = bingeCatSnapshot
+
         showIds = calendarCandidates(
-            sources = listOf(local, simkl, mdbList, trakt),
+            sources = listOf(local, simkl, mdbList, trakt, bingecat),
             cap = MAX_CALENDAR_SHOWS,
             priority = priorityIds
         )
@@ -687,7 +748,7 @@ class LibraryCalendarViewModel(
         val moved = _uiState.value.selected
             .takeIf { _uiState.value.month == month && it != selectedWhenStarted }
         publish(built, landingDay, keepSelection = moved)
-        // Terminal pass: it REPLACES the set with the full four-source union, so
+        // Terminal pass: it REPLACES the set with the full five-source union, so
         // an un-mark made while the build ran is not masked by anything Pass A
         // unioned in (see [publishWatched]).
         watchedJob?.cancel()
@@ -946,11 +1007,11 @@ class LibraryCalendarViewModel(
     /**
      * The watched union for the shows on screen, per show.
      *
-     * The same four sources the rails merge - this profile's completed rows,
-     * Simkl, MDBList and Trakt - read through the same repositories, with every
-     * read failing soft. Only the shows in the month are asked about, so a page
-     * of the calendar costs a handful of cached reads rather than one per show in
-     * the library.
+     * The same five sources the rails merge - this profile's completed rows,
+     * Simkl, MDBList, Trakt and BingeCat - read through the same repositories,
+     * with every read failing soft. Only the shows in the month are asked about,
+     * so a page of the calendar costs a handful of cached reads rather than one
+     * per show in the library.
      */
     private suspend fun mergeWatched(
         showIds: Set<String>
@@ -1000,6 +1061,15 @@ class LibraryCalendarViewModel(
 
             if (trakt.shows.isNotEmpty()) {
                 pairs += trakt.watchedEpisodesFor(keys)
+            }
+
+            // BingeCat's plays, from the snapshot the show-set read already
+            // fetched - NOT a second call to the feed, which is the one tracker
+            // read here with no cache behind it. A null snapshot simply leaves
+            // this pass's tinting to the other sources, the same fail-soft shape
+            // as a Trakt snapshot that never arrived.
+            bingeCatSnapshot?.let { snapshot ->
+                pairs += snapshot.watchedEpisodesFor(keys)
             }
 
             if (simklReady) {

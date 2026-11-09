@@ -9,6 +9,7 @@ import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
+import com.kennyb1201.kbstream.data.debrid.CloudMatch
 import com.kennyb1201.kbstream.data.debrid.TorBoxCachedAnswer
 import com.kennyb1201.kbstream.data.debrid.TorBoxCachedBadges
 import com.kennyb1201.kbstream.data.debrid.TorBoxClient
@@ -239,7 +240,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
      * key is what keeps a late answer for the previous episode off this one's
      * picker - the same guard the badge pass uses.
      */
-    private var cloudMatches: List<TorBoxCloudPicker.CloudMatch> = emptyList()
+    private var cloudMatches: List<CloudMatch> = emptyList()
     private var cloudTargetKey: String? = null
 
     /** Bumped per cloud question, so a superseded answer cannot merge (F1d). */

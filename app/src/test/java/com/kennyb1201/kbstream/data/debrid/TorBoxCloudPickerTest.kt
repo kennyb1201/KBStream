@@ -243,7 +243,7 @@ class TorBoxCloudPickerTest {
     @Test
     fun `the player is never handed a cloud reference in place of a link`() {
         val cloud = TorBoxCloudPicker.rowStream(
-            TorBoxCloudPicker.CloudMatch(1, 2, "Release", "Release.mkv", 10L)
+            CloudMatch(1, 2, "Release", "Release.mkv", 10L)
         )
         val http = Stream(name = "Web", url = "https://host/file.mkv")
         val handed = TorBoxCloudPicker.forPlayer(listOf(cloud, http))

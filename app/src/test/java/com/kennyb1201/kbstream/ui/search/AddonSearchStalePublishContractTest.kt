@@ -81,8 +81,9 @@ class AddonSearchStalePublishContractTest {
     fun `every add-on publish is gated on the token it captured`() {
         val source = source(MODELS)
         assertTrue(
-            "the eager per-add-on snapshot must check the token",
-            source.contains("if (snapshot.isNotEmpty() && generation == addonSearchGeneration)")
+            "the per-rail snapshot publish must check the token",
+            source.contains("private suspend fun publishAddonSnapshot(") &&
+                source.contains("if (generation != addonSearchGeneration) return")
         )
         assertTrue(
             "and so must the consolidated rail publish",
@@ -90,13 +91,13 @@ class AddonSearchStalePublishContractTest {
         )
         assertTrue(
             "and the enrichment republish — against the list that was actually " +
-                "published (visibleGroups still only has the digital-release filter; " +
-                "publishedGroups has the kids ceiling on top of it)",
+                "published (visibleGroups is the de-duped, digital-release-filtered " +
+                "list; publishedGroups has the kids ceiling on top of it)",
             source.contains("if (generation == addonSearchGeneration && enriched != publishedGroups)")
         )
         assertTrue(
             "the token is threaded into the collector that publishes snapshots",
-            source.contains("searchAddonCatalogs(query, tmdbDedupDeferred, generation)") &&
+            source.contains("searchAddonCatalogs(query, generation)") &&
                 source.contains("private suspend fun searchAddonCatalogs(")
         )
     }

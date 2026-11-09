@@ -72,6 +72,8 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.debrid.CloudMatch
+import com.kennyb1201.kbstream.data.debrid.TorBoxCloudPicker
 import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import com.kennyb1201.kbstream.domain.streamengine.AutoplayPick
@@ -153,6 +155,7 @@ import com.kennyb1201.kbstream.ui.settings.SettingsScreen
 import com.kennyb1201.kbstream.ui.search.SearchScreen
 import com.kennyb1201.kbstream.ui.search.SearchSeed
 import com.kennyb1201.kbstream.ui.search.SearchViewModel
+import com.kennyb1201.kbstream.ui.search.StudioSearchHit
 import com.kennyb1201.kbstream.ui.simkl.SimklConnectScreen
 import com.kennyb1201.kbstream.ui.trakt.TraktConnectScreen
 import com.kennyb1201.kbstream.ui.player.addonLookup
@@ -512,7 +515,19 @@ private data class PendingPlay(
     /** bingeGroup of the stream that just ended — empty for fresh starts. */
     val bingeGroup: String? = null,
     /** Best-effort addon identity of the stream that just ended. */
-    val addonName: String? = null
+    val addonName: String? = null,
+    /**
+     * The exact cloud file the viewer tapped in Settings → TorBox cloud files,
+     * when this launch came from that list (null for every other launch).
+     *
+     * It is what lets the walk attempt the tapped file first: the resolve only
+     * ever asks the add-ons (the cloud question is the picker's - see
+     * StreamsViewModel.requestCloudRows), so without this the file the viewer
+     * pressed would not be in the candidate set at all. The (torrent, file)
+     * pair travels from the dialog row, which is exact; nothing re-derives it
+     * from a release name on this path.
+     */
+    val cloudMatch: CloudMatch? = null
 ) {
     val streamKey: String
         get() = streamNavigationKey(target.contentType, target.streamId)
@@ -1589,8 +1604,14 @@ fun AppRoot(
         // link's lifetime would otherwise replay the PREVIOUS episode's
         // ordering and skip BingeGroupResolver.orderedForNextEpisode entirely,
         // which is the continuity a binge is supposed to inherit.
+        // A tapped cloud file is the cache's other exclusion (spec F3.1): a
+        // replay would hand the player the ADD-ON link that played last time,
+        // and the file the viewer actually pressed would never be attempted at
+        // all. One resolve round-trip is the price, and it is the request that
+        // was made.
         val cached =
             if (pending.isNextEpisodeAdvance) null
+            else if (pending.cloudMatch != null) null
             else PlayedLinkCache.get(context, pending.streamKey)
         if (cached != null) {
             // The replay answers to the viewer's ceiling too. A link remembered
@@ -1697,6 +1718,15 @@ fun AppRoot(
                     previousAddonName = pending.addonName ?: continuedFrom?.addonName
                 )
             }
+        // The tapped cloud file, at the HEAD of the walk's candidates: the
+        // resolve above only ever answers add-on rows (the cloud question is
+        // the picker's - StreamsViewModel.requestCloudRows), so the file the
+        // viewer pressed would otherwise not be in the set at all. Seeded AFTER
+        // the resolve and BEFORE the walk, which leaves the resolve untouched
+        // and lets the walk's existing cloud branch prepare it: one
+        // `requestdl`, inside the same budget. No new resolve path.
+        val tappedRow = pending.cloudMatch?.let { TorBoxCloudPicker.rowStream(it) }
+        val walkCandidates = tappedRow?.let { listOf(it) + ordered } ?: ordered
         // The add-on for each source, in the same order the advance will walk:
         // the binge resolver above may have re-ordered the list, so the names
         // are resolved by stream identity rather than by their old position.
@@ -1728,8 +1758,20 @@ fun AppRoot(
         // pickers build them, so auto-play cannot decide differently depending
         // on which screen opened the episode.
         val bingeWanted = AutoplayPick.Binge(bingeGroupWanted, addonWanted)
+        // Recorded, not inferred: the walk answers with the PREPARED stream (a
+        // copy), so identity afterwards cannot say whether the tapped row is
+        // what started. Both are set by the resolve wrapper below.
+        var tappedTried = false
+        var tappedStarted = false
         val autoplayPick: (List<Stream>) -> Stream? = { remaining ->
-            AutoplayPick.pick(
+            // A tapped file is a press on ONE file, so it is picked ahead of
+            // every rule - the episode tiers, the binge tie-break, the ceiling
+            // - the same latitude a manual press on a picker row has. The
+            // file's own name declares the episode this target is for (the
+            // dialog's season/episode came from the same fileSpan parse), so
+            // there is nothing here for the wrong-episode guard to catch.
+            val tapped = remaining.firstOrNull { row -> row === tappedRow }
+            tapped ?: AutoplayPick.pick(
                 context = context,
                 remaining = remaining,
                 season = pending.target.season,
@@ -1748,11 +1790,30 @@ fun AppRoot(
         // case is a picker rather than minutes of "Finding sources…".
         val walkStartedAt = System.currentTimeMillis()
         val start = AutoplayWalk.start(
-            candidates = ordered,
+            candidates = walkCandidates,
             pick = autoplayPick,
-            resolve = { TorBoxResolve.playableStream(context, it) }
+            resolve = { row ->
+                val prepared = TorBoxResolve.playableStream(context, row)
+                // The tapped file gets a cloud row's preparation, not a hash
+                // one: the walk mints its link through the same `requestdl`
+                // call and counts the attempt against the budget.
+                if (row === tappedRow) {
+                    tappedTried = true
+                    tappedStarted = prepared != null
+                }
+                prepared
+            }
         )
         val walkSpentMs = System.currentTimeMillis() - walkStartedAt
+        // Spec F3.6: what became of the tapped file, in the words the rank
+        // block and the session ring both use.
+        val tappedNote = if (tappedRow == null) "" else when {
+            tappedStarted -> " · tapped"
+            tappedTried -> " · tapped file unpreparable, " +
+                if (start != null) "walked" else "picker"
+            else -> " · tapped file not attempted, " +
+                if (start != null) "walked" else "picker"
+        }
         // Recorded, not inferred from the head of the list: this is the
         // episode-handoff path a wrong episode is reported from, and the rank
         // block cannot say whether auto-play started anything at all (see
@@ -1760,12 +1821,16 @@ fun AppRoot(
         com.kennyb1201.kbstream.data.reporting.StreamRankReport.noteAutoPlay(
             (start?.let { picked ->
                 "started · ${StreamRanker.labelOf(picked.stream)}" +
-                    if (picked.resolved) " (prepared from its hash)" else "" +
+                    if (picked.resolved) {
+                        if (tappedStarted) " (prepared from your TorBox file)"
+                        else " (prepared from its hash)"
+                    } else "" +
                         if (completeAnswer) "" else " · from a TRUNCATED answer"
             } ?: "none - the picker is showing instead " +
                 "(episode length ${
                     pending.target.runtimeMinutes?.let { "$it min" } ?: "unknown"
                 })") +
+                tappedNote +
                 // The four facts a "wrong pick on a slow evening" report needs
                 // (spec I19): the ceiling that applied, how long the walk had,
                 // how long it spent, whether the add-ons all answered, and which
@@ -1787,7 +1852,8 @@ fun AppRoot(
                 (start?.let { picked ->
                     "started ${StreamRanker.labelOf(picked.stream)}" +
                         if (picked.resolved) " (prepared)" else ""
-                } ?: "none - picker")
+                } ?: "none - picker") +
+                tappedNote
         )
         // A truncated answer is a PARTIAL sources list, and the viewer is about
         // to see it in the player (spec C27). One marker, here, rather than a
@@ -2663,15 +2729,20 @@ fun AppRoot(
                     }
                 },
                 onOpenStats = { screen = Screen.Stats },
-                // A file in the viewer's TorBox cloud, opened from Settings →
-                // TorBox (spec F2b). A file that named an episode opens that
-                // episode's picker - where the cloud row appears by the same
-                // rules as any other picker - and one that named only a title
-                // opens the title.
-                onOpenTorBoxFile = { type, id, title, season, episode ->
-                    screen = when {
-                        type == "series" && season != null && episode != null -> Screen.Streams(
-                            target = StreamsTarget(
+                // A file in the viewer's TorBox cloud, tapped in Settings →
+                // TorBox. A file that named an episode (or is a film) PLAYS,
+                // through the same autoplay branch as a Play press: with
+                // auto-select on, the splash and then the player, the picker
+                // only when nothing playable resolves; off, today's picker.
+                // The tapped file rides along ([PendingPlay.cloudMatch]) so the
+                // walk tries that file first - a tap names one file, not a
+                // request for the ranked list. A file that named only a title
+                // still opens the title: there is no episode to play.
+                onOpenTorBoxFile = { type, id, title, season, episode, file ->
+                    // The playable target, or null for the title-only file.
+                    val playTarget = when {
+                        type == "series" && season != null && episode != null ->
+                            StreamsTarget(
                                 contentType = "series",
                                 streamId = "$id:$season:$episode",
                                 title = "$title S$season E$episode",
@@ -2679,34 +2750,65 @@ fun AppRoot(
                                 season = season,
                                 episode = episode,
                                 resumePositionMs = 0L
-                            ),
-                            parentId = id,
-                            parentType = "series",
-                            itemPoster = null,
-                            returnTo = Screen.Settings
-                        )
+                            )
 
-                        type == "series" -> Screen.Detail(
+                        type == "series" -> null
+
+                        else -> StreamsTarget(
+                            contentType = "movie",
+                            streamId = id,
+                            title = title,
+                            displayName = title,
+                            season = null,
+                            episode = null,
+                            resumePositionMs = 0L
+                        )
+                    }
+                    if (playTarget == null) {
+                        screen = Screen.Detail(
                             type = "series",
                             id = id,
                             returnTo = Screen.Settings
                         )
-
-                        else -> Screen.Streams(
-                            target = StreamsTarget(
-                                contentType = "movie",
-                                streamId = id,
-                                title = title,
-                                displayName = title,
-                                season = null,
-                                episode = null,
-                                resumePositionMs = 0L
-                            ),
-                            parentId = id,
-                            parentType = "movie",
-                            itemPoster = null,
-                            returnTo = Screen.Settings
-                        )
+                    } else {
+                        // A pending "Play Manually" is consumed so it cannot
+                        // leak into a later Play, but it does NOT divert this
+                        // tap: the tap is itself a manual choice - of one
+                        // specific file - and a newer, more specific one.
+                        // consume() deliberately leaves the picked key in
+                        // place, so a fall through to the picker still finds
+                        // it and suppresses that picker's own auto-select,
+                        // which is exactly where the manual intent can still
+                        // be honoured.
+                        ManualSourceSelection.consume()
+                        val parentType =
+                            if (playTarget.contentType == "series") "series" else "movie"
+                        if (AppPreferences.getAutoSelectStream(context)) {
+                            // Fresh user-initiated play: the binge watchdog's
+                            // consecutive-autoplay count restarts here, as it
+                            // does for a Play press.
+                            AppPreferences.resetConsecutiveAutoplays(context)
+                            pendingAutoPlay = PendingPlay(
+                                target = playTarget,
+                                parentId = id,
+                                parentType = parentType,
+                                itemPoster = null,
+                                backdropUrl = null,
+                                clearLogoUrl = null,
+                                overview = null,
+                                cast = emptyList(),
+                                returnTo = Screen.Settings,
+                                cloudMatch = file
+                            )
+                        } else {
+                            screen = Screen.Streams(
+                                target = playTarget,
+                                parentId = id,
+                                parentType = parentType,
+                                itemPoster = null,
+                                returnTo = Screen.Settings
+                            )
+                        }
                     }
                 }
             )
@@ -2820,13 +2922,30 @@ fun AppRoot(
                 },
 
                 onStudioClick = { studio ->
-                    screen = Screen.Studio(
-                        studio.id,
-                        studio.name,
-                        false,
-                        null,
-                        returnTo = Screen.Search
-                    )
+                    // Two kinds on one rail (see StudioSearchHit): a TMDB
+                    // company opens the company page exactly as it always has,
+                    // and a catalog network/service opens the page the browse
+                    // chip opens - provider rails for a service, the network's
+                    // series rails (plus its company's MOVIES) for a network.
+                    screen = when (studio) {
+                        is StudioSearchHit.Company -> Screen.Studio(
+                            studio.result.id,
+                            studio.result.name,
+                            false,
+                            null,
+                            returnTo = Screen.Search
+                        )
+                        is StudioSearchHit.Network -> Screen.Studio(
+                            studio.entry.id,
+                            studio.entry.name,
+                            !studio.entry.networkIsCompany,
+                            studio.entry.providerId,
+                            studio.entry.networkOrCompanyId,
+                            studio.entry.networkIsCompany,
+                            studio.entry.originalsCompanyId,
+                            returnTo = Screen.Search
+                        )
+                    }
                 },
 
                 onCollectionClick = { collection ->

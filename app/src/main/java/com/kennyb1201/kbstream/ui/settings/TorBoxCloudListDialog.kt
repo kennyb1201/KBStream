@@ -27,6 +27,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.kennyb1201.kbstream.FormFactor
+import com.kennyb1201.kbstream.data.debrid.CloudMatch
 import com.kennyb1201.kbstream.data.debrid.TorBoxClient
 import com.kennyb1201.kbstream.data.debrid.TorBoxCloudCache
 import com.kennyb1201.kbstream.data.debrid.TorBoxCloudPicker
@@ -67,11 +68,24 @@ import kotlinx.coroutines.launch
 fun TorBoxCloudListDialog(
     onDismiss: () -> Unit,
     /**
-     * Opens the title a tapped file belongs to. `id` is the app's own route id
-     * ("tmdb:123"); `season`/`episode` are null when the file named a title but
-     * no episode, which opens the title rather than a picker.
+     * Plays the tapped file, or opens the title it belongs to. `id` is the app's
+     * own route id ("tmdb:123"); `season`/`episode` are null when the file named
+     * a title but no episode, which opens the title rather than a player.
+     *
+     * [file] is the identity of the row itself, not something the route has to
+     * re-derive: the play it leads to attempts THIS file first, so the torrent
+     * and file ids travel with the tap. Re-deriving them on the far side would
+     * mean matching the account's list a second time and hoping for the same
+     * answer.
      */
-    onOpen: (type: String, id: String, title: String, season: Int?, episode: Int?) -> Unit
+    onOpen: (
+        type: String,
+        id: String,
+        title: String,
+        season: Int?,
+        episode: Int?,
+        file: CloudMatch
+    ) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -113,7 +127,14 @@ fun TorBoxCloudListDialog(
                 "tmdb:${resolved.tmdbId}",
                 title,
                 episode?.first,
-                episode?.second
+                episode?.second,
+                CloudMatch(
+                    torrentId = row.torrentId,
+                    fileId = row.fileId,
+                    torrentName = row.torrentName,
+                    fileName = row.fileName,
+                    size = row.size
+                )
             )
         }
     }
@@ -156,8 +177,8 @@ fun TorBoxCloudListDialog(
 }
 
 private const val PANEL_SUBTITLE =
-    "Files in your account. A file that names an episode opens that episode's picker; " +
-        "one that names only a title opens the title."
+    "Files in your account. A file that names an episode plays it - straight away when " +
+        "auto-select is on; one that names only a title opens the title."
 
 /** The list itself, shared by both form factors. */
 @Composable

@@ -112,4 +112,76 @@ class BingeCatWatchedSnapshotTest {
         val snapshot = bingeCatWatchedSnapshot(emptyList())
         assertTrue("no rows, no shows - the rail simply has one source less", snapshot.shows.isEmpty())
     }
+
+    // ── one show's plays, for the watched-state union (Slice A, X3c) ───────
+
+    @Test
+    fun `one show's episodes come back from the snapshot the leg already read`() {
+        val snapshot = bingeCatWatchedSnapshot(
+            listOf(
+                showRow(imdb = "tt13111078", plays = arrayOf(play(4, 4))),
+                showRow(tmdb = 235357, plays = arrayOf(play(2, 8))),
+                showRow(imdb = "tt13111078", plays = arrayOf(play(4, 3)))
+            )
+        )
+
+        assertEquals(
+            "the show's plays are the union of its rows",
+            setOf(4 to 4, 4 to 3),
+            snapshot.watchedEpisodesFor(listOf("tt13111078"))
+        )
+        assertEquals(
+            "and every id form the app keys by reaches the same show",
+            setOf(2 to 8),
+            snapshot.watchedEpisodesFor(listOf("235357", "tmdb:235357", "imdb:"))
+        )
+    }
+
+    @Test
+    fun `a key only matches the show it names`() {
+        val snapshot = bingeCatWatchedSnapshot(
+            listOf(
+                showRow(imdb = "tt123", plays = arrayOf(play(1, 1))),
+                showRow(imdb = "tt1234", plays = arrayOf(play(1, 2)))
+            )
+        )
+
+        assertEquals(
+            "tt123 must not pick up tt1234's plays",
+            setOf(1 to 1),
+            snapshot.watchedEpisodesFor(listOf("tt123"))
+        )
+        assertEquals(
+            "a show the feed never mentions has nothing watched - the caller " +
+                "tells 'no answer' from a null snapshot, not from this",
+            emptySet<Pair<Int, Int>>(),
+            snapshot.watchedEpisodesFor(listOf("tt999"))
+        )
+        assertEquals(
+            "and no keys asks nothing",
+            emptySet<Pair<Int, Int>>(),
+            snapshot.watchedEpisodesFor(emptyList())
+        )
+    }
+
+    @Test
+    fun `a show the feed files under both id forms unions both`() {
+        // The calendar asks with the show's own id AND the IMDb id it resolved
+        // (keysFor), and the feed is free to have filed the same show under
+        // either spelling on different rows - one row with ids.imdb, one with
+        // only ids.tmdb. Both are the same show, so both rows' plays must come
+        // back from the one call.
+        val snapshot = bingeCatWatchedSnapshot(
+            listOf(
+                showRow(imdb = "tt777", plays = arrayOf(play(1, 1))),
+                showRow(tmdb = 777, plays = arrayOf(play(1, 2)))
+            )
+        )
+
+        assertEquals(
+            "both filings of the show answer to the key pair the calendar sends",
+            setOf(1 to 1, 1 to 2),
+            snapshot.watchedEpisodesFor(listOf("tmdb:777", "tt777"))
+        )
+    }
 }

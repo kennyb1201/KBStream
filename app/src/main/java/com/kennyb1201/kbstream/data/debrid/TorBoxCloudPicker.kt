@@ -8,6 +8,24 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
+ * A file in the account that belongs to the title a picker is showing.
+ *
+ * Top-level and public rather than nested in [TorBoxCloudPicker] because it is
+ * the identity a TAP carries: the cloud-file list hands it to the settings pane
+ * (a public composable), and the pane hands it to the player route, so the
+ * (torrent, file) pair the viewer pressed travels instead of being re-derived
+ * from a name. The rest of the object stays internal - only this value crosses
+ * a screen boundary.
+ */
+data class CloudMatch(
+    val torrentId: Long,
+    val fileId: Int,
+    val torrentName: String,
+    val fileName: String,
+    val size: Long
+)
+
+/**
  * TorBox cloud FILES in the stream picker.
  *
  * The picker has always known one way to reach the viewer's TorBox account: an
@@ -55,15 +73,6 @@ internal object TorBoxCloudPicker {
 
     /** One cloud file, as a play needs it: a torrent id and a file id. */
     data class CloudRef(val torrentId: Long, val fileId: Int)
-
-    /** A file in the account that belongs to the title a picker is showing. */
-    data class CloudMatch(
-        val torrentId: Long,
-        val fileId: Int,
-        val torrentName: String,
-        val fileName: String,
-        val size: Long
-    )
 
     /** The URL that carries [torrentId]/[fileId] on a cloud row. */
     fun refUrl(torrentId: Long, fileId: Int): String = "$SCHEME://$torrentId/$fileId"

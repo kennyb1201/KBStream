@@ -67,6 +67,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import com.kennyb1201.kbstream.data.debrid.CloudMatch
 import com.kennyb1201.kbstream.data.debrid.TORBOX_VERIFIED_MARKER
 import com.kennyb1201.kbstream.data.debrid.TorBoxReview
 import com.kennyb1201.kbstream.data.debrid.TorBoxSyncStatus
@@ -342,12 +343,20 @@ fun SettingsScreen(
     /** Opens the read-only Viewing stats screen (finished watches). */
     onOpenStats: () -> Unit = {},
     /**
-     * Opens a title found in the viewer's TorBox cloud: the picker when the file
-     * named an episode (or is a film), the title itself when it named only a
-     * name (spec F2b).
+     * Plays a file found in the viewer's TorBox cloud - straight into the player
+     * when auto-select is on, the picker when it is off - or opens the title
+     * itself when the file named only a name. `file` is the tapped row's own
+     * identity, which the play attempts first.
      */
-    onOpenTorBoxFile: (type: String, id: String, title: String, season: Int?, episode: Int?) -> Unit =
-        { _, _, _, _, _ -> }
+    onOpenTorBoxFile: (
+        type: String,
+        id: String,
+        title: String,
+        season: Int?,
+        episode: Int?,
+        file: CloudMatch
+    ) -> Unit =
+        { _, _, _, _, _, _ -> }
 ) {
     // The phone entry: the same pane IA and the same preference keys, drawn as
     // a grouped page with one pane pushed at a time. One branch; the TV page
@@ -1988,16 +1997,16 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(12.dp))
                 NavigationRow(
                     label = "TorBox cloud files",
-                    description = "See every finished file in your TorBox cloud, and open " +
-                        "the title each one belongs to",
+                    description = "See every finished file in your TorBox cloud, and play it - " +
+                        "or open the title it belongs to",
                     onClick = { torboxCloudOpen = true }
                 )
                 if (torboxCloudOpen) {
                     TorBoxCloudListDialog(
                         onDismiss = { torboxCloudOpen = false },
-                        onOpen = { type, id, title, season, episode ->
+                        onOpen = { type, id, title, season, episode, file ->
                             torboxCloudOpen = false
-                            onOpenTorBoxFile(type, id, title, season, episode)
+                            onOpenTorBoxFile(type, id, title, season, episode, file)
                         }
                     )
                 }

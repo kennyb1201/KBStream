@@ -20,14 +20,16 @@ import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.library.placementOf
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.TmdbTitlePage
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
+import com.kennyb1201.kbstream.data.tmdb.TmdbSearchKeywordResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
-import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchTitleResult
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.watched.WatchStateBus
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -96,7 +98,13 @@ data class AddonResultGroup(
     // Catalog type ("movie" / "series" / "all" / ...) so the screen can
     // honor the "Show Catalog Type on Search Rails" toggle at render time.
     // Null for mixed rails that have no single type.
-    val catalogType: String? = null
+    val catalogType: String? = null,
+    // True for a rail built from a search-style catalog (AI Search, People,
+    // Collections). Those rails overlap the other rails by design, so they are
+    // exempt from the TMDB de-dupe — and because that de-dupe now runs on the
+    // consolidated publish rather than while collecting, the exemption has to
+    // travel with the group instead of living next to the catalog.
+    val searchStyle: Boolean = false
 )
 
 /**
@@ -259,6 +267,94 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     val results: StateFlow<List<SearchTitleResult>> =
         _results.asStateFlow()
 
+    /**
+     * Paging state of the Titles rail, in one place so the four rules the fix
+     * turns on are pure and testable (see [TitlesPagingState]).
+     *
+     * [_results] is published FROM it, never edited beside it: page 1 and
+     * every later page take the same absorb path, so a page-2 title cannot
+     * appear twice and a new query cannot inherit the old query's counters.
+     */
+    private var titlesPaging = TitlesPagingState()
+
+    /**
+     * The query [titlesPaging] belongs to, or null before the first page's
+     * results are published. A load-more reads it rather than the live field,
+     * which is already the NEXT query by the time the debounce is running.
+     */
+    private var titlesQuery: String? = null
+
+    /**
+     * How many titles TMDB says the current query has, 0 while unknown.
+     *
+     * The rail shows only what it has loaded, so this is what turns a capped
+     * list into an honest one ("Showing 24 of 148"). It is the service's own
+     * count: with the digital-release filter on, fewer may arrive than it
+     * promises, so it is an upper bound.
+     */
+    private val _titlesTotal =
+        MutableStateFlow(0)
+
+    val titlesTotal: StateFlow<Int> =
+        _titlesTotal.asStateFlow()
+
+    /** Whether the Titles rail has another page to ask for. */
+    private val _titlesHaveMore =
+        MutableStateFlow(false)
+
+    val titlesHaveMore: StateFlow<Boolean> =
+        _titlesHaveMore.asStateFlow()
+
+    /** True while a page past the first is in flight (the rail's own tail). */
+    private val _titlesLoadingMore =
+        MutableStateFlow(false)
+
+    val titlesLoadingMore: StateFlow<Boolean> =
+        _titlesLoadingMore.asStateFlow()
+
+    /**
+     * Set when a FOLLOW-ON page could not be fetched. Distinct from
+     * [searchError]: the search itself answered, so the rail keeps every card
+     * it has and offers this page again instead of showing the failure card.
+     */
+    private val _titlesPageError =
+        MutableStateFlow<String?>(null)
+
+    val titlesPageError: StateFlow<String?> =
+        _titlesPageError.asStateFlow()
+
+    /**
+     * The Titles rail's type filter: All / Movies / Series.
+     *
+     * A VIEW of what is already loaded, never a second search: changing it
+     * re-reads [titlesPaging] and re-publishes, so the rail keeps its pages,
+     * its scroll and its focus. Reset to All by a new query (see [search]).
+     */
+    private val _titleTypeFilter =
+        MutableStateFlow(TitleTypeFilter.ALL)
+
+    val titleTypeFilter: StateFlow<TitleTypeFilter> =
+        _titleTypeFilter.asStateFlow()
+
+    /** The Titles rail's order. Reset to Best match by a new query. */
+    private val _titleSort =
+        MutableStateFlow(TitleSort.BEST_MATCH)
+
+    val titleSort: StateFlow<TitleSort> =
+        _titleSort.asStateFlow()
+
+    /**
+     * How many titles the query loaded BEFORE the type filter, so a screen can
+     * tell "nothing matched" from "nothing matched THIS type": the same count
+     * also feeds the generic no-results card, which must not stand in for a
+     * filter the viewer chose (see [titlesEmptyLabel]).
+     */
+    private val _titlesAvailable =
+        MutableStateFlow(0)
+
+    val titlesAvailable: StateFlow<Int> =
+        _titlesAvailable.asStateFlow()
+
     private val _actorResults =
         MutableStateFlow<List<TmdbSearchPersonResult>>(
             emptyList()
@@ -267,12 +363,17 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     val actorResults: StateFlow<List<TmdbSearchPersonResult>> =
         _actorResults.asStateFlow()
 
+    // Studios is the one name rail with TWO sources: TMDB's company search and
+    // the browse catalog's curated services/networks (TMDB has no
+    // /search/network endpoint, so the catalog is the only place a network can
+    // come from). Hence the hit type rather than the API model - see
+    // [StudioSearchHit].
     private val _studioResults =
-        MutableStateFlow<List<TmdbSearchStudioResult>>(
+        MutableStateFlow<List<StudioSearchHit>>(
             emptyList()
         )
 
-    val studioResults: StateFlow<List<TmdbSearchStudioResult>> =
+    val studioResults: StateFlow<List<StudioSearchHit>> =
         _studioResults.asStateFlow()
 
     private val _collectionResults =
@@ -282,6 +383,17 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
     val collectionResults: StateFlow<List<TmdbSearchCollectionResult>> =
         _collectionResults.asStateFlow()
+
+    // Keywords ("cyberpunk", "heist", "time travel"): a mood or genre word
+    // is a TAG, not a title, so it gets its own rail of tag chips rather than
+    // being searched for as a name.
+    private val _keywordResults =
+        MutableStateFlow<List<TmdbSearchKeywordResult>>(
+            emptyList()
+        )
+
+    val keywordResults: StateFlow<List<TmdbSearchKeywordResult>> =
+        _keywordResults.asStateFlow()
 
 
     private val _recentSearches =
@@ -461,6 +573,23 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         _addonResultGroups.asStateFlow()
 
     private var searchJob: Job? = null
+
+    /**
+     * The in-flight "load more" request.
+     *
+     * Separate from [searchJob] so it does not extend the search's own loading
+     * state, and cancelled by [search] so a new query never appends the old
+     * query's next page.
+     */
+    private var titlesPageJob: Job? = null
+
+    /**
+     * Bumped by every [search]. A page load that outlives its query (it can be
+     * inside a suspend call when the cancel lands) compares this before
+     * publishing, so a stale page is dropped rather than appended to a rail it
+     * does not belong to.
+     */
+    private var titlesGeneration = 0
 
     private var addonSearchJob: Job? = null
 
@@ -750,11 +879,35 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         persistRecentSearches()
     }
 
+    // The last few finished searches, memory only and short-lived: retyping a
+    // query inside the TTL is answered from here instead of re-firing every
+    // wave (F4). Cleared by resetSearchState, so a profile switch never serves
+    // one profile's answers to another.
+    private val searchCache = SearchCache<SearchSnapshot>(
+        maxEntries = MAX_CACHED_SEARCHES,
+        ttlMillis = SEARCH_CACHE_TTL_MS
+    )
+
     fun search(query: String) {
         val normalized = query.trim()
         _searchQuery.value = query
 
         searchJob?.cancel()
+        // Titles paging belongs to the query that asked for it. A new query
+        // starts at page 1 with no total, no next page and no stale page
+        // error, and any page still in flight is cancelled and invalidated so
+        // the old query's page 2 cannot land on the new query's rail.
+        titlesGeneration++
+        titlesPageJob?.cancel()
+        titlesPaging = TitlesPagingState()
+        titlesQuery = null
+        _titlesLoadingMore.value = false
+        // A new query starts on the whole rail, in the rail's own order: the
+        // filter and sort describe ONE query's results, so carrying them into
+        // the next one would silently hide half of it (F3).
+        _titleTypeFilter.value = TitleTypeFilter.ALL
+        _titleSort.value = TitleSort.BEST_MATCH
+        publishTitlesSummary()
         invalidateAddonSearch()
         _addonResultGroups.value = emptyList()
         _searchError.value = null
@@ -764,9 +917,24 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             _actorResults.value = emptyList()
             _studioResults.value = emptyList()
             _collectionResults.value = emptyList()
+            _keywordResults.value = emptyList()
             _suggestions.value = emptyList()
             _isLoading.value = false
             resultsQuery = null
+            return
+        }
+
+        val cached = searchCache.get(normalized)
+        if (cached != null) {
+            // A repeat inside the TTL: no wave is re-fired, and the rails are
+            // back before the next keystroke could land (F4/S5). The add-on
+            // wave still runs - its rails come from a separate publish path
+            // with its own generation guard - and it is handed the index the
+            // cached titles were de-duped with.
+            searchJob = viewModelScope.launch {
+                restoreCachedSearch(normalized, cached)
+                launchAddonSearch(normalized, CompletableDeferred(cached.tmdbDedup))
+            }
             return
         }
 
@@ -785,31 +953,81 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 // once the awaits return (see the check below).
                 val failedTmdbWaves = AtomicInteger(0)
 
+                /**
+                 * One list wave. [call] answers null when the request could not
+                 * be MADE at all - no TMDB key, an outage, an unparseable body
+                 * - and that is a FAILED wave. An empty list is a real answer
+                 * ("nothing matched") and must stay one: folding the two
+                 * together is what let a keyless build show "No matches
+                 * found." for a search that never ran (F1).
+                 */
                 suspend fun <T> tmdbWave(
                     what: String,
-                    call: suspend () -> List<T>
-                ): List<T> =
+                    call: suspend () -> List<T>?
+                ): List<T> {
+                    val outcome = runCatchingCancellable { call() }
+                    val results = outcome.getOrNull()
+                    if (outcome.isFailure || results == null) {
+                        failedTmdbWaves.incrementAndGet()
+                        outcome.exceptionOrNull()?.let { e ->
+                            Log.e("KBStream", "$what failed", e)
+                        }
+                    }
+                    return results.orEmpty()
+                }
+
+                // The two title waves keep their NULL (the page could not be
+                // fetched) instead of folding it into an empty list: the rail
+                // has to tell "no more results" from "this page never
+                // arrived", or a page-2 outage would end the list silently.
+                suspend fun tmdbTitlePage(
+                    what: String,
+                    call: suspend () -> TmdbTitlePage?
+                ): TmdbTitlePage? =
                     runCatchingCancellable { call() }
                         .onFailure { e ->
                             failedTmdbWaves.incrementAndGet()
                             Log.e("KBStream", "$what failed", e)
                         }
-                        .getOrDefault(emptyList())
+                        .getOrNull()
 
                 val tmdbMoviesDeferred = async {
-                    tmdbWave("Movie search") { tmdbRepository.searchMovies(normalized) }
+                    tmdbTitlePage("Movie search") {
+                        tmdbRepository.searchMoviesPage(normalized, page = 1)
+                    }
                 }
                 val tmdbTvDeferred = async {
-                    tmdbWave("TV search") { tmdbRepository.searchTv(normalized) }
+                    tmdbTitlePage("TV search") {
+                        tmdbRepository.searchTvPage(normalized, page = 1)
+                    }
                 }
                 val personDeferred = async {
-                    tmdbWave("Person search") { tmdbRepository.searchPerson(normalized) }
+                    tmdbWave("Person search") { tmdbRepository.searchPersonOrNull(normalized) }
                 }
                 val studioDeferred = async {
-                    tmdbWave("Studio search") { tmdbRepository.searchCompany(normalized) }
+                    tmdbWave("Studio search") { tmdbRepository.searchCompanyOrNull(normalized) }
                 }
                 val collectionDeferred = async {
-                    tmdbWave("Collection search") { tmdbRepository.searchCollection(normalized) }
+                    tmdbWave("Collection search") { tmdbRepository.searchCollectionOrNull(normalized) }
+                }
+                // Sixth wave: the keyword lookup. A keyword word is not a
+                // title, so no amount of movie/TV search will ever find
+                // "cyberpunk" - the tag itself is what the query matched, and
+                // one tap opens its Tag page (F1/F2). It is its own wave, so a
+                // failure here leaves the other five untouched (F3).
+                val keywordDeferred = async {
+                    tmdbWave("Keyword search") { tmdbRepository.searchKeywordsOrNull(normalized) }
+                }
+
+                // The de-dupe index the add-on rails consult, built from page
+                // 1's hits in the background and handed over as a deferred: it
+                // is the one piece of the add-on wave that needs the TMDB
+                // answers, and awaiting it is the consolidated publish's job -
+                // never a snapshot's, or a stalled TMDB wave would hold rails
+                // that were ready to show. It doubles as the cache's stored
+                // index, so a cached repeat de-dupes against the same hits.
+                val tmdbDedupDeferred = async {
+                    tmdbDedupIndexFor(tmdbMoviesDeferred, tmdbTvDeferred)
                 }
 
                 // Add-on / AI search (AIOMetadata, BingeCat, ...) fires in
@@ -818,15 +1036,15 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 // wave delays the other.
                 launchAddonSearch(
                     normalized,
-                    tmdbMoviesDeferred,
-                    tmdbTvDeferred
+                    tmdbDedupDeferred
                 )
 
-                val tmdbMovies = tmdbMoviesDeferred.await()
-                val tmdbTv = tmdbTvDeferred.await()
+                val moviePage = tmdbMoviesDeferred.await()
+                val tvPage = tmdbTvDeferred.await()
                 val personResults = personDeferred.await()
                 val studioResults = studioDeferred.await()
                 val collectionResults = collectionDeferred.await()
+                val keywordResults = keywordDeferred.await()
 
                 if (failedTmdbWaves.get() == TMDB_WAVE_COUNT) {
                     // The search did not run: say so instead of rendering an
@@ -837,22 +1055,26 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                     _actorResults.value = emptyList()
                     _studioResults.value = emptyList()
                     _collectionResults.value = emptyList()
+                    _keywordResults.value = emptyList()
                     _searchError.value = SEARCH_UNAVAILABLE
                     resultsQuery = null
                     return@launch
                 }
 
-                // Cap result counts so the list stays instantly scrollable
-                // even for very broad queries (e.g. one-letter searches).
-                // Kids Mode additionally certification-checks every title
-                // before it renders (search endpoints carry no rating),
-                // reusing the shared detail cache so repeat searches are
-                // cheap. The cap runs AFTER filtering so a strict profile
-                // still sees a full page of allowed hits.
+                // Kids Mode certification-checks every title before it
+                // renders (search endpoints carry no rating), reusing the
+                // shared detail cache so repeat searches are cheap. It runs
+                // per page, exactly as the digital-release filter does, so a
+                // strict profile sees the same titles it would have without
+                // paging - just more of them as it scrolls.
+                //
+                // There is no cap any more: a broad query used to stop at 24
+                // hits with nothing on screen saying so. The rail now pages,
+                // and the hero line says how many of the total are showing.
                 val mergedTitles = mergeTitles(
                     query = normalized,
-                    movies = tmdbMovies,
-                    tv = tmdbTv,
+                    movies = moviePage?.items.orEmpty(),
+                    tv = tvPage?.items.orEmpty(),
                     // The viewer's own signals, read once per search and in
                     // memory from there on (the store's snapshot is a prefs
                     // read, no network and no new call): the merged waves
@@ -861,15 +1083,20 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                     // pre-taste one.
                     taste = TasteSignals.snapshot(app)
                 )
-                _results.value =
-                    if (tmdbRepository.kidsMaxAge() == null) {
-                        mergedTitles.take(MAX_TITLE_RESULTS)
-                    } else {
-                        tmdbRepository.kidsFilterMetas(mergedTitles.map { it.meta })
-                            .toSet()
-                            .let { allowed -> mergedTitles.filter { it.meta in allowed } }
-                            .take(MAX_TITLE_RESULTS)
-                    }
+                // Page 1 is simply the first absorb: the publish path every
+                // later page takes. Going through it here is what lets the
+                // rail keep its cards, its counters and its error in one
+                // object instead of page 1 and page N having separate rules.
+                titlesPaging = TitlesPagingState().absorb(
+                    TitlesPage(
+                        number = 1,
+                        merged = titlesForProfile(mergedTitles),
+                        totalPages = maxOf(moviePage?.totalPages ?: 0, tvPage?.totalPages ?: 0),
+                        total = (moviePage?.totalResults ?: 0) + (tvPage?.totalResults ?: 0)
+                    )
+                )
+                titlesQuery = normalized
+                publishTitles()
                 // M10 (audit): the person CARD prints up to three known-for
                 // TITLE names under the name, and a search for an adult
                 // performer therefore put adult titles in plain text on a kids
@@ -886,7 +1113,22 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                             .take(MAX_PERSON_RESULTS)
                             .map { it.copy(knownFor = emptyList()) }
                     }
-                _studioResults.value = studioResults.distinctBy { it.id }.take(MAX_STUDIO_RESULTS)
+                // Studios, merged: the catalog's own network/service entries
+                // first (exact/prefix matches on a curated list, opening the
+                // richer service-or-network page), then TMDB's company hits
+                // behind them. A local name match, not a wave: a network has no
+                // search endpoint, and these entries are already in memory.
+                // It cannot fail, so it never touches failedTmdbWaves - a dead
+                // company wave still leaves the catalog hits on the rail.
+                _studioResults.value = mergeStudioHits(
+                    catalog = networkStudioHits(
+                        entries = studioCatalogEntries(),
+                        query = normalized,
+                        max = MAX_STUDIO_RESULTS
+                    ),
+                    companies = studioResults,
+                    max = MAX_STUDIO_RESULTS
+                )
                 // Collections carry no rating of their own, so the ceiling is
                 // applied to their members: a kids profile sees a franchise
                 // only when at least one of its films is allowed. Studios are
@@ -900,6 +1142,33 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                             .distinctBy { it.id }
                             .take(MAX_COLLECTION_RESULTS)
                     }
+                // Keyword hits are tags, not titles: there is nothing here to
+                // de-dupe against the title rails (a different kind of thing
+                // altogether) and nothing for the kids ceiling to vet either -
+                // the app's existing rule is that a NAME is not content, which
+                // is why studios are published untouched too. The Tag page the
+                // tap opens is where the titles underneath are ceiling-checked
+                // (F4).
+                _keywordResults.value =
+                    keywordResults.distinctBy { it.id }.take(MAX_KEYWORD_RESULTS)
+
+                // Remember the answer now that every rail is published, so a
+                // repeat restores exactly what this search put on screen.
+                // Written before the badge resolution below: badges are keyed
+                // off profile state and are rebuilt on the way back in.
+                searchCache.put(
+                    normalized,
+                    SearchSnapshot(
+                        titles = titlesPaging.results,
+                        titlesTotal = titlesPaging.total,
+                        titlesTotalPages = titlesPaging.totalPages,
+                        actors = _actorResults.value,
+                        studios = _studioResults.value,
+                        collections = _collectionResults.value,
+                        keywords = _keywordResults.value,
+                        tmdbDedup = tmdbDedupDeferred.await()
+                    )
+                )
 
                 // The suggestions row may only quote THIS query's results
                 // from here (see [updateSuggestions]).
@@ -919,15 +1188,240 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 throw e
             } catch (e: Exception) {
                 Log.e("KBStream", "Search failed", e)
+                titlesPaging = TitlesPagingState()
+                publishTitlesSummary()
                 _results.value = emptyList()
                 _actorResults.value = emptyList()
                 _studioResults.value = emptyList()
                 _collectionResults.value = emptyList()
+                _keywordResults.value = emptyList()
                 _searchError.value = SEARCH_UNAVAILABLE
             } finally {
                 _isLoading.value = false
             }
         }
+    }
+
+    /**
+     * The titles a profile may see from [merged]: everything, unless the profile
+     * has a kids ceiling, in which case each title is certification-checked the
+     * way the un-paged search checked its (only) page.
+     *
+     * Applied per page so paging changes nothing about what a profile is
+     * allowed to see - it only changes how many pages of it arrive.
+     */
+    private suspend fun titlesForProfile(
+        mergedTitles: List<SearchTitleResult>
+    ): List<SearchTitleResult> {
+        if (tmdbRepository.kidsMaxAge() == null) return mergedTitles
+        val allowed = tmdbRepository.kidsFilterMetas(mergedTitles.map { it.meta }).toSet()
+        return mergedTitles.filter { it.meta in allowed }
+    }
+
+    /**
+     * Publish the rail the paging state describes - cards AND their counters.
+     *
+     * The published list is the merged, paged list put through the viewer's
+     * filter and sort ([visibleTitles]); [titlesPaging] keeps the unfiltered
+     * master, which is what paging dedupes against. That split is what lets a
+     * filter change re-read the same results instead of asking TMDB again.
+     */
+    private fun publishTitles() {
+        _results.value = visibleTitles()
+        publishTitlesSummary()
+    }
+
+    /** [titlesPaging]'s results as the rail draws them: filtered, then sorted. */
+    private fun visibleTitles(): List<SearchTitleResult> = sortTitles(
+        filterTitlesByType(titlesPaging.results, _titleTypeFilter.value),
+        _titleSort.value,
+        titlesQuery.orEmpty().lowercase(),
+        TasteSignals.snapshot(app)
+    )
+
+    /**
+     * Show only movies / only series / everything, without re-fetching.
+     *
+     * The pages already loaded are unchanged; only the view of them is.
+     */
+    fun setTitleTypeFilter(filter: TitleTypeFilter) {
+        if (_titleTypeFilter.value == filter) return
+        _titleTypeFilter.value = filter
+        publishTitles()
+    }
+
+    /** Reorder the Titles rail without re-fetching. */
+    fun setTitleSort(sort: TitleSort) {
+        if (_titleSort.value == sort) return
+        _titleSort.value = sort
+        publishTitles()
+    }
+
+    /**
+     * The rail's counters without touching its cards, for the reset at the
+     * start of a search: the previous query's titles stay on screen through the
+     * debounce exactly as they always did, but they can no longer be quoted as
+     * "of N" for the new one.
+     */
+    private fun publishTitlesSummary() {
+        _titlesAvailable.value = titlesPaging.results.size
+        _titlesTotal.value = titlesPaging.total
+        _titlesHaveMore.value = titlesPaging.hasMore
+        _titlesPageError.value = titlesPaging.error
+    }
+
+    /**
+     * Ask for the Titles rail's next page.
+     *
+     * Called when the rail reaches its end (see the two search screens). Idempotent
+     * by construction: it answers immediately while a page is in flight, while
+     * the first page is still loading, and once the pages are exhausted - so a
+     * rail that reports its end on every scroll frame asks once per page.
+     *
+     * A page that cannot be fetched does NOT end the rail: the page-1 cards
+     * stay, [titlesPageError] names what happened, and the next call asks for
+     * the same page again (the pager does not advance its counter on failure).
+     */
+    fun loadMoreTitles() {
+        val query = titlesQuery ?: return
+        val generation = titlesGeneration
+        if (!titlesPaging.hasMore) return
+        if (_titlesLoadingMore.value) return
+        // Page 1 is still coming: its own wave will fill the rail.
+        if (searchJob?.isActive == true) return
+
+        val page = titlesPaging.nextPage
+        titlesPaging = titlesPaging.copy(error = null)
+        publishTitlesSummary()
+        _titlesLoadingMore.value = true
+
+        titlesPageJob = viewModelScope.launch {
+            val alreadyShown = titlesPaging.results.size
+            try {
+                val moviesPage = runCatchingCancellable {
+                    tmdbRepository.searchMoviesPage(query, page)
+                }.getOrNull()
+                val showsPage = runCatchingCancellable {
+                    tmdbRepository.searchTvPage(query, page)
+                }.getOrNull()
+
+                // A superseded query (or a new page already landed) owns the
+                // rail now: dropping this page is the whole point of the token.
+                if (generation != titlesGeneration) return@launch
+
+                if (moviesPage == null && showsPage == null) {
+                    titlesPaging = titlesPaging.failed(TITLES_PAGE_UNAVAILABLE)
+                    publishTitlesSummary()
+                    return@launch
+                }
+
+                val merged = mergeTitles(
+                    query = query,
+                    movies = moviesPage?.items.orEmpty(),
+                    tv = showsPage?.items.orEmpty(),
+                    taste = TasteSignals.snapshot(app)
+                )
+                titlesPaging = titlesPaging.absorb(
+                    TitlesPage(
+                        number = page,
+                        merged = titlesForProfile(merged),
+                        totalPages = maxOf(
+                            moviesPage?.totalPages ?: 0,
+                            showsPage?.totalPages ?: 0
+                        ),
+                        total = (moviesPage?.totalResults ?: 0) +
+                            (showsPage?.totalResults ?: 0)
+                    )
+                )
+                publishTitles()
+
+                // Only what this page added needs badges/marks resolved; the
+                // cards already on screen were resolved when they arrived.
+                val added = titlesPaging.results.drop(alreadyShown)
+                if (added.isNotEmpty()) {
+                    refreshSiblingOwnedMarkers()
+                    resolveTmdbTitles(added)
+                }
+            } finally {
+                if (generation == titlesGeneration) _titlesLoadingMore.value = false
+            }
+        }
+    }
+
+    /**
+     * The Titles rail's own hits as a de-dup index: what an add-on row has to
+     * match to be a duplicate of a title the viewer is already looking at.
+     *
+     * Built from page 1's hits, exactly as it was before the rail could page.
+     * It is computed in the background because it is the single piece of the
+     * add-on wave that needs the TMDB answers; the add-on probes do not wait
+     * for it, and neither does a snapshot's publish path.
+     */
+    private suspend fun tmdbDedupIndexFor(
+        moviesDeferred: Deferred<TmdbTitlePage?>,
+        tvDeferred: Deferred<TmdbTitlePage?>
+    ): TmdbDedupIndex {
+        val movies = moviesDeferred.await()?.items.orEmpty()
+        val tv = tvDeferred.await()?.items.orEmpty()
+        return TmdbDedupIndex(
+            ids = buildSet {
+                movies.forEach { result ->
+                    add(TmdbDedupIndex.idKey("movie", "tmdb:${result.id}"))
+                }
+                tv.forEach { result ->
+                    add(TmdbDedupIndex.idKey("series", "tmdb:${result.id}"))
+                }
+            },
+            nameYears = buildSet {
+                movies.forEach { result ->
+                    TmdbDedupIndex.nameYearKey(
+                        type = "movie",
+                        name = tmdbResultName("movie", result),
+                        year = tmdbResultYear(result)
+                    )?.let { key -> add(key) }
+                }
+                tv.forEach { result ->
+                    TmdbDedupIndex.nameYearKey(
+                        type = "series",
+                        name = tmdbResultName("series", result),
+                        year = tmdbResultYear(result)
+                    )?.let { key -> add(key) }
+                }
+            }
+        )
+    }
+
+    /**
+     * Put a cached answer back exactly as the fresh wave left it: the titles
+     * through the paging state, so the rail still pages, filters and sorts the
+     * same way, then the four name rails.
+     *
+     * Nothing is re-queried. The titles' master list (not the filtered view) is
+     * what the snapshot carries, which is why [publishTitles] can rebuild the
+     * rail from it after a filter or sort change exactly as it does live.
+     */
+    private suspend fun restoreCachedSearch(query: String, snapshot: SearchSnapshot) {
+        titlesPaging = titlesPaging.absorb(
+            TitlesPage(
+                number = 1,
+                merged = snapshot.titles,
+                totalPages = snapshot.titlesTotalPages,
+                total = snapshot.titlesTotal
+            )
+        )
+        titlesQuery = query
+        publishTitles()
+        _actorResults.value = snapshot.actors
+        _studioResults.value = snapshot.studios
+        _collectionResults.value = snapshot.collections
+        _keywordResults.value = snapshot.keywords
+        resultsQuery = query.lowercase()
+        _isLoading.value = false
+        refreshSiblingOwnedMarkers()
+        // Badges and marks are profile state, not search results: resolve them
+        // again from the ids the cached titles carry (disk+memory cached, so
+        // this is not a fresh round of TMDB work).
+        resolveTmdbTitles(_results.value)
     }
 
     /**
@@ -939,8 +1433,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
      */
     private fun launchAddonSearch(
         query: String,
-        tmdbMoviesDeferred: Deferred<List<TmdbSearchTitleResult>>,
-        tmdbTvDeferred: Deferred<List<TmdbSearchTitleResult>>
+        tmdbDedupDeferred: Deferred<TmdbDedupIndex>
     ) {
         invalidateAddonSearch()
         val generation = addonSearchGeneration
@@ -952,47 +1445,15 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         // shared detail cache; the known-unknown rule is the one
         // kidsFilterMetas owns (fail closed under G/PG, open under PG-13).
         addonSearchJob = viewModelScope.launch {
-            // The add-on probes start immediately now — they used to wait
-            // for BOTH TMDB searches to finish before firing a single
-            // request, adding ~0.5-1s to every addon rail. The de-dupe index
-            // is instead resolved lazily: each addon consults it only after
-            // its own network response is back, by which time TMDB has almost
-            // always finished anyway (and if not, that addon was the slow one
-            // regardless).
-            val tmdbDedupDeferred = async {
-                val movies = tmdbMoviesDeferred.await()
-                val tv = tmdbTvDeferred.await()
-                TmdbDedupIndex(
-                    ids = buildSet {
-                        movies.forEach { result ->
-                            add(TmdbDedupIndex.idKey("movie", "tmdb:${result.id}"))
-                        }
-                        tv.forEach { result ->
-                            add(TmdbDedupIndex.idKey("series", "tmdb:${result.id}"))
-                        }
-                    },
-                    nameYears = buildSet {
-                        movies.forEach { result ->
-                            TmdbDedupIndex.nameYearKey(
-                                type = "movie",
-                                name = tmdbResultName("movie", result),
-                                year = tmdbResultYear(result)
-                            )?.let { key -> add(key) }
-                        }
-                        tv.forEach { result ->
-                            TmdbDedupIndex.nameYearKey(
-                                type = "series",
-                                name = tmdbResultName("series", result),
-                                year = tmdbResultYear(result)
-                            )?.let { key -> add(key) }
-                        }
-                    }
-                )
-            }
-
+            // The add-on probes start immediately: they used to wait for BOTH
+            // TMDB searches to finish before firing a single request, adding
+            // ~0.5-1s to every add-on rail. Nothing on the publish path waits
+            // for the de-dupe index either - it arrives as a deferred and is
+            // awaited once, on the consolidated republish (see
+            // [publishAddonSnapshot]).
             val groups =
                 try {
-                    searchAddonCatalogs(query, tmdbDedupDeferred, generation)
+                    searchAddonCatalogs(query, generation)
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -1013,18 +1474,20 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             // filter in searchMovies) and Home, so the two halves of a search
             // agree. A group the filter empties is dropped rather than left as a
             // titleless rail.
-            val visibleGroups =
-                groups
-                    .map { group ->
-                        group.copy(
-                            results = tmdbRepository.filterByHomeAvailabilityById(
-                                items = group.results,
-                                id = { result -> result.meta.id },
-                                type = { result -> result.type }
-                            )
-                        )
-                    }
-                    .filter { group -> group.results.isNotEmpty() }
+            //
+            // Each rail already went through it as it was published (F2); the
+            // consolidated publish runs it again so the FINAL state is filtered
+            // even for a rail whose lookups resolved to nothing after it landed
+            // (the lookups are disk+memory cached, so the second pass is cheap).
+            //
+            // Before it: the one TMDB name+year de-dupe of the whole wave (F1).
+            // The snapshots published without it, so the index is only awaited
+            // here, once, on the copy that becomes the final state — a TMDB wave
+            // that never answers leaves the snapshots standing rather than an
+            // empty section.
+            val visibleGroups = withHomeAvailability(
+                dedupAddonGroups(groups, tmdbDedupDeferred.await())
+            )
 
             // A newer search already owns the rails: drop this wave rather
             // than republish the superseded query's hits (LS-P2-2). Checked
@@ -1078,10 +1541,10 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
      * A third-party catalog's own metadata carries no certification, so the
      * check resolves each result's id through the shared detail cache
      * (`kidsFilterMetas`) — the same call the TMDB title wave makes, so a
-     * repeat search is cheap. There are two publish paths (the eager
-     * per-add-on snapshot and the consolidated wave) and BOTH go through here:
-     * an intermediate snapshot that skipped the ceiling would put unvetted
-     * rails on a kids profile for as long as the slower add-ons take to answer.
+     * repeat search is cheap. There are two publish paths (the per-rail
+     * snapshot and the consolidated wave) and BOTH go through here: an
+     * intermediate snapshot that skipped the ceiling would put unvetted rails
+     * on a kids profile for as long as the slower catalogs take to answer.
      */
     private suspend fun withKidsCeiling(
         groups: List<AddonResultGroup>
@@ -1094,6 +1557,29 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             vetAddonGroup(group, allowedMetas)
         }
     }
+
+    /**
+     * Drop the results whose movie has no home release yet, and the rail itself
+     * when that empties it — the same rule the consolidated path applies, so a
+     * snapshot can never show an un-released movie even briefly (F2).
+     *
+     * [TmdbRepository.filterByHomeAvailabilityById] is disk+memory cached and
+     * gates itself on the Digital Release setting, so this is the one call both
+     * publish paths make per group; series pass through untouched.
+     */
+    private suspend fun withHomeAvailability(
+        groups: List<AddonResultGroup>
+    ): List<AddonResultGroup> = dropEmptyAddonGroups(
+        groups.map { group ->
+            group.copy(
+                results = tmdbRepository.filterByHomeAvailabilityById(
+                    items = group.results,
+                    id = { result -> result.meta.id },
+                    type = { result -> result.type }
+                )
+            )
+        }
+    )
 
     /**
      * Fill missing year/rating display data on add-on search results from
@@ -1151,43 +1637,37 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private suspend fun searchAddonCatalogs(
         query: String,
-        tmdbDedupDeferred: Deferred<TmdbDedupIndex>,
         generation: Int
     ): List<AddonResultGroup> = coroutineScope {
         val addons = addonManager.getEnabledAddons()
 
-        // Every installed add-on is probed in parallel, and each add-on's
-        // rails are published the moment that add-on answers (install order
-        // preserved via indexed slots) instead of waiting for the slowest
-        // one. A slow AI add-on therefore delays only its own rails, never
-        // the whole add-on section. MAX_ADDON_GROUPS still caps the total,
-        // and MAX_ADDON_GROUPS_PER_ADDON stops a catalog-heavy add-on from
+        // Every installed add-on is probed in parallel, and each RAIL is
+        // published the moment its catalog answers (install order preserved
+        // via indexed slots) instead of waiting for the slowest one — or even
+        // for the slowest catalog of its own add-on. A slow AI add-on
+        // therefore delays only its own rails, never the whole section.
+        // MAX_ADDON_GROUPS still caps the total, and
+        // MAX_ADDON_GROUPS_PER_ADDON stops a catalog-heavy add-on from
         // crowding the others out of the cap.
+        //
+        // Nothing here awaits the TMDB de-dupe index any more: that index
+        // needs both TMDB search waves, and waiting on it was what held a fast
+        // add-on's rails behind a stalled TMDB request (F1). The snapshot uses
+        // only the `seen` set, which is local to the add-on and free; the
+        // name+year de-dupe is applied once, on the consolidated republish.
         val slots = AtomicReferenceArray<List<AddonResultGroup>>(addons.size)
 
         addons.mapIndexed { index, addon ->
             launch {
-                val groups = try {
-                    collectAddonSearchGroup(addon, query, tmdbDedupDeferred)
+                try {
+                    collectAddonSearchGroup(addon, query) { group ->
+                        publishAddonSnapshot(index, group, slots, generation)
+                    }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (_: Exception) {
-                    emptyList()
-                }.take(MAX_ADDON_GROUPS_PER_ADDON)
-
-                slots.set(index, groups)
-
-                val snapshot = coalesceAddonGroups(
-                    (0 until slots.length())
-                        .mapNotNull { slots.get(it) }
-                        .flatten()
-                ).take(MAX_ADDON_GROUPS)
-                if (snapshot.isNotEmpty() && generation == addonSearchGeneration) {
-                    // Vetted too: this is a real publish, and on a kids profile
-                    // an unvetted intermediate snapshot would show adult hits
-                    // until the consolidated wave replaced them.
-                    _addonResultGroups.value = withKidsCeiling(snapshot)
-                    refreshSiblingOwnedMarkers()
+                    // One bad add-on must not take the other rails down; the
+                    // rails it already published stay published.
                 }
             }
         }.joinAll()
@@ -1197,6 +1677,46 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 .mapNotNull { slots.get(it) }
                 .flatten()
         ).take(MAX_ADDON_GROUPS)
+    }
+
+    /**
+     * Add one finished rail to [index]'s slot and, while this wave still owns
+     * the rails, republish the snapshot of everything that has answered so far.
+     *
+     * The rail arrives ALREADY through the digital-release filter (see
+     * [collectAddonSearchGroup]), so the snapshot is the finished, visible set
+     * and the filter's lookups are not repeated for rails that are already on
+     * screen (F2). The snapshot is an earlier publish of the same groups the
+     * consolidated wave finishes with, never a different list (F3).
+     */
+    private suspend fun publishAddonSnapshot(
+        index: Int,
+        group: AddonResultGroup,
+        slots: AtomicReferenceArray<List<AddonResultGroup>>,
+        generation: Int
+    ) {
+        val current = slots.get(index).orEmpty()
+        // The per-add-on cap, applied as rails arrive rather than at the end:
+        // once an add-on is full, its later catalogs are not published either.
+        if (current.size >= MAX_ADDON_GROUPS_PER_ADDON) return
+        slots.set(index, current + group)
+
+        // A newer search already owns the rails: drop this snapshot rather than
+        // republish the superseded query's hits (LS-P2-2).
+        if (generation != addonSearchGeneration) return
+
+        val snapshot = coalesceAddonGroups(
+            (0 until slots.length())
+                .mapNotNull { slots.get(it) }
+                .flatten()
+        ).take(MAX_ADDON_GROUPS)
+        if (snapshot.isEmpty()) return
+
+        // Vetted too: this is a real publish, and on a kids profile an
+        // unvetted intermediate snapshot would show adult hits until the
+        // consolidated wave replaced them.
+        _addonResultGroups.value = withKidsCeiling(snapshot)
+        refreshSiblingOwnedMarkers()
     }
 
     /**
@@ -1248,15 +1768,31 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
      * rails like "AI Search" always render. Returns an empty list when the
      * add-on yields no rails so it drops out just like the old loop's
      * `continue`.
+     *
+     * Every rail is handed to [onGroup] the moment it is finished, so the
+     * caller can publish it before this add-on's slower catalogs answer. No
+     * TMDB input is needed to finish a rail: the de-dupe that needs the index
+     * (F1) is not applied here at all.
      */
     private suspend fun collectAddonSearchGroup(
         addon: InstalledAddon,
         query: String,
-        tmdbDedupDeferred: Deferred<TmdbDedupIndex>
+        onGroup: suspend (AddonResultGroup) -> Unit
     ): List<AddonResultGroup> = coroutineScope {
         val groups = mutableListOf<AddonResultGroup>()
         val baseUrl =
             addon.manifestUrl.removeSuffix("/manifest.json")
+
+        // Finish one rail: through the digital-release filter first (F2), so no
+        // publish — snapshot or consolidated — can show an un-released movie,
+        // and dropped entirely when that filter empties it. The cap applies as
+        // rails arrive, not at the end.
+        suspend fun emit(group: AddonResultGroup) {
+            if (groups.size >= MAX_ADDON_GROUPS_PER_ADDON) return
+            val visible = withHomeAvailability(listOf(group)).firstOrNull() ?: return
+            groups += visible
+            onGroup(visible)
+        }
 
         val collected = mutableListOf<MetaPreview>()
 
@@ -1298,27 +1834,33 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 .take(MAX_ADDON_CATALOG_PROBES)
 
             if (searchableCatalogs.isNotEmpty()) {
-                val perCatalog = coroutineScope {
-                    searchableCatalogs.map { catalog ->
-                        async {
-                            catalog to runCatchingCancellable {
-                                repository.searchCatalog(
-                                    baseUrl,
-                                    catalog.type,
-                                    catalog.id,
-                                    query
-                                )
-                            }.getOrDefault(emptyList())
-                        }
-                    }.awaitAll()
+                // Probed in parallel, consumed in catalog order: `seen` is a
+                // cross-rail de-dupe, so a rail has to be built in the order it
+                // will be shown — but each one is published as soon as it is
+                // its turn AND has answered, so a slow catalog only holds back
+                // the rails listed after it.
+                val probes = searchableCatalogs.map { catalog ->
+                    async {
+                        catalog to runCatchingCancellable {
+                            repository.searchCatalog(
+                                baseUrl,
+                                catalog.type,
+                                catalog.id,
+                                query
+                            )
+                        }.getOrDefault(emptyList())
+                    }
                 }
 
-                // Regular catalogs: a title found by an earlier catalog (or
-                // already present in the TMDB rails) is not repeated in the
-                // same addon's later regular rails.
+                // Regular catalogs: a title found by an earlier regular rail is
+                // not repeated in the same addon's later ones. This is the ONLY
+                // de-dupe a snapshot gets — it needs no TMDB, which is what
+                // lets a rail publish while the TMDB wave is still stalled (F1).
+                // The TMDB name+year de-dupe is applied to this same group on
+                // the consolidated publish, once the index has landed (F3).
                 val seen = mutableSetOf<String>()
-                val tmdbDedup = tmdbDedupDeferred.await()
-                for ((catalog, hits) in perCatalog) {
+                for (probe in probes) {
+                    val (catalog, hits) = probe.await()
                     val searchStyle = catalog.isSearchStyleCatalog()
                     // A search that returns the SAME list as the catalog's
                     // unfiltered browse view means the catalog ignored the
@@ -1330,15 +1872,6 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                     val items = hits
                         .asSequence()
                         .distinctBy { "${it.type}:${it.id}" }
-                        .filter { meta ->
-                            searchStyle ||
-                                !tmdbDedup.matches(
-                                    type = meta.type,
-                                    id = meta.id,
-                                    name = meta.name,
-                                    year = meta.yearOrNull
-                                )
-                        }
                         .filter { meta ->
                             // Search-style rails never enter or consult the
                             // dedup set: they must always render.
@@ -1359,11 +1892,16 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                         .take(MAX_ADDON_CATALOG_RESULTS)
                         .toList()
                     if (items.isEmpty()) continue
-                    groups += AddonResultGroup(
-                        addonName = addon.displayName,
-                        railLabel = catalog.railLabel(addon.displayName),
-                        results = items,
-                        catalogType = catalog.type
+                    emit(
+                        AddonResultGroup(
+                            addonName = addon.displayName,
+                            railLabel = catalog.railLabel(addon.displayName),
+                            results = items,
+                            catalogType = catalog.type,
+                            // Carries the exemption to the consolidated
+                            // publish, which is where the TMDB de-dupe now runs.
+                            searchStyle = searchStyle
+                        )
                     )
                 }
             }
@@ -1371,20 +1909,9 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             return@coroutineScope groups
         }
 
-        // Await the de-dupe index once, before filtering.
-        val tmdbDedup = tmdbDedupDeferred.await()
-
         val addonItems =
             collected
                 .distinctBy { "${it.type}:${it.id}" }
-                .filter { meta ->
-                    !tmdbDedup.matches(
-                        type = meta.type,
-                        id = meta.id,
-                        name = meta.name,
-                        year = meta.yearOrNull
-                    )
-                }
                 .map { meta ->
                     SearchTitleResult(
                         id = meta.id,
@@ -1401,12 +1928,14 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
         if (addonItems.isEmpty()) return@coroutineScope emptyList<AddonResultGroup>()
 
-        groups += AddonResultGroup(
-            // Standard search mixes movies + series in one rail.
-            addonName = addon.displayName,
-            railLabel = "All",
-            results = addonItems,
-            catalogType = null
+        emit(
+            AddonResultGroup(
+                // Standard search mixes movies + series in one rail.
+                addonName = addon.displayName,
+                railLabel = "All",
+                results = addonItems,
+                catalogType = null
+            )
         )
 
         return@coroutineScope groups
@@ -1813,6 +2342,22 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     private fun activeCollectionNames(): List<String> =
         browseNamesFor("collections", isKidsMode).orEmpty()
 
+    /**
+     * The catalog entries the Studios rail may match: the "Services & Networks"
+     * category as the sidebar currently shows it.
+     *
+     * Read from the PUBLISHED categories, not the raw lists, on purpose - one
+     * read site, so the rail inherits the active mode (a kids profile matches
+     * only kids-curated brands, extras included - see [kidsBrowseCategories])
+     * and the hidden-chip filter: a chip the viewer hid is not offered back as a
+     * search result either.
+     */
+    private fun studioCatalogEntries(): List<BrowseEntry> =
+        _browseCategories.value
+            .firstOrNull { it.key == "services" }
+            ?.entries
+            .orEmpty()
+
     private fun baseBrowseCategories(): List<BrowseCategory> =
         if (isKidsMode) kidsBrowseCategories() else BROWSE_CATEGORIES
 
@@ -1866,11 +2411,21 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         // profile must not survive into the kids view (or vice versa).
         searchJob?.cancel()
         addonSearchJob?.cancel()
+        // The rail's pages belong to the profile that searched for them.
+        titlesGeneration++
+        titlesPageJob?.cancel()
+        titlesPaging = TitlesPagingState()
+        titlesQuery = null
+        _titlesLoadingMore.value = false
+        _titleTypeFilter.value = TitleTypeFilter.ALL
+        _titleSort.value = TitleSort.BEST_MATCH
+        publishTitlesSummary()
         _searchQuery.value = ""
         _results.value = emptyList()
         _actorResults.value = emptyList()
         _studioResults.value = emptyList()
         _collectionResults.value = emptyList()
+        _keywordResults.value = emptyList()
         _suggestions.value = emptyList()
         _addonResultGroups.value = emptyList()
         _isLoading.value = false
@@ -2448,12 +3003,24 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         commitSearch()
     }
 
-    fun onStudioOpened(studio: TmdbSearchStudioResult) {
+    fun onStudioOpened(studio: StudioSearchHit) {
         commitSearch()
     }
 
     fun onCollectionOpened(collection: TmdbSearchCollectionResult) {
         commitSearch()
+    }
+
+    /**
+     * A keyword hit opens the SAME Tag page the Keywords browse chip opens -
+     * `isKeyword = true` is what makes it discover by keyword id instead of by
+     * genre id - so there is one keyword world and not two screens for it
+     * (F2). "movie" matches the chip: the page runs movie rails, and its own
+     * toggle reaches series.
+     */
+    fun onKeywordOpened(keyword: TmdbSearchKeywordResult) {
+        commitSearch()
+        onOpenTagScreen?.invoke(keyword.id, keyword.name, true, "movie")
     }
 
     fun onRecentSearchClicked(query: String) {
@@ -2462,6 +3029,23 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         commitSearch(query)
     }
 
+
+    /**
+     * Forget ONE committed query.
+     *
+     * Clear-all was the only way to take a single search off the list, so
+     * removing a mistyped or private one cost the other nine (F4a). The match
+     * is case-insensitive because [commitSearch] de-dupes that way - the same
+     * query typed in two casings is one chip.
+     */
+    fun removeRecentSearch(query: String) {
+        val updated = withoutRecentSearch(_recentSearches.value, query)
+        // Nothing matched (a stale chip, or an already-forgotten query): do not
+        // rewrite the stored list for a no-op.
+        if (updated.size == _recentSearches.value.size) return
+        _recentSearches.value = updated
+        persistRecentSearches()
+    }
 
     fun clearRecentSearches() {
         _recentSearches.value = emptyList()
@@ -2473,12 +3057,22 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         searchJob = null
         addonSearchJob?.cancel()
         addonSearchJob = null
+        titlesGeneration++
+        titlesPageJob?.cancel()
+        titlesPageJob = null
+        titlesPaging = TitlesPagingState()
+        titlesQuery = null
+        _titlesLoadingMore.value = false
+        _titleTypeFilter.value = TitleTypeFilter.ALL
+        _titleSort.value = TitleSort.BEST_MATCH
+        publishTitlesSummary()
         _searchQuery.value = ""
         _results.value = emptyList()
         _addonResultGroups.value = emptyList()
         _actorResults.value = emptyList()
         _studioResults.value = emptyList()
         _collectionResults.value = emptyList()
+        _keywordResults.value = emptyList()
         _suggestions.value = emptyList()
         _isLoading.value = false
         _searchError.value = null
@@ -2494,6 +3088,9 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         _partialWatchedKeys.value = emptySet()
         _resolvedIds.value = emptyMap()
         siblingOwnedMarkerIds = emptySet()
+        // The cached answers were shaped by the outgoing profile's ceiling and
+        // badges, so another profile must not be served them.
+        searchCache.clear()
     }
 
     /**
@@ -2564,10 +3161,19 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         const val RECENT_SEARCHES_SEPARATOR = "\u0001"
         const val MAX_RESOLUTION_BATCH = 300
         const val MAX_RECENT_SEARCHES = 10
-        const val MAX_TITLE_RESULTS = 24
+
+        /** How many finished searches the in-memory cache keeps (F4). */
+        const val MAX_CACHED_SEARCHES = 5
+
+        /** How long a cached search stays answerable: five minutes. */
+        const val SEARCH_CACHE_TTL_MS = 5 * 60 * 1000L
         const val MAX_PERSON_RESULTS = 12
         const val MAX_STUDIO_RESULTS = 8
         const val MAX_COLLECTION_RESULTS = 8
+
+        // Eight, the same rail length as Studios and Collections: a keyword
+        // rail is a row of tags to browse, not a list to page through.
+        const val MAX_KEYWORD_RESULTS = 8
 
         const val MAX_ADDON_RESULTS_PER_ADDON = 40
         // Rails per add-on. Must exceed AIOMetadata's maximum search-catalog
@@ -2645,6 +3251,13 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         const val SEARCH_DEBOUNCE_MS = 300L
 
         /** The TMDB endpoints one search probes (movies, TV, people, studios, collections). */
-        const val TMDB_WAVE_COUNT = 5
+        const val TMDB_WAVE_COUNT = 6
+
+        /**
+         * What the Titles rail says when a FOLLOW-ON page could not be fetched.
+         * The rail's cards stay; the tail offers the page again.
+         */
+        const val TITLES_PAGE_UNAVAILABLE =
+            "Couldn't load more titles. Check the connection and try again."
     }
 }

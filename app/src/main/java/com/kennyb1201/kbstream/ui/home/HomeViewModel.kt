@@ -17,6 +17,7 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
 import com.kennyb1201.kbstream.data.airdates.TvmazeAirDateRepository
 import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
+import com.kennyb1201.kbstream.data.bingecat.BingeCatWriteRules
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
@@ -28,15 +29,18 @@ import com.kennyb1201.kbstream.data.library.isDisliked
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListPlaybackItem
+import com.kennyb1201.kbstream.data.mdblist.mdbListWatchedEpisodesByShow
 import com.kennyb1201.kbstream.data.notifications.NewEpisodeRules
 import com.kennyb1201.kbstream.data.player.rerootedEpisodeStreamId
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
+import com.kennyb1201.kbstream.data.reporting.UpcomingDiagTrace
 import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.simkl.UPCOMING_DIAGNOSTICS
 import com.kennyb1201.kbstream.data.trakt.TraktPlaybackSession
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
+import com.kennyb1201.kbstream.data.trakt.TraktShowWatch
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.tmdb.HeroArtwork
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
@@ -62,7 +66,6 @@ import com.kennyb1201.kbstream.ui.components.landscapeArtFor
 import com.kennyb1201.kbstream.ui.components.landscapeArtKey
 import com.kennyb1201.kbstream.ui.components.landscapeArtUrls
 import com.kennyb1201.kbstream.data.settings.AppPreferences
-import com.kennyb1201.kbstream.data.settings.ResumeAuthority
 import com.kennyb1201.kbstream.data.tmdb.alternatePosterPath
 import com.kennyb1201.kbstream.data.tmdb.tmdbImage
 import com.kennyb1201.kbstream.data.tmdb.director
@@ -608,12 +611,13 @@ class HomeViewModel(
                     val caughtUp = items.filter(::isCaughtUpForUpcoming)
 
                     if (UPCOMING_DIAGNOSTICS && caughtUp.size != items.size) {
-                        Log.d(
-                            "UPCOMING_DIAG",
+                        val notCaughtUpLine =
                             "kept off Upcoming (not caught up): " +
                                 items.filterNot(::isCaughtUpForUpcoming)
                                     .joinToString { "'${it.title}'" }
-                        )
+
+                        Log.d("UPCOMING_DIAG", notCaughtUpLine)
+                        UpcomingDiagTrace.note(notCaughtUpLine)
                     }
 
                     // runCatchingCancellable, not a bare call: an exception
@@ -652,11 +656,15 @@ class HomeViewModel(
                                 loadLocalCaughtUpUpcomingItems()
                         )
                     }.getOrElse { error ->
+                        val failedLine =
+                            "upcoming schedule build failed"
+
                         Log.e(
                             "UPCOMING_DIAG",
-                            "upcoming schedule build failed",
+                            failedLine,
                             error
                         )
+                        UpcomingDiagTrace.note(failedLine)
                         emptyList()
                     }
 
@@ -3359,11 +3367,15 @@ Log.d(
             runCatchingCancellable {
                 simklRepository.getCaughtUpUnreleasedShows()
             }.getOrElse { e ->
+                val failedLine =
+                    "caught-up candidates failed: ${e.message}"
+
                 Log.w(
                     "UPCOMING_DIAG",
-                    "caught-up candidates failed: ${e.message}",
+                    failedLine,
                     e
                 )
+                UpcomingDiagTrace.note(failedLine)
                 // The last good answer stands for a flaky call - but
                 // only this profile's. See [caughtUpUpcomingCache].
                 return caughtUpUpcomingCache(
@@ -3379,13 +3391,14 @@ Log.d(
                     MAX_CAUGHT_UP_UPCOMING_ITEMS
                 )
 
-            Log.d(
-                "UPCOMING_DIAG",
+            val candidatesLine =
                 "caught-up candidates=${candidates.size} " +
                     capped.joinToString {
                         "'${it.title}'"
                     }
-            )
+
+            Log.d("UPCOMING_DIAG", candidatesLine)
+            UpcomingDiagTrace.note(candidatesLine)
         }
 
         // Reuse the Continue Watching builder: it is what resolves the TMDB
@@ -3433,8 +3446,7 @@ Log.d(
                         ) >= startOfToday
                 }
 
-            Log.d(
-                "UPCOMING_DIAG",
+            val enrichedLine =
                 "caught-up enriched=${built.size} " +
                     "future-dated=${airing.size} " +
                     "no-dated-tmdb-episode=" + built.filterNot {
@@ -3444,7 +3456,9 @@ Log.d(
                     }.joinToString {
                         "'${it.title}'"
                     }
-            )
+
+            Log.d("UPCOMING_DIAG", enrichedLine)
+            UpcomingDiagTrace.note(enrichedLine)
         }
 
         val upcomingCards =
@@ -3453,11 +3467,12 @@ Log.d(
         if (
             UPCOMING_DIAGNOSTICS
         ) {
-            Log.d(
-                "UPCOMING_DIAG",
+            val cardsLine =
                 "caught-up cards=${upcomingCards.size} " +
                     "(after kids mode + dismissals)"
-            )
+
+            Log.d("UPCOMING_DIAG", cardsLine)
+            UpcomingDiagTrace.note(cardsLine)
         }
 
         lastCaughtUpUpcomingItems = upcomingCards
@@ -3521,14 +3536,15 @@ Log.d(
             // F2c: the SOURCE rides with each candidate. The rail is a union,
             // so "no card" and "no source knew the show" are different reports
             // and this line is what tells them apart in COPY DIAGNOSTICS.
-            Log.d(
-                "UPCOMING_DIAG",
+            val localCandidatesLine =
                 "caught-up candidates (local+mdb+trakt+bingecat)=" +
                     candidates.size + " " +
                     candidates.joinToString {
                         "'${it.parentId}'@${it.source}"
                     }
-            )
+
+            Log.d("UPCOMING_DIAG", localCandidatesLine)
+            UpcomingDiagTrace.note(localCandidatesLine)
         }
 
         val semaphore =
@@ -3569,14 +3585,15 @@ Log.d(
         if (
             UPCOMING_DIAGNOSTICS
         ) {
-            Log.d(
-                "UPCOMING_DIAG",
+            val localCardsLine =
                 "caught-up cards (local+mdb)=" +
                     cards.size + " " +
                     cards.joinToString {
                         "'${it.title}'"
                     }
-            )
+
+            Log.d("UPCOMING_DIAG", localCardsLine)
+            UpcomingDiagTrace.note(localCardsLine)
         }
 
         lastLocalCaughtUpUpcomingItems = cards
@@ -4096,9 +4113,22 @@ Log.d(
      * The TMDB series detail behind a parent id, in whichever id flavor the
      * card carries - the same cached lookup (and the same flavor handling) the
      * local next-up cards use.
+     *
+     * [forceRefresh] asks TMDB again instead of trusting the cached row. It is
+     * threaded per FLAVOR on purpose (Slice B, F4): a `tt...` id is filed under
+     * `"series:tt..."` and a TMDB id under `"series:tmdb:<n>"`, and neither
+     * lookup reads the other's key - so a "re-fetch by resolved TMDB id" would
+     * leave every addon-filed show reading exactly the stale row the bypass was
+     * meant to escape. The fresh answer is written back under the key this same
+     * flavor reads, which is what lets [buildLocalNextUpItem]'s own read (via
+     * [seriesDetailLookup]) see it too.
+     *
+     * A failed re-fetch answers null exactly as a miss does, so the caller keeps
+     * the cached verdict rather than inventing one from a failed ask.
      */
     private suspend fun seriesDetailFor(
-        parentId: String
+        parentId: String,
+        forceRefresh: Boolean = false
     ): TmdbDetail? =
         try {
             tmdbLookupSemaphore.withPermit {
@@ -4110,20 +4140,23 @@ Log.d(
                             ?.let { id ->
                                 tmdbRepository.getDetailByTmdbId(
                                     id,
-                                    "series"
+                                    "series",
+                                    forceRefresh
                                 )
                             }
 
                     parentId.startsWith("tt", ignoreCase = true) ->
                         tmdbRepository.fetchEnrichedMetaCached(
                             parentId,
-                            "series"
+                            "series",
+                            forceRefresh = forceRefresh
                         )
 
                     parentId.toIntOrNull() != null ->
                         tmdbRepository.getDetailByTmdbId(
                             parentId.toInt(),
-                            "series"
+                            "series",
+                            forceRefresh
                         )
 
                     else -> null
@@ -4141,10 +4174,17 @@ Log.d(
      * work from a plain null: "this id names no show" and "we could not ask"
      * are the two answers that must not be confused (see [dropsZombieCard]).
      */
-    private suspend fun seriesDetailLookup(parentId: String): TmdbDetailLookup =
+    private suspend fun seriesDetailLookup(
+        parentId: String,
+        forceRefresh: Boolean = false
+    ): TmdbDetailLookup =
         try {
             tmdbLookupSemaphore.withPermit {
-                tmdbRepository.lookupDetailForRawId(parentId, "series")
+                tmdbRepository.lookupDetailForRawId(
+                    parentId,
+                    "series",
+                    forceRefresh
+                )
             }
         } catch (cancellation: kotlinx.coroutines.CancellationException) {
             throw cancellation
@@ -4170,12 +4210,14 @@ Log.d(
     private suspend fun loadLocalNextUpItems(
         existing: List<UpNextItem>,
         /**
-         * Collects the identity keys of shows this pass proves are caught up
-         * locally. The caller drops any tracker card for one of them, so a
-         * finished title leaves Continue Watching without waiting on the
-         * tracker feed (see trackerCardLocallyFinished).
+         * Collects what this pass proves about the shows it leaves off, keyed by
+         * each of the show's identity keys. The caller drops a tracker card for
+         * one of them only when the card does not point PAST the furthest
+         * episode the pass proved watched, so a finished title leaves Continue
+         * Watching at once while a stale verdict cannot hide the new episode
+         * (see trackerCardLocallyFinished).
          */
-        caughtUpShowKeys: MutableSet<String>
+        caughtUpShows: MutableMap<String, LocallyFinishedShow>
     ): List<UpNextItem> {
 
         val completedRows =
@@ -4254,7 +4296,7 @@ Log.d(
                                 buildLocalNextUpItem(
                                     parentId,
                                     row,
-                                    caughtUpShowKeys
+                                    caughtUpShows
                                 )
                             }.getOrNull()
                         }
@@ -4290,6 +4332,14 @@ Log.d(
      * - `number_of_seasons` is never consulted, so an ANNOUNCED season with no
      *   aired episode cannot re-qualify a show on its own.
      * - Newest newly-aired episode first, then capped at [max].
+     * - A group whose CACHED detail says "finished" is asked again before that
+     *   verdict is believed (Slice B, i-3): the detail can be a month old, and a
+     *   show caught up when it was fetched reads as finished for the whole
+     *   month. Bounded to one attempt per group and [max] attempts per pass, and
+     *   only for groups that already had a cached `last_episode_to_air` - a miss
+     *   is not a finished verdict. The fresh answer is written back under the
+     *   group's own id flavor, so [buildLocalNextUpItem]'s later read of the
+     *   same show sees it too (see [seriesDetailFor]).
      */
     private suspend fun selectReturningShowCandidates(
         completedRows: List<WatchHistoryEntity>,
@@ -4319,6 +4369,22 @@ Log.d(
             )
         val checked =
             mutableListOf<Triple<String, WatchHistoryEntity, String?>>()
+
+        // Slice B (i): the detail this gate reads can be up to 30 days old, so a
+        // show that was caught up when it was fetched reads as finished for that
+        // whole month - the returning show's new episode is invisible, and the
+        // card never appears (no tracker involved). When the cached answer is
+        // "finished", ask TMDB again for THAT show before believing it.
+        //
+        // Bounded on purpose: at most one attempt per collapsed group (not per
+        // raw id flavor) and at most [max] attempts per evaluation, attempts
+        // counted before the call so a dead network cannot spin the pass. Only
+        // groups the gate already had a verdict for are eligible - a MISS is not
+        // a finished verdict, today's skip stands, and re-fetching every
+        // unresolvable id on every Home load would be unbounded work for no
+        // signal. A failed re-fetch (null) keeps the cached verdict.
+        var refetchAttempts = 0
+
         for (group in groups) {
             val id = upNextIdentifier(group.parentId)
             if (id != null && id in representedIdentifiers) continue
@@ -4339,15 +4405,38 @@ Log.d(
             // seriesDetailFor is the cached, semaphore-guarded lookup; a miss
             // or a null detail simply skips the show (same as today).
             val detail = details[group.parentId] ?: continue
-            val lastAired = detail.lastEpisodeToAir ?: continue
-            if (
+            var lastAired = detail.lastEpisodeToAir ?: continue
+
+            var qualifies =
                 hasUnwatchedAiredEpisodes(
                     furthestSeason = furthest.first,
                     furthestEpisode = furthest.second,
                     lastAiredSeason = lastAired.seasonNumber,
                     lastAiredEpisode = lastAired.episodeNumber
                 )
-            ) {
+
+            if (!qualifies && refetchAttempts < max) {
+                refetchAttempts += 1
+                // Through the group's OWN flavor, so the write lands under the
+                // key this show's builder reads (see seriesDetailFor).
+                val refreshed = seriesDetailFor(group.parentId, forceRefresh = true)
+                if (refreshed != null) {
+                    details[group.parentId] = refreshed
+                    val freshLastAired = refreshed.lastEpisodeToAir
+                    if (freshLastAired != null) {
+                        lastAired = freshLastAired
+                        qualifies =
+                            hasUnwatchedAiredEpisodes(
+                                furthestSeason = furthest.first,
+                                furthestEpisode = furthest.second,
+                                lastAiredSeason = freshLastAired.seasonNumber,
+                                lastAiredEpisode = freshLastAired.episodeNumber
+                            )
+                    }
+                }
+            }
+
+            if (qualifies) {
                 checked += Triple(group.parentId, latestRow, lastAired.airDate)
             }
         }
@@ -4360,6 +4449,57 @@ Log.d(
     }
 
     /**
+     * Records a show this pass proved caught up, with the furthest episode it can
+     * POSITIVELY prove watched (Slice B, ii-1).
+     *
+     * That pair is what makes the tracker filter episode-aware: with it, a card
+     * pointing at a LATER episode survives a verdict that predates the episode
+     * (a stale detail's "finished" no longer kills the new card). Without it the
+     * record is the old show-key-only verdict - every card for the show is
+     * suppressed - which is today's behaviour for a show whose watched state
+     * could not be read or placed. Unknown evidence is not a licence to re-admit
+     * a card the old rule dropped.
+     *
+     * The pair comes only from evidence that answered: the merged local+tracker
+     * episode sets, or [provedWatched] when the caller just proved it with
+     * `latestAiredEpisodeWatched` - and then only if that pair is IN those sets.
+     * A stale detail must never widen the suppression it just caused.
+     */
+    private suspend fun recordLocallyFinishedShow(
+        caughtUpShows: MutableMap<String, LocallyFinishedShow>,
+        parentId: String,
+        tmdbId: Int,
+        provedWatched: Pair<Int, Int>? = null
+    ) {
+        val (mergedWatchedKeys, trackerWatchedEpisodes) =
+            watchedStateMutex.withLock {
+                watchedEpisodeKeysByShow[parentId].orEmpty() to
+                    trackerWatchedEpisodesByShow[parentId].orEmpty()
+            }
+
+        val furthest =
+            furthestWatchedPair(
+                mergedWatchedKeys = mergedWatchedKeys,
+                trackerWatchedEpisodes = trackerWatchedEpisodes
+            )
+                ?: provedWatched?.takeIf { pair ->
+                    isEpisodeInWatchedEvidence(
+                        pair = pair,
+                        mergedWatchedKeys = mergedWatchedKeys,
+                        trackerWatchedEpisodes = trackerWatchedEpisodes
+                    )
+                }
+
+        val entry =
+            LocallyFinishedShow(
+                keys = upNextShowParentKeys(parentId, "series", tmdbId),
+                furthestWatched = furthest
+            )
+
+        entry.keys.forEach { key -> caughtUpShows[key] = entry }
+    }
+
+    /**
      * The next unwatched aired episode of one locally-watched show as an
      * [UpNextItem] with no progress (the resume path owns cards that have one).
      * Null when the show cannot be resolved or has nothing left to watch.
@@ -4367,7 +4507,7 @@ Log.d(
     private suspend fun buildLocalNextUpItem(
         parentId: String,
         row: WatchHistoryEntity,
-        caughtUpShowKeys: MutableSet<String>
+        caughtUpShows: MutableMap<String, LocallyFinishedShow>
     ): UpNextItem? {
         // The verdict, not just the detail: a completed row filed under an id
         // that names no title builds the same black tile the resume path drops,
@@ -4429,11 +4569,13 @@ Log.d(
             // profile finished it locally. Record it so its tracker twin -
             // which the tracker keeps listing until its own feed catches up -
             // is dropped from the rail immediately (see
-            // trackerCardLocallyFinished).
-            caughtUpShowKeys += upNextShowParentKeys(
-                parentId,
-                "series",
-                tmdbId
+            // trackerCardLocallyFinished), together with the furthest episode
+            // the merged state proves watched, so a card pointing PAST it
+            // survives.
+            recordLocallyFinishedShow(
+                caughtUpShows = caughtUpShows,
+                parentId = parentId,
+                tmdbId = tmdbId
             )
 
             return null
@@ -4471,10 +4613,19 @@ Log.d(
                 trackerWatchedEpisodes = trackerWatchedEpisodes
             )
         ) {
-            caughtUpShowKeys += upNextShowParentKeys(
-                parentId,
-                "series",
-                tmdbId
+            // The pair comes from the evidence that answered, never from the
+            // detail alone: latestAiredEpisodeWatched proved THIS pair is in
+            // the merged sets, and recordLocallyFinishedShow re-checks that
+            // before relaxing anything (Slice B, ii-1).
+            recordLocallyFinishedShow(
+                caughtUpShows = caughtUpShows,
+                parentId = parentId,
+                tmdbId = tmdbId,
+                provedWatched = detail.lastEpisodeToAir?.let { lastAired ->
+                    val season = namedEpisodeNumber(lastAired.seasonNumber)
+                    val episode = namedEpisodeNumber(lastAired.episodeNumber)
+                    if (season != null && episode != null) season to episode else null
+                }
             )
 
             return null
@@ -5728,11 +5879,12 @@ Log.d(
                 // found nothing. Its PRESENCE says that; its absence, for a show
                 // the viewer expected, says the show never reached this build.
                 if (UPCOMING_DIAGNOSTICS) {
-                    Log.d(
-                        "UPCOMING_DIAG",
+                    val droppedLine =
                         "dropped: no next air for '${item.parentId}' " +
                             "S${item.season}E${item.episode}"
-                    )
+
+                    Log.d("UPCOMING_DIAG", droppedLine)
+                    UpcomingDiagTrace.note(droppedLine)
                 }
                 continue
             }
@@ -6603,28 +6755,33 @@ Log.d(
                         // Shows this pass proves are finished locally, in the
                         // rail's own identity vocabulary. Tracked so a tracker
                         // card for one of them can be dropped below without
-                        // waiting for the tracker feed to catch up.
+                        // waiting on the tracker feed to catch up.
                         //
-                        // A synchronized wrapper rather than
-                        // ConcurrentHashMap.newKeySet(): KeySetView is API 24,
-                        // which the app's floor (26) now clears, but this set
-                        // is only added to and emptiness-checked - never
+                        // Keyed by each of the show's keys and carrying the
+                        // furthest episode the pass proved watched (Slice B), so
+                        // the filter can tell "the card points at the episode
+                        // just finished" from "the card points at the new one".
+                        //
+                        // A synchronized wrapper rather than a concurrent map:
+                        // it is only written and emptiness-checked here - never
                         // iterated while its concurrent writers are still
                         // running - so the wrapper (API 1) is sufficient and
-                        // keeps the KeySetView type out of the app entirely.
-                        val locallyFinishedShowKeys =
-                            java.util.Collections.synchronizedSet(HashSet<String>())
+                        // keeps a newer collection type out of the app.
+                        val locallyFinishedShows: MutableMap<String, LocallyFinishedShow> =
+                            java.util.Collections.synchronizedMap(
+                                HashMap<String, LocallyFinishedShow>()
+                            )
 
                         fun withoutLocallyFinishedTrackerCards(
                             items: List<UpNextItem>
                         ): List<UpNextItem> =
-                            if (locallyFinishedShowKeys.isEmpty()) {
+                            if (locallyFinishedShows.isEmpty()) {
                                 items
                             } else {
                                 items.filterNot { item ->
                                     trackerCardLocallyFinished(
                                         item,
-                                        locallyFinishedShowKeys
+                                        locallyFinishedShows
                                     )
                                 }
                             }
@@ -6641,7 +6798,7 @@ Log.d(
                             localItems +
                                 loadLocalNextUpItems(
                                     localItems,
-                                    locallyFinishedShowKeys
+                                    locallyFinishedShows
                                 )
 
                         // The publisher below carries the tracker cards already
@@ -6690,11 +6847,18 @@ Log.d(
 
                         // The feeds are read CONCURRENTLY and each publishes on
                         // arrival, so a slow tracker no longer holds the rail.
-                        // Simkl answering Failed publishes nothing: no answer is
-                        // not an empty answer, and its previous cards - seeded
-                        // into the publisher above - stay on screen. Only the
-                        // chosen tracker's Trakt feed is read (see
-                        // ResumeAuthorityRules).
+                        // A feed answering Failed publishes nothing: no answer
+                        // is not an empty answer, and its previous cards -
+                        // seeded into the publisher above - stay on screen.
+                        //
+                        // EVERY configured feed is read. The resume authority
+                        // is not a feed switch and must never become one: it
+                        // picks which card wins a title its sources all know
+                        // (see ResumeAuthorityRules), and gating the read on it
+                        // left a Trakt-only show with no card at all under the
+                        // default LOCAL setting - which is the fallback the
+                        // authority rule promises, not a reason to skip the
+                        // read.
                         coroutineScope {
 
                             launch {
@@ -6722,24 +6886,109 @@ Log.d(
                                 }
                             }
 
+                            // Trakt arrives ONCE for its whole slot: the paused
+                            // sessions and the next-episode cards are two halves
+                            // of the same answer, and two launches into one slot
+                            // would replace each other (see TrackerFeed).
                             launch {
 
-                                if (resumeAuthority == ResumeAuthority.TRAKT) {
-                                    arrivals.arrive(
-                                        TrackerFeed.TRAKT,
-                                        loadTraktUpNextItems()
-                                    )
+                                val paused =
+                                    loadTraktUpNextItems()
+
+                                when (val next = loadTraktNextEpisodeUpNextItems()) {
+
+                                    is TraktNextUpResult.Success ->
+                                        arrivals.arrive(
+                                            TrackerFeed.TRAKT,
+                                            paused + next.items
+                                        )
+
+                                    TraktNextUpResult.NotConfigured ->
+                                        // No Trakt account: its cards are stale
+                                        // by definition, so the slot is cleared
+                                        // - the paused half is empty too.
+                                        arrivals.arrive(
+                                            TrackerFeed.TRAKT,
+                                            paused
+                                        )
+
+                                    is TraktNextUpResult.Failed ->
+                                        // No answer is not an empty answer: the
+                                        // whole slot keeps its previous cards,
+                                        // paused ones included.
+                                        Log.w(
+                                            "HOME_UPNEXT",
+                                            "TRAKT next-up failed; preserving existing Up Next data",
+                                            next.error
+                                        )
                                 }
                             }
 
-                            // Paused MDBList sessions merge alongside the Simkl
-                            // cards; dedupe keeps the richer local/Simkl twin.
+                            // BingeCat's watched history, the same shape. Its
+                            // slot merges last, so the feeds above keep the
+                            // precedence they had before this leg existed.
                             launch {
 
-                                arrivals.arrive(
-                                    TrackerFeed.MDBLIST,
+                                when (val result = loadBingeCatUpNextItems()) {
+
+                                    is BingeCatNextUpResult.Success ->
+                                        arrivals.arrive(
+                                            TrackerFeed.BINGECAT,
+                                            result.items
+                                        )
+
+                                    BingeCatNextUpResult.NotConfigured ->
+                                        arrivals.arrive(
+                                            TrackerFeed.BINGECAT,
+                                            emptyList()
+                                        )
+
+                                    is BingeCatNextUpResult.Failed ->
+                                        Log.w(
+                                            "HOME_UPNEXT",
+                                            "BINGECAT next-up failed; preserving existing Up Next data",
+                                            result.error
+                                        )
+                                }
+                            }
+
+                            // MDBList arrives ONCE for its whole slot, the
+                            // Trakt shape (Slice A extension, X4): the paused
+                            // sessions and the next-episode cards are two halves
+                            // of one answer, and two launches into one slot
+                            // would replace each other.
+                            launch {
+
+                                val paused =
                                     loadMdbListUpNextItems()
-                                )
+
+                                when (val next = loadMdbListNextEpisodeUpNextItems()) {
+
+                                    is MdbListNextUpResult.Success ->
+                                        arrivals.arrive(
+                                            TrackerFeed.MDBLIST,
+                                            paused + next.items
+                                        )
+
+                                    MdbListNextUpResult.NotConfigured ->
+                                        // No key: its cards are stale by
+                                        // definition, so the slot is cleared -
+                                        // the paused half is empty too.
+                                        arrivals.arrive(
+                                            TrackerFeed.MDBLIST,
+                                            paused
+                                        )
+
+                                    is MdbListNextUpResult.Failed ->
+                                        // No answer is not an empty answer: the
+                                        // whole slot keeps its previous cards,
+                                        // paused ones included.
+                                        Log.w(
+                                            "HOME_UPNEXT",
+                                            "MDBLIST next-up failed; preserving existing Up Next data",
+                                            next.error
+                                        )
+                                }
                             }
                         }
 
@@ -6974,6 +7223,125 @@ Log.d(
     }
 
     /**
+     * MDBList's NEXT-EPISODE leg (Slice A extension, X1).
+     *
+     * The paused leg above only answers `GET /sync/playback`, so a profile whose
+     * MDBList history exists but whose local history does not had no
+     * next-episode card at all: the local returning-show pass was the only leg
+     * on that side and it needs completed rows on this device. A viewer five
+     * episodes into a show on another TV got nothing from the tracker that
+     * actually knows.
+     *
+     * This reads the watched snapshot the app already caches for badges and for
+     * Upcoming leg (c): every show with at least one watched episode, walked to
+     * its next aired unwatched episode. Three things are deliberately absent:
+     *
+     *  - no `hasLocalProgress` gate (the paused builder has one, and it would
+     *    re-create this very hole): the snapshot's own episode set is the
+     *    evidence, not this device's history;
+     *  - no preload change: preloadWatchedEpisodeStateForShow already unions
+     *    MDBList's episodes with local, Simkl and Trakt;
+     *  - no `scrobbleClear` and no write of any kind - the paused builder's
+     *    server-side cleanup stays on the paused path.
+     *
+     * Cost: one cached snapshot read per Home build (a memory-cache lookup in
+     * the common case; Upcoming leg (c) reads the same cached copy), then the
+     * memoized per-show index. No new network call, no new cache, no new
+     * endpoint.
+     */
+    private suspend fun loadMdbListNextEpisodeUpNextItems(): MdbListNextUpResult {
+        val appContext = getApplication<Application>()
+
+        if (!MdbListClient.isConfigured(appContext)) {
+            return MdbListNextUpResult.NotConfigured
+        }
+
+        return try {
+            val snapshot =
+                runCatchingCancellable { MdbListClient.getWatchedSnapshot(appContext) }
+                    .getOrThrow()
+
+            // ONE index for the whole cycle. A per-show prefix scan of the flat
+            // key set is fine once and pathological per poster (see
+            // MdbListWatched), and the index is memoized on the snapshot object
+            // besides.
+            val byShow =
+                mdbListWatchedEpisodesByShow(snapshot.episodeKeys)
+
+            // Sorted, so the leg is deterministic (the index is in the
+            // tracker's own insertion order). The cap counts KEYS, and a show
+            // the tracker knows under both id forms can occupy two of them -
+            // see the dedupe below. Movies are never enumerated: a film has no
+            // next episode, and paused movie sessions already keep Continue
+            // Watching's movie half.
+            val showKeys =
+                byShow.entries
+                    .asSequence()
+                    .filter { entry -> entry.value.isNotEmpty() }
+                    .map { entry -> entry.key }
+                    .sorted()
+                    .take(MAX_MDBLIST_UP_NEXT_ITEMS)
+                    .toList()
+
+            val semaphore =
+                Semaphore(MDBLIST_UP_NEXT_CONCURRENCY)
+
+            val built =
+                coroutineScope {
+                    showKeys
+                        .map { showKey ->
+
+                            async {
+
+                                semaphore.withPermit {
+
+                                    // One unresolvable show drops that row
+                                    // only, as every tracker builder does.
+                                    runCatchingCancellable {
+                                        buildTrackerNextEpisodeUpNextItem(
+                                            parentId = showKey,
+                                            watchedEpisodes = byShow.getValue(showKey),
+                                            idPrefix = "mdblist:next:",
+                                            resumeSource = ResumeSource.MDBLIST,
+                                            diagSource = "mdblist"
+                                        )
+                                    }.getOrNull()
+                                }
+                            }
+                        }
+                        .awaitAll()
+                        .filterNotNull()
+                }
+
+            val items =
+                dedupeTrackerNextEpisodeCards(built)
+
+            Log.d(
+                "HOME_UPNEXT",
+                "MDBList next-up load succeeded: " +
+                    "raw=${byShow.size}, " +
+                    "resolved=${items.size}"
+            )
+
+            MdbListNextUpResult.Success(items)
+
+        } catch (e: kotlinx.coroutines.CancellationException) {
+
+            throw e
+
+        } catch (e: Exception) {
+
+            Log.e(
+                "HOME_UPNEXT",
+                "MDBList next-up load failed: ${e.message}",
+                e
+            )
+
+            MdbListNextUpResult.Failed(e)
+        }
+    }
+
+    /**
      * Builds one Continue Watching card from a paused MDBList session.
      * Drops sessions whose episode is already completed locally (the stale
      * 99%-watched leftover the completion push created), mirrors the same
@@ -7110,13 +7478,16 @@ Log.d(
         // tracker is MDBList had thinner cards than a Simkl one for no reason.
         //
         // Counts are wired only when THIS device has watched something of the
-        // show. The shared watched state is this profile's own completed rows
-        // plus Simkl's (see preloadWatchedEpisodeStateForShow) - MDBList's
-        // watched history is deliberately not in it - so resolving a show the
-        // device has never played would report "0 of 24 aired episodes
-        // watched" over a viewer who is five episodes in on another TV. No
-        // evidence means no line, which is exactly what these cards showed
-        // before.
+        // show. The gate stays as it was (this card's outputs do not change
+        // here), but the reason it was written for is gone: the shared watched
+        // state is no longer "this profile's completed rows plus Simkl's" - it
+        // is the union of local rows, Simkl, Trakt and MDBList (see
+        // preloadWatchedEpisodeStateForShow), so resolving would not invent a
+        // "0 of 24" for a viewer part-way through on another TV. What still
+        // needs the evidence is this PAUSED card's own pair, which is the
+        // session's; the leg that resolves from the tracker's own history is
+        // loadMdbListNextEpisodeUpNextItems, and it gates on nothing but the
+        // snapshot.
         var episodesWatched: Int? = null
         var episodesTotal: Int? = null
         var episodesRemaining: Int? = null
@@ -7300,9 +7671,10 @@ Log.d(
     }
 
     /**
-     * Trakt's paused sessions, for when the viewer has chosen Trakt as the
-     * authoritative resume source. Unlike Simkl's feed there is no watchlist
-     * half here: Trakt's playback read is exactly the resume points.
+     * Trakt's paused sessions. Read whenever Trakt is configured - the resume
+     * authority decides which card WINS a title, never whether a feed is read
+     * (see ResumeAuthorityRules). Unlike Simkl's feed there is no watchlist half
+     * here: Trakt's playback read is exactly the resume points.
      */
     private suspend fun loadTraktUpNextItems(): List<UpNextItem> {
         if (!traktRepository.isConfigured() || !traktRepository.hasToken()) {
@@ -7454,6 +7826,374 @@ Log.d(
             recencyTimestamp = parseTimestampMillis(session.pausedAt),
             backdrop = backdropUrl,
             tmdbId = detail?.id ?: session.tmdbId
+        )
+    }
+
+    /**
+     * Trakt's NEXT-EPISODE leg (Slice A, X1).
+     *
+     * Fills the half its paused-session leg cannot: a show the account has
+     * watched but is not paused in the middle of. Read from the `/sync/watched`
+     * snapshot the app already fetches and caches - the same snapshot the Upcoming
+     * rail's Trakt half reads - so in the common case this costs a lookup, never
+     * a request. Every page failure degrades to the previous snapshot (see
+     * `TraktRepository.watchedSnapshot`), which is why [TraktNextUpResult.Failed]
+     * only fires when the read could not be made at all.
+     *
+     * Series only: a movie has no next episode, and paused movie sessions
+     * already keep Continue Watching's movie half. Rows are taken in the
+     * snapshot's own order (most recently watched first) and trimmed like every
+     * other leg; resolution runs under the paused leg's concurrency bound.
+     */
+    private suspend fun loadTraktNextEpisodeUpNextItems(): TraktNextUpResult {
+        if (!traktRepository.isConfigured() || !traktRepository.hasToken()) {
+            return TraktNextUpResult.NotConfigured
+        }
+
+        return try {
+            val snapshot = traktRepository.watchedSnapshot()
+
+            // Started shows with an id we can name: the "started" gate (a show
+            // with no watched episode proves nothing) and the identity chain,
+            // applied before any TMDB work.
+            val rows =
+                snapshot.shows
+                    .asSequence()
+                    .filter { row -> row.episodes.isNotEmpty() }
+                    .mapNotNull { row ->
+                        traktNextEpisodeParentId(row)?.let { parentId ->
+                            parentId to row
+                        }
+                    }
+                    .toList()
+
+            val semaphore = Semaphore(TRAKT_UP_NEXT_CONCURRENCY)
+            val items =
+                coroutineScope {
+                    rows
+                        .take(MAX_TRAKT_UP_NEXT_ITEMS)
+                        .map { (parentId, row) ->
+
+                            async {
+
+                                semaphore.withPermit {
+
+                                    // One unresolvable show drops that row
+                                    // only, as every tracker builder does.
+                                    runCatchingCancellable {
+                                        buildTrackerNextEpisodeUpNextItem(
+                                            parentId = parentId,
+                                            watchedEpisodes = row.episodes,
+                                            idPrefix = "trakt:next:",
+                                            resumeSource = ResumeSource.TRAKT,
+                                            diagSource = "trakt"
+                                        )
+                                    }.getOrNull()
+                                }
+                            }
+                        }
+                        .awaitAll()
+                        .filterNotNull()
+                }
+
+            Log.d(
+                "HOME_UPNEXT",
+                "TRAKT next-up load succeeded: " +
+                    "raw=${snapshot.shows.size}, " +
+                    "resolved=${items.size}"
+            )
+
+            TraktNextUpResult.Success(items)
+
+        } catch (e: kotlinx.coroutines.CancellationException) {
+
+            throw e
+
+        } catch (e: Exception) {
+
+            Log.e(
+                "HOME_UPNEXT",
+                "TRAKT next-up load failed: ${e.message}",
+                e
+            )
+
+            TraktNextUpResult.Failed(e)
+        }
+    }
+
+    /**
+     * The id the rest of the app knows a Trakt row's show by: the IMDb flavour
+     * first, then `tmdb:<n>`, then any other canonical form - the same chain
+     * `traktCaughtUpCandidates` uses, so the same show arriving from two sources
+     * collapses instead of doubling. Null for a row with no usable id: never
+     * guessed at.
+     */
+    private fun traktNextEpisodeParentId(row: TraktShowWatch): String? =
+        row.idKeys.firstOrNull { key -> key.startsWith("tt") }
+            ?: row.idKeys.firstOrNull { key -> key.startsWith("tmdb:") }
+            ?: row.idKeys.firstOrNull()
+
+    /**
+     * The BingeCat next-episode leg (Slice A, X3).
+     *
+     * Its three gates, then one paged history read. The ORDER matters: the
+     * repository answers `null` both for a gate and for a failed page, so the
+     * gates are checked here first - past them a `null` can only mean the read
+     * failed, and that is [BingeCatNextUpResult.Failed] rather than an empty
+     * history (a partial timeline would hide a card the evidence supports, and
+     * an arriving empty list would wipe the slot's previous cards).
+     *
+     * One read per Continue Watching build: the snapshot is handed to each
+     * card's preload so the watched-state union does not re-page the feed per
+     * show (see [preloadWatchedEpisodeStateForShow]).
+     */
+    private suspend fun loadBingeCatUpNextItems(): BingeCatNextUpResult {
+        val repository = BingeCatRepository.getInstance(getApplication())
+
+        if (!repository.isReady()) return BingeCatNextUpResult.NotConfigured
+
+        if (!BingeCatWriteRules.hasHistoryReadScope(repository.accountScope())) {
+            return BingeCatNextUpResult.NotConfigured
+        }
+
+        var readFailure: Throwable? = null
+        val snapshot =
+            try {
+                repository.watchedHistorySnapshot()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                readFailure = e
+                null
+            }
+
+        if (snapshot == null) {
+            val error =
+                readFailure ?: IllegalStateException("BingeCat watched history read failed")
+            Log.e(
+                "HOME_UPNEXT",
+                "BINGECAT next-up load failed: ${error.message}",
+                error
+            )
+            return BingeCatNextUpResult.Failed(error)
+        }
+
+        val semaphore = Semaphore(BINGECAT_UP_NEXT_CONCURRENCY)
+        val items =
+            coroutineScope {
+                snapshot.shows
+                    .filter { show -> show.episodes.isNotEmpty() }
+                    .take(MAX_BINGECAT_UP_NEXT_ITEMS)
+                    .map { show ->
+
+                        async {
+
+                            semaphore.withPermit {
+
+                                runCatchingCancellable {
+                                    buildTrackerNextEpisodeUpNextItem(
+                                        parentId = show.parentId,
+                                        watchedEpisodes = show.episodes,
+                                        idPrefix = "bingecat:next:",
+                                        resumeSource = ResumeSource.BINGECAT,
+                                        diagSource = "bingecat",
+                                        bingeCatHistory =
+                                            BingeCatHistoryRead.Read(snapshot)
+                                    )
+                                }.getOrNull()
+                            }
+                        }
+                    }
+                    .awaitAll()
+                    .filterNotNull()
+            }
+
+        Log.d(
+            "HOME_UPNEXT",
+            "BINGECAT next-up load succeeded: " +
+                "raw=${snapshot.shows.size}, " +
+                "resolved=${items.size}"
+        )
+
+        return BingeCatNextUpResult.Success(items)
+    }
+
+    /**
+     * One Continue Watching "next up" card from a tracker's watched snapshot
+     * (Slice A: the Trakt and BingeCat legs share this one shape).
+     *
+     * Neither snapshot carries a title, art or timestamp (the wire rows are an
+     * id plus episodes), so the card is built exactly like the Simkl leg's: a
+     * TMDB detail for name/art/rating, the zombie gate, then the shared watched
+     * state and the season walk for the target episode. The walk - not the
+     * tracker - decides the pair: the snapshot's furthest-watched episode is
+     * only where it starts. A null target means the show is caught up (or
+     * nothing has aired), and that is Upcoming's card, not Continue Watching's.
+     *
+     * [recencyTimestamp] is deliberately 0. Neither snapshot carries a per-show
+     * time, and inventing one from row order would rank a stale row above a
+     * fresh one; the rail's comparator sorts a timestamp-less card last inside
+     * its tier, and a twin with a real timestamp lends the cluster its recency.
+     */
+    private suspend fun buildTrackerNextEpisodeUpNextItem(
+        parentId: String,
+        watchedEpisodes: Set<Pair<Int, Int>>,
+        idPrefix: String,
+        resumeSource: ResumeSource,
+        diagSource: String,
+        bingeCatHistory: BingeCatHistoryRead? = null
+    ): UpNextItem? {
+
+        // Where the walk starts from: the furthest episode with a play, exactly
+        // as the Simkl leg passes the feed's own (season, episode). The callers
+        // already skip rows with nothing watched; this is the same "started"
+        // gate stated once more at the read.
+        val furthestWatched =
+            watchedEpisodes.maxWithOrNull(
+                compareBy<Pair<Int, Int>> { pair -> pair.first }
+                    .thenBy { pair -> pair.second }
+            )
+                ?: return null
+
+        val lookup =
+            runCatchingCancellable {
+                tmdbLookupSemaphore.withPermit {
+                    tmdbRepository.lookupDetailForRawId(
+                        parentId,
+                        "series"
+                    )
+                }
+            }.getOrNull() ?: TmdbDetailLookup.Transient
+
+        val detail = (lookup as? TmdbDetailLookup.Found)?.detail
+
+        val posterUrl = detail?.posterPath
+            ?.takeIf { it.isNotBlank() }
+            ?.let { "${TmdbRepository.POSTER_BASE}$it" }
+        val backdropUrl = detail?.backdropPath
+            ?.takeIf { it.isNotBlank() }
+            ?.let { "https://image.tmdb.org/t/p/w780$it" }
+
+        val hasArtwork =
+            !posterUrl.isNullOrBlank() || !backdropUrl.isNullOrBlank()
+        val resolvedName =
+            upNextDisplayTitleOrNull(detail?.name, hasArtwork)
+                ?: upNextDisplayTitleOrNull(detail?.title, hasArtwork)
+
+        val isZombie =
+            dropsZombieCard(
+                lookup = lookup,
+                hasArtwork = hasArtwork,
+                resolvedName = resolvedName
+            )
+
+        if (UP_NEXT_DIAGNOSTICS) {
+            Log.d(
+                "HOME_UPNEXT",
+                upNextZombieDiagLine(
+                    source = diagSource,
+                    parentId = parentId,
+                    lookup = lookup,
+                    hasArtwork = hasArtwork,
+                    resolvedName = resolvedName,
+                    dropped = isZombie
+                )
+            )
+        }
+
+        if (isZombie) return null
+
+        // Both snapshots carry no title (F10), so the name has to come from
+        // TMDB. No name is no card - the same rule the MDBList builder applies
+        // to a row that can name itself only by an internal id.
+        val displayTitle =
+            upNextDisplayTitleOrNull(detail?.name, !posterUrl.isNullOrBlank())
+                ?: upNextDisplayTitleOrNull(detail?.title, !posterUrl.isNullOrBlank())
+                ?: return null
+
+        val numericTmdbId = detail?.id ?: 0
+
+        // The tracker's plays go into the same per-show union the local and
+        // Simkl legs resolve against - without this the walk would answer S1E1
+        // for a show the viewer is part-way through.
+        preloadWatchedEpisodeStateForShow(
+            parentId = parentId,
+            tmdbShowId = numericTmdbId,
+            bingeCatHistory = bingeCatHistory
+        )
+
+        val resolvedTarget =
+            resolveSeriesTargetFromSharedWatchedState(
+                parentId = parentId,
+                tmdbId = numericTmdbId,
+                simklSeason = furthestWatched.first,
+                simklEpisode = furthestWatched.second
+            ) ?: return null
+
+        // The walk answered, but with nothing left to watch: a show whose
+        // queued next episode runs ahead of TMDB's aired set keeps the pair it
+        // knows, and the totals are what say it is caught up (X1b).
+        if (resolvedTarget.isCaughtUpByTotals()) return null
+
+        val badge =
+            upNextArrivalBadge(
+                isResume = resolvedTarget.isResume,
+                airDate = resolvedTarget.airDate,
+                episode = resolvedTarget.episode
+            )
+
+        val subtitle =
+            upNextTrackerSubtitle(
+                prefix = upNextBadgePrefix(badge),
+                season = resolvedTarget.season,
+                episode = resolvedTarget.episode,
+                fallback = null
+            )
+
+        // Upcoming reads _upNext, so a stale next_episode_to_air on this card
+        // would leak into the schedule: repaired against the final target pair
+        // exactly as the Simkl leg repairs its capture.
+        val nextAir =
+            detail?.let { fetched ->
+                nextAirForResolvedTarget(
+                    detail = fetched,
+                    imdbId = parentId.takeIf { it.startsWith("tt", ignoreCase = true) },
+                    resolvedSeason = resolvedTarget.season,
+                    resolvedEpisode = resolvedTarget.episode,
+                    captured = fetched.nextEpisodeToAir
+                )
+            }
+
+        return UpNextItem(
+            id = "$idPrefix$parentId",
+            title = displayTitle,
+            poster = posterUrl,
+            badge = badge,
+            resumeSource = resumeSource,
+            showTitle = detail?.name ?: displayTitle,
+            episodeTitle = resolvedTarget.episodeTitle,
+            episodeDescription = resolvedTarget.episodeDescription,
+            tmdbRating = detail?.voteAverage?.takeIf { it > 0.0 },
+            imdbRating = resolvedTarget.episodeRating,
+            runtimeMinutes =
+                resolvedTarget.runtimeMinutes ?: detail?.displayRuntimeMinutes(),
+            episodesRemaining = resolvedTarget.episodesRemaining,
+            episodesWatched = resolvedTarget.episodesWatched,
+            episodesTotal = resolvedTarget.episodesTotal,
+            episodeThumbnail = resolvedTarget.episodeThumbnail,
+            backdrop = backdropUrl,
+            subtitle = subtitle,
+            parentId = parentId,
+            parentType = "series",
+            season = resolvedTarget.season,
+            episode = resolvedTarget.episode,
+            episodeStreamId = resolvedTarget.streamId,
+            startPositionMs = resolvedTarget.startPositionMs,
+            isSeasonFinale = resolvedTarget.isSeasonFinale,
+            isSeriesFinale = resolvedTarget.isSeriesFinale,
+            nextEpisodeAir = nextAir,
+            tmdbId = detail?.id,
+            recencyTimestamp = 0L
         )
     }
 
@@ -8049,7 +8789,12 @@ episodesTotal =
 
     private suspend fun preloadWatchedEpisodeStateForShow(
         parentId: String,
-        tmdbShowId: Int
+        tmdbShowId: Int,
+        // BingeCat's history for THIS merge, when the caller already read it
+        // (the next-episode leg does). Null means "not asked" - every other
+        // caller - so a profile that merely HAS BingeCat connected is never
+        // marked incomplete by a read nobody made.
+        bingeCatHistory: BingeCatHistoryRead? = null
     ) {
 
         while (true) {
@@ -8223,12 +8968,38 @@ episodesTotal =
                     emptySet()
                 }
 
-            // The union of all three trackers. Everything downstream - the
+            /*
+             * BingeCat's watched episodes for this show, taken from the history
+             * snapshot the next-episode leg already fetched this cycle (Slice A,
+             * X3c). Only that leg passes one; every other caller leaves it null
+             * and this contributes nothing, so the preload never pages the feed
+             * on its own - one read per Continue Watching build, not one per
+             * show. A read that did not answer is NO EVIDENCE, marked exactly
+             * like a failed Simkl/MDBList/Trakt read.
+             */
+            val bingeCatCompletedEpisodes =
+                when (bingeCatHistory) {
+
+                    is BingeCatHistoryRead.Read ->
+                        bingeCatHistory.snapshot.watchedEpisodesFor(showParentIds)
+
+                    BingeCatHistoryRead.Failed -> {
+                        trackerReadFailed = true
+                        emptySet()
+                    }
+
+                    null -> emptySet()
+                }
+
+            // The union of all four trackers. Everything downstream - the
             // episode counts, the next-episode resolution and the caught-up
             // rules - reads this one set, which is the whole point of tracker
             // parity.
             val trackerCompletedEpisodes =
-                simklCompletedEpisodes + mdbListCompletedEpisodes + traktCompletedEpisodes
+                simklCompletedEpisodes +
+                    mdbListCompletedEpisodes +
+                    traktCompletedEpisodes +
+                    bingeCatCompletedEpisodes
 
             val mergedWatchedKeys =
                 WatchedEpisodeState
@@ -11824,6 +12595,17 @@ private suspend fun calculateEpisodesRemaining(
             30
 
         private const val TRAKT_UP_NEXT_CONCURRENCY =
+            4
+
+        /**
+         * BingeCat's next-episode leg: the same cap and the same concurrency as
+         * the other legs, so a large history cannot burst TMDB and a long one
+         * cannot turn one Home build into a minute of lookups.
+         */
+        private const val MAX_BINGECAT_UP_NEXT_ITEMS =
+            30
+
+        private const val BINGECAT_UP_NEXT_CONCURRENCY =
             4
 
         private const val PERIODIC_SIMKL_REFRESH_MS =

@@ -173,7 +173,7 @@ class LibraryCalendarTest {
 
     @Test
     fun `candidates take one show from each source before any source repeats`() {
-        // The profile bug's fix. The four lists used to be concatenated, so a
+        // The profile bug's fix. The lists used to be concatenated, so a
         // long local history could consume the whole allowance and leave the
         // tracker-sourced (currently airing) shows out of the calendar. This is
         // also what made one profile's future dates empty and another's fine:
@@ -196,6 +196,52 @@ class LibraryCalendarTest {
             "every source is represented before the long one gets a second turn",
             order.take(4).toSet() == setOf("tt1", "tmdb:10", "tt100", "tmdb:20")
         )
+    }
+
+    @Test
+    fun `a fifth source joins the round robin as a peer, not a tail`() {
+        // Slice C: BingeCat is the calendar's fifth source. The interleave is
+        // unchanged code - this pins that the new list is a peer in it, so a
+        // BingeCat-only show is reached before any source's second show (which
+        // is what stops a long local history from crowding it out).
+        val order = calendarCandidates(
+            sources = listOf(
+                listOf("tt100", "tt101"),
+                listOf("tmdb:200", "tmdb:201"),
+                listOf("tt300"),
+                listOf("tmdb:400"),
+                listOf("tt500", "tmdb:501")
+            ),
+            cap = 300
+        )
+
+        assertEquals(
+            listOf(
+                "tt100", "tmdb:200", "tt300", "tmdb:400", "tt500",
+                "tt101", "tmdb:201", "tmdb:501"
+            ),
+            order
+        )
+    }
+
+    @Test
+    fun `a BingeCat caught-up show is exempt from the cap like the other sources`() {
+        // The Bad Monkey rule, for the fifth source: a show Upcoming advertises
+        // is in the priority list, and priority is exempt from the tracked
+        // cap - so "on Upcoming, in the calendar" holds for BingeCat too.
+        val order = calendarCandidates(
+            sources = listOf(
+                listOf("tt100", "tt101"),
+                listOf("tmdb:200", "tmdb:201"),
+                listOf("tt300"),
+                listOf("tmdb:400"),
+                listOf("tt500", "tmdb:501")
+            ),
+            cap = 3,
+            priority = listOf("tmdb:501")
+        )
+
+        assertEquals(listOf("tmdb:501", "tt100", "tmdb:200", "tt300"), order)
     }
 
     @Test

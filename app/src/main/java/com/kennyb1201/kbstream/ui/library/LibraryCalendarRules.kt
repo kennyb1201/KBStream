@@ -261,11 +261,11 @@ private fun idAliases(id: String): Set<String> {
 
 /**
  * The calendar's candidate shows, in a SOURCE-FAIR order, with [priority]
- * always present and the four tracked sources filling the rest up to [cap].
+ * always present and the five tracked sources filling the rest up to [cap].
  *
- * The tracked set arrives as four independent lists (this profile's history,
- * Simkl, MDBList, Trakt) and the calendar resolves a bounded number of shows
- * per month - so the order decides which shows get looked at at all. Taking
+ * The tracked set arrives as five independent lists (this profile's history,
+ * Simkl, MDBList, Trakt, BingeCat) and the calendar resolves a bounded number
+ * of shows per month - so the order decides which shows get looked at at all. Taking
  * them source by source let one long history fill the whole allowance and drop
  * every tracker-only show (the ones that usually carry the UNAIRED episodes,
  * because they are the shows being followed right now). Round-robin instead:

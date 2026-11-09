@@ -173,6 +173,14 @@ object Diagnostics {
         // differently from the rail beside it (see [CwFilterTrace] and the
         // `cw.filter:` spec). Absent until Home has filtered a rail.
         CwFilterTrace.lines().forEach { report.appendLine(it) }
+        // What the Continue Watching / Upcoming evaluation last decided, per show
+        // and per leg: which shows the CW leg skipped and why (watched vs aired),
+        // which it kept, and what the caught-up blob said when leg (c) read it
+        // (blob age vs last watched write). The UPCOMING_DIAG lines used to be
+        // logcat-only, so a paste could not say whether a missing show was never
+        // evaluated or evaluated and skipped (see [UpcomingDiagTrace]). Absent
+        // until Home has evaluated a rail.
+        UpcomingDiagTrace.lines().forEach { report.appendLine("upcoming: $it") }
         // What each pinned Library rail's rows CARRIED as art, per load. A
         // Trakt rail drawn title-only is either a read that shipped no poster
         // URL or one that shipped URLs that do not load - and only the rail can

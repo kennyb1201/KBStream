@@ -7,11 +7,16 @@ import kotlinx.coroutines.sync.withLock
 /**
  * The tracker feeds merged beside the local resume cards, in the order the rail
  * merges them (see [ContinueWatchingArrivals]).
+ *
+ * [BINGECAT] is the watched-history leg added in Slice A: its cards carry
+ * [ResumeSource.BINGECAT] and go last, so every existing feed keeps the
+ * precedence it had before the leg existed.
  */
 internal enum class TrackerFeed {
     SIMKL,
     MDBLIST,
-    TRAKT
+    TRAKT,
+    BINGECAT
 }
 
 /**
@@ -62,7 +67,22 @@ internal class ContinueWatchingArrivals(
     private val arrivals = Mutex()
 
     init {
-        feeds[TrackerFeed.SIMKL] = previousTrackerCards
+        // Each feed is seeded with ITS OWN previous cards, taken from the rail
+        // that is already on screen. Everything used to be seeded into the SIMKL
+        // slot - which worked only because Trakt and MDBList previous cards rode
+        // there, were replaced one by one, and were never a separate slot until
+        // one feed answered. A new feed seeded with nothing would have flashed
+        // its cards out on the local-first publish, and widening the same lie to
+        // cover it would have put four feeds' cards in one feed's slot.
+        //
+        // A card whose source matches no feed (a local card that somehow lost
+        // its history row) falls out of the seed rather than into the wrong
+        // slot: the next successful answer for it re-supplies it, and the merge
+        // would have collapsed it with its own twin anyway.
+        previousTrackerCards.forEach { card ->
+            val feed = card.resumeSource.toTrackerFeed() ?: return@forEach
+            feeds[feed] = feeds[feed].orEmpty() + card
+        }
     }
 
     /** Publishes the local cards plus whatever trackers already answered. */
@@ -117,7 +137,31 @@ internal class ContinueWatchingArrivals(
          * order: the dedupe keeps the first card of a show and the ranking
          * decides the rest, so this is what makes the final contents
          * independent of which tracker answered first.
+         *
+         * BingeCat is appended LAST so the three feeds that merged before this
+         * slice keep their exact precedence.
          */
-        val MERGE_ORDER = listOf(TrackerFeed.SIMKL, TrackerFeed.MDBLIST, TrackerFeed.TRAKT)
+        val MERGE_ORDER = listOf(
+            TrackerFeed.SIMKL,
+            TrackerFeed.MDBLIST,
+            TrackerFeed.TRAKT,
+            TrackerFeed.BINGECAT
+        )
     }
 }
+
+/**
+ * The feed a card's source feeds, or null for a card that belongs to no feed.
+ *
+ * [ResumeSource.LOCAL] is the null case: local cards never live in a tracker
+ * slot (they are the rail's own half), and `previousTrackerCards` does not carry
+ * them in the first place.
+ */
+private fun ResumeSource.toTrackerFeed(): TrackerFeed? =
+    when (this) {
+        ResumeSource.LOCAL -> null
+        ResumeSource.SIMKL -> TrackerFeed.SIMKL
+        ResumeSource.MDBLIST -> TrackerFeed.MDBLIST
+        ResumeSource.TRAKT -> TrackerFeed.TRAKT
+        ResumeSource.BINGECAT -> TrackerFeed.BINGECAT
+    }

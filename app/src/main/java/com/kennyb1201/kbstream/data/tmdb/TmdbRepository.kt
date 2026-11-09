@@ -76,6 +76,24 @@ data class StudioItem(val item: TmdbDiscoverItem, val mediaType: String)
 data class StudioSection(val title: String, val items: List<StudioItem>)
 
 /**
+ * One page of a TMDB title search, with the service's own totals beside it.
+ *
+ * [items] has already been through this repository's rules (the
+ * digital-release filter on the movie side), so a caller pages over the same
+ * results it would have seen on page 1 before paging existed.
+ *
+ * [totalResults] is TMDB's count of matches and [totalPages] its page count.
+ * Both are the SERVICE's numbers: with the digital-release filter on, [items]
+ * can be shorter than the page TMDB counted, so a "showing N of M" line built
+ * from these is an upper bound, never an under-count.
+ */
+data class TmdbTitlePage(
+    val items: List<TmdbSearchTitleResult>,
+    val totalResults: Int,
+    val totalPages: Int
+)
+
+/**
  * Whether a discover row is a real catalog entry - something a poster grid can
  * draw - rather than a TMDB placeholder (an announced announcement, a festival
  * stub, a merge target) that carries a title and nothing else.
@@ -987,7 +1005,22 @@ class TmdbRepository private constructor(context: Context) :
          * Null by default, so every existing caller compiles unchanged and the
          * normal path makes no extra request.
          */
-        fallbackName: String? = null
+        fallbackName: String? = null,
+        /**
+         * Skip the caches for THIS call and ask TMDB again.
+         *
+         * For the one question a month-old disk row cannot answer (Slice B:
+         * "did anything air since this detail was fetched?"), not a TTL change: a
+         * shorter [detailCacheDiskTtlMs] would re-fetch every title's detail for
+         * every surface on the same schedule. The fetch writes back through the
+         * normal path, under the normal key, so the caller's own later reads (and
+         * every other surface's) see the fresh row.
+         *
+         * A miss is still not cached, a transient failure still answers
+         * `Transient`/null, and a concurrent fetch of the same key is still
+         * shared rather than duplicated.
+         */
+        forceRefresh: Boolean = false
     ): TmdbDetail? {
         val key = "${normalizeType(type)}:$imdbId"
         val now = System.currentTimeMillis()
@@ -997,23 +1030,31 @@ class TmdbRepository private constructor(context: Context) :
         // cache is consulted first by BOTH paths, because a full object answers
         // a slim question: a title the Detail screen already loaded serves its
         // own rail card with no extra work.
-        val cached = detailCache[key]
-        if (cached != null && now - cached.first < detailCacheTtlMs) {
-            return cached.second
-        }
-        if (!full) {
-            val railCached = railDetailCache[key]
-            if (railCached != null && now - railCached.first < detailCacheTtlMs) {
-                return railCached.second
+        if (!forceRefresh) {
+            val cached = detailCache[key]
+            if (cached != null && now - cached.first < detailCacheTtlMs) {
+                return cached.second
+            }
+            if (!full) {
+                val railCached = railDetailCache[key]
+                if (railCached != null && now - railCached.first < detailCacheTtlMs) {
+                    return railCached.second
+                }
             }
         }
 
         // Disk cache so resolved metadata survives restarts. Full first, for the
         // same reason; the slim row is only consulted when there is no full one.
+        // A forced call does not even read them: a row it must not use is a row
+        // not worth the query.
         val diskKey = detailDiskKey(key)
-        val diskCached = runCatchingCancellable {
-            tmdbJsonCacheDao.getByKey(diskKey)
-        }.getOrNull()
+        val diskCached = if (forceRefresh) {
+            null
+        } else {
+            runCatchingCancellable {
+                tmdbJsonCacheDao.getByKey(diskKey)
+            }.getOrNull()
+        }
         if (diskCached != null && now - diskCached.updatedAt < detailCacheDiskTtlMs) {
             val parsed = runCatching {
                 detailJsonAdapter.fromJson(diskCached.json)
@@ -1024,7 +1065,7 @@ class TmdbRepository private constructor(context: Context) :
                 return parsed
             }
         }
-        if (!full) {
+        if (!full && !forceRefresh) {
             val railKey = railDetailKey(key)
             val railDiskCached = runCatchingCancellable {
                 tmdbJsonCacheDao.getByKey(railKey)
@@ -1476,17 +1517,32 @@ class TmdbRepository private constructor(context: Context) :
         }
     }
 
-    suspend fun searchPerson(query: String): List<TmdbSearchPersonResult> {
-        if (apiKey.isBlank()) return emptyList()
-        return runCatchingCancellable { api.searchPerson(query, apiKey).results }
-            .getOrDefault(emptyList())
+    /**
+     * Person search, or null when the request could not be made at ALL: no
+     * TMDB key, an outage, a body that would not parse.
+     *
+     * An empty list is a real answer - nothing matched - and the two must not
+     * be folded together: the search screen's error card is what tells a
+     * keyless or offline build apart from a search that genuinely found
+     * nothing, and per-call swallowing made them identical. Same split as
+     * [searchMoviesOrNull].
+     */
+    suspend fun searchPersonOrNull(query: String): List<TmdbSearchPersonResult>? {
+        if (apiKey.isBlank()) return null
+        return runCatchingCancellable { api.searchPerson(query, apiKey).results }.getOrNull()
     }
 
-    suspend fun searchCompany(query: String): List<TmdbSearchStudioResult> {
-        if (apiKey.isBlank()) return emptyList()
-        return runCatchingCancellable { api.searchCompany(query, apiKey).results }
-            .getOrDefault(emptyList())
+    suspend fun searchPerson(query: String): List<TmdbSearchPersonResult> =
+        searchPersonOrNull(query).orEmpty()
+
+    /** [searchPersonOrNull] for studios/companies. */
+    suspend fun searchCompanyOrNull(query: String): List<TmdbSearchStudioResult>? {
+        if (apiKey.isBlank()) return null
+        return runCatchingCancellable { api.searchCompany(query, apiKey).results }.getOrNull()
     }
+
+    suspend fun searchCompany(query: String): List<TmdbSearchStudioResult> =
+        searchCompanyOrNull(query).orEmpty()
 
     /*
      * TMDB-native title search. This is the primary title source for the
@@ -1500,6 +1556,47 @@ class TmdbRepository private constructor(context: Context) :
 
     suspend fun searchTv(query: String): List<TmdbSearchTitleResult> =
         searchTvOrNull(query).orEmpty()
+
+    /**
+     * Page [page] of the movie search, or null when the request could not be
+     * made at all - the same failure/emptiness split [searchMoviesOrNull]
+     * documents, now per page: a page-2 outage must not read as "no more
+     * results", or the rail would end early and silently.
+     */
+    suspend fun searchMoviesPage(query: String, page: Int = 1): TmdbTitlePage? {
+        if (apiKey.isBlank()) return null
+        val response =
+            runCatchingCancellable { api.searchMovie(query, apiKey, page) }.getOrNull()
+                ?: return null
+
+        // Per page, exactly as page 1 always was: the filter decides one
+        // result at a time, so applying it to a page and then appending is the
+        // same rule the un-paged search applied to its only page.
+        val items = if (!isDigitalFilterEnabled()) {
+            response.results
+        } else {
+            filterByHomeAvailability(response.results) { it.id to "movie" }
+        }
+
+        return TmdbTitlePage(
+            items = items,
+            totalResults = response.totalResults,
+            totalPages = response.totalPages
+        )
+    }
+
+    /** [searchMoviesPage] for television: no availability filter, per page. */
+    suspend fun searchTvPage(query: String, page: Int = 1): TmdbTitlePage? {
+        if (apiKey.isBlank()) return null
+        val response =
+            runCatchingCancellable { api.searchTv(query, apiKey, page) }.getOrNull()
+                ?: return null
+        return TmdbTitlePage(
+            items = response.results,
+            totalResults = response.totalResults,
+            totalPages = response.totalPages
+        )
+    }
 
     /**
      * A movie search that keeps FAILURE distinct from an empty answer: null when
@@ -1519,24 +1616,14 @@ class TmdbRepository private constructor(context: Context) :
      * [filterByHomeAvailability]), so it can hide a title but never report one
      * as absent because the network failed.
      */
-    suspend fun searchMoviesOrNull(query: String): List<TmdbSearchTitleResult>? {
-        if (apiKey.isBlank()) return null
-        val results =
-            runCatchingCancellable { api.searchMovie(query, apiKey).results }.getOrNull()
-                ?: return null
-
-        if (!isDigitalFilterEnabled()) return results
-
-        return filterByHomeAvailability(results) {
-            it.id to "movie"
-        }
-    }
+    suspend fun searchMoviesOrNull(query: String): List<TmdbSearchTitleResult>? =
+        // Page 1, so the un-paged seam and the paged one cannot drift: the
+        // filter and the failure split live in exactly one place.
+        searchMoviesPage(query, page = 1)?.items
 
     /** [searchMoviesOrNull] for television: null on a failed request, not on an empty one. */
-    suspend fun searchTvOrNull(query: String): List<TmdbSearchTitleResult>? {
-        if (apiKey.isBlank()) return null
-        return runCatchingCancellable { api.searchTv(query, apiKey).results }.getOrNull()
-    }
+    suspend fun searchTvOrNull(query: String): List<TmdbSearchTitleResult>? =
+        searchTvPage(query, page = 1)?.items
 
     /**
      * The RAW (unfiltered) collection detail for [collectionId], read through
@@ -2108,8 +2195,13 @@ class TmdbRepository private constructor(context: Context) :
         return EpisodeSchemeStore.get(appContext, stable).encode() ?: "1:1"
     }
 
-    suspend fun getDetailByTmdbId(tmdbId: Int, type: String): TmdbDetail? =
-        (lookupDetailByTmdbId(tmdbId, type) as? TmdbDetailLookup.Found)?.detail
+    suspend fun getDetailByTmdbId(
+        tmdbId: Int,
+        type: String,
+        /** See [fetchEnrichedMetaCached]'s parameter of the same name. */
+        forceRefresh: Boolean = false
+    ): TmdbDetail? =
+        (lookupDetailByTmdbId(tmdbId, type, forceRefresh) as? TmdbDetailLookup.Found)?.detail
 
     /**
      * [getDetailByTmdbId], with the MISS KIND kept (see [TmdbDetailLookup]).
@@ -2121,7 +2213,16 @@ class TmdbRepository private constructor(context: Context) :
      * does not exist" from "we could not ask". Every other failure is
      * [TmdbDetailLookup.Transient].
      */
-    suspend fun lookupDetailByTmdbId(tmdbId: Int, type: String): TmdbDetailLookup {
+    suspend fun lookupDetailByTmdbId(
+        tmdbId: Int,
+        type: String,
+        /**
+         * Skip the caches for this call and ask TMDB again (see
+         * [fetchEnrichedMetaCached]). The answer is written back under this
+         * same key, so a later cached read sees it.
+         */
+        forceRefresh: Boolean = false
+    ): TmdbDetailLookup {
         if (apiKey.isBlank()) return TmdbDetailLookup.Transient
 
         val key = "${normalizeType(type)}:tmdb:$tmdbId"
@@ -2129,16 +2230,23 @@ class TmdbRepository private constructor(context: Context) :
         pruneMemoryCaches()
 
         // In-memory TTL cache (fast path for the current session).
-        val cached = detailCache[key]
-        if (cached != null && now - cached.first < detailCacheTtlMs) {
-            cached.second?.let { return TmdbDetailLookup.Found(it) }
+        if (!forceRefresh) {
+            val cached = detailCache[key]
+            if (cached != null && now - cached.first < detailCacheTtlMs) {
+                cached.second?.let { return TmdbDetailLookup.Found(it) }
+            }
         }
 
-        // Disk cache so resolved metadata survives restarts.
+        // Disk cache so resolved metadata survives restarts. A forced call skips
+        // the read entirely - the row is one it has decided not to trust.
         val diskKey = detailDiskKey(key)
-        val diskCached = runCatchingCancellable {
-            tmdbJsonCacheDao.getByKey(diskKey)
-        }.getOrNull()
+        val diskCached = if (forceRefresh) {
+            null
+        } else {
+            runCatchingCancellable {
+                tmdbJsonCacheDao.getByKey(diskKey)
+            }.getOrNull()
+        }
         if (diskCached != null && now - diskCached.updatedAt < detailCacheDiskTtlMs) {
             val parsed = runCatching {
                 detailJsonAdapter.fromJson(diskCached.json)
@@ -2220,8 +2328,13 @@ class TmdbRepository private constructor(context: Context) :
      * is remembered (memory + disk, and it answers [fetchEnrichedMetaCached]
      * too, because the key shape is that function's own), a miss never is.
      */
-    suspend fun lookupDetailByImdbId(imdbId: String, type: String): TmdbDetailLookup =
-        lookupDetailByExternalId(imdbId, "imdb_id", type)
+    suspend fun lookupDetailByImdbId(
+        imdbId: String,
+        type: String,
+        /** See [fetchEnrichedMetaCached]'s parameter of the same name. */
+        forceRefresh: Boolean = false
+    ): TmdbDetailLookup =
+        lookupDetailByExternalId(imdbId, "imdb_id", type, forceRefresh)
 
     /**
      * [lookupDetailByImdbId] for any external source TMDB's `/find` accepts
@@ -2243,7 +2356,18 @@ class TmdbRepository private constructor(context: Context) :
     suspend fun lookupDetailByExternalId(
         externalId: String,
         externalSource: String,
-        type: String
+        type: String,
+        /**
+         * Skip the caches for this call and ask TMDB again (see
+         * [fetchEnrichedMetaCached]).
+         *
+         * It has to exist on THIS path separately from the TMDB-id one: the two
+         * file under different keys (`series:tt123` here, `series:tmdb:456`
+         * there), and neither reads the other's - so a fresh detail fetched by
+         * TMDB id does not answer an `tt`-filed read, and the write-back has to
+         * land under the key the caller's own later read will use.
+         */
+        forceRefresh: Boolean = false
     ): TmdbDetailLookup {
         val id = externalId.trim().substringBefore(':').trim()
         if (id.isBlank()) return TmdbDetailLookup.Unresolvable
@@ -2256,21 +2380,29 @@ class TmdbRepository private constructor(context: Context) :
         val now = System.currentTimeMillis()
         pruneMemoryCaches()
 
-        detailCache[key]?.let { (cachedAt, detail) ->
-            if (detail != null && now - cachedAt < detailCacheTtlMs) {
-                return TmdbDetailLookup.Found(detail)
+        if (!forceRefresh) {
+            detailCache[key]?.let { (cachedAt, detail) ->
+                if (detail != null && now - cachedAt < detailCacheTtlMs) {
+                    return TmdbDetailLookup.Found(detail)
+                }
             }
-        }
-        railDetailCache[key]?.let { (cachedAt, detail) ->
-            if (detail != null && now - cachedAt < detailCacheTtlMs) {
-                return TmdbDetailLookup.Found(detail)
+            railDetailCache[key]?.let { (cachedAt, detail) ->
+                if (detail != null && now - cachedAt < detailCacheTtlMs) {
+                    return TmdbDetailLookup.Found(detail)
+                }
             }
         }
 
+        // A forced call skips the disk reads too: a row it must not trust is a
+        // row not worth the query.
         val diskKey = detailDiskKey(key)
-        val diskCached = runCatchingCancellable {
-            tmdbJsonCacheDao.getByKey(diskKey)
-        }.getOrNull()
+        val diskCached = if (forceRefresh) {
+            null
+        } else {
+            runCatchingCancellable {
+                tmdbJsonCacheDao.getByKey(diskKey)
+            }.getOrNull()
+        }
         if (diskCached != null && now - diskCached.updatedAt < detailCacheDiskTtlMs) {
             val parsed = runCatching {
                 detailJsonAdapter.fromJson(diskCached.json)
@@ -2281,9 +2413,13 @@ class TmdbRepository private constructor(context: Context) :
             }
         }
         val railKey = railDetailKey(key)
-        val railDiskCached = runCatchingCancellable {
-            tmdbJsonCacheDao.getByKey(railKey)
-        }.getOrNull()
+        val railDiskCached = if (forceRefresh) {
+            null
+        } else {
+            runCatchingCancellable {
+                tmdbJsonCacheDao.getByKey(railKey)
+            }.getOrNull()
+        }
         if (railDiskCached != null && now - railDiskCached.updatedAt < detailCacheDiskTtlMs) {
             val parsed = runCatching {
                 detailJsonAdapter.fromJson(railDiskCached.json)
@@ -2346,7 +2482,17 @@ class TmdbRepository private constructor(context: Context) :
      * the caller needs to know that no lookup will ever resolve this row, and
      * that is a droppable fact of the same kind as a 404.
      */
-    suspend fun lookupDetailForRawId(rawId: String, type: String): TmdbDetailLookup {
+    suspend fun lookupDetailForRawId(
+        rawId: String,
+        type: String,
+        /**
+         * Ask TMDB again for this id, whichever flavor it is (see
+         * [fetchEnrichedMetaCached]). Threaded through the SAME branch the
+         * caller's ordinary read takes, so the fresh answer is filed under the
+         * key that read will use.
+         */
+        forceRefresh: Boolean = false
+    ): TmdbDetailLookup {
         val trimmed = rawId.trim()
         if (trimmed.isBlank()) return TmdbDetailLookup.Unresolvable
 
@@ -2359,17 +2505,18 @@ class TmdbRepository private constructor(context: Context) :
                     .trim()
                     .toIntOrNull()
                     ?: return TmdbDetailLookup.Unresolvable
-                lookupDetailByTmdbId(tmdbId, type)
+                lookupDetailByTmdbId(tmdbId, type, forceRefresh)
             }
 
-            lower.startsWith("tt") -> lookupDetailByImdbId(trimmed.substringBefore(':'), type)
+            lower.startsWith("tt") ->
+                lookupDetailByImdbId(trimmed.substringBefore(':'), type, forceRefresh)
 
             lower.startsWith("tvdb:") -> {
                 val tvdbId = trimmed.substringAfter(':').substringBefore(':').trim()
                 if (tvdbId.isBlank()) {
                     TmdbDetailLookup.Unresolvable
                 } else {
-                    lookupDetailByExternalId(tvdbId, "tvdb_id", type)
+                    lookupDetailByExternalId(tvdbId, "tvdb_id", type, forceRefresh)
                 }
             }
 
@@ -3245,10 +3392,13 @@ class TmdbRepository private constructor(context: Context) :
      * stable keyword id, which the Tag screen then discovers with. Cached in
      * the ViewModel so a name is resolved at most once per session.
      */
-    suspend fun searchKeywords(query: String): List<TmdbSearchKeywordResult> {
-        if (apiKey.isBlank()) return emptyList()
-        return runCatchingCancellable { api.searchKeyword(query, apiKey).results }
-            .getOrDefault(emptyList())
+    suspend fun searchKeywords(query: String): List<TmdbSearchKeywordResult> =
+        searchKeywordsOrNull(query).orEmpty()
+
+    /** [searchPersonOrNull] for keywords: the search rail's sixth wave. */
+    suspend fun searchKeywordsOrNull(query: String): List<TmdbSearchKeywordResult>? {
+        if (apiKey.isBlank()) return null
+        return runCatchingCancellable { api.searchKeyword(query, apiKey).results }.getOrNull()
     }
 
 
@@ -3649,11 +3799,14 @@ class TmdbRepository private constructor(context: Context) :
         )
     }
 
-    suspend fun searchCollection(query: String): List<TmdbSearchCollectionResult> {
-    if (apiKey.isBlank()) return emptyList()
-    return runCatchingCancellable { api.searchCollection(query, apiKey).results }
-        .getOrDefault(emptyList())
+    /** [searchPersonOrNull] for collections. */
+    suspend fun searchCollectionOrNull(query: String): List<TmdbSearchCollectionResult>? {
+        if (apiKey.isBlank()) return null
+        return runCatchingCancellable { api.searchCollection(query, apiKey).results }.getOrNull()
     }
+
+    suspend fun searchCollection(query: String): List<TmdbSearchCollectionResult> =
+        searchCollectionOrNull(query).orEmpty()
 
     suspend fun getByGenre(
         genreId: Int,

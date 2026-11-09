@@ -45,7 +45,6 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
-import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import kotlinx.coroutines.android.awaitFrame
 import com.kennyb1201.kbstream.ui.components.KBSectionHeader
@@ -188,9 +187,18 @@ internal fun SearchHero(
     onSubmit: () -> Unit,
     totalCount: Int,
     catalogCount: Int,
+    // How many TMDB titles the query has in total, 0 while unknown. The rail
+    // shows only the pages loaded so far, and this is what says so: the first
+    // page used to be the whole list with nothing admitting the rest existed.
+    titlesTotal: Int,
+    // Which type the Titles rail is showing. The count line says it in the
+    // filter's own terms ("12 movies"), and the total can only be quoted when
+    // the rail is unfiltered - see titleCountLabel.
+    titleTypeFilter: TitleTypeFilter,
     actorCount: Int,
     studioCount: Int,
     collectionCount: Int,
+    keywordCount: Int,
     addonCount: Int,
     isLoading: Boolean
 ) {
@@ -283,11 +291,14 @@ internal fun SearchHero(
             Text(
                 text = buildString {
                     val chips = buildList {
-                        if (catalogCount > 0) add("$catalogCount titles")
+                        if (catalogCount > 0) {
+                            add(titleCountLabel(catalogCount, titleTypeFilter, titlesTotal))
+                        }
                         if (addonCount > 0) add("$addonCount from add-ons")
                         if (actorCount > 0) add("$actorCount actors")
                         if (collectionCount > 0) add("$collectionCount collections")
                         if (studioCount > 0) add("$studioCount studios")
+                        if (keywordCount > 0) add("$keywordCount keywords")
                     }
                     append(chips.joinToString(" · "))
                 },
@@ -345,6 +356,45 @@ internal fun SearchRail(
         ) {
             content()
         }
+    }
+}
+
+/**
+ * The Titles rail's end-of-rail item: what the rail says while a further page is
+ * in flight, or when one could not be loaded.
+ *
+ * It is a rail ITEM rather than something drawn over the row, so it travels
+ * with the content: on a TV the retry chip is reachable with the D-pad exactly
+ * like the last poster, and on a phone it is scrolled to like any other card.
+ * Nothing is drawn when the rail is complete - a finished list needs no chrome
+ * to say so.
+ */
+@Composable
+internal fun SearchRailTail(
+    loading: Boolean,
+    error: String?,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    when {
+        error != null -> Column(
+            modifier = modifier,
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = error,
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall
+            )
+            SearchChip(label = "TRY AGAIN", onClick = onRetry, accent = false)
+        }
+
+        loading -> Text(
+            text = "Loading more…",
+            color = KBTextLo,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = modifier
+        )
     }
 }
 
@@ -606,7 +656,7 @@ internal fun PersonResultCard(
 
 @Composable
 internal fun StudioResultCard(
-    studio: TmdbSearchStudioResult,
+    studio: StudioSearchHit,
     onClick: () -> Unit,
     // Same return-focus hook as PersonResultCard.
     modifier: Modifier = Modifier
@@ -646,7 +696,11 @@ internal fun StudioResultCard(
                 .padding(12.dp)
         ) {
             Text(
-                text = studio.name,
+                // The card is text-only and never reads a logo, so a catalog
+                // network (which carries none) renders exactly like a company
+                // with no logo: the name, and no premium on the origin country
+                // it does not have.
+                text = studio.displayName,
                 style = MaterialTheme.typography.titleMedium,
                 color = KBTextHi,
                 maxLines = 2,
