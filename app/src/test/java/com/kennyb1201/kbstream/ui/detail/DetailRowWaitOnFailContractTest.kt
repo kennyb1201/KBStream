@@ -21,11 +21,24 @@ import org.junit.Test
  * reveal has nothing to reveal and the geometric search finds nothing below. Six
  * dead DOWNs in two walks, each landing the moment the episodes arrived.
  *
+ * Then the 0.9.208 paste, same move, `loading=false` on every line:
+ *
+ * ```
+ * detail move GENRE DOWN -> EPISODES landed=false via=edge waited=false   (x2, then x4)
+ * ```
+ *
+ * The episode data was already in and the EPISODES row was already in presence -
+ * the chain named it as the target - but the section's chips had not composed
+ * yet. The wait was gated on the loading flags, so it never ran: that is
+ * composition lag, and it reads exactly like loading lag from here. So the gate
+ * is the landing itself - a target the chain found is a row this page HAS.
+ *
  * Pinned here: a failed landing waits on the same bounded budget, re-reads the
  * settled presence, re-asks the SAME target exactly once, and only then falls to
- * the unchanged toggle/edge tail (F1); the move line carries the loading state
- * the press arrived in and whether the wait ran (F2); and a settled page never
- * waits, so its edges are exactly what they were (F3).
+ * the unchanged toggle/edge tail (F1); the wait fires whether or not a load is
+ * still in flight, which is what the 0.9.208 paste missed (F1b); the move line
+ * carries the loading state the press arrived in and whether the wait ran (F2);
+ * and a real edge still ends the move before the wait is ever reached (F3).
  *
  * Read from the source: these are suspend moves in a Compose page. The
  * behaviour stands on the device (§4).
@@ -43,18 +56,30 @@ class DetailRowWaitOnFailContractTest {
     // ── F1: wait, re-ask the same target once, then the old tail ──────────
 
     @Test
-    fun `a failed landing waits when the rows are still arriving`() {
+    fun `a failed landing waits whether or not the page is still loading`() {
         assertTrue(
-            "F1: the wait is gated on the page still loading, so a settled page " +
-                "never waits",
-            move.contains("if (rowsStillArriving()) {")
+            "F1b: the wait is gated on the landing, not on the loading flags - a " +
+                "target the chain found is a row this page has, and the chips it " +
+                "cannot reach yet are one composition late, not one load late",
+            move.contains(
+                "if (rowsStillArriving() || DetailFocusChain.exists(target, presence)) {"
+            )
         )
         assertTrue(
-            "and it is the page's own bounded budget - no new constants, no second " +
-                "retry",
-            move.contains("while (rowsStillArriving() && waited < RETURN_FOCUS_STEPS) {") &&
+            "F1: and it is the page's own bounded budget - no new constants, no " +
+                "second retry",
+            move.contains("waited < RETURN_FOCUS_STEPS &&") &&
                 move.contains("delay(RETURN_FOCUS_DELAY_MS)") &&
                 !move.contains("FOCUS_RETRY_MS")
+        )
+        assertTrue(
+            "a press that arrived while the page was loading still stops the moment " +
+                "the load does, so a slow title pays for its load and nothing more - " +
+                "while a press that arrived settled spends the budget, which is the " +
+                "only thing that gives that composition its frames",
+            move.contains("(rowsStillArriving() || !tracedLoading)") &&
+                move.indexOf("val tracedLoading = rowsStillArriving()") <
+                move.indexOf("if (rowsStillArriving() || DetailFocusChain.exists(")
         )
         assertTrue(
             "the wait re-reads the presence that LANDED, the same way the old " +
@@ -67,7 +92,7 @@ class DetailRowWaitOnFailContractTest {
             move.contains("focusRow(target, fromColumn, from, direction, settled)")
         )
         val wait = move.slice(
-            "if (rowsStillArriving()) {",
+            "if (rowsStillArriving() || DetailFocusChain.exists(target, presence)) {",
             "val fellThrough = fallThroughIfMidPage("
         )
         assertTrue(
@@ -85,7 +110,8 @@ class DetailRowWaitOnFailContractTest {
 
     @Test
     fun `the wait sits before the toggle, edge and geometry tail`() {
-        val waitAt = move.indexOf("if (rowsStillArriving()) {")
+        val waitAt =
+            move.indexOf("if (rowsStillArriving() || DetailFocusChain.exists(target, presence)) {")
         assertTrue("the wait exists", waitAt > 0)
         assertTrue(
             "F1: it runs after the landing it rescues",
@@ -116,7 +142,7 @@ class DetailRowWaitOnFailContractTest {
         val firstAsk = move.substringAfter("val landed =")
             .substringBefore("tracedVia = \"chain\"")
         val wait = move.slice(
-            "if (rowsStillArriving()) {",
+            "if (rowsStillArriving() || DetailFocusChain.exists(target, presence)) {",
             "val fellThrough = fallThroughIfMidPage("
         )
         assertTrue(
@@ -140,9 +166,11 @@ class DetailRowWaitOnFailContractTest {
                 move.indexOf("try {")
         )
         assertTrue(
-            "and the wait reports itself",
+            "and the wait reports what it actually SPENT: F3 of this spec asks that " +
+                "a press that waited and still failed be distinguishable from one " +
+                "that never waited, so the flag is the steps taken, not the gate",
             move.contains("var tracedWaited = false") &&
-                move.contains("tracedWaited = true")
+                move.contains("tracedWaited = waited > 0")
         )
         assertTrue(
             "the line appends both, leaving every existing field where the paste " +
@@ -156,21 +184,25 @@ class DetailRowWaitOnFailContractTest {
     // ── F3: a settled page is untouched ──────────────────────────────────
 
     @Test
-    fun `nothing about a settled page changes`() {
-        val wait = move.slice(
-            "if (rowsStillArriving()) {",
-            "val fellThrough = fallThroughIfMidPage("
+    fun `a real edge still ends the move without waiting`() {
+        val gate = "if (rowsStillArriving() || DetailFocusChain.exists(target, presence)) {"
+        val wait = move.slice(gate, "val fellThrough = fallThroughIfMidPage(")
+        assertTrue(
+            "F3: one bounded wait and nothing else - no second loop, no raised budget",
+            wait.count("while (") == 1 &&
+                wait.count("RETURN_FOCUS_STEPS") == 1 &&
+                !wait.contains("while (true)")
         )
         assertTrue(
-            "F3: one wait, behind the loading gate, and nothing else - the move has no " +
-                "unconditional waiting loop",
-            wait.count("while (rowsStillArriving() && waited < RETURN_FOCUS_STEPS)") == 1
+            "and a real edge never reaches it: no row that way is still answered " +
+                "where it always was, before the wait",
+            move.indexOf("nextRow(from, direction, presence) ?: return false") in
+                0 until move.indexOf(gate)
         )
         assertFalse(
-            "no wait on a settled page's edges: the tail still returns false for a " +
-                "real edge rather than waiting",
-            move.contains("if (!rowsStillArriving()) {") ||
-                move.contains("while (true)")
+            "the gate is not the loading flags alone again - that is the miss this " +
+                "spec is",
+            move.contains("if (rowsStillArriving()) {")
         )
         assertTrue(
             "and the chain itself is not touched by this spec - the edge verdict is " +

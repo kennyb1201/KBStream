@@ -3049,19 +3049,41 @@ fun DetailScreen(
             // failed landing waits for the rows the same way a missing one does -
             // same budget, one re-ask - and only then falls to the tail.
             //
+            // F1b (detail-down-wait, failed landing): that wait used to be gated
+            // on the loading flags, and on the 0.9.208 paste it never fired. On
+            // Dark Marvels the episode data was IN (`loading=false` on all six
+            // GENRE DOWN lines) and the EPISODES row was in presence - the chain
+            // named it as the target - while the section's chips had not composed
+            // yet: the same unlandable row, one composition late instead of one
+            // load late. `waited=false` on every line is that gate reading the
+            // loads and not the landing. So the gate is the landing: a target the
+            // chain found is a row this page HAS ([DetailFocusChain.exists]), and
+            // a press that failed to land on it waits whether or not a load is
+            // still in flight. Same budget, one re-ask, no second wait loop.
+            //
             // The retry re-runs the landing for the SAME target with the presence
             // that settled, because the row the press aimed at is still the row
             // it means; nothing below it was ever asked for.
-            if (rowsStillArriving()) {
+            if (rowsStillArriving() || DetailFocusChain.exists(target, presence)) {
                 var waited = 0
-                while (rowsStillArriving() && waited < RETURN_FOCUS_STEPS) {
+                // A press that arrived while the page was loading stops the
+                // moment the load does. A press that arrived on a settled page
+                // has nothing to wait FOR that this handler can see - the row is
+                // there and the chip has not registered - so it spends the
+                // budget, which is what gives that composition the frames it
+                // needs. `tracedLoading` is the state the press ARRIVED in, so
+                // the two reads cannot disagree.
+                while (waited < RETURN_FOCUS_STEPS && (rowsStillArriving() || !tracedLoading)) {
                     delay(RETURN_FOCUS_DELAY_MS)
                     waited += 1
                 }
                 // The composition that landed the rows, not the one that made the
                 // handler (see [awaitRowsThenMove]).
                 val settled = latestRowPresence.value ?: presence
-                tracedWaited = true
+                // Whether the wait actually SPENT anything, so a press that fell
+                // through with no steps taken does not report a wait it did not
+                // make.
+                tracedWaited = waited > 0
                 val retried =
                     if (target == DetailRow.MEDIA && direction == DetailFocusDirection.DOWN) {
                         focusMediaStrip(from)
