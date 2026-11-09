@@ -72,8 +72,11 @@ class HomeRailCardKeyContractTest {
     @Test
     fun `the other rail families keep their own namespaces`() {
         assertTrue(
-            "Continue Watching cards stay in their own family",
-            home.contains("val cardKey = CONTINUE_WATCHING_CARD_KEY_PREFIX + item.id")
+            "Continue Watching cards stay in their own family, keyed by the show " +
+                "rather than by the leg that won this build (upNextRailKey)",
+            home.contains(
+                "val cardKey = CONTINUE_WATCHING_CARD_KEY_PREFIX + upNextRailKey(item)"
+            )
         )
         assertTrue(
             "and so do the Upcoming cards - only catalog-vs-catalog collided",

@@ -240,10 +240,14 @@ class ContinueWatchingHeadLandingContractTest {
 
     @Test
     fun `the card's identity key is untouched, which is what makes the landing necessary`() {
+        // The key is the SHOW's stable identity ([upNextRailKey]), not the
+        // winning leg's id - so a rebuild no longer disposes the node, while a
+        // card that actually moves still keeps its focus. Either way it is an
+        // identity key, not the position, which is why the landing exists.
         assertTrue(
             "keyed by card identity: that is why focus follows the card that " +
                 "moved rather than staying on position 0",
-            rail.contains("key = { _, item -> item.id }")
+            rail.contains("key = { _, item -> upNextRailKey(item) }")
         )
     }
 

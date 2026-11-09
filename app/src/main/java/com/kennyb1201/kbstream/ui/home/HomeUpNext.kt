@@ -1614,6 +1614,55 @@ internal fun upNextGroupingKeys(
 }
 
 /**
+ * The rail's Compose key for one card: the SHOW, not the leg that won this
+ * build.
+ *
+ * The merge already collapses a show's legs into one card, and the card that
+ * survives keeps the WINNING leg's [UpNextItem.id] - `simkl:show-1218` on one
+ * rebuild, `nextup:tt0096697` on the next. Keying the rail on that id made an
+ * ordinary rebuild look like a different item to Compose: the old node was
+ * disposed, a new one composed, and its poster + backdrop were requested from
+ * Coil and decoded again against a ~29 MB cache on a 192 MB-heap TV. That
+ * churn across every visible card at once - the field's 2026-11-09 flips on
+ * The Simpsons, Universal Basic Guys, Animal Control, The Paper, Forbidden
+ * History, Good Times, Rooster and Breaking Bear, then a freeze and a silent
+ * LMK kill - is what this key exists to stop. A winner flip now updates the
+ * card in place: same node, same image, focus requester untouched.
+ *
+ * The key is built from the identity the merge itself clusters on
+ * ([upNextStrongIdentityKeys]), in the order that keeps it stable whichever
+ * flavor produced the card:
+ *
+ *  1. the resolved TMDB id - the one id every flavor resolves, which is what
+ *     pairs an `tt...` leg with a `tmdb:<n>` leg at all;
+ *  2. else the normalized parent id, for a card whose enrichment has not
+ *     landed yet;
+ *  3. else the title key - only a card with no id at all gets there, which is
+ *     exactly the case [upNextGroupingKeys] falls back to the name for too.
+ *
+ * Every branch is a member of [upNextGroupingKeys], so cards in one cluster
+ * agree, and two published cards cannot collide: the merge clusters by
+ * union-find over those keys, so distinct survivors carry disjoint key sets
+ * (a duplicate key in a LazyRow throws - the ANDROID-1D crash family).
+ *
+ * [UpNextItem.id] and [resumeSource] are unchanged: the diagnostics still
+ * print the leg, and Remove / Mark as Watched resolve through other fields.
+ */
+internal fun upNextRailKey(item: UpNextItem): String {
+    val mediaType =
+        upNextMediaType(item.parentType)
+
+    item.tmdbId
+        ?.takeIf { it > 0 }
+        ?.let { return "parent:$mediaType:$it" }
+
+    upNextIdentifier(item.parentId)
+        ?.let { return "parent:$mediaType:$it" }
+
+    return upNextTitleKey(item)
+}
+
+/**
  * The second half of the rail's one-card-per-show rule: merges the strict
  * [upNextGroupingKeys] clusters that name the same show but could not meet on
  * an id.

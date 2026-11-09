@@ -4024,7 +4024,13 @@ private fun BuiltinContinueWatchingRail(
                 // is the viewer walking the rail.
                 itemsIndexed(
                     items = cards,
-                    key = { _, item -> item.id },
+                    // Keyed by the SHOW, not by the leg that won this build:
+                    // the same show's card id flips between legs across
+                    // ordinary rebuilds (simkl:show-1218 / nextup:tt0096697),
+                    // and disposing + recomposing every visible card for that
+                    // re-decoded its art on a 192 MB heap until the system
+                    // killed the app. See [upNextRailKey].
+                    key = { _, item -> upNextRailKey(item) },
                     // One reuse pool for this row's own card shape. The rails'
                     // cells are different composables, so sharing a pool across
                     // them would swap contents on every scroll that crossed a
@@ -4043,7 +4049,7 @@ private fun BuiltinContinueWatchingRail(
                     // Detail restore looks up. Registered as the card composes,
                     // and dropped as it leaves, so a disposed node is never
                     // asked for focus (see [cardFocusRequesters]).
-                    val cardKey = CONTINUE_WATCHING_CARD_KEY_PREFIX + item.id
+                    val cardKey = CONTINUE_WATCHING_CARD_KEY_PREFIX + upNextRailKey(item)
                     DisposableEffect(requester, cardKey) {
                         cardFocusRequesters[cardKey] = requester
                         onDispose { cardFocusRequesters.remove(cardKey) }
