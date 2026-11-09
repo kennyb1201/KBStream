@@ -239,6 +239,24 @@ internal object SettingsSearchIndex {
             "torbox debrid resolve instant cached hash torrent add missing cloud quota " +
                 "instant playback"
         ),
+        // The account's own cloud FILES in the picker, and the list of them.
+        // Two entries because they are two doors: the switch decides whether a
+        // matching file is offered, the list is where a viewer looks for a file
+        // the picker could not place.
+        SettingSearchEntry(
+            "integrations.torbox-cloud-files",
+            SettingsPane.INTEGRATIONS,
+            "TorBox cloud files in stream picker",
+            "torbox debrid cloud file files picker episode movie download offer source " +
+                "sources my account own"
+        ),
+        SettingSearchEntry(
+            "integrations.torbox-cloud-list",
+            SettingsPane.INTEGRATIONS,
+            "TorBox cloud files",
+            "torbox debrid cloud file files list account cloud download release episode " +
+                "open browse"
+        ),
         SettingSearchEntry(
             "integrations.badges-above",
             SettingsPane.INTEGRATIONS,

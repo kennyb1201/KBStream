@@ -294,10 +294,11 @@ class StreamsDeepDiveContractTest {
                 screen.contains("onStreamSelected(selected, allSources, addons, selectedAddon)")
             )
             assertTrue(
-                "$which: and to the launch that resolved a hash row first",
+                "$which: and to the launch that resolved a hash row first - past the " +
+                    "cloud rows' own hand-off filter, which wraps the same list",
                 screen
-                    .substringAfter("allSources.map { if (it === selected) resolved else it },")
-                    .substringBefore(")")
+                    .substringAfter("allSources.map { if (it === selected) resolved else it }")
+                    .take(400)
                     .contains("selectedAddon")
             )
             assertTrue(

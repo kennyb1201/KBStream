@@ -54,10 +54,12 @@ class StreamsIdentityContractTest {
             resolve.indexOf("noteRequest(") < resolve.indexOf("val resolved = fetch(")
         )
         assertTrue(
-            "the picker's load keeps recording its own request, binge context included",
-            load.contains(
-                "noteRequest(contentType, streamId, runtimeMinutes, bingeGroup, bingeAddonName)"
-            )
+            "the picker's load keeps recording its own request, binge context and the " +
+                "heading the TorBox cloud match reads included",
+            Regex(
+                "noteRequest\\(\\s*contentType,\\s*streamId,\\s*runtimeMinutes,\\s*bingeGroup," +
+                    "\\s*bingeAddonName,\\s*displayTitle\\s*\\)"
+            ).containsMatchIn(load)
         )
         assertEquals(
             "one stamping site only: a second `lastRequest =` assignment is the second answer " +

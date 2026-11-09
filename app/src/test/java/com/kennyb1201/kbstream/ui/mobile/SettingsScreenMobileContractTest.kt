@@ -60,7 +60,7 @@ class SettingsScreenMobileContractTest {
         val mobileCall = screen.indexOf("SettingsScreenMobile(")
         assertTrue("SettingsScreen must branch on FormFactor.isTv", dispatch >= 0)
         assertTrue("the mobile branch must call SettingsScreenMobile", mobileCall > dispatch)
-        val branch = screen.substring(dispatch, mobileCall + 420)
+        val branch = screen.substring(dispatch, mobileCall + 560)
         listOf(
             "onBack = onBack",
             "onOpenAddons = onOpenAddons",
@@ -68,7 +68,8 @@ class SettingsScreenMobileContractTest {
             "onOpenProfiles = onOpenProfiles",
             "onOpenCatalogManager = onOpenCatalogManager",
             "onOpenCatalogBuilder = onOpenCatalogBuilder",
-            "onOpenStats = onOpenStats"
+            "onOpenStats = onOpenStats",
+            "onOpenTorBoxFile = onOpenTorBoxFile"
         ).forEach { callback ->
             assertTrue("the branch must forward $callback", branch.contains(callback))
         }
