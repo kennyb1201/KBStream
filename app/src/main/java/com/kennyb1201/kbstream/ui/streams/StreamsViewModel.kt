@@ -12,6 +12,8 @@ import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.data.debrid.TorBoxCachedAnswer
 import com.kennyb1201.kbstream.data.debrid.TorBoxCachedBadges
 import com.kennyb1201.kbstream.data.debrid.TorBoxClient
+import com.kennyb1201.kbstream.data.debrid.TorBoxCloudCache
+import com.kennyb1201.kbstream.data.debrid.TorBoxCloudPicker
 import com.kennyb1201.kbstream.data.player.DolbyVisionCapability
 import com.kennyb1201.kbstream.data.player.EpisodeScheme
 import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
@@ -218,6 +220,43 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
     private var unfilteredGroups: List<StreamAddonGroup> = emptyList()
 
     /**
+     * The add-on rows BEFORE the TorBox cloud merge, with their add-on names.
+     *
+     * Kept apart from [unfilteredStreams] because the cloud merge is neither a
+     * filter nor a one-way edit: the toggle can move while the picker is open,
+     * and re-publishing from these brings every cloud row back or takes them all
+     * away without a second fetch (and without doubling them, which is what
+     * re-merging the already-merged list would do).
+     */
+    private var baseStreams: List<Stream> = emptyList()
+    private var baseAddons: List<String?> = emptyList()
+
+    /**
+     * The account's cloud files that belong to the title on screen, and the
+     * target they were matched for (see [requestCloudRows]).
+     *
+     * A file list is only current for the title it was matched against, so the
+     * key is what keeps a late answer for the previous episode off this one's
+     * picker - the same guard the badge pass uses.
+     */
+    private var cloudMatches: List<TorBoxCloudPicker.CloudMatch> = emptyList()
+    private var cloudTargetKey: String? = null
+
+    /** Bumped per cloud question, so a superseded answer cannot merge (F1d). */
+    private var cloudAsk = 0
+
+    /**
+     * The one discreet offer row's state (spec F4c/F4d).
+     *
+     * True only when the feature is OFF for this profile AND a cloud file
+     * matches the title on screen. OFF with no match leaves the picker exactly
+     * as it was before this feature existed, which is the whole point of
+     * Kenny's "I don't want to see them all the time".
+     */
+    private val _cloudOffer = MutableStateFlow(false)
+    val cloudOffer: StateFlow<Boolean> = _cloudOffer.asStateFlow()
+
+    /**
      * The ANSWERED cached set for [cachedAnswerGeneration], or null while none
      * has arrived for the current fetch.
      *
@@ -302,6 +341,15 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         val contentType: String,
         val streamId: String,
         val runtimeMinutes: Int?,
+        /**
+         * The picker's own heading, kept for the TorBox cloud match.
+         *
+         * The cloud rules compare a release name with the TITLE, and the only
+         * title this request carries is the one the picker is showing
+         * ("Landman S1 E10 • The Crumbs of Hope"). Held here so REFRESH re-asks
+         * the same question instead of dropping the cloud rows it had.
+         */
+        val displayTitle: String? = null,
         /**
          * The binge identity the request was made with, so REFRESH keeps it.
          *
@@ -396,7 +444,9 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         streamId: String,
         runtimeMinutes: Int? = null,
         bingeGroup: String? = null,
-        bingeAddonName: String? = null
+        bingeAddonName: String? = null,
+        /** The picker's heading, for the TorBox cloud match (see [cloudMatches]). */
+        displayTitle: String? = null
     ) {
         // One load at a time: a second request - the picker's REFRESH, or a new
         // target - supersedes the first. Without this the two coroutines
@@ -404,7 +454,14 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // per-add-on callback, the list could end up showing a mix of the two
         // requests' sources.
         loadJob?.cancel()
-        noteRequest(contentType, streamId, runtimeMinutes, bingeGroup, bingeAddonName)
+        noteRequest(
+            contentType,
+            streamId,
+            runtimeMinutes,
+            bingeGroup,
+            bingeAddonName,
+            displayTitle
+        )
         // A reset offer belongs to the answer that made it: a new load for
         // another target must not leave the previous one's row on screen.
         _schemeResetOffer.value = null
@@ -418,6 +475,13 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             // Through the publish helpers, so a previous title's cached answer
             // cannot act on this one's rows and the held raw rows are cleared
             // with the visible ones.
+            // A new target's cloud rows belong to the OLD target until the new
+            // match lands, so they are dropped BEFORE the empty publish - dropped
+            // after it, they would still be merged into the cleared list and
+            // paint the previous episode's file on this one.
+            cloudMatches = emptyList()
+            cloudTargetKey = null
+            _cloudOffer.value = false
             publishStreams(emptyList(), emptyList())
             publishGroups(emptyList())
             _debug.value = emptyList()
@@ -438,7 +502,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                         // shrinking once the check answers), and reading the
                         // published value here would re-filter what is already
                         // filtered.
-                        publishStreams(unfilteredStreams + incoming, unfilteredAddons)
+                        publishStreams(baseStreams + incoming, baseAddons)
                     }
                 },
                 runtimeMinutes = runtimeMinutes,
@@ -457,6 +521,15 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             _schemeResetOffer.value = resolved.schemeResetOffer
             _loadedKey.value = "$contentType:$streamId"
             _isLoading.value = false
+            // Beside the rows, never in front of them: the account is read from
+            // a 15-minute cache (or with one `mylist` call when it is stale), and
+            // whatever it answers merges in when it lands (spec F1d). The picker
+            // has already painted by then.
+            requestCloudRows(
+                contentType = contentType,
+                streamId = streamId,
+                displayTitle = displayTitle
+            )
         }
     }
 
@@ -486,7 +559,11 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             streamId = streamId,
             runtimeMinutes = runtimeMinutes,
             bingeGroup = sameTarget?.bingeGroup,
-            bingeAddonName = sameTarget?.bingeAddonName
+            bingeAddonName = sameTarget?.bingeAddonName,
+            // The cloud match is the same question about the same title, so it
+            // is re-asked with the same heading - a refresh must not take the
+            // viewer's own file out of the list.
+            displayTitle = sameTarget?.displayTitle
         )
     }
 
@@ -519,7 +596,8 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             streamId = streamId,
             runtimeMinutes = sameTarget?.runtimeMinutes,
             bingeGroup = sameTarget?.bingeGroup,
-            bingeAddonName = sameTarget?.bingeAddonName
+            bingeAddonName = sameTarget?.bingeAddonName,
+            displayTitle = sameTarget?.displayTitle
         )
     }
 
@@ -535,14 +613,16 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         streamId: String,
         runtimeMinutes: Int?,
         bingeGroup: String? = null,
-        bingeAddonName: String? = null
+        bingeAddonName: String? = null,
+        displayTitle: String? = null
     ) {
         lastRequest = StreamsRequest(
-            contentType,
-            streamId,
-            runtimeMinutes,
-            bingeGroup,
-            bingeAddonName
+            contentType = contentType,
+            streamId = streamId,
+            runtimeMinutes = runtimeMinutes,
+            displayTitle = displayTitle,
+            bingeGroup = bingeGroup,
+            bingeAddonName = bingeAddonName
         )
     }
 
@@ -573,6 +653,9 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         _droppedByTypeGuard.value = 0
         _schemeResetOffer.value = null
         lastRequest = null
+        cloudMatches = emptyList()
+        cloudTargetKey = null
+        _cloudOffer.value = false
         _isLoading.value = true
     }
 
@@ -1202,6 +1285,48 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
      * later re-filter.
      */
     private fun publishStreams(streams: List<Stream>, addons: List<String?>) {
+        baseStreams = streams
+        baseAddons = addons
+        publishEffective()
+    }
+
+    /**
+     * Publishes the add-on rows plus whatever TorBox cloud rows belong on this
+     * title, then filters the result.
+     *
+     * The cloud rows are merged HERE rather than into the ranked list so that
+     * the picker's own order can still change them: the toggle flipping on shows
+     * them from rows already in hand, and an answer that lands after the picker
+     * painted merges in without a re-fetch - the two requirements that made the
+     * feature toggleable at all (spec F4, F1d).
+     *
+     * [TorBoxCloudPicker.insertIndex] places them after the add-on-matched
+     * TorBox rows and before every HTTP row, which is the debrid tier without a
+     * claim to outrank a row the ranker actually placed (F1c).
+     */
+    private fun publishEffective() {
+        val merge = AppPreferences.getTorboxCloudRows(getApplication()) && cloudMatches.isNotEmpty()
+        val index = if (merge) TorBoxCloudPicker.insertIndex(baseStreams) else -1
+        val rows = if (merge) cloudMatches.map { TorBoxCloudPicker.rowStream(it) } else emptyList()
+        val streams =
+            if (index < 0) {
+                baseStreams
+            } else {
+                ArrayList<Stream>(baseStreams.size + rows.size).apply {
+                    addAll(baseStreams.take(index))
+                    addAll(rows)
+                    addAll(baseStreams.drop(index))
+                }
+            }
+        val addons =
+            if (index < 0) {
+                baseAddons
+            } else {
+                // A cloud row came from the account, not an add-on: its name is
+                // null, the same answer a direct link gets.
+                baseAddons.take(index) + List(rows.size) { null } + baseAddons.drop(index)
+            }
+
         unfilteredStreams = streams
         unfilteredAddons = addons
         val cached = activeCachedSet()
@@ -1211,6 +1336,84 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             if (kept == null) addons
             else CachedOnlyVisible.alongside(addons, streams.size, kept)
         publishCachedOnlyState(hidden = if (kept == null) 0 else streams.size - kept.size)
+    }
+
+    /**
+     * Asks for the account's cloud files for this title, without anyone waiting
+     * on it (spec F1d), then merges whatever matches.
+     *
+     * The offer row is decided here too, and only here: a match with the
+     * feature OFF is what earns the one discreet row (F4c), and no match leaves
+     * the picker untouched (F4d).
+     *
+     * Inert without a key (F0a) and for the live-TV path, which has no title to
+     * match.
+     */
+    private fun requestCloudRows(
+        contentType: String,
+        streamId: String,
+        displayTitle: String?
+    ) {
+        val title = displayTitle?.takeIf { it.isNotBlank() } ?: lastRequest?.displayTitle
+        if (title.isNullOrBlank()) return
+        if (contentType != "series" && contentType != "movie") return
+        if (!hasDebridServiceConfigured()) return
+        val key = "$contentType:$streamId"
+        if (cloudTargetKey == key) return
+        cloudTargetKey = key
+        // Its own ticket rather than the fetch's: what must not land is an
+        // answer for a target this picker is no longer on, and the target key
+        // above is that fact. The fetch ticket would also refuse an answer on
+        // the autoselect path, which never ran a load to issue one.
+        val ask = ++cloudAsk
+        val episode = EpisodeMatch.requestedFrom(streamId)
+        viewModelScope.launch {
+            val torrents = TorBoxCloudCache.fresh(getApplication())
+            if (ask != cloudAsk || cloudTargetKey != key) return@launch
+            val matches = TorBoxCloudPicker.matches(
+                torrents = torrents,
+                mediaType = contentType,
+                title = title,
+                year = null,
+                season = episode?.first,
+                episode = episode?.second
+            )
+            cloudMatches = matches
+            _cloudOffer.value = matches.isNotEmpty() &&
+                !AppPreferences.getTorboxCloudRows(getApplication())
+            publishEffective()
+        }
+    }
+
+    /**
+     * Makes sure the title on screen has had its cloud question asked, even when
+     * the picker reused a list a background resolve had already fetched (see
+     * MainActivity's Screen.Streams) - that path never runs [load], so this is
+     * its only chance to offer the viewer's own file.
+     *
+     * A no-op when the same target's question has already been asked.
+     */
+    fun ensureCloudRows(
+        title: String,
+        contentType: String,
+        streamId: String
+    ) {
+        val key = "$contentType:$streamId"
+        if (cloudTargetKey == key) return
+        requestCloudRows(contentType, streamId, title)
+    }
+
+    /**
+     * The offer row's action: switch cloud rows on for this profile and reveal
+     * the matches already in hand (spec F4c).
+     *
+     * Deliberately not a picker-wide fetch: the answer is already here, which is
+     * why the offer existed at all.
+     */
+    fun revealCloudRows() {
+        AppPreferences.setTorboxCloudRows(getApplication(), true)
+        _cloudOffer.value = false
+        publishEffective()
     }
 
     /**
@@ -1242,7 +1445,9 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
      * there is one - never an older title's.
      */
     fun reapplyCachedOnlyFilter() {
-        publishStreams(unfilteredStreams, unfilteredAddons)
+        // From the add-on rows, not from the published list: publishing the
+        // already-merged list would merge the cloud rows a second time.
+        publishEffective()
         publishGroups(unfilteredGroups)
     }
 
@@ -1272,7 +1477,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             cachedAnswerGeneration = generation
             // An ANSWERED empty set is not an early return: it draws no chip and
             // still hides every hash row, which is exactly what it means.
-            publishStreams(TorBoxCachedBadges.mark(unfilteredStreams, cached), unfilteredAddons)
+            publishStreams(TorBoxCachedBadges.mark(baseStreams, cached), baseAddons)
             publishGroups(
                 unfilteredGroups.map { group ->
                     group.copy(streams = TorBoxCachedBadges.mark(group.streams, cached))

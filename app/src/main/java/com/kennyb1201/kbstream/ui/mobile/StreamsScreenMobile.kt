@@ -40,6 +40,7 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.debrid.TorBoxCloudPicker
 import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.download.DownloadGate
@@ -161,6 +162,9 @@ fun StreamsScreenMobile(
         // The same state the television picker reads, from the same ViewModel:
         // the Cached-only filter is applied once, where the list is published.
         val cachedOnly by viewModel.cachedOnly.collectAsStateWithLifecycle()
+        // The one discreet row that says a TorBox cloud file exists for this
+        // episode while the feature is switched off (spec F4c).
+        val cloudOffer by viewModel.cloudOffer.collectAsStateWithLifecycle()
         val context = LocalContext.current
         val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
         // This phone's downloads for the profile on screen. The rows read their
@@ -194,7 +198,9 @@ fun StreamsScreenMobile(
             if (selected.drm?.licenseUrl != null) {
                 PlayerEngine.clearLaunchAnime()
             }
-            if (!TorBoxResolve.isUnresolved(selected)) {
+            // A cloud row needs the same preparation a hash row does (its link
+            // is minted from the account on the press) - see TorBoxResolve.
+            if (!TorBoxResolve.needsPreparation(selected)) {
                 onStreamSelected(selected, allSources, addons, selectedAddon)
                 return
             }
@@ -210,7 +216,11 @@ fun StreamsScreenMobile(
                 }
                 onStreamSelected(
                     resolved,
-                    allSources.map { if (it === selected) resolved else it },
+                    // Unpressed cloud rows keep their reference out of the
+                    // player's hand-off (see TorBoxCloudPicker.forPlayer).
+                    TorBoxCloudPicker.forPlayer(
+                        allSources.map { if (it === selected) resolved else it }
+                    ),
                     addons,
                     selectedAddon
                 )
@@ -539,6 +549,21 @@ fun StreamsScreenMobile(
                 }
 
                 else -> {
+                    // The offer row: only while the feature is off AND a cloud
+                    // file matches this episode (spec F4c). One tap switches it
+                    // on for the profile and reveals the rows already in hand.
+                    if (cloudOffer) {
+                        item(key = "torbox-cloud-offer") {
+                            KBButton(
+                                label = TorBoxCloudPicker.OFFER_LABEL.uppercase(),
+                                modifier = Modifier.padding(
+                                    start = 16.dp,
+                                    end = 16.dp,
+                                    top = 8.dp
+                                )
+                            ) { viewModel.revealCloudRows() }
+                        }
+                    }
                     itemsIndexed(
                         items = visibleStreams,
                         key = { index, _ -> streamKeys[index] }

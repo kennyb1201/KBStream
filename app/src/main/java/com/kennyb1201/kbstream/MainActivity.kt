@@ -2662,7 +2662,53 @@ fun AppRoot(
                         screen = Screen.CatalogBuilder(returnTo = Screen.Settings)
                     }
                 },
-                onOpenStats = { screen = Screen.Stats }
+                onOpenStats = { screen = Screen.Stats },
+                // A file in the viewer's TorBox cloud, opened from Settings →
+                // TorBox (spec F2b). A file that named an episode opens that
+                // episode's picker - where the cloud row appears by the same
+                // rules as any other picker - and one that named only a title
+                // opens the title.
+                onOpenTorBoxFile = { type, id, title, season, episode ->
+                    screen = when {
+                        type == "series" && season != null && episode != null -> Screen.Streams(
+                            target = StreamsTarget(
+                                contentType = "series",
+                                streamId = "$id:$season:$episode",
+                                title = "$title S$season E$episode",
+                                displayName = title,
+                                season = season,
+                                episode = episode,
+                                resumePositionMs = 0L
+                            ),
+                            parentId = id,
+                            parentType = "series",
+                            itemPoster = null,
+                            returnTo = Screen.Settings
+                        )
+
+                        type == "series" -> Screen.Detail(
+                            type = "series",
+                            id = id,
+                            returnTo = Screen.Settings
+                        )
+
+                        else -> Screen.Streams(
+                            target = StreamsTarget(
+                                contentType = "movie",
+                                streamId = id,
+                                title = title,
+                                displayName = title,
+                                season = null,
+                                episode = null,
+                                resumePositionMs = 0L
+                            ),
+                            parentId = id,
+                            parentType = "movie",
+                            itemPoster = null,
+                            returnTo = Screen.Settings
+                        )
+                    }
+                }
             )
         }
 
@@ -3319,9 +3365,22 @@ fun AppRoot(
                         // the list orders by it exactly as auto-play does
                         // (audit S-F5).
                         bingeGroup = current.target.bingeGroup,
-                        bingeAddonName = current.target.bingeAddonName
+                        bingeAddonName = current.target.bingeAddonName,
+                        // The heading, so the TorBox cloud match compares a
+                        // release name with the title this picker is actually
+                        // showing (see StreamsViewModel.requestCloudRows).
+                        displayTitle = current.target.title
                     )
                 }
+                // Also on the path that SKIPPED the load: a picker opened on a
+                // list a background resolve had already fetched never runs
+                // load, and this is where its cloud question is still asked
+                // (a no-op when the load above already asked it).
+                streamsViewModel.ensureCloudRows(
+                    title = current.target.title,
+                    contentType = current.target.contentType,
+                    streamId = current.target.streamId
+                )
             }
 
             val streamKey = streamNavigationKey(

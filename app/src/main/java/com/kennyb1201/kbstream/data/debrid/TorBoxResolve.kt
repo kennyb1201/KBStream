@@ -135,6 +135,13 @@ internal object TorBoxResolve {
      */
     suspend fun playableStream(context: Context, stream: Stream): Stream? =
         withContext(Dispatchers.IO) {
+            // A cloud row names a file in the account rather than a hash, and
+            // its link is minted from exactly the same `requestdl` call: the
+            // row is playable for the same reason a matched one is, with no
+            // add-on and no cached check in between (spec F1b).
+            TorBoxCloudPicker.refOf(stream.url)?.let { ref ->
+                return@withContext playCloudFile(context, stream, ref)
+            }
             if (!isUnresolved(stream)) return@withContext null
             val hash = normalizedHash(stream.infoHash) ?: return@withContext null
             val apiKey = AppPreferences.getTorboxApiKey(context)
@@ -169,6 +176,46 @@ internal object TorBoxResolve {
                 }
                 .getOrNull()
         }
+
+    /**
+     * Whether pressing [stream] needs this object before it can play: a hash row
+     * (which the account has to resolve) or a cloud row (whose link is minted
+     * from the account). Every other row is playable as it stands.
+     *
+     * The pickers test this instead of [isUnresolved], so a cloud row goes
+     * through the same one-attempt press path a hash row does.
+     */
+    fun needsPreparation(stream: Stream): Boolean =
+        isUnresolved(stream) || TorBoxCloudPicker.isCloudRow(stream)
+
+    /**
+     * The CDN link for one file of a cloud row, built through the same
+     * `requestDownloadUrl` (and its retry) an add-on-matched row uses.
+     *
+     * No cached check: the file is in the viewer's own cloud by definition, and
+     * `requestdl` is the authority on whether it is linkable. Fail-soft like the
+     * hash path - no key, a rejected request, a torrent whose files are not
+     * linked -> null, with the reason in the trace and never the key.
+     */
+    private suspend fun playCloudFile(
+        context: Context,
+        stream: Stream,
+        ref: TorBoxCloudPicker.CloudRef
+    ): Stream? {
+        val apiKey = AppPreferences.getTorboxApiKey(context)
+        if (apiKey.isBlank()) {
+            TorBoxTrace.note("cloud · no key, the file is unplayable")
+            return null
+        }
+        return runCatching {
+            val url = requestDownloadUrl(apiKey, ref.torrentId, ref.fileId)
+            TorBoxTrace.note("cloud · playing file ${ref.fileId} of torrent ${ref.torrentId}")
+            playable(stream, url)
+        }.onFailure {
+            Log.w(TAG, "cloud play failed: ${it.javaClass.simpleName}")
+            TorBoxTrace.note("cloud play failed: ${it.javaClass.simpleName}")
+        }.getOrNull()
+    }
 
     private suspend fun resolve(
         apiKey: String,

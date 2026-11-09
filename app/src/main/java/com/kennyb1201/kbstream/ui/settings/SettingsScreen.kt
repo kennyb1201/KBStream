@@ -340,7 +340,14 @@ fun SettingsScreen(
     /** Opens the Catalog Builder: the rule-based "smart catalog" editor. */
     onOpenCatalogBuilder: () -> Unit = {},
     /** Opens the read-only Viewing stats screen (finished watches). */
-    onOpenStats: () -> Unit = {}
+    onOpenStats: () -> Unit = {},
+    /**
+     * Opens a title found in the viewer's TorBox cloud: the picker when the file
+     * named an episode (or is a film), the title itself when it named only a
+     * name (spec F2b).
+     */
+    onOpenTorBoxFile: (type: String, id: String, title: String, season: Int?, episode: Int?) -> Unit =
+        { _, _, _, _, _ -> }
 ) {
     // The phone entry: the same pane IA and the same preference keys, drawn as
     // a grouped page with one pane pushed at a time. One branch; the TV page
@@ -357,7 +364,8 @@ fun SettingsScreen(
             onOpenProfiles = onOpenProfiles,
             onOpenCatalogManager = onOpenCatalogManager,
             onOpenCatalogBuilder = onOpenCatalogBuilder,
-            onOpenStats = onOpenStats
+            onOpenStats = onOpenStats,
+            onOpenTorBoxFile = onOpenTorBoxFile
         )
         return
     }
@@ -762,6 +770,12 @@ fun SettingsScreen(
     var torboxCachedOnly by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getTorboxCachedOnly(context))
     }
+    var torboxCloudRows by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getTorboxCloudRows(context))
+    }
+    // The cloud list itself: loaded only while it is open, so a Settings page
+    // that never asks for it makes no `mylist` call.
+    var torboxCloudOpen by remember { mutableStateOf(false) }
     // Device-local, so no profile/sync key: these two are facts about this
     // television and apply to every profile on it (see AppPreferences).
     var screensaverEnabled by remember {
@@ -1950,6 +1964,43 @@ fun SettingsScreen(
                         AppPreferences.setTorboxCachedOnly(context, it)
                     }
                 )
+
+                // ── TORBOX: THE ACCOUNT'S OWN FILES IN THE PICKER ─────
+                // Off by default (spec F4a). With it on, a file downloaded
+                // straight into TorBox - which no add-on returns, so the hash
+                // match never sees it - appears in the episode's picker. With it
+                // off, the picker only offers the one row that says such a file
+                // exists, so nothing is added to a list that did not ask for it.
+                Spacer(modifier = Modifier.height(12.dp))
+                ToggleRow(
+                    label = "TorBox cloud files in stream picker",
+                    description = "Offer the files already in your TorBox cloud on the " +
+                        "episode or film they belong to, including one you downloaded there " +
+                        "that no add-on lists. Off, the picker stays as it is unless a cloud " +
+                        "file matches what you are watching - then one row offers it. Needs a " +
+                        "TorBox key; a file still downloading is never offered.",
+                    checked = torboxCloudRows,
+                    onToggle = {
+                        torboxCloudRows = it
+                        AppPreferences.setTorboxCloudRows(context, it)
+                    }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                NavigationRow(
+                    label = "TorBox cloud files",
+                    description = "See every finished file in your TorBox cloud, and open " +
+                        "the title each one belongs to",
+                    onClick = { torboxCloudOpen = true }
+                )
+                if (torboxCloudOpen) {
+                    TorBoxCloudListDialog(
+                        onDismiss = { torboxCloudOpen = false },
+                        onOpen = { type, id, title, season, episode ->
+                            torboxCloudOpen = false
+                            onOpenTorBoxFile(type, id, title, season, episode)
+                        }
+                    )
+                }
 
                 }
 

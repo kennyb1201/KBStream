@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.domain.streamengine
 
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.debrid.TorBoxCloudPicker
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -99,8 +100,16 @@ object AutoplayWalk {
         }
         while (true) {
             val candidate = pick(remaining) ?: return null
-            if (!candidate.url.isNullOrBlank()) {
-                return Start(candidate, sourcesFor(null, candidate), resolved = false)
+            // A cloud row carries a reference rather than a link (see
+            // TorBoxCloudPicker), so it is prepared like a hash row: handing its
+            // `kbstream-torbox-cloud:` address to the player would be a dead
+            // link the walk itself declared ready.
+            if (!candidate.url.isNullOrBlank() && !TorBoxCloudPicker.isCloudRow(candidate)) {
+                return Start(
+                    candidate,
+                    TorBoxCloudPicker.forPlayer(sourcesFor(null, candidate)),
+                    resolved = false
+                )
             }
             // The resolve budget (attempts OR time) is spent, but the LIST is
             // not: skip this hash and ask again, so a url-bearing row anywhere
@@ -121,7 +130,10 @@ object AutoplayWalk {
             if (prepared != null) {
                 return Start(
                     stream = prepared,
-                    sources = sourcesFor(prepared, candidate),
+                    // Every OTHER cloud row is cleared out of the hand-off for
+                    // the same reason: the player must not be given a reference
+                    // in place of a link.
+                    sources = TorBoxCloudPicker.forPlayer(sourcesFor(prepared, candidate)),
                     resolved = true
                 )
             }

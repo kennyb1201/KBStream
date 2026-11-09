@@ -295,6 +295,9 @@ object PrefsPayloadBuilder {
                                              //   holds? The same account-level question, so the
                                              //   household's TVs agree instead of each hiding
                                              //   different rows
+        "torbox_cloud_rows",                 // should the picker offer the account's own cloud FILES
+                                             //   (a release no add-on returns)? Off by default;
+                                             //   a viewing preference, so it follows the profile
         "default_subtitle_size",             // subtitle appearance: same on every device
         "default_subtitle_bg",
         "clean_sdh_captions",                // ...and whether captions keep their sound descriptions

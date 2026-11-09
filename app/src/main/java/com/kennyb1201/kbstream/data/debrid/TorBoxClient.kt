@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.Request
@@ -249,10 +250,31 @@ internal object TorBoxClient {
         }
     }
 
-    /** One torrent already in the account's TorBox cloud. */
+    /** One file inside a [CloudTorrent], as `mylist` lists it. */
+    data class CloudFile(val id: Int, val name: String, val size: Long = 0L)
+
+    /**
+     * One torrent already in the account's TorBox cloud.
+     *
+     * [id] and [name] are what the library sync has always needed; the rest was
+     * added for the cloud-file picker (see TorBoxCloudPicker), which has to know
+     * whether the torrent has finished downloading (a still-downloading file is
+     * hidden, never greyed) and which files it holds (the file, not the torrent
+     * name, is the authority on the episode).
+     *
+     * Both new halves are FAIL-SOFT: a response that omits them parses exactly
+     * as it did before, with [complete] false and no files, so nothing that does
+     * not opt into the feature can break on a shape it does not expect.
+     */
     data class CloudTorrent(
         val id: Long,
-        val name: String
+        val name: String,
+        /** True when TorBox reports the download as finished/present. */
+        val complete: Boolean = false,
+        /** 0..1 as the API reports it, when it says anything. */
+        val progress: Double = 0.0,
+        /** The torrent's files; empty when the response listed none. */
+        val files: List<CloudFile> = emptyList()
     )
 
     /**
@@ -262,12 +284,24 @@ internal object TorBoxClient {
      * cloud files to Library" sync (see [TorBoxLibrarySync]).
      */
     suspend fun cloudTorrents(context: Context): List<CloudTorrent> =
+        cloudTorrentsOrNull(context) ?: emptyList()
+
+    /**
+     * [cloudTorrents], answering NULL for "could not ask" - no key, or a failed
+     * request - instead of the empty list a genuinely empty cloud answers.
+     *
+     * The distinction exists for [TorBoxCloudCache]: "you have no files" may be
+     * cached for the TTL, "the request failed" may not, or one outage would
+     * hide the viewer's own cloud files for a quarter hour. Callers that only
+     * want the rows keep using [cloudTorrents].
+     */
+    suspend fun cloudTorrentsOrNull(context: Context): List<CloudTorrent>? =
         withContext(Dispatchers.IO) {
             val apiKey = AppPreferences.getTorboxApiKey(context)
-            if (apiKey.isBlank()) return@withContext emptyList()
+            if (apiKey.isBlank()) return@withContext null
             runCatching { queryLibrary(apiKey) }
                 .onFailure { Log.w(TAG, "mylist failed: ${it.message}") }
-                .getOrDefault(emptyList())
+                .getOrNull()
         }
 
     /**
@@ -320,9 +354,12 @@ internal object TorBoxClient {
             .header("Authorization", "Bearer $apiKey")
             .build()
         client.newCall(request).execute().use { response ->
+            // Throws rather than answering empty: a failed request and an empty
+            // cloud are different facts, and [cloudTorrentsOrNull] is what the
+            // cloud-file cache reads to tell them apart.
             if (!response.isSuccessful) {
                 Log.w(TAG, "mylist HTTP ${response.code}")
-                return emptyList()
+                throw IllegalStateException("mylist HTTP ${response.code}")
             }
             return parseCloudTorrents(response.body?.string().orEmpty())
         }
@@ -332,6 +369,10 @@ internal object TorBoxClient {
      * Reads the account's torrents out of a `mylist` response. The documented
      * shape is `{"data": [{"id": 1, "name": "..."}]}`; a torrent with a blank
      * name cannot be looked up by title and is dropped here.
+     *
+     * The completion state and the file list are read beside them (see
+     * [CloudTorrent]); both are optional, so a response that carries neither is
+     * still a list of ids and names.
      */
     internal fun parseCloudTorrents(body: String): List<CloudTorrent> {
         val root = runCatching { json.parseToJsonElement(body) }.getOrNull() as? JsonObject
@@ -342,8 +383,75 @@ internal object TorBoxClient {
             val id = (obj["id"] as? JsonPrimitive)?.content?.toLongOrNull() ?: return@mapNotNull null
             val name = (obj["name"] as? JsonPrimitive)?.content?.trim().orEmpty()
             if (name.isBlank()) return@mapNotNull null
-            CloudTorrent(id = id, name = name)
+            CloudTorrent(
+                id = id,
+                name = name,
+                complete = isCloudComplete(obj),
+                progress = (obj["progress"] as? JsonPrimitive)
+                    ?.content?.trim()?.toDoubleOrNull() ?: 0.0,
+                files = parseCloudFiles(obj["files"])
+            )
         }
     }
+
+    /**
+     * Whether a `mylist` entry says its download has finished.
+     *
+     * Three spellings, because TorBox's own payloads have used each: the boolean
+     * `download_finished`, a `download_state` word, and `download_present` (the
+     * files are on their servers, which is what a play needs). The progress
+     * fraction is the fallback. Silence is NOT completeness: a torrent this
+     * cannot classify is hidden rather than offered (spec F0e), so a response
+     * shape this build does not know degrades to "no cloud rows" instead of a
+     * row that cannot play.
+     */
+    internal fun isCloudComplete(obj: JsonObject): Boolean {
+        (obj["download_finished"] as? JsonPrimitive)
+            ?.content?.trim()?.lowercase()
+            ?.let { if (it == "true" || it == "false") return it == "true" }
+        (obj["download_present"] as? JsonPrimitive)
+            ?.content?.trim()?.lowercase()
+            ?.let { if (it == "true") return true }
+        val state = (obj["download_state"] as? JsonPrimitive)
+            ?.content?.trim()?.lowercase().orEmpty()
+        if (state in COMPLETE_STATES) return true
+        if (state.isNotBlank() && state !in PENDING_STATES) return false
+        val progress = (obj["progress"] as? JsonPrimitive)
+            ?.content?.trim()?.toDoubleOrNull() ?: return false
+        return progress >= 1.0
+    }
+
+    /** The file entries of a `mylist` row, in the API's own order. */
+    private fun parseCloudFiles(element: JsonElement?): List<CloudFile> {
+        val array = element as? JsonArray ?: return emptyList()
+        return array.mapNotNull { file ->
+            val obj = file as? JsonObject ?: return@mapNotNull null
+            // `id_` is the SDK's Python-side spelling of the same field (see
+            // TorBoxResolve.parseFiles), so both are read.
+            val id = (obj["id"] as? JsonPrimitive ?: obj["id_"] as? JsonPrimitive)
+                ?.content?.trim()?.toIntOrNull()
+                ?: return@mapNotNull null
+            // `short_name` is the file's own name without the folder path; the
+            // path is what `name` carries on some responses.
+            val name = ((obj["short_name"] as? JsonPrimitive)?.content
+                ?: (obj["name"] as? JsonPrimitive)?.content)
+                ?.trim().orEmpty()
+            if (name.isBlank()) return@mapNotNull null
+            CloudFile(
+                id = id,
+                name = name,
+                size = (obj["size"] as? JsonPrimitive)?.content?.trim()?.toLongOrNull() ?: 0L
+            )
+        }
+    }
+
+    /** `download_state` words that mean the files are ready to stream. */
+    private val COMPLETE_STATES = setOf("completed", "complete", "cached", "finished", "uploaded")
+
+    /** `download_state` words that mean it is still working, whatever it says. */
+    private val PENDING_STATES = setOf(
+        "downloading", "uploading", "queued", "pending", "stalled", "metaDL".lowercase(),
+        "checking", "paused", "error"
+    )
 
 }

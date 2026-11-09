@@ -107,8 +107,9 @@ class CachedOnlyPickerContractTest {
             guard < badge.indexOf("publishStreams(") && guard < badge.indexOf("publishGroups(")
         )
         assertTrue(
-            "the rows are marked on the raw list, so a chip survives a later toggle",
-            badge.contains("publishStreams(TorBoxCachedBadges.mark(unfilteredStreams, cached)")
+            "the rows are marked on the raw add-on list - not the published one, which " +
+                "may already carry the TorBox cloud merge - so a chip survives a later toggle",
+            badge.contains("publishStreams(TorBoxCachedBadges.mark(baseStreams, cached)")
         )
     }
 
@@ -157,8 +158,9 @@ class CachedOnlyPickerContractTest {
         val reapply = model.substringAfter("fun reapplyCachedOnlyFilter()")
             .substringBefore("\n    /**")
         assertTrue(
-            "re-publish both lists from the raw rows", 
-            reapply.contains("publishStreams(unfilteredStreams, unfilteredAddons)") &&
+            "re-publish both lists from the raw rows (publishEffective re-merges the " +
+                "TorBox cloud rows over them instead of publishing the merged list again)",
+            reapply.contains("publishEffective()") &&
                 reapply.contains("publishGroups(unfilteredGroups)")
         )
         listOf("fetch(", "load(", "TorBoxClient", "checkCached").forEach { io ->

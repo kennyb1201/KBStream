@@ -48,6 +48,16 @@ internal object TorBoxCloudRules {
         RegexOption.IGNORE_CASE
     )
 
+    /**
+     * The second half of an episode RANGE (`S01E01-E02`), left behind when
+     * [EPISODE] removes the first marker.
+     *
+     * A two-part release names both episodes in its title, and cutting only the
+     * first marker left "-E02" welded to the show's name - which made the title
+     * comparison fail on exactly the files a range is meant to serve.
+     */
+    private val EPISODE_RANGE_TAIL = Regex("\\s*[-~]\\s*e\\d{1,3}\\b", RegexOption.IGNORE_CASE)
+
     private val BRACKETS = Regex("\\[[^\\]]*\\]|\\([^)]*\\)")
 
     /**
@@ -79,7 +89,8 @@ internal object TorBoxCloudRules {
             year = null
         }
 
-        val bare = EPISODE.replace(title, " ")
+        val bare = EPISODE_RANGE_TAIL
+            .replace(EPISODE.replace(title, " "), " ")
             .trim()
             .trim('-', ' ', ':', '|')
             .replace(Regex("\\s+"), " ")
@@ -95,6 +106,149 @@ internal object TorBoxCloudRules {
 
     /** True when a release name names a series (a season/episode marker). */
     fun looksLikeSeries(raw: String): Boolean = EPISODE.containsMatchIn(raw)
+
+    /**
+     * Whether [parsed] names [title] with the same confidence [bestMatch]
+     * demands of a TMDB candidate.
+     *
+     * The picker knows the title it is showing - it is the same title, from the
+     * same metadata, that the sync would have searched TMDB for - so it does
+     * not need a search to ask the question. It does need the SAME bar, though:
+     * an exact normalized title and agreeing years when both sides state one,
+     * because a cloud row on the wrong show is exactly the guess
+     * [bestMatch] refuses to make. [score] is the one implementation; this is
+     * that rule without a candidate to score.
+     */
+    fun confidentMatch(parsed: ParsedName, title: String, year: Int? = null): Boolean {
+        val target = normalizedTitle(parsed.title)
+        if (target.isBlank()) return false
+        if (target != normalizedTitle(title)) return false
+        return yearsAgree(parsed.year, year)
+    }
+
+    /**
+     * The title part of a picker's own heading.
+     *
+     * A series picker is handed "Landman S1 E10 • The Crumbs of Hope" (see
+     * StreamsTarget), which is not the title a release name states: the show
+     * name is everything before the episode marker. A heading with no marker is
+     * returned as it is, so a movie's title passes through untouched.
+     */
+    fun showTitleOf(pickerTitle: String): String =
+        EPISODE_TAIL.replace(pickerTitle, "").trim().ifBlank { pickerTitle.trim() }
+
+    private val EPISODE_TAIL = Regex(
+        "\\s+s\\d{1,2}\\s*(?:e\\d{1,3}|\\s+e\\d{1,3})\\b.*$",
+        RegexOption.IGNORE_CASE
+    )
+
+    /**
+     * The episode(s) a file name states, or null when it states none.
+     *
+     * Ranges are read as ranges (`S01E01-E02`, `E01-E02`), because a two-part
+     * file holds both episodes and earns a row on each (spec F1a). [season] is
+     * null for a marker that names an episode without a season (`E10`), which
+     * the caller fills in from the torrent's own name when it has one.
+     */
+    data class EpisodeSpan(val season: Int?, val start: Int, val end: Int)
+
+    private val SEASON_EPISODE_RANGE = Regex(
+        "(?<![0-9a-z])s(\\d{1,2})\\s*e(\\d{1,3})\\s*[-~]\\s*(?:s\\d{1,2})?e?(\\d{1,3})(?![0-9])",
+        RegexOption.IGNORE_CASE
+    )
+    private val EPISODE_RANGE = Regex(
+        "(?<![0-9a-z])e(\\d{1,3})\\s*[-~]\\s*e(\\d{1,3})(?![0-9])",
+        RegexOption.IGNORE_CASE
+    )
+    private val SEASON_EPISODE = Regex(
+        "(?<![0-9a-z])s(\\d{1,2})\\s*[-_. ]?\\s*e(\\d{1,3})(?![0-9])",
+        RegexOption.IGNORE_CASE
+    )
+    private val SEASON_X_EPISODE = Regex(
+        "(?<![0-9a-z])(\\d{1,2})x(\\d{1,3})(?![0-9])"
+    )
+    private val SEASON_WORD_EPISODE = Regex(
+        "(?<![0-9a-z])season\\s*(\\d{1,2})\\s*(?:episode|ep\\.?)\\s*(\\d{1,3})(?![0-9])",
+        RegexOption.IGNORE_CASE
+    )
+    private val BARE_EPISODE = Regex(
+        "(?<![0-9a-z])e(\\d{1,3})(?![0-9])",
+        RegexOption.IGNORE_CASE
+    )
+    private val SEASON_ONLY = Regex(
+        "(?<![0-9a-z])(?:s|season\\s*)(\\d{1,2})(?![0-9])",
+        RegexOption.IGNORE_CASE
+    )
+
+    /** The episode span [raw] states, read on its own. */
+    fun episodeSpan(raw: String): EpisodeSpan? {
+        SEASON_EPISODE_RANGE.find(raw)?.let { match ->
+            val a = match.groupValues[2].toIntOrNull() ?: return@let
+            val b = match.groupValues[3].toIntOrNull() ?: return@let
+            return EpisodeSpan(match.groupValues[1].toIntOrNull(), minOf(a, b), maxOf(a, b))
+        }
+        EPISODE_RANGE.find(raw)?.let { match ->
+            val a = match.groupValues[1].toIntOrNull() ?: return@let
+            val b = match.groupValues[2].toIntOrNull() ?: return@let
+            return EpisodeSpan(null, minOf(a, b), maxOf(a, b))
+        }
+        SEASON_EPISODE.find(raw)?.let { match ->
+            val season = match.groupValues[1].toIntOrNull()
+            val episode = match.groupValues[2].toIntOrNull() ?: return@let
+            return EpisodeSpan(season, episode, episode)
+        }
+        SEASON_WORD_EPISODE.find(raw)?.let { match ->
+            val season = match.groupValues[1].toIntOrNull()
+            val episode = match.groupValues[2].toIntOrNull() ?: return@let
+            return EpisodeSpan(season, episode, episode)
+        }
+        SEASON_X_EPISODE.find(raw)?.let { match ->
+            val season = match.groupValues[1].toIntOrNull()
+            val episode = match.groupValues[2].toIntOrNull() ?: return@let
+            // A resolution label (1920x1080) is not an episode marker; the
+            // season half is bounded to two digits, which keeps it out.
+            if (season == null || season > 99) return@let
+            return EpisodeSpan(season, episode, episode)
+        }
+        BARE_EPISODE.find(raw)?.let { match ->
+            val episode = match.groupValues[1].toIntOrNull() ?: return@let
+            return EpisodeSpan(null, episode, episode)
+        }
+        return null
+    }
+
+    /** The season [raw] names on its own (`S01`, `Season 1`), or null. */
+    fun seasonOf(raw: String): Int? = SEASON_ONLY.find(raw)?.groupValues?.get(1)?.toIntOrNull()
+
+    /**
+     * The episodes a cloud file holds, from the file name and its torrent's.
+     *
+     * The FILE is the authority (spec F1a): a season pack's torrent name says
+     * "S01" and nothing about an episode, so only a file that names one earns a
+     * row. A single-file torrent is named for what it holds, so its own name is
+     * read when the file name states no episode - and a season the file omits is
+     * filled from the torrent name (`Show.S01.1080p/Show.E10.mkv`).
+     */
+    fun fileSpan(torrentName: String, fileName: String): EpisodeSpan? {
+        val fromFile = episodeSpan(fileName)
+        val fromTorrent = episodeSpan(torrentName)
+        val span = fromFile ?: fromTorrent ?: return null
+        if (span.season != null) return span
+        return span.copy(season = fromTorrent?.season ?: seasonOf(torrentName))
+    }
+
+    /**
+     * Whether [span] covers [episode] of [season].
+     *
+     * A span that names no season covers every season, because a bare `E10` is
+     * how a file inside a season pack names itself; a span that names another
+     * season does not.
+     */
+    fun spanCovers(span: EpisodeSpan?, season: Int?, episode: Int): Boolean {
+        if (span == null) return false
+        if (span.season != null && season != null && span.season != season) return false
+        return episode in span.start..span.end
+    }
 
     /**
      * The best TMDB candidate for [parsed], or null when none is a confident
@@ -151,9 +305,19 @@ internal object TorBoxCloudRules {
      */
     fun retriesNoMatch(attempts: Int): Boolean = attempts < EMPTY_SEARCH_ATTEMPTS
 
+    /**
+     * Whether a parsed year and a known year can be the same title. Silence on
+     * either side agrees; two years that are not within one do not.
+     */
+    fun yearsAgree(parsedYear: Int?, year: Int?): Boolean {
+        if (parsedYear == null || year == null) return true
+        return kotlin.math.abs(parsedYear - year) <= 1
+    }
+
     private fun score(candidate: Candidate, target: String, year: Int?): Double? {
         if (candidate.tmdbId <= 0) return null
         if (normalizedTitle(candidate.title) != target) return null
+        if (!yearsAgree(candidate.year, year)) return null
 
         val candidateYear = candidate.year
         val yearScore = when {

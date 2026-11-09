@@ -114,6 +114,7 @@ import com.kennyb1201.kbstream.ui.settings.RatedFilter
 import com.kennyb1201.kbstream.ui.settings.SETTINGS_SEARCH_FLASH_MS
 import com.kennyb1201.kbstream.ui.settings.SETTINGS_SEARCH_MAX_RESULTS
 import com.kennyb1201.kbstream.ui.settings.SETTINGS_SEARCH_SCROLL_BUDGET_MS
+import com.kennyb1201.kbstream.ui.settings.TorBoxCloudListDialog
 import com.kennyb1201.kbstream.ui.settings.SettingSearchEntry
 import com.kennyb1201.kbstream.ui.settings.SettingsSearchIndex
 import com.kennyb1201.kbstream.ui.settings.ratedGlyphRes
@@ -203,7 +204,10 @@ fun SettingsScreenMobile(
     onOpenProfiles: () -> Unit = {},
     onOpenCatalogManager: () -> Unit = {},
     onOpenCatalogBuilder: () -> Unit = {},
-    onOpenStats: () -> Unit = {}
+    onOpenStats: () -> Unit = {},
+    /** Opens a title found in the viewer's TorBox cloud (spec F2b). */
+    onOpenTorBoxFile: (type: String, id: String, title: String, season: Int?, episode: Int?) -> Unit =
+        { _, _, _, _, _ -> }
 ) {
     val context = LocalContext.current
     // Reopen on the pane last read, exactly as the TV rail does (device-local,
@@ -306,7 +310,8 @@ fun SettingsScreenMobile(
                             onOpenBingeCat = onOpenBingeCat,
                             onOpenBingeCatPublicLists = onOpenBingeCatPublicLists,
                             onOpenPublicLists = onOpenPublicLists,
-                            onOpenProfiles = onOpenProfiles
+                            onOpenProfiles = onOpenProfiles,
+                            onOpenTorBoxFile = onOpenTorBoxFile
                         )
 
                         SettingsPane.COLLECTIONS -> CollectionsPaneMobile(
@@ -805,7 +810,8 @@ private fun IntegrationsPaneMobile(
     onOpenBingeCat: () -> Unit,
     onOpenBingeCatPublicLists: () -> Unit,
     onOpenPublicLists: (String) -> Unit,
-    onOpenProfiles: () -> Unit
+    onOpenProfiles: () -> Unit,
+    onOpenTorBoxFile: (type: String, id: String, title: String, season: Int?, episode: Int?) -> Unit
 ) {
     val context = LocalContext.current
     val activeProfile by ProfileManager.activeProfile.collectAsStateWithLifecycle()
@@ -1237,6 +1243,39 @@ private fun IntegrationsPaneMobile(
             get = AppPreferences::getTorboxCachedOnly,
             set = AppPreferences::setTorboxCachedOnly
         )
+        // The account's own files in the picker (spec F4). Off by default: a
+        // cloud file is offered on the episode it belongs to, not as a second
+        // source list on every title. Off, a match still earns one discreet
+        // row; with no match the picker is untouched.
+        SyncedToggleMobile(
+            label = "TorBox cloud files in stream picker",
+            description = "Offer the files already in your TorBox cloud on the episode or " +
+                "film they belong to, including one you downloaded there that no add-on " +
+                "lists. Off, the picker stays as it is unless a cloud file matches what" +
+                " you are watching - then one row offers it. Needs a TorBox key; a file " +
+                "still downloading is never offered.",
+            get = AppPreferences::getTorboxCloudRows,
+            set = AppPreferences::setTorboxCloudRows
+        )
+        var torboxCloudOpen by remember { mutableStateOf(false) }
+        KBButton(
+            label = "TORBOX CLOUD FILES",
+            modifier = Modifier.fillMaxWidth(),
+            onClick = { torboxCloudOpen = true }
+        )
+        SettingsCaptionMobile(
+            "Every finished file in your TorBox cloud. Tap one to open the title it " +
+                "belongs to."
+        )
+        if (torboxCloudOpen) {
+            TorBoxCloudListDialog(
+                onDismiss = { torboxCloudOpen = false },
+                onOpen = { type, id, title, season, episode ->
+                    torboxCloudOpen = false
+                    onOpenTorBoxFile(type, id, title, season, episode)
+                }
+            )
+        }
         SyncedToggleMobile(
             label = "Add cached torrents to TorBox on play",
             description = "TorBox Instant only plays torrents its cache already holds. With " +

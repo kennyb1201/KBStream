@@ -141,6 +141,17 @@ object AppPreferences {
     private const val KEY_TORBOX_LIBRARY_SYNC = "torbox_library_sync"
     private const val KEY_TORBOX_RESOLVE_CREATE = "torbox_resolve_create"
     private const val KEY_TORBOX_CACHED_ONLY = "torbox_cached_only"
+
+    /**
+     * TorBox cloud FILES in the stream picker, per profile.
+     *
+     * OFF by default, and deliberately so (spec F4a): the cloud list is a
+     * situational tool - a file downloaded straight into TorBox that no add-on
+     * returns - not a second source list the viewer wants on every title. With
+     * it off, the picker only offers the one row that says a cloud file exists
+     * for this episode (F4c); with nothing matching it is untouched (F4d).
+     */
+    private const val KEY_TORBOX_CLOUD_ROWS = "torbox_cloud_rows"
     // The TorBox key the last successful VERIFY was made for, as a digest (see
     // torboxKeyFingerprint). Beside the key itself, in the encrypted, profile-
     // scoped store: it is a fact about that credential, and the Settings row is
@@ -2270,6 +2281,28 @@ object AppPreferences {
         // Also the picker's cue to re-publish: the list is a view over the rows
         // it already holds, so a toggle re-filters in place instead of fetching
         // again (see StreamsViewModel.reapplyCachedOnlyFilter).
+        syncDisplayPrefsBlob(context)
+    }
+
+    // ── TorBox cloud files in the stream picker ──────────────────────
+    //
+    // Per profile, like the sync's own toggle: one shared household TorBox
+    // account, each profile deciding what IT sees (spec F5b). A profile with
+    // this on sees its account's cloud rows on the titles it opens; a profile
+    // with it off sees the single "Show TorBox cloud file" offer where a file
+    // matches. Off by default - see the key's own note.
+    //
+    // Synced with the profile, like the two TorBox switches above: it is a
+    // statement about what this viewer wants offered, so the phone and the TV
+    // should not disagree about it.
+    fun getTorboxCloudRows(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_TORBOX_CLOUD_ROWS, false)
+
+    fun setTorboxCloudRows(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_TORBOX_CLOUD_ROWS, enabled).apply()
+        // The picker re-publishes from what it already holds (see
+        // StreamsViewModel.revealCloudRows), so flipping this in the offer row
+        // reveals the rows without a second fetch.
         syncDisplayPrefsBlob(context)
     }
 

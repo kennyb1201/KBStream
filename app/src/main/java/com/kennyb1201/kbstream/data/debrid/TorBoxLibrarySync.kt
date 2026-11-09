@@ -143,6 +143,11 @@ internal object TorBoxLibrarySync {
         }
 
         val torrents = TorBoxClient.cloudTorrents(context)
+        // The picker's cloud-file cache is fed from this read (spec F1d): the
+        // round has just paid for the same `mylist`, so the next picker does not
+        // ask again. Seeded even on an EMPTY cloud - "nothing here" is an answer
+        // worth holding for the TTL, unlike a failed request.
+        TorBoxCloudCache.seed(torrents)
         if (torrents.isEmpty()) {
             return file(store, Report(0, 0, outcome = Outcome.CLOUD_EMPTY))
         }

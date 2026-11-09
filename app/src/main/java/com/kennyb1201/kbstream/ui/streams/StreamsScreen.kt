@@ -62,6 +62,7 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.debrid.TorBoxCloudPicker
 import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.data.player.BingeGroupMemory
@@ -190,6 +191,9 @@ fun StreamsScreen(
     // What the Cached-only filter is hiding right now: the empty state has to be
     // able to say "your setting hid these" rather than "this title has none".
     val cachedOnly by viewModel.cachedOnly.collectAsStateWithLifecycle()
+    // The one discreet row that says a TorBox cloud file exists for this
+    // episode while the feature is switched off (spec F4c).
+    val cloudOffer by viewModel.cloudOffer.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     /*
@@ -217,7 +221,9 @@ fun StreamsScreen(
         if (selected.drm?.licenseUrl != null) {
             PlayerEngine.clearLaunchAnime()
         }
-        if (!TorBoxResolve.isUnresolved(selected)) {
+        // A cloud row needs the same preparation a hash row does (its link is
+        // minted from the account on the press) - see TorBoxResolve.
+        if (!TorBoxResolve.needsPreparation(selected)) {
             onStreamSelected(selected, allSources, addons, selectedAddon)
             return
         }
@@ -233,7 +239,12 @@ fun StreamsScreen(
             }
             onStreamSelected(
                 resolved,
-                allSources.map { if (it === selected) resolved else it },
+                // Unpressed cloud rows keep their reference out of the player's
+                // hand-off: its own "next source" walk would treat that address
+                // as a link (see TorBoxCloudPicker.forPlayer).
+                TorBoxCloudPicker.forPlayer(
+                    allSources.map { if (it === selected) resolved else it }
+                ),
                 addons,
                 selectedAddon
             )
@@ -750,6 +761,15 @@ fun StreamsScreen(
                     }
 
                     else -> {
+                        // The offer row: shown only while the feature is off AND
+                        // a cloud file matches this episode (spec F4c). One
+                        // press switches it on for the profile and reveals the
+                        // rows, which are already in hand.
+                        if (cloudOffer) {
+                            item(key = "torbox-cloud-offer") {
+                                TorBoxCloudOfferRow(onClick = { viewModel.revealCloudRows() })
+                            }
+                        }
                         // The add-ons that did not answer, named above the rows
                         // they would have added. A failed add-on contributes no
                         // sources, so without this line a picker short one
@@ -1297,6 +1317,36 @@ private fun SchemeResetRow(
         ) {
             Text(
                 text = "RESET EPISODE NUMBERING FOR THIS SHOW",
+                color = KBAccent,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
+}
+
+/**
+ * The one discretionary row the TorBox cloud feature adds while it is OFF.
+ *
+ * Deliberately quieter than a source card (smaller type, a thin accent border):
+ * it is not a source, it is the answer to "the file I downloaded is not in this
+ * list". One press switches cloud rows on for this profile and reveals the
+ * matches the ViewModel already holds (spec F4c).
+ */
+@Composable
+private fun TorBoxCloudOfferRow(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    KBCard(onClick = onClick, modifier = modifier) {
+        Box(
+            modifier = Modifier
+                .background(KBSurfaceRaised.copy(alpha = 0.92f), KBShapeCard)
+                .border(1.dp, KBAccent.copy(alpha = 0.34f), KBShapeCard)
+                .padding(horizontal = 18.dp, vertical = 10.dp)
+        ) {
+            Text(
+                text = TorBoxCloudPicker.OFFER_LABEL,
                 color = KBAccent,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold

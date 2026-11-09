@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.download
 
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.debrid.TorBoxCloudPicker
 
 /**
  * Whether the Download action may be offered for one source row, and if not,
@@ -77,7 +78,13 @@ object DownloadGates {
      * The two are pinned together by a test so they cannot drift apart.
      */
     fun needsResolve(stream: Stream): Boolean =
-        stream.url.isNullOrBlank() && !stream.infoHash.isNullOrBlank()
+        // A TorBox cloud row carries a reference in its URL rather than a link
+        // (see TorBoxCloudPicker), so it needs the same resolve step - and it
+        // resolves through the same TorBoxResolve.playableStream. Without this
+        // the downloader would fetch `kbstream-torbox-cloud://…` as if it were
+        // an address.
+        TorBoxCloudPicker.isCloudRow(stream) ||
+            (stream.url.isNullOrBlank() && !stream.infoHash.isNullOrBlank())
 
     /**
      * Whether the row may be enqueued at all, hash rows included - the resolve
