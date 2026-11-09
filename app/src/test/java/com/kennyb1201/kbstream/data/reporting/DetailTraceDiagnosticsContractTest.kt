@@ -90,7 +90,8 @@ class DetailTraceDiagnosticsContractTest {
         assertTrue(
             "E1: the move, spelled the way a paste can be read",
             detail.contains("\"detail move \$from \$direction -> ") &&
-                detail.contains("\"landed=\$tracedLanded via=\$tracedVia\"")
+                detail.contains("\"landed=\$tracedLanded via=\$tracedVia loading=\$tracedLoading \"") &&
+                detail.contains("\"waited=\$tracedWaited\"")
         )
         assertTrue(
             "noted from a finally, so every exit produces a line - including the " +

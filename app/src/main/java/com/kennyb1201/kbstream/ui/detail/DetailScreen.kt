@@ -2886,6 +2886,23 @@ fun DetailScreen(
         )
 
     /**
+     * Whether this page is still waiting on the data that decides which rows it
+     * has.
+     *
+     * The two loads the row presence depends on: the title's own detail (which
+     * brings the keywords, the cast, the networks and More Like This) and the
+     * season's episode list (which brings the episode section). While either is
+     * in flight, a row that is not in [DetailRowPresence] yet may still arrive -
+     * so "no row that way" is not yet an answer (see [awaitRowsThenMove]), and a
+     * row that IS in presence may still be waiting on the content a press lands
+     * on (see [moveFocusVertical]'s wait).
+     *
+     * Declared above [moveFocusVertical] because the move's own wait reads it:
+     * a local function is only visible below its declaration.
+     */
+    fun rowsStillArriving(): Boolean = isLoading || episodesLoading
+
+    /**
      * Moves the focus vertically out of [from] in [direction]: the page's ONE
      * vertical handoff.
      *
@@ -2943,6 +2960,14 @@ fun DetailScreen(
         var tracedTarget: DetailRow? = null
         var tracedLanded = false
         var tracedVia = "edge"
+        // F2 (detail-down-wait): the loading state the press ARRIVED in, taken
+        // before the wait can change it - a move that started loading and ended
+        // loaded is exactly the evidence the next paste needs, and reading the
+        // state in the `finally` would lose it.
+        val tracedLoading = rowsStillArriving()
+        // Whether the wait below ran: a landing that only happened after the rows
+        // arrived is a different story from one on a settled page.
+        var tracedWaited = false
         try {
             if (
                 direction == DetailFocusDirection.UP &&
@@ -3013,6 +3038,43 @@ fun DetailScreen(
                 return moved
             }
 
+            // F1 (detail-down-wait): the press can also just be too EARLY, which
+            // is the DOWN mirror of the UP trap. The chain found a row - EPISODES
+            // on a title whose episodes are still arriving - so the press skipped
+            // [awaitRowsThenMove] entirely, and the landing failed because the
+            // section's chips are not composed yet: reveal cannot reveal a rail
+            // that has no content, and the geometric search finds nothing below a
+            // page that has not drawn it. The move then ended at the edge, six
+            // times in one walk, and landed the moment the episodes arrived. So a
+            // failed landing waits for the rows the same way a missing one does -
+            // same budget, one re-ask - and only then falls to the tail.
+            //
+            // The retry re-runs the landing for the SAME target with the presence
+            // that settled, because the row the press aimed at is still the row
+            // it means; nothing below it was ever asked for.
+            if (rowsStillArriving()) {
+                var waited = 0
+                while (rowsStillArriving() && waited < RETURN_FOCUS_STEPS) {
+                    delay(RETURN_FOCUS_DELAY_MS)
+                    waited += 1
+                }
+                // The composition that landed the rows, not the one that made the
+                // handler (see [awaitRowsThenMove]).
+                val settled = latestRowPresence.value ?: presence
+                tracedWaited = true
+                val retried =
+                    if (target == DetailRow.MEDIA && direction == DetailFocusDirection.DOWN) {
+                        focusMediaStrip(from)
+                    } else {
+                        focusRow(target, fromColumn, from, direction, settled)
+                    }
+                if (retried) {
+                    tracedVia = "chain"
+                    tracedLanded = true
+                    return true
+                }
+            }
+
             // Nothing landed - not the row the press aimed at, not any row beyond
             // it - and this is where the press used to be swallowed with the
             // focus unmoved. Only the two real edges of the page may still do
@@ -3052,7 +3114,8 @@ fun DetailScreen(
         } finally {
             DetailTrace.note(
                 "detail move $from $direction -> ${tracedTarget ?: "none"} " +
-                    "landed=$tracedLanded via=$tracedVia"
+                    "landed=$tracedLanded via=$tracedVia loading=$tracedLoading " +
+                    "waited=$tracedWaited"
             )
         }
     }
@@ -3080,18 +3143,6 @@ fun DetailScreen(
      * takes only DOWN; its UP belongs to the episode card, which owns the season
      * chip (see [focusSeasonChip]).
      */
-    /**
-     * Whether this page is still waiting on the data that decides which rows it
-     * has.
-     *
-     * The two loads the row presence depends on: the title's own detail (which
-     * brings the keywords, the cast, the networks and More Like This) and the
-     * season's episode list (which brings the episode section). While either is
-     * in flight, a row that is not in [DetailRowPresence] yet may still arrive -
-     * so "no row that way" is not yet an answer (see [awaitRowsThenMove]).
-     */
-    fun rowsStillArriving(): Boolean = isLoading || episodesLoading
-
     /**
      * A press that reached the end of the PAINTED page while its rows are still
      * arriving: wait for them, then ask the chain again with the presence that
