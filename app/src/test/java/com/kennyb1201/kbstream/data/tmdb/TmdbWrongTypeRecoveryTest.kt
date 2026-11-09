@@ -36,7 +36,7 @@ class TmdbWrongTypeRecoveryTest {
             movieResults = listOf(TmdbBasic(id = 929, title = "The Dino Movie"))
         )
         api.searchTvResults = TmdbSearchTitleResponse(
-            listOf(TmdbSearchTitleResult(id = 57532, name = "PAW Patrol"))
+            results = listOf(TmdbSearchTitleResult(id = 57532, name = "PAW Patrol"))
         )
         api.detail = TmdbDetail(id = 57532, name = "PAW Patrol")
 
@@ -61,7 +61,7 @@ class TmdbWrongTypeRecoveryTest {
     fun `case and whitespace variants still match exactly`() = runBlocking {
         api.findResults = TmdbFindResponse(movieResults = listOf(TmdbBasic(id = 929)))
         api.searchTvResults = TmdbSearchTitleResponse(
-            listOf(TmdbSearchTitleResult(id = 57532, name = "PAW Patrol"))
+            results = listOf(TmdbSearchTitleResult(id = 57532, name = "PAW Patrol"))
         )
         api.detail = TmdbDetail(id = 57532, name = "PAW Patrol")
 
@@ -87,7 +87,7 @@ class TmdbWrongTypeRecoveryTest {
     fun `a search result that is not an exact title match is not used`() = runBlocking {
         api.findResults = TmdbFindResponse(movieResults = listOf(TmdbBasic(id = 929)))
         api.searchTvResults = TmdbSearchTitleResponse(
-            listOf(TmdbSearchTitleResult(id = 999, name = "PAW Patrol: The Movie"))
+            results = listOf(TmdbSearchTitleResult(id = 999, name = "PAW Patrol: The Movie"))
         )
         api.detail = TmdbDetail(id = 999)
 
@@ -111,7 +111,7 @@ class TmdbWrongTypeRecoveryTest {
     fun `a blank name never searches`() = runBlocking {
         api.findResults = TmdbFindResponse(movieResults = listOf(TmdbBasic(id = 929)))
         api.searchTvResults = TmdbSearchTitleResponse(
-            listOf(TmdbSearchTitleResult(id = 57532, name = "PAW Patrol"))
+            results = listOf(TmdbSearchTitleResult(id = 57532, name = "PAW Patrol"))
         )
 
         val detail = findAndFetchDetail(
@@ -135,7 +135,7 @@ class TmdbWrongTypeRecoveryTest {
     fun `an id TMDB does not know at all is not guessed at`() = runBlocking {
         api.findResults = TmdbFindResponse()
         api.searchTvResults = TmdbSearchTitleResponse(
-            listOf(TmdbSearchTitleResult(id = 57532, name = "PAW Patrol"))
+            results = listOf(TmdbSearchTitleResult(id = 57532, name = "PAW Patrol"))
         )
 
         val detail = findAndFetchDetail(
@@ -163,7 +163,7 @@ class TmdbWrongTypeRecoveryTest {
             tvResults = listOf(TmdbBasic(id = 57532, name = "PAW Patrol"))
         )
         api.searchMovieResults = TmdbSearchTitleResponse(
-            listOf(TmdbSearchTitleResult(id = 140300, title = "PAW Patrol: The Movie"))
+            results = listOf(TmdbSearchTitleResult(id = 140300, title = "PAW Patrol: The Movie"))
         )
         api.detail = TmdbDetail(id = 140300, title = "PAW Patrol: The Movie")
 
