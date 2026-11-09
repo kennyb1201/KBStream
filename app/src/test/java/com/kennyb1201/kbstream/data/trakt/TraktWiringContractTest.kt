@@ -40,6 +40,20 @@ class TraktWiringContractTest {
 
     private fun main(relative: String): String = File(mainRoot(), relative).readText()
 
+    /**
+     * The scan below is about what the code calls, not what its docs mention:
+     * the paused-session reader names `ResumeAuthorityRules` in prose, and a
+     * class name in a comment is not a wipe of anyone's resume rows.
+     */
+    private fun stripComments(text: String): String =
+        Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL)
+            .replace(text, "")
+            .lineSequence()
+            .joinToString("\n") { line ->
+                val marker = line.indexOf("//")
+                if (marker < 0) line else line.substring(0, marker)
+            }
+
     private fun project(relative: String): String {
         val prefixes = listOf("", "app/")
         var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
@@ -58,7 +72,7 @@ class TraktWiringContractTest {
 
     @Test
     fun `a disconnect clears the Trakt session and nothing else`() {
-        val src = main(repoPath)
+        val src = stripComments(main(repoPath))
 
         listOf("WatchHistory", "watchHistoryDao", "deleteAll", "clearLocalWatchState", "Resume")
             .forEach { forbidden ->

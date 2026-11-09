@@ -55,11 +55,15 @@ class TraktIntegrationContractTest {
     }
 
     @Test
-    fun `Home unions all three trackers' watched episodes`() {
+    fun `Home unions every tracker's watched episodes`() {
         val src = main("com/kennyb1201/kbstream/ui/home/HomeViewModel.kt")
 
         assertTrue("Trakt is read", src.contains("traktCompletedEpisodes"))
-        assertTrue("and unioned with the other two", src.contains("+ traktCompletedEpisodes"))
+        assertTrue(
+            "and is one term of the single union every downstream rule reads",
+            src.contains("val trackerCompletedEpisodes =") &&
+                src.contains("traktCompletedEpisodes +")
+        )
         assertTrue(
             "a failed read is distinguished from nothing watched",
             src.contains("traktRepository.isConfigured()") &&

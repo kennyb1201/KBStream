@@ -105,7 +105,7 @@ class ResumeAuthorityWiringContractTest {
     }
 
     @Test
-    fun `Trakt playback is read only for the Trakt authority, and mapped as a resume`() {
+    fun `Trakt playback is read for every configured account, and mapped as a resume`() {
         assertTrue(
             "Trakt's own resume endpoints",
             traktApi.contains("@GET(\"sync/playback/movies\")") &&
@@ -123,10 +123,12 @@ class ResumeAuthorityWiringContractTest {
                 traktRepo.contains("season = if (isMovie) null else episode?.season")
         )
         assertTrue(
-            "Home only spends the request when Trakt is the chosen source",
-            home.contains("if (resumeAuthority == ResumeAuthority.TRAKT)") &&
-                home.contains("loadTraktUpNextItems()") &&
-                home.contains("resumeSource = ResumeSource.TRAKT")
+            "Home reads the paused sessions for every configured account: the " +
+                "authority is a winner-picker, and gating the read on it left a " +
+                "Trakt-only show with no card at all under the default LOCAL",
+            home.contains("loadTraktUpNextItems()") &&
+                home.contains("resumeSource = ResumeSource.TRAKT") &&
+                !home.contains("if (resumeAuthority == ResumeAuthority.TRAKT)")
         )
     }
 

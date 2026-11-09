@@ -90,8 +90,9 @@ class UiUniformityBatchBContractTest {
         )
         assertEquals(
             "each rail's side room is the focus inset, cancelled so the tiles " +
-                "line up with the heading above them",
-            3,
+                "line up with the heading above them: the three originals plus " +
+                "the paged Titles rail",
+            4,
             count(search, "Modifier.offset(x = -KBFocusChipInset)")
         )
         assertEquals(
