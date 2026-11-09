@@ -195,8 +195,8 @@ class DetailChipColumnWiringContractTest {
         assertTrue(
             "the Media row enters its own rail in the column the section " +
                 "remembers, then falls back to the first card",
-            source.contains("suspend fun focusFirstMediaCard() {") &&
-                source.contains("if (focusChipColumn(MEDIA_ROW_KEY, lastMediaCardColumn)) return") &&
+            source.contains("suspend fun focusFirstMediaCard(): Boolean {") &&
+                source.contains("if (focusChipColumn(MEDIA_ROW_KEY, lastMediaCardColumn)) return true") &&
                 source.contains("focusChipColumn(MEDIA_ROW_KEY, 0)")
         )
         assertTrue(

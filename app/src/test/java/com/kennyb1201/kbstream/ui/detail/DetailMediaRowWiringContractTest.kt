@@ -350,10 +350,18 @@ class DetailMediaRowWiringContractTest {
         )
         assertTrue(
             "the card's UP hands over to that, so the press is never consumed " +
-                "with the focus left on the card",
-            screen.contains("onFocusStrip = { startFocusMove { focusMediaStrip(") &&
-                screen.contains("DetailRow.MEDIA") &&
-                screen.contains("startFocusMove { focusFirstMediaCard() }")
+                "with the focus left on the card - and both internal handoffs now " +
+                "fall through to the geometric search when their own landing " +
+                "fails (the vertical-focus audit's F3)",
+            screen.contains("onFocusStrip = { startFocusMove {") &&
+                screen.contains("focusMediaStrip( DetailRow.MEDIA )") &&
+                screen.contains("if (!landed) { focusByGeometry( DetailFocusDirection.UP ) }")
+        )
+        assertTrue(
+            "the strip's DOWN reads its landing too: DOWN -> cards, then geometry",
+            screen.contains("val landed = focusFirstMediaCard()") &&
+                screen.contains("if (!landed) { focusByGeometry( DetailFocusDirection.DOWN ) }") &&
+                screen.contains("detail media DOWN landed=\$landed")
         )
     }
 

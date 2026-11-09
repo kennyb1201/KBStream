@@ -458,7 +458,10 @@ class DetailFocusChainWiringContractTest {
         assertTrue(
             "which is what lets the caller's fallback to the header actually run: " +
                 "with an always-true left side it never did",
-            detail.contains("DetailRow.EPISODES -> revealAndFocusEpisodes(from) || focusTopOfPage()")
+            detail.contains(
+                "DetailRow.EPISODES -> revealAndFocusEpisodes(from) || " +
+                    "focusByGeometry(DetailFocusDirection.DOWN)"
+            )
         )
     }
 
@@ -566,7 +569,8 @@ class DetailFocusChainWiringContractTest {
         assertTrue(
             "the unlanded move hands the press to the page's one fall-through " +
                 "rather than consuming it",
-            move.contains("if (fallThroughIfMidPage(from, direction, presence)) return true")
+            move.contains("val fellThrough = fallThroughIfMidPage(from, direction, presence)") &&
+                move.contains("if (fellThrough) return true")
         )
         assertTrue(
             "the edge is decided from the row the press STARTED on, against the " +

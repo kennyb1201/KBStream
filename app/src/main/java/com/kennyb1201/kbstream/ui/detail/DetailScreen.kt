@@ -109,6 +109,7 @@ import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
+import com.kennyb1201.kbstream.data.reporting.DetailTrace
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.data.player.fileEpisodeStreamId
@@ -1882,6 +1883,20 @@ fun DetailScreen(
             delay(RETURN_FOCUS_DELAY_MS)
             attempts += 1
         }
+        // F2a: the arm returns false with nothing said, and that silence is what
+        // made the original trap hard to see - a press that asked for the
+        // header and got nothing looks identical to one nobody asked for. This
+        // is development evidence (logcat), not field diagnosis: the behaviour
+        // is the callers' fall-through, which now runs on this false.
+        Log.w(
+            TAG,
+            "focusTopOfPage: PLAY and details would not take the focus after " +
+                "$RETURN_FOCUS_STEPS attempts"
+        )
+        // E2: the same exhaustion in the ring, because the log is exactly what a
+        // TV cannot show. This is the line the next field paste needs: it names
+        // the failed landing the move line then reports as via=geometry.
+        DetailTrace.note("detail top landing failed after $attempts attempts")
         return false
     }
 
@@ -2710,7 +2725,14 @@ fun DetailScreen(
         presence: DetailRowPresence
     ): Boolean = when (target) {
         DetailRow.HEADER -> focusTopOfPage()
-        DetailRow.EPISODES -> revealAndFocusEpisodes(from) || focusTopOfPage()
+        // F4: a section that will not take the focus is a miss, not a reason to
+        // throw the viewer to the top of the page. The walk arm below already
+        // states that rule - "a rail that will not take the focus must not
+        // teleport the viewer to the top" - and this arm did not obey it: DOWN
+        // from deep in the page ended on PLAY. Geometric DOWN lands on the
+        // nearest row below, which is what the press meant.
+        DetailRow.EPISODES ->
+            revealAndFocusEpisodes(from) || focusByGeometry(DetailFocusDirection.DOWN)
         DetailRow.GENRE,
         DetailRow.KEYWORDS,
         DetailRow.PEOPLE,
@@ -2908,79 +2930,131 @@ fun DetailScreen(
         // own comment says "walking D-pad up from the rails") - it was simply
         // never wired. A title whose overview fits has no toggle, and UP goes to
         // the genres as it always has.
-        if (
-            direction == DetailFocusDirection.UP &&
-            from == firstListRow(presence) &&
-            focusOverviewToggle()
-        ) {
-            return true
-        }
+        // F7: the rows the page has NOW, not the ones the pressing rail was
+        // composed with - a rail composed before a higher row landed computes
+        // the wrong first row, and the toggle stop was skipped in that one
+        // recomposition window. This is the same settled presence the toggle's
+        // own DOWN already reads ([latestRowPresence]).
+        val settledRows = latestRowPresence.value ?: presence
+        // E1: one line per press, whatever the outcome - a dead press is a line
+        // that says so, not an absence. The `finally` runs on every exit, the
+        // cancelled move included, so a press [startFocusMove] cancelled is
+        // visible as one that never landed.
+        var tracedTarget: DetailRow? = null
+        var tracedLanded = false
+        var tracedVia = "edge"
+        try {
+            if (
+                direction == DetailFocusDirection.UP &&
+                from == firstListRow(settledRows) &&
+                focusOverviewToggle()
+            ) {
+                tracedVia = "toggle"
+                tracedLanded = true
+                return true
+            }
 
-        val target = DetailFocusChain.nextRow(from, direction, presence) ?: return false
-        // The press's own intent, recorded where every chain move passes: the
-        // episode effects stop placing the focus once the viewer has steered to
-        // another row (see lastChainLandingRow and episodeAutoFocusAllowed).
-        lastChainLandingRow = target
-        // The GENRE -> KEYWORDS handoff, logged when it does NOT happen. The
-        // chain steps over a row the page does not have by design, so a title
-        // with no keywords skips the row and looks exactly like a broken
-        // handoff - and a failure INSIDE that row is logged where it fails (see
-        // focusRow). Between the two, the log says which cause this is: no row
-        // at all, the row there but not composed, or the focus landing going
-        // elsewhere.
-        if (
-            from == DetailRow.GENRE &&
-            direction == DetailFocusDirection.DOWN &&
-            target != DetailRow.KEYWORDS
-        ) {
-            Log.w(
-                TAG,
-                "GENRE DOWN stepped over KEYWORDS: hasKeywordsRow=" +
-                    "${presence.hasKeywordsRow}, target=$target, visibleKeys=" +
-                    detailListState.layoutInfo.visibleItemsInfo.map { it.key }
+            val target = DetailFocusChain.nextRow(from, direction, presence) ?: return false
+            tracedTarget = target
+            // The press's own intent, recorded where every chain move passes:
+            // the episode effects stop placing the focus once the viewer has
+            // steered to another row (see lastChainLandingRow and
+            // episodeAutoFocusAllowed).
+            lastChainLandingRow = target
+            // The GENRE -> KEYWORDS handoff, logged when it does NOT happen. The
+            // chain steps over a row the page does not have by design, so a
+            // title with no keywords skips the row and looks exactly like a
+            // broken handoff - and a failure INSIDE that row is logged where it
+            // fails (see focusRow). Between the two, the log says which cause
+            // this is: no row at all, the row there but not composed, or the
+            // focus landing going elsewhere.
+            if (
+                from == DetailRow.GENRE &&
+                direction == DetailFocusDirection.DOWN &&
+                target != DetailRow.KEYWORDS
+            ) {
+                Log.w(
+                    TAG,
+                    "GENRE DOWN stepped over KEYWORDS: hasKeywordsRow=" +
+                        "${presence.hasKeywordsRow}, target=$target, visibleKeys=" +
+                        detailListState.layoutInfo.visibleItemsInfo.map { it.key }
+                )
+            }
+            // DOWN into the Media row lands on its tab strip, never on a card:
+            // the strip is the row's selector, and a press that skipped it left
+            // the tab-switcher behind an UP the viewer has no reason to expect -
+            // the reported "I land on the first trailer and have to press UP to
+            // reach the tabs". The column the press arrived with is recorded
+            // either way, so the strip can hand it back on the way up.
+            val landed =
+                if (target == DetailRow.MEDIA && direction == DetailFocusDirection.DOWN) {
+                    lastMediaCardColumn = fromColumn
+                    focusMediaStrip(from)
+                } else {
+                    focusRow(target, fromColumn, from, direction, presence)
+                }
+            tracedVia = "chain"
+            tracedLanded = landed
+            if (landed) return true
+
+            // F1a: an UP that walked to the header and could not LAND on it is a
+            // miss, not an edge, and a miss must move. The edge rule below still
+            // says UP off the genres is the top of the page - and it is - but the
+            // press asked for the row above it and that row refused, which is the
+            // momentary state the field found after a walk: focus alive on the
+            // chip, PLAY one row up, and the press consumed with nothing moved
+            // because the edge arm read the miss as the edge. So the geometric
+            // search runs here, from where the viewer actually is: PLAY sits
+            // directly above the chips in the fixed header, so UP finds it.
+            if (target == DetailRow.HEADER && direction == DetailFocusDirection.UP) {
+                val moved = focusByGeometry(DetailFocusDirection.UP)
+                tracedVia = "geometry"
+                tracedLanded = moved
+                return moved
+            }
+
+            // Nothing landed - not the row the press aimed at, not any row beyond
+            // it - and this is where the press used to be swallowed with the
+            // focus unmoved. Only the two real edges of the page may still do
+            // that; every other press falls through to the platform's default
+            // geometric search, which is a move the viewer can see, rather than a
+            // key the page took and did nothing with (see
+            // [fallThroughIfMidPage]).
+            val fellThrough = fallThroughIfMidPage(from, direction, presence)
+            tracedVia = "geometry"
+            tracedLanded = fellThrough
+            if (fellThrough) return true
+
+            // And when the platform's search finds nothing either, a mid-page
+            // DOWN still has one honest landing: the overview's toggle. It is on
+            // screen, focusable, and its own DOWN routes back to the genres, so a
+            // press that ends there is a visible move rather than a dead remote -
+            // the reported trap on a title whose episode section was not ready to
+            // be placed (see [focusOverviewToggle]).
+            //
+            // The edge rule is untouched: a press at a REAL edge - DOWN off the
+            // last row, UP off the header or the genres - is still consumed where
+            // it is, which is why the edge is asked again here rather than
+            // trusting the fall-through's false to mean "mid-page".
+            if (
+                direction == DetailFocusDirection.DOWN &&
+                !DetailFocusChain.isPageEdge(from, direction, presence)
+            ) {
+                val toggleLanded = focusOverviewToggle()
+                tracedVia = "toggle"
+                tracedLanded = toggleLanded
+                return toggleLanded
+            }
+            tracedVia =
+                if (DetailFocusChain.isPageEdge(from, direction, presence)) "edge"
+                else "geometry"
+            return false
+        } finally {
+            DetailTrace.note(
+                "detail move $from $direction -> ${tracedTarget ?: "none"} " +
+                    "landed=$tracedLanded via=$tracedVia"
             )
         }
-        // DOWN into the Media row lands on its tab strip, never on a card: the
-        // strip is the row's selector, and a press that skipped it left the
-        // tab-switcher behind an UP the viewer has no reason to expect - the
-        // reported "I land on the first trailer and have to press UP to reach
-        // the tabs". The column the press arrived with is recorded either way,
-        // so the strip can hand it back on the way up.
-        val landed =
-            if (target == DetailRow.MEDIA && direction == DetailFocusDirection.DOWN) {
-                lastMediaCardColumn = fromColumn
-                focusMediaStrip(from)
-            } else {
-                focusRow(target, fromColumn, from, direction, presence)
-            }
-        if (landed) return true
-
-        // Nothing landed - not the row the press aimed at, not any row beyond it
-        // - and this is where the press used to be swallowed with the focus
-        // unmoved. Only the two real edges of the page may still do that; every
-        // other press falls through to the platform's default geometric search,
-        // which is a move the viewer can see, rather than a key the page took
-        // and did nothing with (see [fallThroughIfMidPage]).
-        if (fallThroughIfMidPage(from, direction, presence)) return true
-
-        // And when the platform's search finds nothing either, a mid-page DOWN
-        // still has one honest landing: the overview's toggle. It is on screen,
-        // focusable, and its own DOWN routes back to the genres, so a press that
-        // ends there is a visible move rather than a dead remote - the reported
-        // trap on a title whose episode section was not ready to be placed (see
-        // [focusOverviewToggle]).
-        //
-        // The edge rule is untouched: a press at a REAL edge - DOWN off the last
-        // row, UP off the header or the genres - is still consumed where it is,
-        // which is why the edge is asked again here rather than trusting the
-        // fall-through's false to mean "mid-page".
-        if (
-            direction == DetailFocusDirection.DOWN &&
-            !DetailFocusChain.isPageEdge(from, direction, presence)
-        ) {
-            return focusOverviewToggle()
-        }
-        return false
     }
 
     /**
@@ -3300,7 +3374,21 @@ fun DetailScreen(
      */
     fun overviewToggleVerticalFocus(presence: DetailRowPresence): (KeyEvent) -> Boolean =
         nonRailVerticalFocusWithDownOutcome(
-            onUp = { startFocusMove { focusTopOfPage() } },
+            // F1b: the same rule as the chain's head arm above, for the one
+            // surface that borrows HEADER's position instead of owning a row:
+            // the toggle consumed its UP unconditionally, so a landing that
+            // failed left the key taken and the focus on the toggle. The search
+            // is started here because the key is already ours (F1c) - UP from
+            // the toggle finds the genres or PLAY above it in the fixed header.
+            onUp = {
+                startFocusMove {
+                    val landed =
+                        focusTopOfPage() || focusByGeometry(DetailFocusDirection.UP)
+                    // E3: the toggle's own outcome, readable without the move
+                    // line - the UP that lands here has no chain row of its own.
+                    DetailTrace.note("detail toggle UP landed=$landed")
+                }
+            },
             onDown = {
                 // The rows that LANDED, not the ones this handler was made
                 // with: the same shape as [awaitRowsThenMove]'s, for the same
@@ -3309,12 +3397,15 @@ fun DetailScreen(
                     latestRowPresence.value
                         ?: presence
 
-                if (
-                    !DetailFocusChain.toggleDownIsConsumed(
-                        presence = settled,
-                        rowsStillArriving = rowsStillArriving()
-                    )
-                ) {
+                val kept = DetailFocusChain.toggleDownIsConsumed(
+                    presence = settled,
+                    rowsStillArriving = rowsStillArriving()
+                )
+                // E3: whether the toggle's DOWN was placed, on its own line -
+                // `landed=false` here is the press going back to the platform,
+                // not a dead key.
+                DetailTrace.note("detail toggle DOWN landed=$kept")
+                if (!kept) {
                     // The page has nowhere to put this press, so it is not the
                     // page's key to keep: it goes back to the platform's default
                     // search, which is a visible no-op at a real edge rather than
@@ -3356,9 +3447,9 @@ fun DetailScreen(
      * direct request can miss - the remembered slot being the one card the
      * scroll has not composed yet, while the first card is there.
      */
-    suspend fun focusFirstMediaCard() {
-        if (focusChipColumn(MEDIA_ROW_KEY, lastMediaCardColumn)) return
-        if (lastMediaCardColumn != 0 && focusChipColumn(MEDIA_ROW_KEY, 0)) return
+    suspend fun focusFirstMediaCard(): Boolean {
+        if (focusChipColumn(MEDIA_ROW_KEY, lastMediaCardColumn)) return true
+        if (lastMediaCardColumn != 0 && focusChipColumn(MEDIA_ROW_KEY, 0)) return true
         // Anchored on the STRIP, not on the cards row. This arm runs with the
         // viewer standing on the strip, so the strip's own index is a hint the
         // reveal can actually use - and the cards are the list item directly
@@ -3368,6 +3459,9 @@ fun DetailScreen(
         // page (a title with a dozen reviews above the row) the media cards at
         // index ~20 were out of reach and DOWN off the strip did nothing at
         // all.
+        // F3: answers whether the last resort landed - all three attempts can
+        // miss when the cards row will not come back into composition, and the
+        // caller now falls through to the geometric search on that answer.
         revealAndFocusChipColumn(MEDIA_ROW_KEY, MEDIA_STRIP_KEY, lastMediaCardColumn)
     }
 
@@ -3424,8 +3518,10 @@ fun DetailScreen(
 
     /**
      * A card of the Media row: UP returns to the row's tab strip, and DOWN is
-     * the chain's press out of the row - the bottom of the page, which the
-     * handler lands on the header PLAY (see [detailRowVerticalFocus]).
+     * the chain's press out of the row - which here IS the bottom of the page:
+     * the handler delegates DOWN to [detailRowVerticalFocus] for MEDIA, and a
+     * page with nothing below that row consumes the press and stays on the card
+     * rather than landing on the header PLAY (F6).
      * LEFT/RIGHT are the lazy row's own and are left alone.
      *
      * UP belongs to the row rather than to the chain because it is about the
@@ -4146,7 +4242,10 @@ fun DetailScreen(
             //    the default-focus effect has to honour it too.
             LaunchedEffect(returnTarget, restoredReturnFocus) {
                 if (returnTarget != null || restoredReturnFocus) return@LaunchedEffect
-                landFocusOn(playButtonFocusRequester)
+                val landed = landFocusOn(playButtonFocusRequester)
+                // E6: a page that opens with the focus nowhere now has a line
+                // for it, and the landed flag says whether the open took.
+                DetailTrace.note("detail entry focus=play landed=$landed")
             }
 
             // A rail on this page opened a drill-down: an actor page, a
@@ -4184,6 +4283,7 @@ fun DetailScreen(
                     target.rowKey == GENRE_ROW_KEY ||
                         detailListState.revealRail(target.rowKey, target.rowIndex)
 
+                var entryLanded = false
                 if (onScreen) {
                     if (target.itemIndex >= 0) {
                         runCatching { rowState.scrollToItem(target.itemIndex) }
@@ -4228,7 +4328,14 @@ fun DetailScreen(
                         }
                         attempts++
                     }
+                    entryLanded = focused
                 }
+
+                // E6: the drill-down return's landing, named by the row it went
+                // back to - row keys only, never a title or an id.
+                DetailTrace.note(
+                    "detail entry focus=return:${target.rowKey} landed=$entryLanded"
+                )
 
                 // Read once, whatever came of it: a later update to the detail
                 // must not scroll the page out from under the viewer.
@@ -7006,7 +7113,23 @@ fun DetailScreen(
                                             // cards, in the column the section
                                             // remembers (see
                                             // focusFirstMediaCard).
-                                            startFocusMove { focusFirstMediaCard() }
+                                            startFocusMove {
+                                                // F3: the row's own handoff is the
+                                                // first resort, the platform's
+                                                // search the second - a cards
+                                                // row that will not come back
+                                                // must not leave the press
+                                                // unmoved.
+                                                val landed = focusFirstMediaCard()
+                                                DetailTrace.note(
+                                                    "detail media DOWN landed=$landed"
+                                                )
+                                                if (!landed) {
+                                                    focusByGeometry(
+                                                        DetailFocusDirection.DOWN
+                                                    )
+                                                }
+                                            }
                                         },
                                         presence = detailRowPresence
                                     ),
@@ -7122,9 +7245,25 @@ fun DetailScreen(
                                                         cardIndex,
                                                         onFocusStrip = {
                                                             startFocusMove {
-                                                                focusMediaStrip(
+                                                                // F3: strip first,
+                                                                // geometry second -
+                                                                // a strip the
+                                                                // scroll disposed
+                                                                // and the reveal
+                                                                // could not bring
+                                                                // back is a miss,
+                                                                // not a dead key.
+                                                                val landed = focusMediaStrip(
                                                                     DetailRow.MEDIA
                                                                 )
+                                                                DetailTrace.note(
+                                                                    "detail media UP landed=$landed"
+                                                                )
+                                                                if (!landed) {
+                                                                    focusByGeometry(
+                                                                        DetailFocusDirection.UP
+                                                                    )
+                                                                }
                                                             }
                                                         },
                                                         presence = detailRowPresence

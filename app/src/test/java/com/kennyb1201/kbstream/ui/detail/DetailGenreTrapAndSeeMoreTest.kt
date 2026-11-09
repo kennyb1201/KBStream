@@ -87,10 +87,14 @@ class DetailGenreTrapAndSeeMoreTest {
     fun `the episode section is revealed like a rail, not asked once`() {
         val row = member("DetailRow.EPISODES -> ", "DetailRow.GENRE,")
         assertTrue(
-            "the EPISODES arm no longer answers a failed ask with the header " +
-                "fallback alone: it reveals the section first, which is what a " +
-                "card rail below the fold has always got",
-            row.contains("revealAndFocusEpisodes(from) || focusTopOfPage()")
+            "the EPISODES arm reveals the section first, which is what a card rail " +
+                "below the fold has always got - and a reveal that still fails " +
+                "falls to the geometric search DOWNWARD rather than throwing the " +
+                "viewer to PLAY at the top of the page (the vertical-focus " +
+                "audit's F4)",
+            row.contains(
+                "revealAndFocusEpisodes(from) || focusByGeometry(DetailFocusDirection.DOWN)"
+            )
         )
 
         val reveal = member("suspend fun revealAndFocusEpisodes(", "suspend fun focusRow(")
@@ -195,8 +199,8 @@ class DetailGenreTrapAndSeeMoreTest {
     @Test
     fun `a DOWN press the chain cannot place lands on the overview toggle`() {
         val move = member("suspend fun moveFocusVertical(", "fun detailRowVerticalFocus(")
-        val fallThrough = move.indexOf("if (fallThroughIfMidPage(from, direction, presence)) return true")
-        val toggle = move.indexOf("return focusOverviewToggle()")
+        val fallThrough = move.indexOf("val fellThrough = fallThroughIfMidPage(from, direction, presence)")
+        val toggle = move.indexOf("val toggleLanded = focusOverviewToggle()")
         assertTrue(
             "the platform's search is tried first and the toggle is the stop " +
                 "after it, so the existing default search keeps its primacy",
@@ -242,7 +246,7 @@ class DetailGenreTrapAndSeeMoreTest {
                 "no rail can disagree about it",
             move.contains(
                 "direction == DetailFocusDirection.UP && " +
-                    "from == firstListRow(presence) && " +
+                    "from == firstListRow(settledRows) && " +
                     "focusOverviewToggle()"
             )
         )
@@ -290,8 +294,13 @@ class DetailGenreTrapAndSeeMoreTest {
             "suspend fun focusFirstMediaCard("
         )
         assertTrue(
-            "UP is the header (PLAY), as it always was",
-            toggleHandler.contains("onUp = { startFocusMove { focusTopOfPage() } }")
+            "UP is the header (PLAY), as it always was - and a landing the header " +
+                "refuses now runs the geometric search rather than keeping the key " +
+                "(the 2026-11-08 UP trap, see DetailTopFallThroughContractTest)",
+            toggleHandler.contains(
+                "onUp = { startFocusMove { val landed = focusTopOfPage() || " +
+                    "focusByGeometry(DetailFocusDirection.UP)"
+            )
         )
         assertTrue(
             "and DOWN is the genres, through HEADER's chain position - asked with " +

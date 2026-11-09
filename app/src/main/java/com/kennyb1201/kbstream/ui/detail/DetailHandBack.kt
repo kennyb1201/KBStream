@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.focus.FocusRequester
+import com.kennyb1201.kbstream.data.reporting.DetailTrace
 import com.kennyb1201.kbstream.ui.browse.FocusLandingVerdict
 import kotlinx.coroutines.android.awaitFrame
 
@@ -187,6 +188,12 @@ internal suspend fun deliverDetailHandBack(
                     DETAIL_FOCUS_TAG,
                     "hand-back delivered: ${handBack.label} after $frame frame(s), verified"
                 )
+                // E5: the same verdict in the ring - a menu or overlay
+                // dismissed from a rail card either came back or did not, and
+                // the field paste is where that has to be readable.
+                DetailTrace.note(
+                    "detail hand-back ${handBack.label} delivered after $frame frame(s)"
+                )
                 return true
             }
 
@@ -194,6 +201,9 @@ internal suspend fun deliverDetailHandBack(
                 Log.w(
                     DETAIL_FOCUS_TAG,
                     "hand-back undelivered: ${handBack.label} after $frame frame(s)"
+                )
+                DetailTrace.note(
+                    "detail hand-back ${handBack.label} abandoned after $frame frame(s)"
                 )
                 return false
             }

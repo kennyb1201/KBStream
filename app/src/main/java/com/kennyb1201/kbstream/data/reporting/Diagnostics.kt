@@ -107,6 +107,15 @@ object Diagnostics {
         // lineup and the guide snapshots only - a diagnostics capture must
         // never change the state it reports.
         guideMatchLines(app).forEach { report.appendLine(it) }
+        // ...and what the guide's FOCUS did on the way in: whether the entry grab
+        // was armed at all, whether it landed or exhausted, which guard stood it
+        // down, and whether a sidebar collapse hid the sidebar with it. The
+        // guide's GUIDE lines used to be logcat-only, so the first-enter repro's
+        // capture carried no focus evidence whatsoever - "landed", "exhausted"
+        // and "never armed" could not be told apart from the paste (see
+        // [GuideTrace]). Absent until the guide has been opened, so a report from
+        // a session that never entered it keeps the length it had.
+        GuideTrace.lines().forEach { report.appendLine("guide: $it") }
         report.appendLine(addonLine(app))
         // How the last source fetch ordered its results, and why the head of the
         // list is the head: the two rules that outrank every quality label
@@ -170,6 +179,15 @@ object Diagnostics {
         // tell those apart (see [LibraryRailArtTrace]). Absent until a pinned
         // rail has loaded.
         LibraryRailArtTrace.lines().forEach { report.appendLine(it) }
+        // What the detail page's vertical focus last did: one line per chain
+        // move (row, direction, target, landed or fell through), the top
+        // landing's exhaustion, the toggle's and the Media row's internal
+        // handoffs, the hand-back verdict and the entry landing. Those presses
+        // fail by consuming the key and moving nothing, and the page's own
+        // lines are logcat - which the release APK does not carry (see
+        // [DetailTrace]). Absent until something on Detail has been moved on,
+        // so the rest of a report is unchanged.
+        DetailTrace.lines().forEach { report.appendLine("detail: $it") }
         // Episode identity per playback session and per handoff between them:
         // the bookkeeping behind "the binge offered an episode I had already
         // watched". Absent until something has played (see

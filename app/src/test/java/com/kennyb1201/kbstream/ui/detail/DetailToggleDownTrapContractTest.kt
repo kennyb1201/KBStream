@@ -194,7 +194,7 @@ class DetailToggleDownTrapContractTest {
                 "read from the chain, so no rail can disagree about it",
             move.contains(
                 "direction == DetailFocusDirection.UP && " +
-                    "from == firstListRow(presence) && focusOverviewToggle()"
+                    "from == firstListRow(settledRows) && focusOverviewToggle()"
             )
         )
     }
@@ -208,8 +208,13 @@ class DetailToggleDownTrapContractTest {
             Regex("focusOverviewToggle\\(\\)").findAll(detail).count()
         )
         assertTrue(
-            "and UP still leaves it for the header",
-            toggleHandler.contains("onUp = { startFocusMove { focusTopOfPage() } }")
+            "and UP still leaves it for the header - and a header that will not take " +
+                "the focus now moves the press anyway instead of keeping it (the UP " +
+                "trap's F1b, see DetailTopFallThroughContractTest)",
+            toggleHandler.contains(
+                "onUp = { startFocusMove { val landed = focusTopOfPage() || " +
+                    "focusByGeometry(DetailFocusDirection.UP)"
+            )
         )
         assertTrue(
             "the captured presence is still what the handler is handed - it is the " +

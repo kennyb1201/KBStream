@@ -218,13 +218,19 @@ class DetailFocusHandBackContractTest {
                 "own handler, the Media strip's DOWN and a card's UP back to the " +
                 "strip",
             detail.contains("startFocusMove { moveFocusVertical(row, direction, column, presence) }") &&
-                detail.contains("startFocusMove { focusFirstMediaCard() }") &&
-                detail.contains("startFocusMove { focusMediaStrip(")
+                detail.contains("startFocusMove { val landed = focusFirstMediaCard()") &&
+                detail.contains("startFocusMove { val landed = focusMediaStrip(")
         )
         assertFalse(
             "the bare launches are what let two moves overlap",
             detail.contains("scope.launch { moveFocusVertical(row, direction, column, presence) }") ||
                 detail.contains("scope.launch { focusFirstMediaCard() }")
+        )
+        assertFalse(
+            "and the two media handoffs still go through it now that they read " +
+                "their landing",
+            detail.contains("launch { val landed = focusFirstMediaCard()") ||
+                detail.contains("launch { val landed = focusMediaStrip(")
         )
     }
 
