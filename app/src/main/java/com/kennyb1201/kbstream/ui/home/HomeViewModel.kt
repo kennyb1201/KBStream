@@ -9314,7 +9314,11 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     // 5 of 10 (the rest scheduled with future air dates), episode 5 rendered
     // as "SEASON FINALE". The season length is the higher of the last
     // LISTED episode and TMDB's declared episode count (the declared count
-    // guards against a lagging season listing). An unaired last episode
+    // guards against a lagging season listing). Both of those numbers come
+    // from the same lagging source, though, so a NEXT EPISODE TO AIR in the
+    // same season vetoes the tag outright - that is the one signal that can
+    // see past TMDB not having added the rest of the season yet (see the
+    // veto below). An unaired last episode
     // still never renders as a finale — the watchable-target guard below
     // refuses to tag it.
     //
@@ -9358,21 +9362,46 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
             return false
         }
 
+        // Both numbers the guard below reads come from that same fetch, so it
+        // is taken ONCE: the declared count and the next-episode veto after it
+        // must not each pay a lookup, and a failed lookup is the "no answer"
+        // both have always treated it as.
+        val showDetail =
+            try {
+                showDetailFor(tmdbId)
+            } catch (_: Exception) {
+                null
+            }
+
         // Declared count guards a lagging listing: TMDB may have created
         // only the first episodes of a 10-episode season so far, in which
         // case the last LISTED episode (say 5) must not count as the finale
         // when the season's declared length is 10.
         val declaredEpisodeCount =
-            try {
-                showDetailFor(tmdbId)
-                    ?.episodeCountForSeason(season)
-            } catch (_: Exception) {
-                null
-            }
+            showDetail
+                ?.episodeCountForSeason(season)
                 ?: 0
 
         val seasonLength =
             maxOf(lastListedEpisode, declaredEpisodeCount)
+
+        // Neither of those numbers can see past TMDB lagging EVERYWHERE, which
+        // is the reported Universal Basic Guys S3E6: the season listing held 6
+        // and TMDB's declared count for the season was 6, so maxOf(6, 6) said
+        // finale while E7 and E8 were still on their way. One signal is not
+        // from those two: the show's next episode to air, in the SAME detail
+        // this scope already fetched. A later episode of this season still to
+        // air - whatever the listing or the declared count say - means this one
+        // is not where the season ends, so the tag is vetoed outright. A pointer
+        // that is missing, points at another season, or is not after this
+        // episode leaves the guard above exactly as it was.
+        val nextToAir = showDetail?.nextEpisodeToAir
+        if (
+            nextToAir?.seasonNumber == season &&
+            (nextToAir.episodeNumber ?: 0) > episode
+        ) {
+            return false
+        }
 
         return SeasonRules
             .isSeasonFinale(
