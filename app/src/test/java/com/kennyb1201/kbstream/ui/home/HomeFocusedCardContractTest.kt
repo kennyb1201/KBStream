@@ -165,8 +165,13 @@ class HomeFocusedCardContractTest {
         assertTrue(
             "the Continue Watching cards, in the built-in row's own key family - " +
                 "one title can be a catalog card and a Continue Watching card at " +
-                "once, and one key must not mean two places to put the D-pad back",
-            home.contains("val cardKey = CONTINUE_WATCHING_CARD_KEY_PREFIX + item.id") &&
+                "once, and one key must not mean two places to put the D-pad back. " +
+                "The content half is the SHOW's key (upNextRailKey), not the leg " +
+                "that won this rebuild: the leg flips between rebuilds, and a key " +
+                "that flips with it disposes and re-decodes every visible card",
+            home.contains(
+                "val cardKey = CONTINUE_WATCHING_CARD_KEY_PREFIX + upNextRailKey(item)"
+            ) &&
                 focus.contains(
                     "internal const val CONTINUE_WATCHING_CARD_KEY_PREFIX = \"upnext:\""
                 )
