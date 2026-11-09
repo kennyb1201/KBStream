@@ -99,7 +99,9 @@ class DetailVerticalAuditContractTest {
                 detail.contains(
                     "if (focusChipColumn(MEDIA_ROW_KEY, lastMediaCardColumn)) return true"
                 ) &&
-                detail.contains("revealAndFocusChipColumn(MEDIA_ROW_KEY, MEDIA_STRIP_KEY,")
+                detail.contains(
+                    "return revealAndFocusChipColumn(MEDIA_ROW_KEY, MEDIA_STRIP_KEY,"
+                )
         )
     }
 

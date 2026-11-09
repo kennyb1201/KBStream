@@ -3462,7 +3462,7 @@ fun DetailScreen(
         // F3: answers whether the last resort landed - all three attempts can
         // miss when the cards row will not come back into composition, and the
         // caller now falls through to the geometric search on that answer.
-        revealAndFocusChipColumn(MEDIA_ROW_KEY, MEDIA_STRIP_KEY, lastMediaCardColumn)
+        return revealAndFocusChipColumn(MEDIA_ROW_KEY, MEDIA_STRIP_KEY, lastMediaCardColumn)
     }
 
     /**
