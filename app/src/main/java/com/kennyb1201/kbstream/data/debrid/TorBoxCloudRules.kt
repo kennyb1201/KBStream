@@ -27,6 +27,30 @@ internal object TorBoxCloudRules {
         val voteAverage: Double?
     )
 
+    /**
+     * The containers a TorBox file can be played from.
+     *
+     * ONE list, deliberately: the picker chooses what to offer from it, the
+     * resolver chooses the biggest playable file from it, and the cloud list
+     * (Settings) decides what to show at all from it. Three copies of "what is
+     * playable" is how the dialog came to list screenshots and .nfo files the
+     * picker would never offer - so adding a container is now one line, in one
+     * place, for all three.
+     */
+    val VIDEO_EXTENSIONS = setOf(
+        "mkv", "mp4", "m4v", "avi", "mov", "ts", "m2ts", "webm", "wmv", "mpg", "mpeg", "flv"
+    )
+
+    /**
+     * Whether [name] names a file a play can use: the extension after the last
+     * dot, trimmed and lowercased, in [VIDEO_EXTENSIONS].
+     *
+     * A name with no extension is not playable. Case is ignored, because
+     * release names are not consistent about it (`.MKV` is common).
+     */
+    fun isVideo(name: String): Boolean =
+        name.substringAfterLast('.', "").trim().lowercase() in VIDEO_EXTENSIONS
+
     /** A four-digit year, as release names spell it. */
     private val YEAR = Regex("\\b(19\\d{2}|20\\d{2})\\b")
 

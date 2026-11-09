@@ -121,10 +121,6 @@ internal object TorBoxResolve {
     /** hash -> torrent id, so a repeat play skips the account lookup. */
     private val knownIds = ConcurrentHashMap<String, Known>()
 
-    private val VIDEO_EXTENSIONS = setOf(
-        "mkv", "mp4", "m4v", "avi", "mov", "ts", "m2ts", "webm", "wmv", "mpg", "mpeg", "flv"
-    )
-
     /**
      * A link for [stream], or null when this source cannot be served from the
      * viewer's TorBox account.
@@ -477,13 +473,12 @@ internal object TorBoxResolve {
                 candidate.equals(base, ignoreCase = true)
             }?.let { return it }
         }
-        return files.filter { extensionOf(it.name) in VIDEO_EXTENSIONS }
+        // The shared rule (TorBoxCloudRules.isVideo), so the resolver, the picker
+        // and the cloud list cannot disagree about what is playable.
+        return files.filter { TorBoxCloudRules.isVideo(it.name) }
             .maxByOrNull { it.size }
             ?: files.maxByOrNull { it.size }
     }
-
-    private fun extensionOf(name: String): String =
-        name.substringAfterLast('.', "").trim().lowercase()
 
     // ── response readers ─────────────────────────────────────────────────────
 

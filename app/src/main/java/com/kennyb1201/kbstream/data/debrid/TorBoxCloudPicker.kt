@@ -65,14 +65,6 @@ internal object TorBoxCloudPicker {
         val size: Long
     )
 
-    /** Video files, for choosing what a movie torrent holds. */
-    private val VIDEO_EXTENSIONS = setOf(
-        "mkv", "mp4", "m4v", "avi", "mov", "ts", "m2ts", "webm", "wmv", "mpg", "mpeg", "flv"
-    )
-
-    private fun isVideo(name: String): Boolean =
-        name.substringAfterLast('.', "").trim().lowercase() in VIDEO_EXTENSIONS
-
     /** The URL that carries [torrentId]/[fileId] on a cloud row. */
     fun refUrl(torrentId: Long, fileId: Int): String = "$SCHEME://$torrentId/$fileId"
 
@@ -154,7 +146,11 @@ internal object TorBoxCloudPicker {
             if (!torrent.complete) continue
             val parsed = TorBoxCloudRules.parseName(torrent.name) ?: continue
             if (!TorBoxCloudRules.confidentMatch(parsed, wantedTitle, year)) continue
-            val files = torrent.files.filter { isVideo(it.name) }.ifEmpty { torrent.files }
+            // The shared rule, with the picker's own fallback kept: a picker has
+            // to offer something to play for the open title even when a torrent
+            // holds nothing the rule recognises.
+            val files = torrent.files.filter { TorBoxCloudRules.isVideo(it.name) }
+                .ifEmpty { torrent.files }
             for (file in files) {
                 val span = TorBoxCloudRules.fileSpan(torrent.name, file.name)
                 if (!TorBoxCloudRules.spanCovers(span, season, episode)) continue
@@ -185,7 +181,7 @@ internal object TorBoxCloudPicker {
             // title alone reads.
             if (TorBoxCloudRules.looksLikeSeries(torrent.name)) continue
             val file = torrent.files
-                .filter { isVideo(it.name) }
+                .filter { TorBoxCloudRules.isVideo(it.name) }
                 .maxByOrNull { it.size }
                 ?: torrent.files.maxByOrNull { it.size }
                 ?: continue

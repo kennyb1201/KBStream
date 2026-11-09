@@ -38,6 +38,8 @@ class TorBoxCloudPickerContractTest {
         const val WALK = "com/kennyb1201/kbstream/domain/streamengine/AutoplayWalk.kt"
         const val SYNC = "com/kennyb1201/kbstream/data/debrid/TorBoxLibrarySync.kt"
         const val GATES = "com/kennyb1201/kbstream/data/download/DownloadGates.kt"
+        const val DIALOG = "com/kennyb1201/kbstream/ui/settings/TorBoxCloudListDialog.kt"
+        const val RULES = "com/kennyb1201/kbstream/data/debrid/TorBoxCloudRules.kt"
     }
 
     // ── F0 / T8: the gates, in front of the fetch ────────────────────────────
@@ -258,6 +260,154 @@ class TorBoxCloudPickerContractTest {
         assertTrue(
             "the sync still reads the same torrent list it always did",
             source(SYNC).contains("val torrents = TorBoxClient.cloudTorrents(context)")
+        )
+    }
+
+    // ── one definition of "playable" (spec F1/F2/F3) ─────────────────────
+
+    @Test
+    fun `the cloud list, the picker and the resolver share one playable rule`() {
+        val rules = source(RULES)
+        assertTrue(
+            "F1: the extension set lives in the shared cloud rules, once",
+            rules.contains("val VIDEO_EXTENSIONS = setOf(") &&
+                rules.contains("fun isVideo(name: String): Boolean =")
+        )
+        val picker = source(PICKER)
+        val resolve = source(RESOLVE)
+        assertTrue(
+            "the picker delegates to it, and keeps no copy of the set",
+            picker.contains("TorBoxCloudRules.isVideo(it.name)") &&
+                !picker.contains("private val VIDEO_EXTENSIONS")
+        )
+        assertTrue(
+            "and so does the resolver",
+            resolve.contains("TorBoxCloudRules.isVideo(it.name)") &&
+                !resolve.contains("private val VIDEO_EXTENSIONS") &&
+                !resolve.contains("extensionOf(")
+        )
+        assertTrue(
+            "the picker's fallback is untouched: an unrecognised torrent still offers " +
+                "its own files for the open title",
+            picker.contains(".ifEmpty { torrent.files }")
+        )
+
+        val dialog = source(DIALOG)
+        val rows = dialog.substringAfter("internal fun cloudFileRows(")
+            .substringBefore("@Composable\nprivate fun CloudFileTile(")
+        assertTrue(
+            "F2: the list filters with that same rule, before it maps a file to a row",
+            rows.contains(".filter { TorBoxCloudRules.isVideo(it.name) }") &&
+                rows.indexOf("TorBoxCloudRules.isVideo(") < rows.indexOf("CloudFileRow(")
+        )
+        assertTrue(
+            "and with NO ifEmpty fallback - a torrent with nothing playable contributes " +
+                "no rows",
+            !rows.contains("ifEmpty")
+        )
+        assertTrue(
+            "the finished-only rule stands, ahead of the playable filter",
+            rows.indexOf("filter { it.complete }") in 0 until
+                rows.indexOf("TorBoxCloudRules.isVideo(")
+        )
+        assertTrue(
+            "F3: the empty state states the new rule",
+            dialog.contains("Only finished, playable files are listed.")
+        )
+    }
+
+    // ── search and sort on the cloud list (spec F1-F4, F6) ────────────────
+
+    @Test
+    fun `the cloud list has one controls row, in memory, above the list`() {
+        val dialog = source(DIALOG)
+        val body = dialog.substringAfter("private fun CloudListBody(")
+            .substringBefore("private fun SortCard(")
+
+        assertTrue(
+            "F1: the app's own text field, both form factors, not a new widget",
+            dialog.contains("import com.kennyb1201.kbstream.ui.components.KBTextField as TvKBTextField") &&
+                dialog.contains(
+                    "import com.kennyb1201.kbstream.ui.components.touch.KBTextField as TouchKBTextField"
+                ) &&
+                body.contains("TvKBTextField(") && body.contains("TouchKBTextField(")
+        )
+        assertTrue(
+            "and the field flexes with the sort control beside it",
+            body.contains("placeholder = \"Search files…\"") &&
+                body.contains("modifier = Modifier.weight(1f)") &&
+                body.contains("label = \"Sort: \${sort.label}\"")
+        )
+        assertTrue(
+            "the controls stay ABOVE the list, so the weight still goes to rows",
+            body.indexOf("Search files…") in 0 until body.indexOf("else -> LazyColumn(")
+        )
+        assertTrue(
+            "F6: the close-button fix's weight is still on the list",
+            body.contains(".weight(1f, fill = false)")
+        )
+        assertTrue(
+            "F2/F3: what is drawn is the derived list, and the derivation takes the " +
+                "query and the mode",
+            body.contains("val shown = remember(query, rows, sort) { cloudFileListRows(rows, query, sort) }") &&
+                body.contains("items(shown, key =")
+        )
+        assertTrue(
+            "the default order is the API's, unchanged",
+            body.contains("var sort by remember { mutableStateOf(CloudFileSort.NEWEST) }")
+        )
+        assertTrue(
+            "F4: no match is its own line, and the empty-cloud text is still there",
+            body.contains("No files match “\${query.trim()}”.") &&
+                body.contains("Nothing in your TorBox cloud yet")
+        )
+        assertTrue(
+            "§3: dialog-local only - no preference is read or written for this",
+            !dialog.contains("AppPreferences")
+        )
+        assertTrue(
+            "and the fetch is untouched: still fresh on every open, never re-run by a " +
+                "search or a sort",
+            dialog.contains("TorBoxCloudCache.fresh(context, force = true)")
+        )
+    }
+
+    // ── the cloud list dialog: the list flexes, CLOSE stays inside ─────────
+
+    @Test
+    fun `a full cloud list shrinks the list, never the CLOSE button`() {
+        val dialog = source(DIALOG)
+        val body = dialog.substringAfter("private fun CloudListBody(")
+            .substringBefore("private fun TvCloseButton(")
+
+        assertTrue(
+            "the body is one shared column for both form factors",
+            body.contains("Column {") &&
+                body.indexOf("LazyColumn(") == body.lastIndexOf("LazyColumn(")
+        )
+        assertTrue(
+            "and the LIST is what flexes: weight(1f, fill = false) in that column, so a " +
+                "full list, a message line or a wrapped subtitle comes out of the list " +
+                "instead of pushing CLOSE past the panel's bottom edge - the field " +
+                "photo had the button cut in half",
+            body.contains(".weight(1f, fill = false)")
+        )
+        assertTrue(
+            "the list's own cap is unchanged and it still scrolls",
+            body.contains(".heightIn(max = 400.dp)") && body.contains("verticalArrangement")
+        )
+        assertTrue(
+            "CLOSE is still the last child, and the weight is the list's alone - the " +
+                "button row is laid out inside the panel, not flexed with it",
+            body.indexOf("label = \"CLOSE\"") > body.indexOf("LazyColumn(") &&
+                !body.substringAfter("label = \"CLOSE\"").contains("weight(") &&
+                body.contains("TvCloseButton(onClick = onDismiss)")
+        )
+        assertTrue(
+            "and the panel's max height is untouched: no new dialog sizing, no new " +
+                "scroll container",
+            dialog.contains("Modifier.heightIn(max = 560.dp)") &&
+                !dialog.contains("verticalScroll")
         )
     }
 
