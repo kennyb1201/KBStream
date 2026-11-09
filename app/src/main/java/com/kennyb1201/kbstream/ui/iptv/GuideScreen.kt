@@ -106,6 +106,7 @@ import com.kennyb1201.kbstream.data.iptv.PendingChannelTune
 import com.kennyb1201.kbstream.data.iptv.epgProgramChannelKey
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.notifications.ReminderRules
+import com.kennyb1201.kbstream.data.reporting.GuideTrace
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBCard
@@ -334,6 +335,16 @@ fun GuideScreen(
         // effect never runs for it - focus stays on the header toggle and DOWN
         // lands through the header return, exactly as it does today.
         if (guideView == GuideViewMode.GRID && !fromPlayback) gridEntryFocusArmed = true
+        // F3a: the decision itself, once per guide open. Without it a grab that
+        // never armed is indistinguishable from one that armed and exhausted -
+        // the fork the first-enter repro needs named. The list path arms
+        // nothing and is not playback, so it stays silent: the list has its own
+        // grab and this line is about the grid's.
+        if (fromPlayback) {
+            GuideTrace.note("guide entry skipped fromPlayback=true")
+        } else if (guideView == GuideViewMode.GRID) {
+            GuideTrace.note("guide entry armed view=GRID")
+        }
     }
     // F4a: nothing reads the grid's span any more - it is fixed at
     // [GRID_SPAN_HOURS] - so the old per-profile zoom key is cleared once on

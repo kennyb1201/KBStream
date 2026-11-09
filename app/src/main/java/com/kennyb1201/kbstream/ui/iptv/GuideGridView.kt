@@ -88,6 +88,7 @@ import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.notifications.ReminderRules
+import com.kennyb1201.kbstream.data.reporting.GuideTrace
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
@@ -363,11 +364,13 @@ internal fun GuideGridView(
         // F1c: the retry is the fallback, not a silent end. A handoff that dies
         // without a line is the bug this spec is about - the press was consumed
         // and nothing moved, and the log said nothing either.
+        val guideLine = "grid handoff pending-giveup row=${target.rowIndex} cell=${target.cellId} " +
+            "channel=${target.channelFocus} requester=$requesterSeen attempts=$attempts"
         Log.i(
             "GUIDE",
-            "grid handoff pending-giveup row=${target.rowIndex} cell=${target.cellId} " +
-                "channel=${target.channelFocus} requester=$requesterSeen attempts=$attempts"
+            guideLine
         )
+        GuideTrace.note(guideLine)
     }
 
     // F1b: the sidebar has to be composed before its requester can take focus,
@@ -390,10 +393,12 @@ internal fun GuideGridView(
         }
         pendingSidebarFocus = false
         if (landed) focusHome = GridFocusHome.SIDEBAR
+        val guideLine = "grid handoff channel->sidebar group=$label landed=$landed attempts=$attempts"
         Log.i(
             "GUIDE",
-            "grid handoff channel->sidebar group=$label landed=$landed attempts=$attempts"
+            guideLine
         )
+        GuideTrace.note(guideLine)
     }
 
     // F1e: Down out of the header returns to the last focus home - the sidebar
@@ -461,11 +466,13 @@ internal fun GuideGridView(
         val wanted = requesterFor(home)
         if (wanted != null && runCatching { wanted.requestFocus() }.getOrDefault(false)) {
             landHome()
+            val guideLine = "grid handoff header->grid signal=$returnFocusSignal $target " +
+                "direct=true landed=$home"
             Log.i(
                 "GUIDE",
-                "grid handoff header->grid signal=$returnFocusSignal $target " +
-                    "direct=true landed=$home"
+                guideLine
             )
+            GuideTrace.note(guideLine)
             return@LaunchedEffect
         }
 
@@ -490,11 +497,13 @@ internal fun GuideGridView(
         }
         if (landed) {
             landHome()
+            val guideLine = "grid handoff header->grid signal=$returnFocusSignal $target " +
+                "direct=false fallback=true landed=$home attempts=$attempts"
             Log.i(
                 "GUIDE",
-                "grid handoff header->grid signal=$returnFocusSignal $target " +
-                    "direct=false fallback=true landed=$home attempts=$attempts"
+                guideLine
             )
+            GuideTrace.note(guideLine)
             return@LaunchedEffect
         }
 
@@ -505,11 +514,13 @@ internal fun GuideGridView(
         val moved = runCatching {
             focusManager.moveFocus(FocusDirection.Down)
         }.getOrDefault(false)
+        val guideLine = "grid handoff header->grid signal=$returnFocusSignal $target " +
+            "direct=false fallback=false geometric=$moved attempts=$attempts"
         Log.i(
             "GUIDE",
-            "grid handoff header->grid signal=$returnFocusSignal $target " +
-                "direct=false fallback=false geometric=$moved attempts=$attempts"
+            guideLine
         )
+        GuideTrace.note(guideLine)
     }
 
     // ENTRY-FOCUS F1b/F1c: the grab itself - the list's entry loop, for the
@@ -525,6 +536,16 @@ internal fun GuideGridView(
         // F2b: a header return or an in-grid handoff in flight owns focus in
         // those moments; the grab stands down for good rather than racing it.
         if (pendingFocus != null || pendingSidebarFocus || returnFocusSignal > 0) {
+            // F3b: which guard fired used to be invisible - a grab that stood
+            // down for a handoff in flight looked exactly like a grab that
+            // never armed at all, and the first-enter repro cannot be read
+            // without that distinction.
+            val guard = when {
+                pendingFocus != null -> "pendingFocus"
+                pendingSidebarFocus -> "pendingSidebarFocus"
+                else -> "returnFocusSignal=$returnFocusSignal"
+            }
+            GuideTrace.note("grid entry-focus stood-down $guard")
             onEntryFocusDone()
             return@LaunchedEffect
         }
@@ -573,11 +594,15 @@ internal fun GuideGridView(
             focusedCellId = null
             focusHome = if (home == "sidebar") GridFocusHome.SIDEBAR else GridFocusHome.CHANNEL
             pendingSidebarFocus = false
-            Log.i("GUIDE", "grid entry-focus landed=$target attempts=$attempts")
+            val guideLine = "grid entry-focus landed=$target attempts=$attempts"
+            Log.i("GUIDE", guideLine)
+            GuideTrace.note(guideLine)
         } else {
             // F1c: a still-dead entry has to be readable in COPY DIAGNOSTICS,
             // not silent - which is what the field report was.
-            Log.i("GUIDE", "grid entry-focus exhausted home=$home attempts=$attempts")
+            val guideLine = "grid entry-focus exhausted home=$home attempts=$attempts"
+            Log.i("GUIDE", guideLine)
+            GuideTrace.note(guideLine)
         }
         onEntryFocusDone()
     }
@@ -602,7 +627,9 @@ internal fun GuideGridView(
     fun handoffFocus(rowIndex: Int, cell: GridCell?, direction: String) {
         val row = rows.getOrNull(rowIndex)
         if (row == null) {
-            Log.i("GUIDE", "grid handoff $direction row=$rowIndex dropped=no-row")
+            val guideLine = "grid handoff $direction row=$rowIndex dropped=no-row"
+            Log.i("GUIDE", guideLine)
+            GuideTrace.note(guideLine)
             return
         }
         val requester = if (cell == null) {
@@ -624,11 +651,13 @@ internal fun GuideGridView(
         } else {
             pendingFocus = GridPendingFocus(rowIndex, cell?.id, channelFocus = cell == null)
         }
+        val guideLine = "grid handoff $direction row=$rowIndex cell=${cell?.id} onScreen=$rowOnScreen " +
+            "requester=${requester != null} direct=$direct fallback=${!direct}"
         Log.i(
             "GUIDE",
-            "grid handoff $direction row=$rowIndex cell=${cell?.id} onScreen=$rowOnScreen " +
-                "requester=${requester != null} direct=$direct fallback=${!direct}"
+            guideLine
         )
+        GuideTrace.note(guideLine)
     }
 
     /**
@@ -658,10 +687,21 @@ internal fun GuideGridView(
         if (!direct) {
             pendingFocus = GridPendingFocus(rowIndex, cellId = null, channelFocus = true)
         }
+        val guideLine = "grid handoff sidebar->channel row=$rowIndex channel=${row.channelKey} " +
+            "requester=${requester != null} direct=$direct fallback=${!direct}"
         Log.i(
             "GUIDE",
-            "grid handoff sidebar->channel row=$rowIndex channel=${row.channelKey} " +
-                "requester=${requester != null} direct=$direct fallback=${!direct}"
+            guideLine
+        )
+        GuideTrace.note(guideLine)
+        // F3c: the collapse itself, on one line - the request's own result and
+        // the hide that rode with it. The intermittent stuck-sidebar report had
+        // no evidence at all: the focus request and the hide happen together, so
+        // a sidebar that stayed could not be told from a request that never
+        // landed. The hide is unconditional here (the call above), which is what
+        // `sidebarHidden=true` records.
+        GuideTrace.note(
+            "grid collapse sidebar->channel row=$rowIndex landed=$direct sidebarHidden=true"
         )
     }
 
@@ -754,11 +794,13 @@ internal fun GuideGridView(
             } else {
                 pendingSidebarFocus = true
             }
+            val guideLine = "grid handoff channel->sidebar row=$rowIndex group=$selectedGroup " +
+                "requester=${requester != null} direct=$direct fallback=${!direct}"
             Log.i(
                 "GUIDE",
-                "grid handoff channel->sidebar row=$rowIndex group=$selectedGroup " +
-                    "requester=${requester != null} direct=$direct fallback=${!direct}"
+                guideLine
             )
+            GuideTrace.note(guideLine)
             true
         }
         Key.DirectionRight -> {
