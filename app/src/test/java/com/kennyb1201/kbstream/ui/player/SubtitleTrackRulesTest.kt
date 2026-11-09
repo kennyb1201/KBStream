@@ -89,9 +89,9 @@ class SubtitleTrackRulesTest {
     }
 
     @Test
-    fun `PGS ranks by kind in its language instead of behind the text tracks`() {
+    fun `a PGS track is demoted behind text but still takes the preferred language`() {
         assertEquals(
-            "an SDH track still outranks a regular one, whichever container format it is in",
+            "PGS is last resort (F1), so an SDH text track wins over a regular PGS one",
             Choice.Show(1),
             SubtitleTrackRules.choose(listOf(pgs("en"), srt("en", title = "English SDH")), "en")
         )

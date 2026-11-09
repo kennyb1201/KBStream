@@ -18,9 +18,13 @@ import org.junit.Test
  * text (the narrow case of a track that kept its own mime), and the record of a
  * track this device has SEEN draw an image.
  *
- * Everything here stays INSIDE one ranking step: neither rule can move a track
- * across a language or a kind, so a proven bitmap track still loses to a
- * same-language SDH text track and still beats nothing at all.
+ * Everything here stays INSIDE one language bucket: neither rule can move a
+ * track across a bucket, so a bitmap track in the viewer's language still wins
+ * over a text track tagged for another language. The kind cross came later -
+ * since F1 a bitmap is last resort across the honest kinds, so a same-language
+ * SDH bitmap also loses to a same-language REGULAR text track (see
+ * SubtitleBitmapLastResortTest). What holds here either way: a bitmap track is
+ * only chosen when nothing else in its bucket can be.
  */
 class SubtitleTrackRulesProofTest {
 
@@ -77,9 +81,10 @@ class SubtitleTrackRulesProofTest {
     }
 
     @Test
-    fun `rule a never crosses a language or a kind`() {
+    fun `rule a never crosses a language bucket`() {
         // PGS SDH in the viewer's language, SRT regular in another language: the
-        // language match wins, exactly as before Rule A existed.
+        // language match wins, exactly as before Rule A existed. F1's split runs
+        // inside the bucket and never reaches past it into another language.
         val candidates = listOf(
             text("en", MimeTypes.APPLICATION_PGS, title = "English SDH"),
             text("fr", MimeTypes.APPLICATION_SUBRIP)

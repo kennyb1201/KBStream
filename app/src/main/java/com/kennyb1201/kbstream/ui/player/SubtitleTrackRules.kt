@@ -311,9 +311,13 @@ internal object SubtitleTrackRules {
      *  3. a track this device has SEEN draw bitmaps ([provenBitmapPositions]) -
      *     rendered images whatever its mime says.
      *
-     * This is the whole F3 preference: it never crosses a language or a kind, it
-     * only orders the candidates that already matched the same step, and with no
-     * proven set and no mixed mimes it reproduces the old file order exactly.
+     * This is the F3 preference: it never crosses a language bucket and never
+     * crosses the text/bitmap split, it only orders the candidates that already
+     * matched the same half of a step, and with no proven set and no mixed mimes
+     * it reproduces the old file order exactly. Since F1 a step is split into
+     * its text and bitmap halves BEFORE this order is read (see
+     * [isBitmapTrack]), so proof can no longer put a bitmap track in front of a
+     * text track of another kind.
      */
     private fun tierOf(
         candidate: Candidate,
@@ -337,6 +341,30 @@ internal object SubtitleTrackRules {
                 { it.index }
             )
         )
+
+    /**
+     * Whether this candidate is a BITMAP track for the text-before-bitmap split
+     * (F1/F2) - the same two signals [tierOf] reads, minus its ordering: a mime
+     * that states a bitmap format ([isBitmapFormat]), or a position this device
+     * has SEEN draw images ([provenBitmapPositions]).
+     *
+     * Everything else counts as text here, including `application/x-media3-cues`
+     * and a null mime: media3 transcodes subtitles to that one mime during
+     * extraction, so it proves nothing either way (see [isProvenTextFormat]).
+     * That is the stated first-play limitation - an embedded PGS track is
+     * indistinguishable from text until it has been seen, and the proven-bitmap
+     * record demotes it from the next play on. No mime heuristic is invented to
+     * close it.
+     */
+    private fun isBitmapTrack(
+        candidate: Candidate,
+        index: Int,
+        provenBitmapPositions: Set<Int>
+    ): Boolean {
+        if (isBitmapFormat(candidate.mimeType)) return true
+        val position = candidate.position.takeIf { it >= 0 } ?: index
+        return position in provenBitmapPositions
+    }
 
     /**
      * Decide the subtitle track for [candidates], given the viewer's preferred
@@ -365,17 +393,34 @@ internal object SubtitleTrackRules {
      *     among the forced tracks is preserved: a forced track in the preferred
      *     language still beats an untagged one.
      *
+     * BITMAP IS LAST RESORT, across the honest kinds (F1): a bucket is scanned
+     * for its TEXT tracks before any of its BITMAP tracks, whatever the kind.
+     * Kind order alone could not answer the report - an English SDH bitmap took
+     * step 1 from the English regular text track beside it, because the SDH scan
+     * returned before the regular scan ever ran - so inside each bucket the
+     * scans are SDH text, regular text, SDH bitmap, regular bitmap. "Bitmap" is
+     * [isBitmapTrack]: a mime that states PGS/VobSub/DVB, or a position this
+     * device has seen draw images. Forced stays a demoted block below the
+     * untagged bucket (a separate, settled decision), and its own scans take the
+     * same text-before-bitmap split.
+     *
+     * Stated limitation: on a first play an embedded PGS track carries
+     * `application/x-media3-cues`, which proves nothing, so it is
+     * indistinguishable from text and can still win its kind step. From the
+     * second play the proven-bitmap record demotes it. There is deliberately no
+     * first-play mime guess (see [isProvenTextFormat]).
+     *
      * The whole order, most complete first, is:
      *
-     *  1. the preferred language: SDH, then regular; a bitmap track whose
-     *     format this engine draws ranks here like any other track - inside a
-     *     step, proof orders the candidates ([tierOf]): a text-proven mime
-     *     first, a track this device has seen draw bitmaps last;
+     *  1. the preferred language: SDH text, regular text, SDH bitmap, regular
+     *     bitmap; inside a half, proof orders the candidates ([tierOf]);
      *  2. a bitmap track in the preferred language whose format this engine does
      *     NOT draw — the next engine is asked (see [Choice.NeedsMpv]);
-     *  3. an untagged track: SDH, then regular;
-     *  4. a forced track: preferred-tagged, then untagged;
-     *  5. another language: SDH, then regular, then forced.
+     *  3. an untagged track: the same four scans as step 1;
+     *  4. a forced track: preferred text, untagged text, preferred bitmap,
+     *     untagged bitmap;
+     *  5. another language: SDH text, regular text, SDH bitmap, regular bitmap,
+     *     forced text, forced bitmap, then anything left.
      */
     fun choose(
         candidates: List<Candidate>,
@@ -414,20 +459,36 @@ internal object SubtitleTrackRules {
             !it.forced && !isSdh(it) && !isCommentaryOrMt(it)
         }
         // One ordered view of the drawable tracks (see [tierOf]): proof beats
-        // file order inside every step below, and never across steps - a
-        // proven-bitmap track still loses to a same-language SDH text track, but
-        // it also loses to a same-language regular text track and to a track
-        // this device has seen draw images. With nothing proven and no mixed
-        // mimes this list is the candidates in file order, as before.
+        // file order inside every step below, and never across steps. With
+        // nothing proven and no mixed mimes this list is the candidates in file
+        // order, as before.
         val ordered = orderedForStep(renderable, provenBitmapPositions)
 
-        // 1. The preferred language, most complete kind first: SDH, then a
-        //    regular full translation. The forced flag is deliberately NOT
+        // F1's split, the half every scan below asks for: [isBitmapTrack] - a
+        // stated bitmap mime, or a position this device has seen draw images -
+        // so a track whose mime proves nothing still counts as text until it has
+        // been seen (the documented first-play limitation).
+        val isBitmap: (IndexedValue<Candidate>) -> Boolean = {
+            isBitmapTrack(it.value, it.index, provenBitmapPositions)
+        }
+
+        /** The bucket's first [kind] track in [bitmapHalf], in proof order. */
+        fun first(
+            bucket: (Candidate) -> Boolean,
+            kind: (Candidate) -> Boolean,
+            bitmapHalf: Boolean
+        ): Int? = ordered.firstOrNull {
+            bucket(it.value) && kind(it.value) && isBitmap(it) == bitmapHalf
+        }?.index
+
+        // 1. The preferred language, text before bitmap and SDH before regular
+        //    inside each half: an SDH bitmap no longer takes this step from the
+        //    regular text track next to it. The forced flag is deliberately NOT
         //    here: it is demoted below the untagged tracks (step 4).
-        ordered.firstOrNull { isPreferred(it.value) && isSdh(it.value) }
-            ?.let { return Choice.Show(it.index) }
-        ordered.firstOrNull { isPreferred(it.value) && isRegular(it.value) }
-            ?.let { return Choice.Show(it.index) }
+        first(isPreferred, isSdh, bitmapHalf = false)?.let { return Choice.Show(it) }
+        first(isPreferred, isRegular, bitmapHalf = false)?.let { return Choice.Show(it) }
+        first(isPreferred, isSdh, bitmapHalf = true)?.let { return Choice.Show(it) }
+        first(isPreferred, isRegular, bitmapHalf = true)?.let { return Choice.Show(it) }
 
         // 2. The preferred language IS present, but only as a bitmap track this
         //    engine cannot draw. This is the silent failure this object exists
@@ -441,30 +502,39 @@ internal object SubtitleTrackRules {
         // 3. No tagged match. An UNTAGGED track is the common case in rips, and
         //    it is the viewer's own language far more often than not, so it is
         //    preferred over a track tagged for a language they did ask for -
-        //    and it is ranked by kind for the same reason.
-        ordered.firstOrNull { isUntagged(it.value) && isSdh(it.value) }
-            ?.let { return Choice.Show(it.index) }
-        ordered.firstOrNull { isUntagged(it.value) && isRegular(it.value) }
-            ?.let { return Choice.Show(it.index) }
+        //    and it is ranked by kind, and split text-before-bitmap, for the
+        //    same reasons as step 1.
+        first(isUntagged, isSdh, bitmapHalf = false)?.let { return Choice.Show(it) }
+        first(isUntagged, isRegular, bitmapHalf = false)?.let { return Choice.Show(it) }
+        first(isUntagged, isSdh, bitmapHalf = true)?.let { return Choice.Show(it) }
+        first(isUntagged, isRegular, bitmapHalf = true)?.let { return Choice.Show(it) }
 
         // 4. Forced, demoted: a preferred-tagged forced track no longer beats an
         //    untagged SDH/regular track. The container forced flag is unreliable
         //    on rips (see KDoc); the untagged track is the viewer's language far
         //    more often than a forced flag is honest. Language order among forced
-        //    tracks is preserved: preferred-tagged before untagged.
-        ordered.firstOrNull { isPreferred(it.value) && it.value.forced }
-            ?.let { return Choice.Show(it.index) }
-        ordered.firstOrNull { isUntagged(it.value) && it.value.forced }
-            ?.let { return Choice.Show(it.index) }
+        //    tracks is preserved - preferred-tagged before untagged - and the
+        //    block takes F1's split as a whole, so a signs-only bitmap never
+        //    takes the step from a forced text track.
+        first(isPreferred, { it.forced }, bitmapHalf = false)?.let { return Choice.Show(it) }
+        first(isUntagged, { it.forced }, bitmapHalf = false)?.let { return Choice.Show(it) }
+        first(isPreferred, { it.forced }, bitmapHalf = true)?.let { return Choice.Show(it) }
+        first(isUntagged, { it.forced }, bitmapHalf = true)?.let { return Choice.Show(it) }
 
         // 5. Only tagged tracks, none of them the preferred language. The
         //    fallback is still taken - "some subtitles" beats none for a viewer
         //    who asked for subtitles - but the preferred language won above, so
         //    this never overrides a real match, and a forced track in another
-        //    language is still the last thing chosen before [Choice.Off].
-        ordered.firstOrNull { isSdh(it.value) }?.let { return Choice.Show(it.index) }
-        ordered.firstOrNull { isRegular(it.value) }?.let { return Choice.Show(it.index) }
-        ordered.firstOrNull { it.value.forced }?.let { return Choice.Show(it.index) }
+        //    language is still the last thing chosen before [Choice.Off]. The
+        //    split spans the whole bucket here: both honest text halves, then
+        //    their bitmaps, then the forced halves.
+        val any: (Candidate) -> Boolean = { true }
+        first(any, isSdh, bitmapHalf = false)?.let { return Choice.Show(it) }
+        first(any, isRegular, bitmapHalf = false)?.let { return Choice.Show(it) }
+        first(any, isSdh, bitmapHalf = true)?.let { return Choice.Show(it) }
+        first(any, isRegular, bitmapHalf = true)?.let { return Choice.Show(it) }
+        first(any, { it.forced }, bitmapHalf = false)?.let { return Choice.Show(it) }
+        first(any, { it.forced }, bitmapHalf = true)?.let { return Choice.Show(it) }
         ordered.firstOrNull()?.let { return Choice.Show(it.index) }
 
         // 6. Nothing drawable at all, but the file does carry subtitle tracks:
@@ -477,8 +547,9 @@ internal object SubtitleTrackRules {
 
     /**
      * The index of the best track in an ALREADY language-matched drawable set:
-     * SDH, then a regular track, then a forced one. This is exactly the
-     * preferred-language bucket of [choose], split out for the re-assert pass
+     * SDH text, regular text, SDH bitmap, regular bitmap, then the forced halves
+     * (see [choose]'s step 1). This is exactly the preferred-language bucket of
+     * [choose], split out for the re-assert pass
      * ([PlayerTrackBridge.matchingOverride]) which runs on every READY and
      * rebuffer and used to take the first match in file order - re-arming the
      * forced track moments after the kind-ranked initial selection had picked
@@ -505,22 +576,38 @@ internal object SubtitleTrackRules {
         }
         // The same proof order as [choose]'s preferred bucket, for the same
         // reason: this pass re-arms a track on every READY and rebuffer, so it
-        // must not walk a proven-bitmap track back in front of a text track of
-        // the same kind that the initial selection had avoided.
+        // must not walk a bitmap track back in front of a text track of ANY
+        // honest kind that the initial selection had avoided (F2). Without the
+        // split this pass re-armed the bitmap SDH moments after choose() had
+        // picked the regular text beside it, and the report came straight back.
         val order = candidates.indices.sortedWith(
             compareBy(
                 { tierOf(candidates[it], it, provenBitmapPositions) },
                 { it }
             )
         )
+        val isBitmap: (Int) -> Boolean = { index ->
+            isBitmapTrack(candidates[index], index, provenBitmapPositions)
+        }
+        // The same four scans as [choose]'s preferred bucket, then the forced
+        // halves: text before bitmap in every scan.
         order.forEach { index ->
-            if (isSdh(candidates[index])) return index
+            if (!isBitmap(index) && isSdh(candidates[index])) return index
         }
         order.forEach { index ->
-            if (isRegular(candidates[index])) return index
+            if (!isBitmap(index) && isRegular(candidates[index])) return index
         }
         order.forEach { index ->
-            if (candidates[index].forced) return index
+            if (isBitmap(index) && isSdh(candidates[index])) return index
+        }
+        order.forEach { index ->
+            if (isBitmap(index) && isRegular(candidates[index])) return index
+        }
+        order.forEach { index ->
+            if (!isBitmap(index) && candidates[index].forced) return index
+        }
+        order.forEach { index ->
+            if (isBitmap(index) && candidates[index].forced) return index
         }
         return null
     }
