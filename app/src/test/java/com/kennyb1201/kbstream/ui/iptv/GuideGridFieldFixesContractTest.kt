@@ -101,13 +101,15 @@ class GuideGridFieldFixesContractTest {
             channelLeft.contains("pendingSidebarFocus = true")
         )
         assertTrue(
-            "the retry asks the current group's requester",
-            sidebarReturn.contains("val label = groups.getOrNull(groups.indexOf(selectedGroup)")
+            "the retry asks the current group's requester, resolved once from the " +
+                "selected group",
+            sidebarReturn.contains("val groupIndex = groups.indexOf(selectedGroup).coerceAtLeast(0)") &&
+                sidebarReturn.contains("val label = groups.getOrNull(groupIndex)")
         )
         assertTrue(
             "and gives up after eight frames with a line",
             sidebarReturn.contains("while (attempts < 8)") &&
-                sidebarReturn.contains("landed=\$landed attempts=\$attempts")
+                sidebarReturn.contains("attempts=\$attempts scrolled=\$scrolled")
         )
     }
 
@@ -263,7 +265,10 @@ class GuideGridFieldFixesContractTest {
         )
         assertTrue(
             "and the async sidebar retry reports frames spent, so an exhaustion is visible",
-            sidebarReturn.contains("\"grid handoff channel->sidebar group=\$label landed=\$landed attempts=\$attempts\"")
+            sidebarReturn.contains(
+                "\"grid handoff channel->sidebar group=\$label landed=\$landed \" +\n" +
+                    "            \"attempts=\$attempts scrolled=\$scrolled\""
+            )
         )
         assertTrue(
             "the panel is the guide's own GUIDE tag",

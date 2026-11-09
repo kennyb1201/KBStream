@@ -379,7 +379,9 @@ internal fun GuideGridView(
     // up (F2c: a handoff that dies silently is the whole bug).
     LaunchedEffect(pendingSidebarFocus, sidebarVisible, groups, selectedGroup) {
         if (!pendingSidebarFocus || !sidebarVisible) return@LaunchedEffect
-        val label = groups.getOrNull(groups.indexOf(selectedGroup).coerceAtLeast(0))
+        val groupIndex = groups.indexOf(selectedGroup).coerceAtLeast(0)
+        val label = groups.getOrNull(groupIndex)
+        var scrolled = false
         var landed = false
         var attempts = 0
         while (attempts < 8) {
@@ -388,12 +390,36 @@ internal fun GuideGridView(
                 landed = true
                 break
             }
+            // GUIDE-LEFT F1: the map can hold an entry for a row that cannot
+            // answer - filed before the sidebar was hidden, or left behind when
+            // the LazyColumn disposed it as it scrolled away - and the field
+            // paste shows exactly that: requester=true, direct=false, then eight
+            // retries against the same detached node. No number of asks revives
+            // it, because the retry has no compose step. This is the entry
+            // grab's step, copied: the first failed ask is the signal that the
+            // row is not there, so it is scrolled into place, and the ask after
+            // the next frame sees the fresh requester it files.
+            //
+            // Guarded on attempt 0 and on the ask having failed, not on
+            // [LazyListState.layoutInfo]: a sidebar that has just been hidden
+            // can still report its last layout, and a selection that is on
+            // screen is not scrolled at all.
+            if (attempts == 0) {
+                sidebarState.scrollToItem(groupIndex)
+                scrolled = true
+            }
             withFrameNanos { }
             attempts++
         }
         pendingSidebarFocus = false
         if (landed) focusHome = GridFocusHome.SIDEBAR
-        val guideLine = "grid handoff channel->sidebar group=$label landed=$landed attempts=$attempts"
+        // GUIDE-LEFT F4: `scrolled` says whether the compose step ran, so a paste
+        // can tell a handoff that landed on its first ask from one that only
+        // landed after the row was brought back - the two cases this line used
+        // to conflate, and the reason eight failed attempts looked identical to
+        // eight attempts against a row that was never there.
+        val guideLine = "grid handoff channel->sidebar group=$label landed=$landed " +
+            "attempts=$attempts scrolled=$scrolled"
         Log.i(
             "GUIDE",
             guideLine
@@ -782,12 +808,24 @@ internal fun GuideGridView(
     fun onChannelKey(rowIndex: Int, key: Key): Boolean = when (key) {
         Key.DirectionLeft -> {
             // F1b: the sidebar comes back and takes focus, on the current group.
-            // Direct first (it is composed the moment the state flips), pending
-            // as the fallback for the frames before it is.
+            //
+            // GUIDE-LEFT F2: direct only when the row is ALREADY composed. A row
+            // the sidebar is not composing - hidden a moment ago, or scrolled out
+            // of its window - has a map entry but no attached node, so asking it
+            // cannot land: that ask was the field's `direct=false`, one wasted
+            // frame followed by a retry loop with no way to succeed. The effect
+            // owns the first ask after the frame and the scroll instead.
+            //
+            // `sidebarVisible` is the composable's own parameter, so it still
+            // holds the value this frame was composed with - false while focus
+            // was in the grid, which is the state every reported LEFT press
+            // arrived in.
             onSidebarVisibleChange(true)
             val index = groups.indexOf(selectedGroup).coerceAtLeast(0)
             val requester = sidebarRequesters[groups.getOrNull(index)]
-            val direct = requester != null &&
+            val rowOnScreen = sidebarVisible &&
+                sidebarState.layoutInfo.visibleItemsInfo.any { it.index == index }
+            val direct = rowOnScreen && requester != null &&
                 runCatching { requester.requestFocus() }.getOrDefault(false)
             if (direct) {
                 focusHome = GridFocusHome.SIDEBAR

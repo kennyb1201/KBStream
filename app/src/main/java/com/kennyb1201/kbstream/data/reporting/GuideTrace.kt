@@ -25,8 +25,14 @@ package com.kennyb1201.kbstream.data.reporting
  */
 internal object GuideTrace {
 
-    /** Lines kept. One guide entry is one to three lines; this is a short ring. */
-    private const val MAX_LINES = 8
+    /**
+     * Lines kept. One guide entry is one to three lines, and a session's worth of
+     * handoffs has to survive alongside them: at eight, five repeated LEFT
+     * attempts filled the ring and pushed the entry-focus line out of the paste
+     * that was meant to answer the first-enter fork. [DetailTrace] uses the same
+     * sixteen.
+     */
+    private const val MAX_LINES = 16
 
     private val lock = Any()
 

@@ -18,8 +18,9 @@ import org.junit.Test
  *
  * What is pinned here:
  *
- *  - the ring is [TorBoxTrace]'s shape - eight lines, oldest first, process-wide
- *    and never cleared by navigation (F1a/F1b, T5),
+ *  - the ring is [TorBoxTrace]'s shape - sixteen lines (GUIDE-LEFT F3 raised it
+ *    from eight), oldest first, process-wide and never cleared by navigation
+ *    (F1a/F1b, T5),
  *  - every existing GUIDE log site has a twin with the SAME string, so logcat
  *    volume and wording are unchanged (F2a/F2b, T6),
  *  - the three lines that did not exist - arming, stand-down, collapse - are
@@ -43,31 +44,27 @@ class GuideTraceDiagnosticsContractTest {
     // ── T5: the ring is bounded and ordered ────────────────────────────────
 
     @Test
-    fun `nine notes keep the last eight, oldest first`() {
-        (1..9).forEach { GuideTrace.note("line $it") }
+    fun `seventeen notes keep the last sixteen, oldest first`() {
+        (1..17).forEach { GuideTrace.note("line $it") }
 
         assertEquals(
-            "eight lines maximum: a capture describes the entry in front of the " +
-                "viewer, not the whole session",
-            listOf(
-                "line 2",
-                "line 3",
-                "line 4",
-                "line 5",
-                "line 6",
-                "line 7",
-                "line 8",
-                "line 9"
-            ),
-            GuideTrace.lines()
+            "sixteen lines, not eight (GUIDE-LEFT F3): the 0.9.206 paste's ring was " +
+                "full of five repeated LEFT attempts and the entry-focus line had " +
+                "been pushed out, so the first-enter fork could not be read from " +
+                "the capture meant to answer it",
+            16,
+            GuideTrace.lines().size
         )
+        assertEquals("line 2", GuideTrace.lines().first())
+        assertEquals("line 17", GuideTrace.lines().last())
     }
 
     @Test
     fun `the ring is TorBoxTrace's shape and cannot be cleared by navigation`() {
         assertTrue(
-            "the same bounded ring as the other traces: eight, oldest first",
-            trace.contains("private const val MAX_LINES = 8") &&
+            "the same bounded ring as the other traces: sixteen, oldest first - " +
+                "parity with DetailTrace (GUIDE-LEFT F3)",
+            trace.contains("private const val MAX_LINES = 16") &&
                 trace.contains("synchronized(lock) { lines = (lines + trimmed).takeLast(MAX_LINES) }")
         )
         assertTrue(
