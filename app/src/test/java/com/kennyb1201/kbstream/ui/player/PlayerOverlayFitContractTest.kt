@@ -145,6 +145,33 @@ class PlayerOverlayFitContractTest {
         )
     }
 
+    @Test
+    fun `the cast band is above the badges, and the badges above the seek bar`() {
+        // Kenny, 2026-11-09: the cast reads ABOVE the source badges, and the
+        // badges are the last thing before the seek bar - on both engines and
+        // both form factors, which is why the order lives in the one shared
+        // layout rather than in either activity. Pinned by document order: the
+        // views are looked up by id, so nothing else notices a swap back.
+        val chrome = layout("player_chrome.xml")
+        val info = chrome.indexOf("@+id/chrome_info")
+        val cast = chrome.indexOf("@+id/chrome_cast_section")
+        val badges = chrome.indexOf("@+id/chrome_badge_row")
+        val seek = chrome.indexOf("@+id/chrome_seekbar_row")
+
+        listOf("chrome_info" to info, "chrome_cast_section" to cast,
+            "chrome_badge_row" to badges, "chrome_seekbar_row" to seek).forEach { (id, at) ->
+            assertTrue("$id is missing from the shared overlay", at >= 0)
+        }
+        assertTrue(
+            "the cast band must come straight after the info block, not after the badges",
+            info < cast && cast < badges
+        )
+        assertTrue(
+            "and the badges must be the last block above the seek bar",
+            badges < seek
+        )
+    }
+
     // ── measurement: every block lands on the television ─────────────────
 
     @Test

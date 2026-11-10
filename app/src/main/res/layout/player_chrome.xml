@@ -192,24 +192,10 @@
 
         </LinearLayout>
 
-        <!-- The source's own badge chips, PINNED below the fixed info block. A
-             read-only strip: not focusable, so it never becomes a D-pad stop, and
-             not a scroller either - the row is fixed like the rest of the
-             overlay, and the chips are short enough to sit on one line. -->
-        <LinearLayout
-            android:id="@+id/chrome_badge_row"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:layout_marginBottom="2dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:visibility="gone" />
-
-        <!-- Cast band: pinned between the fixed info block and the seekbar, the
-             same placement both players use. It is the one thing on the overlay
-             that scrolls, and only sideways: a title's cast is longer than any
-             screen. -->
+        <!-- Cast band: directly below the fixed info block, and above the source
+             badges - the same placement both players use. It is the one thing on
+             the overlay that scrolls, and only sideways: a title's cast is longer
+             than any screen. -->
         <LinearLayout
             android:id="@+id/chrome_cast_section"
             android:layout_width="match_parent"
@@ -244,6 +230,21 @@
                     android:orientation="horizontal" />
             </HorizontalScrollView>
         </LinearLayout>
+
+        <!-- The source's own badge chips, the last thing above the seekbar. A
+             read-only strip: not focusable, so it never becomes a D-pad stop (the
+             cast row above and the seek bar below are the two neighbours), and
+             not a scroller either - the row is fixed like the rest of the
+             overlay, and the chips are short enough to sit on one line. -->
+        <LinearLayout
+            android:id="@+id/chrome_badge_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="2dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:visibility="gone" />
 
         <!-- Bottom section: seekbar + controls. -->
         <LinearLayout
