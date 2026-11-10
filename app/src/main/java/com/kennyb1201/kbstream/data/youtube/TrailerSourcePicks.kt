@@ -61,18 +61,61 @@ internal fun pickBest(
     items: List<StreamCandidate>,
     preferredClient: String,
     excludeClients: Set<String> = emptySet()
-): StreamCandidate? {
+): StreamCandidate? = probeOrder(items, preferredClient, excludeClients).firstOrNull()
+
+/**
+ * How many candidates of one shape are probed before playing one.
+ *
+ * THREE, not one: the failure this exists for is a single signed URL refusing
+ * its chunk ranges while another format of the same title serves them, and the
+ * field cases (2026-11-09, the trailers that died ~20 s in) were one candidate
+ * dying with nothing behind it. Three covers the preferred client's top two
+ * formats plus the next client's best without turning one resolve into a
+ * sweep of every rendition.
+ */
+internal const val MAX_PROBED_CANDIDATES = 3
+
+/**
+ * One probe's own ceiling. A CDN that has not begun to answer the opening chunk
+ * by now is not going to play the trailer, and the resolve must not wait on it:
+ * the same cheap ranged read the single probe used, bounded short enough that
+ * three of them in the worst case still fit the resolve's budget.
+ */
+internal const val CANDIDATE_PROBE_TIMEOUT_MS = 2_500L
+
+/**
+ * The whole probe set's ceiling, so three slow candidates cannot add up to a
+ * stalled resolve: whoever has answered by then is the pick.
+ */
+internal const val CANDIDATE_PROBE_BUDGET_MS = 4_000L
+
+/**
+ * Every eligible candidate in the order it may be probed: the preferred
+ * client's pool first, then the rest of the pool, each ranked by score.
+ *
+ * [pickBest] is this list's head, which is what keeps the first mount's rule and
+ * the probe's order from drifting apart: the preferred client is DEMOTED, not
+ * banned, and only when it has nothing does another client's source rank first.
+ */
+internal fun probeOrder(
+    items: List<StreamCandidate>,
+    preferredClient: String,
+    excludeClients: Set<String> = emptySet()
+): List<StreamCandidate> {
     // Defence in depth: the pools are already filtered by the caller, but this
     // is the one function that decides what plays, so an excluded client must
     // never win by being the preferred one.
     val eligible = items.filterNot { it.client in excludeClients }
     val preferred = eligible.filter { it.client == preferredClient }
     val pool = if (preferred.isNotEmpty()) preferred else eligible
-    return pool.sortedWith(
-        compareByDescending<StreamCandidate> { it.score }
-            .thenBy { if (it.hasN) 1 else 0 }
-            .thenBy { it.priority }
-    ).firstOrNull()
+    val byScore = compareByDescending<StreamCandidate> { it.score }
+        .thenBy { if (it.hasN) 1 else 0 }
+        .thenBy { it.priority }
+    // The preferred pool keeps its place even when it is empty: the rest of the
+    // pool is what is probed then, in exactly the order it would have had.
+    return preferred.sortedWith(byScore) + eligible
+        .filterNot { it.client == preferredClient }
+        .sortedWith(byScore)
 }
 
 /**

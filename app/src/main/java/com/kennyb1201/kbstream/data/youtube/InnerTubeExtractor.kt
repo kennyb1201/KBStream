@@ -4,6 +4,8 @@ import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -472,11 +474,19 @@ object InnerTubeExtractor {
         }
 
         // Prefer adaptive video + audio (best quality) only when HLS is absent.
-        val bestVideo = pickBest(allowedVideo, PREFERRED_SEPARATE_CLIENT, excludeClients)
+        //
+        // PROBED, not bet on: the top candidates of the shape are given a cheap
+        // ranged read at once, and the best-ranked one that actually serves
+        // bytes is the pick. The single probe this replaces answered for the
+        // top-scored candidate only, so a format that could not serve its chunk
+        // ranges was discovered ~20 s into playback instead of here - the
+        // 2026-11-09 deaths. The pick itself is unchanged when the top candidate
+        // answers: same ranking, same preferred client, same ladder order.
+        val bestVideo = firstServable(
+            probeOrder(allowedVideo, PREFERRED_SEPARATE_CLIENT, excludeClients)
+        )
 
-        val resolvedVideo = bestVideo?.let {
-            resolveReachableUrl(it.url, userAgentFor(it.client))
-        }
+        val resolvedVideo = bestVideo?.url
 
         // Probe more than one audio candidate: googlevideo rejects probes
         // per-CDN-node, so the single best audio URL 403ing does NOT mean the
@@ -555,12 +565,12 @@ object InnerTubeExtractor {
         // WITHIN that pool - it must not be able to put another client's source
         // first, which is how an android_vr first mount died at ~15 s while
         // android's own progressive played the trailer through.
-        val bestProgressive = pickBest(allowedProgressive, PREFERRED_SEPARATE_CLIENT, excludeClients)
+        val bestProgressive = firstServable(
+            probeOrder(allowedProgressive, PREFERRED_SEPARATE_CLIENT, excludeClients)
+        )
 
-        val resolvedProgressive = bestProgressive?.let {
-            resolveReachableUrl(it.url, userAgentFor(it.client))
-        }
-        if (resolvedProgressive != null) {
+        val resolvedProgressive = bestProgressive?.url
+        if (bestProgressive != null && resolvedProgressive != null) {
             Log.d(
                 TAG,
                 "Falling back to muxed progressive stream " +
@@ -931,6 +941,92 @@ object InnerTubeExtractor {
 
     /** UA of the client a candidate URL was signed for (probes must match it). */
     private fun userAgentFor(clientKey: String): String? = YouTubeClients.userAgentFor(clientKey)
+
+    /**
+     * The first candidate in [ranked] that serves bytes, probing them all at
+     * once.
+     *
+     * Every probe starts together and the answers are awaited IN RANK ORDER, so
+     * the winner is always the best-ranked readable candidate - never a lower
+     * format that merely answered first - while waiting only for the ranks above
+     * it to fail. The overall [CANDIDATE_PROBE_BUDGET_MS] bounds the lot; a probe
+     * still running when the pick is made is cancelled, so a dead CDN node
+     * cannot hold the resolve.
+     *
+     * A null answer leaves the caller to its next shape (adaptive -> progressive
+     * -> NewPipe), exactly as a failed single probe did.
+     */
+    private suspend fun firstServable(
+        ranked: List<StreamCandidate>,
+        limit: Int = MAX_PROBED_CANDIDATES
+    ): StreamCandidate? {
+        val top = ranked.take(limit)
+        if (top.isEmpty()) return null
+        return coroutineScope {
+            val probes = top.map { candidate ->
+                async(Dispatchers.IO) {
+                    probeServesBytes(candidate.url, userAgentFor(candidate.client))
+                }
+            }
+            val winner = withTimeoutOrNull(CANDIDATE_PROBE_BUDGET_MS) {
+                var found: StreamCandidate? = null
+                for (index in top.indices) {
+                    if (probes[index].await()) {
+                        found = top[index]
+                        break
+                    }
+                }
+                found
+            }
+            // The pick is made; whatever is still probing is not the pick.
+            probes.forEach { it.cancel() }
+            winner
+        }
+    }
+
+    /**
+     * The probe itself: a ranged GET for the opening megabyte under the UA the
+     * URL was signed for, accepted only when bytes actually arrive.
+     *
+     * The response code alone is not enough - googlevideo has been seen to
+     * answer a range request and then serve nothing - so the first kilobyte is
+     * read before the candidate counts as playable. Non-googlevideo URLs (the
+     * NewPipe/Piped shapes never reach this) count as servable: there is no
+     * chunk wall to test for them.
+     */
+    private fun probeServesBytes(url: String, userAgent: String?): Boolean {
+        if (!url.contains("googlevideo.com")) return true
+        return runCatching {
+            val request = Request.Builder()
+                .url(url)
+                .get()
+                .header("Range", "bytes=0-1048575")
+                .header("User-Agent", userAgent ?: YouTubeClients.android.userAgent)
+                .build()
+            candidateProbeClient.newCall(request).execute().use { response ->
+                if (response.code != 200 && response.code != 206) {
+                    return@use false
+                }
+                val stream = response.body.byteStream()
+                val buffer = ByteArray(1024)
+                stream.read(buffer) > 0
+            }
+        }.getOrDefault(false)
+    }
+
+    /**
+     * The candidates' probe client: same shape as [probeClient], with the read
+     * bounded to [CANDIDATE_PROBE_TIMEOUT_MS] so one silent CDN node costs a
+     * probe, not the resolve.
+     */
+    private val candidateProbeClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(2, TimeUnit.SECONDS)
+            .readTimeout(CANDIDATE_PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
+    }
 
     /**
      * The trailer's HLS manifest, a preferred client's whenever one is usable.

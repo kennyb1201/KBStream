@@ -2081,6 +2081,11 @@ Log.d(
             backdropUrl = resolvedBackdrop,
             logoUrl = resolvedLogo,
             trailerKey = heroTrailerKeyOf(detail),
+            // The IMDb id the resolve tries before that key, when this page's
+            // own id already is one (Cinemeta's "tt…"); a TMDB-keyed page is
+            // mapped by the launcher from the id beside it.
+            imdbId = com.kennyb1201.kbstream.data.imdb.ImdbTrailerData.imdbIdOf(id),
+            tmdbId = detail?.id,
             settled = true
         )
     }

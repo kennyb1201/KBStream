@@ -1412,6 +1412,12 @@ private fun HomeHero(
     // the shortcut's name, mirroring the tile's own fallback.
     var brandMarkUnusable by remember(heroLogoUrls) { mutableStateOf(false) }
 
+    // The title's IMDb id, for the IMDb leg of the resolve below, when this
+    // page's add-on meta already is one (Cinemeta's "tt…"). Otherwise the
+    // launcher maps the hero's TMDB id. Null keeps the hero on YouTube, exactly
+    // as it was.
+    val heroImdbId = com.kennyb1201.kbstream.data.imdb.ImdbTrailerData.imdbIdOf(meta?.id)
+
     val trailerPlaying =
         !trailerKey.isNullOrBlank() && autoPlayTrailer
 
@@ -1631,7 +1637,13 @@ private fun HomeHero(
                 TrailerPlayerLauncher
                     .resolvePlayableUrl(
                         trailerKey,
-                        excludeClients = pending?.excludedClients ?: emptySet()
+                        excludeClients = pending?.excludedClients ?: emptySet(),
+                        // IMDb's own MP4 is tried before this YouTube key; the
+                        // id comes from the hero's own detail (a tt-id meta)
+                        // or the TMDB mapping the launcher resolves.
+                        imdbId = heroImdbId,
+                        tmdbId = tmdbDetail?.id,
+                        type = preview.type
                     )
                     .onSuccess { source ->
                         // Kept for the death plan: a later death names this
@@ -3115,6 +3127,26 @@ private fun HomeHeroHost(
     // resolve off in the background the moment the key arrives means the
     // post-dwell resolve is usually a cache hit (the resolve mutex coalesces
     // both callers into one network flight) and playback starts immediately.
+    // The hero title's IMDb id, for the pre-warm and the IMDb leg of the
+    // post-dwell resolve. Read here rather than passed in: HomeHeroHost already
+    // takes the detail and the meta as State, and both are composition-time
+    // reads that belong in this scope.
+    val heroImdbId = com.kennyb1201.kbstream.data.imdb.ImdbTrailerData
+        .imdbIdOf(heroMeta.value?.id)
+
+    // The IMDb pre-resolve, on its own effect so its title-page fallback (~8 s,
+    // 18 s worst case) can never delay the YouTube pre-warm below: the two are
+    // independent sources and the play reads whichever is ready.
+    LaunchedEffect(heroImdbId, heroTmdbDetail.value?.id) {
+        runCatchingCancellable {
+            TrailerPlayerLauncher.prefetchImdbTrailer(
+                imdbId = heroImdbId,
+                tmdbId = heroTmdbDetail.value?.id,
+                type = focusedItem.value?.type
+            )
+        }
+    }
+
     LaunchedEffect(heroTrailerKey.value) {
         val key = heroTrailerKey.value
         if (
@@ -3130,7 +3162,10 @@ private fun HomeHeroHost(
                 InnerTubeExtractor.prewarmPoTokens(key)
                 TrailerPlayerLauncher.resolvePlayableUrl(
                     key,
-                    recordFailure = false
+                    recordFailure = false,
+                    imdbId = heroImdbId,
+                    tmdbId = heroTmdbDetail.value?.id,
+                    type = focusedItem.value?.type
                 )
                     // Silent in the UI (the hero keeps its backdrop), but not in
                     // the log: a pre-warm that never lands is why the post-dwell

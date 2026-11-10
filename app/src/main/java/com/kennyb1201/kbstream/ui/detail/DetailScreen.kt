@@ -134,8 +134,10 @@ import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.tmdb.tmdbImage
 import com.kennyb1201.kbstream.data.tmdb.writers
-import com.kennyb1201.kbstream.data.youtube.PlayableSource
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.youtube.InnerTubeExtractor
+import com.kennyb1201.kbstream.data.youtube.PlayableSource
+import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_WAIT_MS
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
@@ -1403,6 +1405,10 @@ fun DetailScreen(
     val trailerVideo = remember(tmdbDetail) {
         TrailerPick.best(tmdbDetail?.videos?.results)
     }
+    // The title's IMDb id, for the IMDb trailer leg of every resolve on this
+    // page: an add-on meta whose id already is one (Cinemeta). A TMDB-id page
+    // has none here - that mapping is resolved by the launcher from tmdbDetail.
+    val detailImdbId = com.kennyb1201.kbstream.data.imdb.ImdbTrailerData.imdbIdOf(meta?.id)
     // PO-token pre-warm: a title that HAS a trailer means the press is seconds to
     // minutes away, and the cold WebView is what a resolve pays its whole mint
     // budget for (see InnerTubeExtractor.prewarmPoTokens). Off the main thread
@@ -1410,6 +1416,22 @@ fun DetailScreen(
     LaunchedEffect(trailerVideo?.key) {
         trailerVideo?.key?.takeIf { it.isNotBlank() }?.let { key ->
             InnerTubeExtractor.prewarmPoTokens(key)
+        }
+    }
+    // The IMDb pre-resolve, on the same rule: the title has a trailer button, so
+    // the press is seconds to minutes away and the lookup (plus its title-page
+    // fallback, ~8 s) belongs here rather than in front of a black screen.
+    LaunchedEffect(detailImdbId, tmdbDetail?.id) {
+        if (detailImdbId != null || tmdbDetail?.id != null) {
+            runCatchingCancellable {
+                TrailerPlayerLauncher.prefetchImdbTrailer(
+                    imdbId = detailImdbId,
+                    tmdbId = tmdbDetail?.id,
+                    // The route's own spelling: the mapping normalizes it
+                    // ("tv", "anime" and "series" all reach TMDB's series).
+                    type = type
+                )
+            }
         }
     }
     // TMDB's English clearlogo, or nothing. The add-on's own `logo` (fanart.tv
@@ -3679,7 +3701,14 @@ fun DetailScreen(
      * handled by the player's own single-class resume (see TrailerPlayerLauncher).
      */
     fun playTrailer(context: Context, video: TmdbVideo?) {
-        DetailTrailerLaunch.play(context, scope, video)
+        DetailTrailerLaunch.play(
+            context,
+            scope,
+            video,
+            imdbId = detailImdbId,
+            tmdbId = tmdbDetail?.id,
+            type = normalizedType
+        )
     }
 
     /** The header button's trailer: the one pick its label was built from. */

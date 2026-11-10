@@ -569,6 +569,9 @@ fun SettingsScreen(
     var audioOutput by remember(profileRowKey) {
         mutableIntStateOf(AppPreferences.getAudioOutput(context))
     }
+    var imdbTrailers by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getImdbTrailerEnabled(context))
+    }
     var heroTrailerAutoplay by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getHeroTrailerAutoplay(context))
     }
@@ -3208,6 +3211,24 @@ fun SettingsScreen(
                 // Renamed with that move (settings reorg §8.3): the clock left,
                 // so the header names what is actually in the section.
                 SettingsSectionHeader("Hero Trailers")
+
+                // The source leg, not just the hero's: every trailer this app
+                // resolves asks IMDb first when this is on. It sits at the top
+                // of the section because it decides what a trailer IS before
+                // the rows below decide when one plays.
+                ToggleRow(
+                    label = "IMDb Trailers",
+                    description = "Play IMDb's own trailer (a single MP4, up to 1080p) when it has one, " +
+                        "and fall back to YouTube when it does not. Applies to every trailer — hero, " +
+                        "Detail and the media rail — not just this screen's.",
+                    checked = imdbTrailers,
+                    onToggle = {
+                        imdbTrailers = it
+                        AppPreferences.setImdbTrailerEnabled(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
 
                 ToggleRow(
                     label = "Hero Trailer Autoplay",

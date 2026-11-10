@@ -2,8 +2,15 @@ package com.kennyb1201.kbstream.data.youtube
 
 import android.net.Uri
 import android.util.Log
+import com.kennyb1201.kbstream.data.addon.AppContextHolder
+import com.kennyb1201.kbstream.data.imdb.ImdbStreamSelector
+import com.kennyb1201.kbstream.data.imdb.ImdbTrailerData
+import com.kennyb1201.kbstream.data.imdb.ImdbTrailerResolver
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.evictOldest
+import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -66,6 +73,31 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
     private val identityBlocked = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /**
+     * The signing key an IMDb-sourced mount is reported under.
+     *
+     * IMDb signs no googlevideo URL, so there is no YouTube client to name - but
+     * a death still has to say WHICH source died, and a resume still has to be
+     * able to avoid re-picking it. The exclusion is the same mechanism the
+     * YouTube ladder uses: the resume passes this key, and the IMDb leg is
+     * skipped for it, so an IMDb trailer that dies is retried over YouTube
+     * rather than served the same MP4 again.
+     */
+    internal const val IMDB_CLIENT = "imdb"
+
+    /**
+     * Videos whose last handed-over source was IMDb's, session-scoped.
+     *
+     * Kept apart from [sourceCache] on purpose: that cache is keyed on a signed
+     * YouTube URL's `expire` and capped at 6 h, while an IMDb answer has its own
+     * 30-minute discipline in [ImdbTrailerResolver] and must not be served for
+     * the six hours this map would claim. Cleared whenever a YouTube source is
+     * handed over for the same video, so [cachedSigningClient] names the source
+     * that actually mounted last.
+     */
+    private val imdbMounted =
+        java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /**
      * Caps for the two caches above, which live for the whole process (this is
      * an `object`).
      *
@@ -100,6 +132,7 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         // in its value's cachedAt, the failure in the value itself.
         evictOldest(sourceCache, { it.cachedAt }, MAX_SOURCE_ENTRIES)
         evictOldest(resolutionFailures, { it }, MAX_FAILURE_ENTRIES)
+        evictOldest(imdbMounted, { it }, MAX_FAILURE_ENTRIES)
     }
 
     /** Both caches against their caps, for the diagnostics dump. */
@@ -115,6 +148,9 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
     fun invalidate(videoId: String) {
         sourceCache.remove(videoId)
         identityBlocked.remove(normalizeId(videoId))
+        // An explicit invalidation also re-opens the IMDb leg: the MP4 it served
+        // may have been the thing that died.
+        imdbMounted.remove(normalizeId(videoId))
     }
 
     /**
@@ -151,8 +187,16 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
      * resolve is the fallback for a cache entry already gone (evicted, or a
      * resolve from a previous launch that this one served from the cache).
      */
-    fun signingClient(videoIdOrUrl: String): String? =
-        sourceCache[normalizeId(videoIdOrUrl)]?.client ?: PoTokenTrace.resolveClient()
+    fun signingClient(videoIdOrUrl: String): String? {
+        val id = normalizeId(videoIdOrUrl)
+        sourceCache[id]?.let { return it.client }
+        // An IMDb mount has no signed URL to name, and the trace's answer here
+        // would be whatever resolve ran last - so the source is named directly,
+        // and the fullscreen player's one resume excludes it instead of
+        // re-signing the same MP4 that just died (see IMDB_CLIENT).
+        if (imdbMounted.containsKey(id)) return IMDB_CLIENT
+        return PoTokenTrace.resolveClient()
+    }
 
     /**
      * The client recorded on THIS video's own cached entry, or null when there
@@ -165,8 +209,14 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
      * that never signed this trailer and hide the class that did. Null means
      * "unknown client": the ladder grows nothing and relies on its attempt cap.
      */
-    fun cachedSigningClient(videoIdOrUrl: String): String? =
-        sourceCache[normalizeId(videoIdOrUrl)]?.client
+    fun cachedSigningClient(videoIdOrUrl: String): String? {
+        val id = normalizeId(videoIdOrUrl)
+        // A cached YouTube source names its own client (null for NewPipe/Piped).
+        // Without one, the last hand-over may still have been IMDb's: that is a
+        // source this build can name, and the resume has to be able to skip it.
+        if (sourceCache.containsKey(id)) return sourceCache[id]?.client
+        return if (imdbMounted.containsKey(id)) IMDB_CLIENT else null
+    }
 
     /**
      * The stored form of a video key: the extracted id when one can be read, so
@@ -268,7 +318,27 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
          * The replacement is stored, so the next ordinary resolve serves the
          * working source.
          */
-        excludeClients: Set<String> = emptySet()
+        excludeClients: Set<String> = emptySet(),
+        /**
+         * The title's IMDb id (`tt…`), when the caller already knows it.
+         *
+         * IMDb's own trailer - one progressive MP4 - is tried BEFORE the
+         * YouTube ladder whenever the IMDb setting is on and IMDb has something
+         * at 720p or better; see [ImdbTrailerResolver]. Null simply leaves the
+         * resolve on YouTube unless [tmdbId] can name one.
+         */
+        imdbId: String? = null,
+        /**
+         * The title on TMDB, for the IMDb lookup when no `tt…` id was passed.
+         *
+         * A Cinemeta row is already filed under a `tt…` id, but the app's own
+         * rails and most add-on ids are TMDB's - so the mapping (cached by
+         * [TmdbRepository] for thirty days) is what lets IMDb's trailer reach
+         * the default Home feed instead of only the Cinemeta half of it.
+         */
+        tmdbId: Int? = null,
+        /** `movie` / `series`, for that mapping. */
+        type: String? = null
     ): Result<PlayableSource> = resolveMutex.withLock {
 
         // Keep the two process-wide caches bounded (see [pruneCaches]). Every
@@ -320,6 +390,29 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
             resolutionFailures.remove(videoId)
         }
 
+        // IMDb first: a single MP4 that needs no adaptive merge and no signed
+        // chunker, which is the whole reason it exists. Skipped on an exclusion
+        // resolve - that is the YouTube ladder retrying a class that died, and
+        // an IMDb trailer that died has no class: its recovery IS the YouTube
+        // path (see IMDB_CLIENT).
+        val imdb = resolveImdbSource(imdbId, tmdbId, type, excludeClients)
+        if (imdb != null) {
+            val source = PlayableSource.Muxed(imdb.url)
+            resolutionFailures.remove(videoId)
+            imdbMounted[videoId] = System.currentTimeMillis()
+            // Recorded, not mounted as a token pair: nothing here comes from
+            // YouTube, and a `fallback=true` snapshot would read as a
+            // NewPipe/Piped death (see PoTokenTrace.recordMount).
+            PoTokenTrace.recordTrailerSource(
+                "imdb-" + imdb.kindLabel + " video=" + videoId +
+                    " imdb=" + imdbId?.trim() +
+                    " height=" + imdb.height +
+                    " host=" + originHost(imdb.url)
+            )
+            logResolved("IMDb " + imdb.kindLabel, source)
+            return@withLock Result.success(source)
+        }
+
         // Serve from cache if fresh - unless this is an exclusion resolve, whose
         // whole point is a source DIFFERENT from the one the cache holds.
         if (excludeClients.isEmpty()) {
@@ -367,6 +460,9 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
                 resolved.pot
             )
             resolutionFailures.remove(videoId)
+            // A YouTube source just replaced the IMDb one: the next death is
+            // that source's, and its class is what the resume excludes.
+            imdbMounted.remove(videoId)
             logResolved("InnerTube", resolved.source)
             return@withLock Result.success(resolved.source)
         }
@@ -412,6 +508,7 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
                 pot = false
             )
             resolutionFailures.remove(videoId)
+            imdbMounted.remove(videoId)
             logResolved("NewPipe/Piped", source)
         }
         val error = fallback.exceptionOrNull() ?: return@withLock fallback
@@ -437,6 +534,78 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
             error
         )
         return fallback
+    }
+
+    /**
+     * The IMDb leg of a resolve: the title's MP4, or null to stay on YouTube.
+     *
+     * Four gates, each with a reason:
+     *
+     *  - an exclusion resolve never uses it (see [IMDB_CLIENT]);
+     *  - the viewer's setting must be on (default on - this is a reliability
+     *    switch, not a taste one);
+     *  - there must be an application context to read that setting and to build
+     *    a WebView for the page fallback;
+     *  - there must be an IMDb id - every caller that has one passes it.
+     *
+     * `allowPage = false`: a play press may spend the four-second service
+     * exchange, never the eighteen-second title page. The page is the
+     * pre-resolve's job (see [prefetchImdbTrailer]), so a slow page is hidden
+     * behind the hero delay rather than in front of a black screen.
+     */
+    private suspend fun resolveImdbSource(
+        imdbId: String?,
+        tmdbId: Int?,
+        type: String?,
+        excludeClients: Set<String>
+    ): ImdbStreamSelector.Pick? {
+        if (excludeClients.isNotEmpty()) return null
+        val context = AppContextHolder.appContext ?: return null
+        if (!AppPreferences.getImdbTrailerEnabled(context)) return null
+        val id = imdbIdFor(context, imdbId, tmdbId, type) ?: return null
+        return ImdbTrailerResolver.resolve(id, allowPage = false)
+    }
+
+    /**
+     * The title's IMDb id: the caller's own `tt…` id, else TMDB's mapping for
+     * [tmdbId].
+     *
+     * The mapping is [TmdbRepository.resolveImdbId]: memory + disk cached for
+     * thirty days, so a title checked once costs no request on any later
+     * trailer - and a failure is null rather than an exception thrown into the
+     * resolve.
+     */
+    private suspend fun imdbIdFor(
+        context: android.content.Context,
+        imdbId: String?,
+        tmdbId: Int?,
+        type: String?
+    ): String? {
+        imdbId?.let { ImdbTrailerData.imdbIdOf(it) }?.let { return it }
+        val tmdb = tmdbId ?: return null
+        return runCatchingCancellable {
+            TmdbRepository.getInstance(context).resolveImdbId(tmdb, type ?: "movie")
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * The pre-resolve leg: the title's IMDb trailer, cached for the play that
+     * follows.
+     *
+     * Fire-and-forget from the surfaces that know the id before a play exists
+     * (detail entry, hero focus). It runs the title page when the service does
+     * not answer, which is the ~8 s the reference app measures - deliberately
+     * spent here, while a viewer is still browsing, instead of on a press.
+     */
+    suspend fun prefetchImdbTrailer(
+        imdbId: String? = null,
+        tmdbId: Int? = null,
+        type: String? = null
+    ) {
+        val context = AppContextHolder.appContext ?: return
+        if (!AppPreferences.getImdbTrailerEnabled(context)) return
+        val id = imdbIdFor(context, imdbId, tmdbId, type) ?: return
+        ImdbTrailerResolver.prefetch(id)
     }
 
     internal fun logResolved(resolver: String, source: PlayableSource) {

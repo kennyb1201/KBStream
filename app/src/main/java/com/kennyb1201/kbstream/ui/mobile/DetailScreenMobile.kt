@@ -76,6 +76,7 @@ import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.download.DownloadIdentity
 import com.kennyb1201.kbstream.data.images.ImageOverrides
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
@@ -951,6 +952,25 @@ fun DetailScreenMobile(
         val trailerKey = remember(trailerVideo) {
             trailerVideo?.key?.takeIf { it.isNotBlank() }
         }
+        // The title's IMDb id, when the add-on's own id is one (Cinemeta). A
+        // TMDB-id page has none here - the launcher resolves that mapping from
+        // tmdbDetail. The IMDb trailer is what the resolve tries first; null
+        // keeps it on YouTube.
+        val trailerImdbId = com.kennyb1201.kbstream.data.imdb.ImdbTrailerData.imdbIdOf(meta?.id)
+        // The IMDb pre-resolve, beside the token pre-warm and for the same
+        // reason: a press or a dwell is coming, and the lookup (with its title
+        // page fallback) belongs behind the hero delay, not in front of it.
+        LaunchedEffect(trailerImdbId, tmdbDetail?.id) {
+            if (trailerImdbId != null || tmdbDetail?.id != null) {
+                runCatchingCancellable {
+                    TrailerPlayerLauncher.prefetchImdbTrailer(
+                        imdbId = trailerImdbId,
+                        tmdbId = tmdbDetail?.id,
+                        type = normalizedType
+                    )
+                }
+            }
+        }
         // PO-token pre-warm: the trailer here is a press (or a dwell) away, and
         // the cold WebView is what a resolve pays its whole mint budget for - the
         // 0.9.23 capture is exactly that (see
@@ -1221,8 +1241,13 @@ fun DetailScreenMobile(
             // memory. A retry carries the exclusion set, which is also what
             // makes it bypass the cache - the cached URL may be exactly the
             // class that just died.
-            val resolved = TrailerPlayerLauncher
-                .resolvePlayableUrl(key, excludeClients = pending?.excludedClients ?: emptySet())
+            val resolved = TrailerPlayerLauncher                    .resolvePlayableUrl(
+                        key,
+                        excludeClients = pending?.excludedClients ?: emptySet(),
+                        imdbId = trailerImdbId,
+                        tmdbId = tmdbDetail?.id,
+                        type = normalizedType
+                    )
             // Logged, not swallowed: a trailer that never mounts used to leave no
             // trace on this page at all, while the fullscreen owners log the same
             // failure (see DetailTrailerLaunch). Silent on screen, findable in a
@@ -2307,7 +2332,14 @@ fun DetailScreenMobile(
                                                 // Vimeo key.
                                                 video != null && !card.playable -> Unit
                                                 video != null ->
-                                                    DetailTrailerLaunch.play(context, scope, video)
+                                                    DetailTrailerLaunch.play(
+                                                        context,
+                                                        scope,
+                                                        video,
+                                                        imdbId = trailerImdbId,
+                                                        tmdbId = tmdbDetail?.id,
+                                                        type = normalizedType
+                                                    )
                                                 else ->
                                                     selectedBackdrop = card.fullImageUrl
                                             }

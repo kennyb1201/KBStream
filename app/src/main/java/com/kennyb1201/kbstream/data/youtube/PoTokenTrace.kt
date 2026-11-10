@@ -42,6 +42,9 @@ object PoTokenTrace {
 
     private var resolveLine: String? = null
 
+    /** Which trailer SOURCE the last hand-over came from (see [recordTrailerSource]). */
+    private var sourceLine: String? = null
+
     /**
      * The pre-warm's state, always printable: an unset line reads `state=cold`,
      * which is a fact too (this box never warmed).
@@ -221,6 +224,25 @@ object PoTokenTrace {
     /** The most recent resolve's source shape (`hls`/`adaptive`/`progressive`). */
     @Synchronized
     fun resolveKind(): String? = lastResolveKind
+
+    /**
+     * Records which TRAILER SOURCE the last hand-over came from.
+     *
+     * The resolve line above names the YouTube client and format, which says
+     * nothing when the source was not YouTube's at all: an IMDb trailer plays as
+     * one progressive MP4 and would otherwise read as `kind=progressive` with no
+     * client, exactly like a NewPipe/Piped fallback. A field report asking
+     * "did it use IMDb?" then has no line to read, so this one says it in the
+     * report's own vocabulary: `imdb-mp4` or `imdb-hls`, with the id, height and
+     * host. Never a signature or a query string.
+     *
+     * Only the IMDb leg writes it; a YouTube hand-over leaves it as it was (the
+     * resolve line is that source's own record).
+     */
+    @Synchronized
+    fun recordTrailerSource(line: String) {
+        sourceLine = "trailer.source: " + line.trim()
+    }
 
     /**
      * Records the chunk range a googlevideo read or open died in.
@@ -472,6 +494,7 @@ object PoTokenTrace {
             contextLines[context.label]?.let { add(it) }
         }
         resolveLine?.let { add(it) }
+        sourceLine?.let { add(it) }
         add(warmLine ?: "pot.warm: state=$WARM_COLD")
         eventLine?.let { add(it) }
         deathLine?.let { add(it) }
@@ -496,6 +519,7 @@ object PoTokenTrace {
     fun clear() {
         contextLines.clear()
         resolveLine = null
+        sourceLine = null
         warmLine = null
         eventLine = null
         deathLine = null

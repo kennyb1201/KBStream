@@ -65,6 +65,19 @@ data class BillboardPage(
     val logoUrl: String?,
     /** The YouTube key the page's trailer plays, or null when TMDB has none. */
     val trailerKey: String?,
+    /**
+     * The title's IMDb id, when the page's own detail named one.
+     *
+     * The trailer resolve tries IMDb before [trailerKey], so this is what makes
+     * the billboard play the MP4 source rather than only the YouTube one. Null
+     * (an id TMDB cannot place) simply keeps that page on YouTube.
+     */
+    val imdbId: String? = null,
+    /**
+     * The same page on TMDB, for the IMDb lookup when [imdbId] is null (the
+     * usual case: most rails are keyed on TMDB, not on `tt…`).
+     */
+    val tmdbId: Int? = null,
     /** True once this page's resolve has published everything above together. */
     val settled: Boolean
 )

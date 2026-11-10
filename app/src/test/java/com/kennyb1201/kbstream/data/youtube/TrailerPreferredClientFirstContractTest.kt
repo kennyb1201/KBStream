@@ -95,13 +95,13 @@ class TrailerPreferredClientFirstContractTest {
     }
 
     @Test
-    fun `the progressive pick is the shared preferred-client pick`() {
+    fun `the progressive pick is the shared preferred-client probe order`() {
         assertTrue(
             "one ranking function decides what plays: the progressive pool goes " +
-                "through it, not through a sort of its own",
-            extractor.contains(
-                "val bestProgressive = pickBest(" +
-                    "allowedProgressive, PREFERRED_SEPARATE_CLIENT, excludeClients)"
+                "through the shared probe order, not through a sort of its own",
+            flat(extractor).contains(
+                "val bestProgressive = firstServable( " +
+                    "probeOrder(allowedProgressive, PREFERRED_SEPARATE_CLIENT, excludeClients) )"
             )
         )
         assertTrue(
@@ -112,9 +112,17 @@ class TrailerPreferredClientFirstContractTest {
                 )
         )
         assertTrue(
-            "the adaptive pick is the same shape it always was - untouched",
-            extractor.contains(
-                "pickBest(allowedVideo, PREFERRED_SEPARATE_CLIENT, excludeClients)"
+            "the adaptive pick is the same rule, applied to the candidates probed " +
+                "ahead of the mount (see the probe spec)",
+            flat(extractor).contains(
+                "val bestVideo = firstServable( " +
+                    "probeOrder(allowedVideo, PREFERRED_SEPARATE_CLIENT, excludeClients) )"
+            )
+        )
+        assertTrue(
+            "and the head of that order is still exactly what pickBest answers",
+            picks.contains(
+                "): StreamCandidate? = probeOrder(items, preferredClient, excludeClients).firstOrNull()"
             )
         )
     }
@@ -332,7 +340,7 @@ class TrailerPreferredClientFirstContractTest {
             "and every audio probe presents the Adaptive source's own UA, not " +
                 "the candidate's",
             body.contains("val probed = resolveReachableUrl(candidate.url, playUa)") &&
-                !body.contains("userAgentFor(candidate.client)")
+                !body.contains("resolveReachableUrl(candidate.url, userAgentFor(")
         )
     }
 

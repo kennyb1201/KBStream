@@ -82,6 +82,7 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.kb.BrowseHomeRail
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
 import com.kennyb1201.kbstream.data.kb.chipKey
@@ -2170,7 +2171,10 @@ private fun MobileBillboard(
         scope.launch {
             val result = TrailerPlayerLauncher.resolvePlayableUrl(
                 key,
-                excludeClients = pending?.excludedClients ?: emptySet()
+                excludeClients = pending?.excludedClients ?: emptySet(),
+                imdbId = page.imdbId,
+                tmdbId = page.tmdbId,
+                type = page.preview.type
             )
             result.onSuccess { source ->
                 if (playbackPageKey != ownerKey) return@onSuccess
@@ -2406,6 +2410,20 @@ private fun MobileBillboard(
         ?.takeIf { it.isNotBlank() }
     LaunchedEffect(pagerState.settledPage, nextPageTrailerKey) {
         nextPageTrailerKey?.let { key -> InnerTubeExtractor.prewarmPoTokens(key) }
+    }
+    // The same page's IMDb trailer, warmed on the same settle: the billboard's
+    // play press is one swipe (or one hold) away, and the lookup - title page
+    // included - is what should NOT be in front of it. Its own effect, so the
+    // token warm above is never held behind it.
+    val nextPage = pages.getOrNull((pagerState.settledPage + 1) % pages.size.coerceAtLeast(1))
+    LaunchedEffect(pagerState.settledPage, nextPage?.imdbId, nextPage?.tmdbId) {
+        runCatchingCancellable {
+            TrailerPlayerLauncher.prefetchImdbTrailer(
+                imdbId = nextPage?.imdbId,
+                tmdbId = nextPage?.tmdbId,
+                type = nextPage?.preview?.type
+            )
+        }
     }
 
     // A trailer never plays over a page the viewer has left, and never over

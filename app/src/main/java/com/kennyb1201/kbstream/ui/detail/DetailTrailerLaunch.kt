@@ -71,14 +71,30 @@ object DetailTrailerLaunch {
     fun play(
         context: Context,
         scope: CoroutineScope,
-        video: TmdbVideo?
+        video: TmdbVideo?,
+        /**
+         * The title's IMDb id, when the screen knows it.
+         *
+         * The resolve tries IMDb's own MP4 before the YouTube key it was handed
+         * (see `TrailerPlayerLauncher.resolvePlayableUrl`), so the two are not
+         * in competition: IMDb first, this video's YouTube key when IMDb has
+         * nothing suitable.
+         */
+        imdbId: String? = null,
+        /** The title on TMDB, when the screen has no `tt…` id to pass. */
+        tmdbId: Int? = null,
+        /** `movie` / `series`, for the TMDB-to-IMDb mapping. */
+        type: String? = null
     ) {
         val key = video?.key?.takeIf { it.isNotBlank() } ?: return
 
         scope.launch {
             val source =
                 TrailerPlayerLauncher.resolvePlayableUrl(
-                    "https://www.youtube.com/watch?v=$key"
+                    "https://www.youtube.com/watch?v=$key",
+                    imdbId = imdbId,
+                    tmdbId = tmdbId,
+                    type = type
                 ).getOrElse { error ->
                     Log.e(TAG, "Failed to resolve playable trailer URL", error)
                     return@launch

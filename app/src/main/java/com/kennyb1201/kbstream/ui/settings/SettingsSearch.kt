@@ -430,6 +430,14 @@ internal object SettingsSearchIndex {
             "Pure Black Surface",
             "pure black surface oled contrast theme"
         ),
+        // The source every trailer is resolved from before the hero's own rows:
+        // a viewer looking for "imdb" or "mp4" is asking for this one.
+        SettingSearchEntry(
+            "interface.imdb-trailers",
+            SettingsPane.INTERFACE,
+            "IMDb Trailers",
+            "imdb trailer mp4 source youtube fallback reliability"
+        ),
         SettingSearchEntry(
             "interface.hero-trailer-autoplay",
             SettingsPane.INTERFACE,
