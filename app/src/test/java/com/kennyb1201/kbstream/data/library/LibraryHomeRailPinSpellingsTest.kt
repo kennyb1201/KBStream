@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.data.library
 
+import com.kennyb1201.kbstream.data.bingecat.bingecatShelfId
 import com.kennyb1201.kbstream.data.publiclists.PublicListCard
 import com.kennyb1201.kbstream.data.publiclists.PublicListVendor
 import org.junit.Assert.assertEquals
