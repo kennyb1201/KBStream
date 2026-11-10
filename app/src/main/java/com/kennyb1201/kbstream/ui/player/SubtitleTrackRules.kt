@@ -62,6 +62,11 @@ internal object SubtitleTrackRules {
          * language tag never does — and it is what [choose] reads for the kind
          * ordering (see [SubtitleKindRules]). The viewer's picker already reads
          * the same field (see [pickerLabel]).
+         *
+         * Since F1 it is also the FIRST-PLAY bitmap signal: the mime cannot
+         * answer that on a first play (see [isProvenTextFormat]), so a label that
+         * names a bitmap format is what puts an SDH PGS track in the bitmap half
+         * of its kind step (see [namedBitmapFormat]).
          */
         val title: String? = null,
         /**
@@ -190,24 +195,67 @@ internal object SubtitleTrackRules {
     }
 
     /**
+     * The bitmap format a track's own NAME states, or null when it names none.
+     *
+     * The first-play answer to a question the mime cannot answer: media3
+     * transcodes text AND bitmap subtitles to `application/x-media3-cues` during
+     * extraction, so an embedded PGS track is mime-identical to the SRT track
+     * beside it (see [isProvenTextFormat]). What the muxer did write down is the
+     * track's name - `English (PGS)`, `PGS`, `English PGS`, `English SDH (PGS)` -
+     * and the chooser already reads that field for kind ([SubtitleKindRules]), so
+     * this is the same class of evidence, not a new one.
+     *
+     * WHOLE TOKENS only, split the way [SubtitleKindRules] splits its evidence, so
+     * `PGS-SDH` and `SDH [PGS]` both match while a word merely containing the
+     * letters does not. Case-insensitive. The returned badge is what [formatLabel]
+     * shows: `PGS` (also for `HDMV`, the disc's own name for it, and `PGSUB`),
+     * `VOBSUB`, `DVB` (also for `DVBSUB`).
+     */
+    fun namedBitmapFormat(title: String?): String? {
+        val name = title?.lowercase()?.takeIf { it.isNotBlank() } ?: return null
+        val words = name.split(nameTokenSplit).toSet()
+        return when {
+            "pgs" in words || "pgsub" in words || "hdmv" in words -> "PGS"
+            "vobsub" in words -> "VOBSUB"
+            "dvb" in words || "dvbsub" in words -> "DVB"
+            else -> null
+        }
+    }
+
+    /** The label's words, for the whole-token matches above. */
+    private val nameTokenSplit = Regex("[^\\p{L}\\p{N}]+")
+
+    /**
      * Short format badge for a picker row, or null when the format is unknown.
      *
      * The point is engine expectation: the badge names the format ("PGS",
      * "VOBSUB", "DVB") and "ASS" warns that it draws without its typesetting,
      * so the viewer learns what a track is before pressing it rather than after.
      * Whether THIS engine can draw it is a separate answer, carried by
-     * [cannotDrawNote]. A track whose mime proves nothing (the transcoded
-     * `x-media3-cues`) has no badge here on purpose: see [isProvenTextFormat].
+     * [cannotDrawNote].
+     *
+     * A mime that proves nothing (the transcoded `x-media3-cues`) has no badge
+     * from the MIME (see [isProvenTextFormat]) - but the track's own NAME can
+     * still name the format ([namedBitmapFormat]), which is what tells the viewer
+     * on a first play that the row beside their text track is a `PGS` image. A
+     * mime that PROVES text wins over the name, exactly as in [isBitmapTrack]: an
+     * SRT track labelled "English (PGS)" still badges `SRT`.
      */
-    fun formatLabel(mimeType: String?): String? = when (mimeType) {
-        MimeTypes.APPLICATION_PGS -> "PGS"
-        MimeTypes.APPLICATION_VOBSUB -> "VOBSUB"
-        MimeTypes.APPLICATION_DVBSUBS -> "DVB"
-        MimeTypes.TEXT_SSA -> "ASS"
-        MimeTypes.APPLICATION_SUBRIP -> "SRT"
-        MimeTypes.TEXT_VTT -> "VTT"
+    fun formatLabel(mimeType: String?, title: String? = null): String? {
+        val stated = when (mimeType) {
+            MimeTypes.APPLICATION_PGS -> "PGS"
+            MimeTypes.APPLICATION_VOBSUB -> "VOBSUB"
+            MimeTypes.APPLICATION_DVBSUBS -> "DVB"
+            MimeTypes.TEXT_SSA -> "ASS"
+            MimeTypes.APPLICATION_SUBRIP -> "SRT"
+            MimeTypes.TEXT_VTT -> "VTT"
 
-        else -> null
+            else -> null
+        }
+        if (stated != null) return stated
+        // The mime proves nothing, so the name is the only thing left - and it
+        // never speaks for a track whose mime proves text.
+        return if (isProvenTextFormat(mimeType)) null else namedBitmapFormat(title)
     }
 
     /**
@@ -253,7 +301,7 @@ internal object SubtitleTrackRules {
         forced: Boolean = false
     ): String {
         val lang = language?.trim()?.uppercase()?.takeIf { it.isNotEmpty() }
-        val format = formatLabel(mimeType)
+        val format = formatLabel(mimeType, title)
         val forcedTag = if (forced) SubtitleKindRules.FORCED else null
         val kinds = SubtitleKindRules.tagText(title)
         return listOfNotNull(lang, forcedTag, kinds, format)
@@ -344,17 +392,31 @@ internal object SubtitleTrackRules {
 
     /**
      * Whether this candidate is a BITMAP track for the text-before-bitmap split
-     * (F1/F2) - the same two signals [tierOf] reads, minus its ordering: a mime
-     * that states a bitmap format ([isBitmapFormat]), or a position this device
-     * has SEEN draw images ([provenBitmapPositions]).
+     * (F1/F2) - the signals [tierOf] reads, minus its ordering: a mime that
+     * states a bitmap format ([isBitmapFormat]), a NAME that states one
+     * ([namedBitmapFormat]), or a position this device has SEEN draw images
+     * ([provenBitmapPositions]).
      *
-     * Everything else counts as text here, including `application/x-media3-cues`
-     * and a null mime: media3 transcodes subtitles to that one mime during
-     * extraction, so it proves nothing either way (see [isProvenTextFormat]).
-     * That is the stated first-play limitation - an embedded PGS track is
-     * indistinguishable from text until it has been seen, and the proven-bitmap
-     * record demotes it from the next play on. No mime heuristic is invented to
-     * close it.
+     * The name is the first-play signal, and the one that closes the 2026-11-10
+     * report: everything else is silent on a first play. The mime is `x-media3-
+     * cues` for text and bitmap alike (see [isProvenTextFormat]), so it proves
+     * nothing either way, and the proven record is empty by definition. Kenny's
+     * file is the exact shape - an SDH PGS track labelled `English (PGS)` beside
+     * a regular text track - and the label is what puts the bitmap in the SDH
+     * bitmap half, so the regular text track wins step 1 as it should.
+     *
+     * Two guards, both load-bearing:
+     *  - a mime that PROVES text wins over the name, so the signal only fires
+     *    where the mime is silent - an SRT track labelled "English (PGS)" is
+     *    still text;
+     *  - it only ever DEMOTES. The track moves from the text half of its own
+     *    bucket to the bitmap half, so nothing is promoted and nothing is
+     *    dropped: with no text track in the bucket the bitmap still wins it.
+     *
+     * Stated remainder: a bitmap track whose label is a bare `English` carries no
+     * first-play signal, so that file keeps the old behavior until the proven
+     * record exists on a later play. This fixes every labelled file and no
+     * unlabelled one - and no mime guess is invented to cover the rest.
      */
     private fun isBitmapTrack(
         candidate: Candidate,
@@ -362,6 +424,9 @@ internal object SubtitleTrackRules {
         provenBitmapPositions: Set<Int>
     ): Boolean {
         if (isBitmapFormat(candidate.mimeType)) return true
+        if (!isProvenTextFormat(candidate.mimeType) && namedBitmapFormat(candidate.title) != null) {
+            return true
+        }
         val position = candidate.position.takeIf { it >= 0 } ?: index
         return position in provenBitmapPositions
     }
@@ -399,16 +464,18 @@ internal object SubtitleTrackRules {
      * step 1 from the English regular text track beside it, because the SDH scan
      * returned before the regular scan ever ran - so inside each bucket the
      * scans are SDH text, regular text, SDH bitmap, regular bitmap. "Bitmap" is
-     * [isBitmapTrack]: a mime that states PGS/VobSub/DVB, or a position this
-     * device has seen draw images. Forced stays a demoted block below the
-     * untagged bucket (a separate, settled decision), and its own scans take the
-     * same text-before-bitmap split.
+     * [isBitmapTrack]: a mime that states PGS/VobSub/DVB, a track's own NAME that
+     * states one, or a position this device has seen draw images. Forced stays a
+     * demoted block below the untagged bucket (a separate, settled decision), and
+     * its own scans take the same text-before-bitmap split.
      *
-     * Stated limitation: on a first play an embedded PGS track carries
-     * `application/x-media3-cues`, which proves nothing, so it is
-     * indistinguishable from text and can still win its kind step. From the
-     * second play the proven-bitmap record demotes it. There is deliberately no
-     * first-play mime guess (see [isProvenTextFormat]).
+     * A first play is answered by the track's own NAME ([namedBitmapFormat]): an
+     * SDH track labelled `English (PGS)` is a bitmap in the SDH half, so the
+     * regular text track beside it takes step 1 - the 2026-11-10 report. The
+     * stated remainder is a bitmap whose label names no format (`English`), which
+     * stays indistinguishable from text until the proven-bitmap record exists on
+     * a later play: there is deliberately no first-play mime guess (see
+     * [isProvenTextFormat]).
      *
      * The whole order, most complete first, is:
      *
@@ -465,9 +532,10 @@ internal object SubtitleTrackRules {
         val ordered = orderedForStep(renderable, provenBitmapPositions)
 
         // F1's split, the half every scan below asks for: [isBitmapTrack] - a
-        // stated bitmap mime, or a position this device has seen draw images -
-        // so a track whose mime proves nothing still counts as text until it has
-        // been seen (the documented first-play limitation).
+        // stated bitmap mime, a NAME that states one, or a position this device
+        // has seen draw images - so a track whose mime proves nothing is still
+        // demoted behind the text beside it on the FIRST play when its label
+        // says what it is (see [namedBitmapFormat]).
         val isBitmap: (IndexedValue<Candidate>) -> Boolean = {
             isBitmapTrack(it.value, it.index, provenBitmapPositions)
         }
