@@ -264,10 +264,11 @@ class TrailerBoundaryResumeContractTest {
                 helper.contains("if (trailerRefusalResumed) {")
         )
         assertTrue(
-            "the replacement is resolved EXCLUDING the client that signed the dead URL",
-            helper.contains(
-                ".resolvePlayableUrl(videoId, excludeClients = setOfNotNull(deadClient))"
-            )
+            "the replacement is resolved EXCLUDING the client that signed the dead URL, " +
+                "and with the title's ids so the IMDb MP4 is reachable",
+            helper.contains(".resolvePlayableUrl(") &&
+                helper.contains("excludeClients = setOfNotNull(deadClient),") &&
+                helper.contains("imdbId = trailerImdbId,")
         )
         assertTrue(
             "and it continues the session at the death position",

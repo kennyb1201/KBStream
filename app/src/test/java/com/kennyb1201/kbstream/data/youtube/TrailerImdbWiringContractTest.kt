@@ -126,8 +126,9 @@ class TrailerImdbWiringContractTest {
     @Test
     fun `the launcher asks IMDb before the YouTube ladder`() {
         val body = flat(launcher)
-        val imdb =
-            body.indexOf("val imdb = resolveImdbSource(imdbId, tmdbId, type, excludeClients)")
+        val imdb = body.indexOf(
+            "val imdb = resolveImdbSource(imdbId, tmdbId, type, excludeClients, videoId)"
+        )
         val innerTube = body.indexOf("InnerTubeExtractor.extractPlaybackSourceWithClient(")
 
         assertTrue("the IMDb leg is gone", imdb >= 0)
@@ -148,9 +149,25 @@ class TrailerImdbWiringContractTest {
         val body = flat(launcher)
 
         assertTrue(
-            "a resume excludes a class that died; IMDb has no class, so its " +
-                "recovery is the YouTube path",
-            body.contains("if (excludeClients.isNotEmpty()) return null")
+            "a resume that excludes the IMDb source refuses it: an IMDb death has " +
+                "no class, so its recovery is the YouTube path",
+            body.contains("if (IMDB_CLIENT in excludeClients) return null")
+        )
+        assertTrue(
+            "but the OLD blanket refusal must be gone - it also blocked the " +
+                "opposite direction, so a YouTube death (Head of State, 2026-11-10) " +
+                "could never recover to the MP4",
+            !body.contains("if (excludeClients.isNotEmpty()) return null") &&
+                body.contains(
+                    "if (videoId != null && imdbMounted.containsKey(normalizeId(videoId))) " +
+                        "return null"
+                )
+        )
+        assertTrue(
+            "and the video id that second half needs is passed in",
+            body.contains(
+                "resolveImdbSource(imdbId, tmdbId, type, excludeClients, videoId)"
+            )
         )
         assertTrue(
             "the viewer's switch",
@@ -365,6 +382,53 @@ class TrailerImdbWiringContractTest {
                 "TrailerPlayerLauncher.prefetchImdbTrailer( imdbId = nextPage?.imdbId, " +
                     "tmdbId = nextPage?.tmdbId, type = nextPage?.preview?.type )"
             )
+        )
+    }
+
+    @Test
+    fun `every retry re-resolve carries the ids the first resolve had`() {
+        // The retry IS an exclusion resolve, so the ids have to ride along with
+        // the exclusion set - a retry with no IMDb id cannot reach the MP4, which
+        // is the hole that kept a YouTube death (Head of State, 2026-11-10) on the
+        // dead pick.
+        assertTrue(
+            "the TV hero's re-resolve (the resume path) is handed them",
+            flat(homeTv).contains(
+                "excludeClients = pending?.excludedClients ?: emptySet(),"
+            ) &&
+                flat(homeTv).contains("imdbId = heroImdbId,") &&
+                flat(homeTv).contains("tmdbId = tmdbDetail?.id,")
+        )
+        assertTrue(
+            "and so are the phone's billboard and Detail hero",
+            flat(homePhone).contains(
+                "imdbId = page.imdbId, tmdbId = page.tmdbId, type = page.preview.type"
+            ) &&
+                flat(detailPhone).contains(
+                    "imdbId = trailerImdbId, tmdbId = tmdbDetail?.id, type = normalizedType"
+                )
+        )
+        assertTrue(
+            "the shared launch puts them in the player intent",
+            flat(detailLaunch).contains("putExtra(EXTRA_TRAILER_IMDB_ID, it)") &&
+                flat(detailLaunch).contains("putExtra(EXTRA_TRAILER_TMDB_ID, it)") &&
+                flat(detailLaunch).contains("putExtra(EXTRA_TRAILER_TYPE, it)")
+        )
+        val player = source("com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt")
+        assertTrue(
+            "and the fullscreen trailer's one re-resolve reads them back",
+            flat(player).contains(
+                "getStringExtra(DetailTrailerLaunch.EXTRA_TRAILER_IMDB_ID)"
+            ) && flat(player).contains(
+                "getIntExtra(DetailTrailerLaunch.EXTRA_TRAILER_TMDB_ID, 0)"
+            )
+        )
+        assertTrue(
+            "so that a fullscreen YouTube death can also reach the MP4",
+            flat(player).contains(
+                "excludeClients = setOfNotNull(deadClient),"
+            ) && flat(player).contains("imdbId = trailerImdbId,") &&
+                flat(player).contains("tmdbId = trailerTmdbId, type = trailerType")
         )
     }
 

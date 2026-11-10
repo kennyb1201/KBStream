@@ -63,6 +63,7 @@ import androidx.media3.session.MediaSession
 import androidx.media3.ui.AspectRatioFrameLayout
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.ui.components.clipToPosterEdge
+import com.kennyb1201.kbstream.ui.detail.DetailTrailerLaunch
 import com.kennyb1201.kbstream.ui.home.looksLikeRawMediaId
 import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 import com.kennyb1201.kbstream.data.addon.Stream
@@ -1787,6 +1788,21 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * something - and the next resolve is only worth making with a fresh one.
      */
     private var trailerVideoId: String? = null
+
+    /**
+     * The title's ids as the launching screen knew them, for the one trailer
+     * re-resolve this session can make (see [refreshIdentityOnTrailerRefusal]).
+     *
+     * Carried in the intent (see DetailTrailerLaunch) because the ids belong to
+     * the SCREEN, not to the source: the player knows a URL and a video id, and
+     * a retry that has no IMDb id cannot reach the MP4 - which is exactly how a
+     * YouTube death used to be unable to recover to IMDb.
+     */
+    private var trailerImdbId: String? = null
+
+    private var trailerTmdbId: Int? = null
+
+    private var trailerType: String? = null
 
     /**
      * Whether this trailer session has already spent its one client-exclusion
@@ -3775,6 +3791,15 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         )
         trailerVideoId = intent
             .getStringExtra(TrailerPlayerLauncher.EXTRA_TRAILER_VIDEO_ID)
+            ?.takeIf { it.isNotBlank() }
+        trailerImdbId = intent
+            .getStringExtra(DetailTrailerLaunch.EXTRA_TRAILER_IMDB_ID)
+            ?.takeIf { it.isNotBlank() }
+        trailerTmdbId = intent
+            .getIntExtra(DetailTrailerLaunch.EXTRA_TRAILER_TMDB_ID, 0)
+            .takeIf { it > 0 }
+        trailerType = intent
+            .getStringExtra(DetailTrailerLaunch.EXTRA_TRAILER_TYPE)
             ?.takeIf { it.isNotBlank() }
         itemPoster = intent.getStringExtra("item_poster")
         clearLogoUrl = intent.getStringExtra("clear_logo_url")
@@ -12385,7 +12410,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // signed it, and the replacement is sought where the trailer died.
         lifecycleScope.launch {
             val replacement = TrailerPlayerLauncher
-                .resolvePlayableUrl(videoId, excludeClients = setOfNotNull(deadClient))
+                .resolvePlayableUrl(
+                    videoId,
+                    excludeClients = setOfNotNull(deadClient),
+                    // The ids the launch screen resolved with: without them this
+                    // one retry could only walk other YouTube clients, which is
+                    // the Head of State hole (a YouTube death that could never
+                    // recover to the IMDb MP4).
+                    imdbId = trailerImdbId,
+                    tmdbId = trailerTmdbId,
+                    type = trailerType
+                )
                 .getOrNull()
             if (isFinishing || isDestroyed) {
                 // The session (or the process) went away before the requested

@@ -278,9 +278,9 @@ class TrailerPreferredClientFirstContractTest {
         assertTrue(
             "the recovery is unchanged: the dead client is excluded, android_vr " +
                 "included, and the replacement continues from the stop point",
-            player.contains(
-                ".resolvePlayableUrl(videoId, excludeClients = setOfNotNull(deadClient))"
-            )
+            player.contains(".resolvePlayableUrl(") &&
+                player.contains("excludeClients = setOfNotNull(deadClient),") &&
+                flat(player).contains("resolvePlayableUrl( videoId, excludeClients = ")
         )
         assertTrue(
             "and a tokenless progressive still carries the gate's flag",

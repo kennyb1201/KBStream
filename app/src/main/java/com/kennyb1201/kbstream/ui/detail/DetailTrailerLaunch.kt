@@ -30,11 +30,29 @@ object DetailTrailerLaunch {
 
     private const val TAG = "DetailTrailer"
 
+    /**
+     * The title's ids, carried into the player so a trailer that DIES there can
+     * re-resolve with the same IMDb leg the first resolve had.
+     *
+     * Without them the player's one trailer retry (see
+     * `NativePlayerActivity.refreshIdentityOnTrailerRefusal`) reaches only the
+     * YouTube ladder - the exact hole the Head of State death fell into: the
+     * retry after a YouTube death could never reach the IMDb MP4.
+     */
+    const val EXTRA_TRAILER_IMDB_ID = "trailer_imdb_id"
+
+    const val EXTRA_TRAILER_TMDB_ID = "trailer_tmdb_id"
+
+    const val EXTRA_TRAILER_TYPE = "trailer_type"
+
     /** The intent that hands [source] to the player for [videoId]. */
     fun intent(
         context: Context,
         source: PlayableSource,
-        videoId: String
+        videoId: String,
+        imdbId: String? = null,
+        tmdbId: Int? = null,
+        type: String? = null
     ): Intent =
         Intent(context, NativePlayerActivity::class.java).apply {
             val userAgent = when (source) {
@@ -60,6 +78,11 @@ object DetailTrailerLaunch {
             // invalidate the cached YouTube watch config (see
             // TrailerPlayerLauncher.isYouTubeIdentityBlocked's callers).
             putExtra(TrailerPlayerLauncher.EXTRA_TRAILER_VIDEO_ID, videoId)
+            // The ids the FIRST resolve had, for the one re-resolve this
+            // session can make: a retry that has no IMDb id cannot try the MP4.
+            imdbId?.takeIf { it.isNotBlank() }?.let { putExtra(EXTRA_TRAILER_IMDB_ID, it) }
+            tmdbId?.let { putExtra(EXTRA_TRAILER_TMDB_ID, it) }
+            type?.takeIf { it.isNotBlank() }?.let { putExtra(EXTRA_TRAILER_TYPE, it) }
         }
 
     /**
@@ -100,7 +123,16 @@ object DetailTrailerLaunch {
                     return@launch
                 }
 
-            context.startActivity(intent(context, source, key))
+            context.startActivity(
+                intent(
+                    context,
+                    source,
+                    key,
+                    imdbId = imdbId,
+                    tmdbId = tmdbId,
+                    type = type
+                )
+            )
         }
     }
 }

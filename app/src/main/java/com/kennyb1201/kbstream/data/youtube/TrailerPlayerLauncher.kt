@@ -391,11 +391,12 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         }
 
         // IMDb first: a single MP4 that needs no adaptive merge and no signed
-        // chunker, which is the whole reason it exists. Skipped on an exclusion
-        // resolve - that is the YouTube ladder retrying a class that died, and
-        // an IMDb trailer that died has no class: its recovery IS the YouTube
-        // path (see IMDB_CLIENT).
-        val imdb = resolveImdbSource(imdbId, tmdbId, type, excludeClients)
+        // chunker, which is the whole reason it exists. Tried FIRST on a
+        // retry too - that is the Head of State death (2026-11-10: a YouTube
+        // adaptive pick stalling at 2.4 MB), where the most reliable next try is
+        // the MP4, not another gated class. The one exclusion that refuses it is
+        // IMDb's own (see resolveImdbSource).
+        val imdb = resolveImdbSource(imdbId, tmdbId, type, excludeClients, videoId)
         if (imdb != null) {
             val source = PlayableSource.Muxed(imdb.url)
             resolutionFailures.remove(videoId)
@@ -541,12 +542,25 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
      *
      * Four gates, each with a reason:
      *
-     *  - an exclusion resolve never uses it (see [IMDB_CLIENT]);
+     *  - an IMDb DEATH is never answered with IMDb again (see below);
      *  - the viewer's setting must be on (default on - this is a reliability
      *    switch, not a taste one);
      *  - there must be an application context to read that setting and to build
      *    a WebView for the page fallback;
      *  - there must be an IMDb id - every caller that has one passes it.
+     *
+     * The first gate is what this used to get wrong. It refused IMDb on EVERY
+     * exclusion resolve, on the reasoning that an IMDb trailer has no client
+     * class so its recovery is the YouTube path - true, but it also blocked the
+     * opposite direction: a YouTube death could never recover to the MP4, which
+     * is exactly the 2026-11-10 Head of State case (a gated adaptive pick
+     * stalled at 2.4 MB of a 2m28 trailer) - and every retry is an exclusion
+     * resolve. So the test is now the IMDb CLIENT, not "any exclusion": a
+     * YouTube death admits the MP4, an IMDb death does not.
+     *
+     * [videoId]'s own mount marker is the second half of that gate: even a set
+     * that lost the name (an evicted entry, a cleared marker) cannot buy a
+     * second IMDb attempt in a row while the video's last mount was the MP4.
      *
      * `allowPage = false`: a play press may spend the four-second service
      * exchange, never the eighteen-second title page. The page is the
@@ -557,9 +571,13 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         imdbId: String?,
         tmdbId: Int?,
         type: String?,
-        excludeClients: Set<String>
+        excludeClients: Set<String>,
+        videoId: String?
     ): ImdbStreamSelector.Pick? {
-        if (excludeClients.isNotEmpty()) return null
+        // An IMDb death has no class to exclude: its recovery IS YouTube, and
+        // the ladder carries IMDB_CLIENT in the set precisely so this refuses.
+        if (IMDB_CLIENT in excludeClients) return null
+        if (videoId != null && imdbMounted.containsKey(normalizeId(videoId))) return null
         val context = AppContextHolder.appContext ?: return null
         if (!AppPreferences.getImdbTrailerEnabled(context)) return null
         val id = imdbIdFor(context, imdbId, tmdbId, type) ?: return null
