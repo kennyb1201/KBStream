@@ -552,7 +552,6 @@ private fun OnboardingAccountPanel(
  * was used. The card is always a card now: ready acts, not-ready explains
  * itself through [onBlocked], and [busy] only dims the label.
  */
- */
 @Composable
 private fun OnboardingActionButton(
     label: String,
