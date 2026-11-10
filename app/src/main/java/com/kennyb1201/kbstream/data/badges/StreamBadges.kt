@@ -8,6 +8,9 @@ import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
@@ -74,9 +77,31 @@ private data class CompiledBadgeFilter(
 object StreamBadgeEngine {
 
     private const val TAG = "StreamBadges"
-    private const val PREFS_NAME = "kbstream_stream_badges"
-    private const val KEY_PACK_JSON = "badge_pack_json"
-    private const val KEY_PACK_URL = "badge_pack_url"
+
+    /** The pack's own store, profile-scoped like every per-profile setting. */
+    internal const val PREFS_NAME = "kbstream_stream_badges"
+    internal const val KEY_PACK_JSON = "badge_pack_json"
+    internal const val KEY_PACK_URL = "badge_pack_url"
+
+    /**
+     * When this device's pack state last changed - a local import, a local
+     * removal, or an adoption from a sibling.
+     *
+     * The same role `SYNCED_AT` plays for the home order and the pinned rails:
+     * it is what lets a REMOVAL be compared against the pack it would undo. A
+     * removal older than this device's own pack is the sibling not having seen
+     * it yet, and must not win.
+     */
+    internal const val KEY_SYNCED_AT = "badge_pack_synced_at"
+
+    /**
+     * When the pack was removed, 0 while one is loaded.
+     *
+     * A removal used to be nothing but an empty store, which a payload cannot
+     * tell apart from a device that never configured a pack - the blank guard's
+     * whole reason for existing. This is the fact that separates the two.
+     */
+    internal const val KEY_CLEARED_AT = "badge_pack_cleared_at"
 
     private val moshi = Moshi.Builder()
         .addLast(KotlinJsonAdapterFactory())
@@ -108,16 +133,16 @@ object StreamBadgeEngine {
         prefs(context).edit()
             .putString(KEY_PACK_URL, url.trim())
             .putString(KEY_PACK_JSON, normalized)
+            // A pack exists again, so the removal record is spent: a stale
+            // cleared_at left behind would let a sibling adopt a removal of a
+            // pack that is back.
+            .putLong(KEY_CLEARED_AT, 0L)
+            .putLong(KEY_SYNCED_AT, System.currentTimeMillis())
             .apply()
 
         // Cross-device sync: share the imported badge pack.
-        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
-            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
-                appContext,
-                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_BADGE_PACK,
-                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildBadgePack(appContext)
-            )
-        }
+        publish(context)
+        notifyPackChanged()
         return true
     }
 
@@ -146,8 +171,60 @@ object StreamBadgeEngine {
             }
         }
 
+    /**
+     * Remove the pack - and record that this was a REMOVAL, not an empty store.
+     *
+     * The clear is unchanged (the pack URL and JSON go, nothing else in the
+     * settings does). What is new is the stamp and the publish: without them the
+     * removal only existed on this device until the next bulk push, which sent a
+     * blank pack that the other side is right to ignore.
+     */
     fun clearPack(context: Context) {
+        val now = System.currentTimeMillis()
         prefs(context).edit().clear().apply()
+        prefs(context).edit()
+            .putLong(KEY_CLEARED_AT, now)
+            .putLong(KEY_SYNCED_AT, now)
+            .apply()
+        publish(context)
+        notifyPackChanged()
+    }
+
+    /**
+     * True when the last pack state was a removal, so Settings can say so.
+     *
+     * Reads the stamp rather than remembering the press: the line then survives
+     * leaving and re-entering Settings, and says the same thing when the removal
+     * arrived from the other device.
+     */
+    fun wasRemoved(context: Context): Boolean =
+        !hasPack(context) && prefs(context).getLong(KEY_CLEARED_AT, 0L) > 0L
+
+    /**
+     * Ticks whenever the pack itself changes: a local import, a local removal, or
+     * a payload adopted from a sibling (see [PrefsPayloadApplier]).
+     *
+     * The Settings field is `remember`ed state seeded from the store, so it has
+     * no other way to learn that the store moved underneath it - which is why a
+     * REMOVE left the old URL on screen until the screen was left and entered
+     * again.
+     */
+    private val _revision = MutableStateFlow(0L)
+    val revision: StateFlow<Long> = _revision.asStateFlow()
+
+    fun notifyPackChanged() {
+        _revision.value += 1
+    }
+
+    /** Hand the pack to sync immediately: a removal the viewer just made must land now. */
+    private fun publish(context: Context) {
+        val appContext = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
+            ?: context.applicationContext
+        com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+            appContext,
+            com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_BADGE_PACK,
+            com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildBadgePack(appContext)
+        )
     }
 
     /** Parse + normalize a pack JSON: drops filters without name/pattern/valid regex. */

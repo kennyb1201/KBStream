@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream.data.sync
 
 import android.content.Context
+import com.kennyb1201.kbstream.data.badges.BadgePackSyncRules
+import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.data.bingecat.BingeCatToken
 import com.kennyb1201.kbstream.data.bingecat.BingeCatTokenStore
 import com.kennyb1201.kbstream.data.library.LibraryTombstones
@@ -711,11 +713,23 @@ object PrefsPayloadBuilder {
     }
 
     fun buildBadgePack(context: Context): JsonObject {
-        val prefs = scopedPrefs(context, "kbstream_stream_badges")
+        val prefs = scopedPrefs(context, StreamBadgeEngine.PREFS_NAME)
         return buildJsonObject {
             put("updatedAt", System.currentTimeMillis())
-            put("badge_pack_url", prefs.getString("badge_pack_url", null).orEmpty())
-            put("badge_pack_json", prefs.getString("badge_pack_json", null).orEmpty())
+            put(
+                StreamBadgeEngine.KEY_PACK_URL,
+                prefs.getString(StreamBadgeEngine.KEY_PACK_URL, null).orEmpty()
+            )
+            put(
+                StreamBadgeEngine.KEY_PACK_JSON,
+                prefs.getString(StreamBadgeEngine.KEY_PACK_JSON, null).orEmpty()
+            )
+            // The removal stamp, so a sibling can tell a deliberate removal from
+            // a device that never configured a pack (see BadgePackSyncRules).
+            put(
+                StreamBadgeEngine.KEY_CLEARED_AT,
+                prefs.getLong(StreamBadgeEngine.KEY_CLEARED_AT, 0L)
+            )
         }
     }
 
@@ -1631,21 +1645,67 @@ object PrefsPayloadApplier {
         if (live) _revision.value += 1
     }
 
+    /**
+     * The pack half of the account, including its REMOVAL.
+     *
+     * A removal is adopted on the same rule as the pins and the home order -
+     * newer than this device's own last pack state (see [BadgePackSyncRules]) -
+     * and then the open Settings field is told, so it cannot go on showing the
+     * URL of a pack that is gone.
+     */
     private fun applyBadgePack(context: Context, payload: JsonObject, profileId: String?) {
         fun str(key: String): String =
             (payload[key] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+        fun stamp(key: String): Long =
+            (payload[key] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.content?.toLongOrNull() ?: 0L
 
-        val url = str("badge_pack_url")
-        val packJson = str("badge_pack_json")
-        if (packJson.isBlank()) return
+        val prefs = profilePrefs(context, StreamBadgeEngine.PREFS_NAME, profileId)
+        val localStamp = prefs.getLong(StreamBadgeEngine.KEY_SYNCED_AT, 0L)
+        val clearedAt = stamp(StreamBadgeEngine.KEY_CLEARED_AT)
 
-        val prefs = profilePrefs(context, "kbstream_stream_badges", profileId)
-        if (packJson == prefs.getString("badge_pack_json", null).orEmpty()) return
+        when (
+            BadgePackSyncRules.decide(
+                remoteClearedAt = clearedAt,
+                remotePackJson = str(StreamBadgeEngine.KEY_PACK_JSON),
+                localPackJson = prefs.getString(StreamBadgeEngine.KEY_PACK_JSON, null)
+                    .orEmpty(),
+                localStamp = localStamp
+            )
+        ) {
+            BadgePackSyncRules.Decision.Ignore -> Unit
 
-        prefs.edit()
-            .putString("badge_pack_url", url)
-            .putString("badge_pack_json", packJson)
-            .apply()
+            BadgePackSyncRules.Decision.AdoptRemoval -> {
+                prefs.edit()
+                    .remove(StreamBadgeEngine.KEY_PACK_URL)
+                    .remove(StreamBadgeEngine.KEY_PACK_JSON)
+                    // The sibling's stamp, not `now`: this device did not make
+                    // the removal, and claiming it did would let it beat a newer
+                    // pack on the third device.
+                    .putLong(StreamBadgeEngine.KEY_CLEARED_AT, clearedAt)
+                    .putLong(StreamBadgeEngine.KEY_SYNCED_AT, clearedAt)
+                    .apply()
+                StreamBadgeEngine.notifyPackChanged()
+            }
+
+            BadgePackSyncRules.Decision.AdoptPack -> {
+                prefs.edit()
+                    .putString(StreamBadgeEngine.KEY_PACK_URL, str(StreamBadgeEngine.KEY_PACK_URL))
+                    .putString(
+                        StreamBadgeEngine.KEY_PACK_JSON,
+                        str(StreamBadgeEngine.KEY_PACK_JSON)
+                    )
+                    // A pack exists again here too, so the local removal record
+                    // is spent. The stamp only moves forward.
+                    .putLong(StreamBadgeEngine.KEY_CLEARED_AT, 0L)
+                    .putLong(
+                        StreamBadgeEngine.KEY_SYNCED_AT,
+                        maxOf(localStamp, stamp("updatedAt"))
+                    )
+                    .apply()
+                StreamBadgeEngine.notifyPackChanged()
+            }
+        }
     }
 
     /**

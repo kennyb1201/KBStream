@@ -270,11 +270,15 @@ class SettingsDeepDiveContractTest {
             mobile.contains("var value by remember(loadedValue) {") &&
                 mobile.contains("var saved by remember(loadedValue) {")
         )
+        // Two keys, both load-bearing: the profile, because the pack URL another
+        // profile imported is not this one's (settings reorg §4.5 moved the
+        // importer into Playback, not the scoping), and the pack's own revision,
+        // because a REMOVE - here or on the other device - leaves a remembered
+        // field showing the URL of a pack that is gone.
         assertTrue(
-            "the badge pack URL is per profile too - keyed on the pane's own " +
-                "profile key now that the importer lives in Playback (settings reorg " +
-                "§4.5), which is the same per-profile seed by another name",
-            mobile.contains("var badgePackInput by remember(profileRowKey) {")
+            "the badge pack URL is per profile too, and re-seeds when the pack itself " +
+                "changes",
+            mobile.contains("var badgePackInput by remember(profileRowKey, badgePackRevision) {")
         )
     }
 

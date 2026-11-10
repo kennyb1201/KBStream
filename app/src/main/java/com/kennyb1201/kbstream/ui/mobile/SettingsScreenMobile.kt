@@ -2226,16 +2226,22 @@ private fun PlaybackPaneMobile() {
         SettingsSectionMobile("Stream Badges")
         // Per profile, like every device-local row (see rememberProfileRowKey):
         // the pack URL another profile imported is not this one's.
-        var badgePackInput by remember(profileRowKey) {
+        // The pack's OWN revision (see the TV pane): the field is typed into, so
+        // it re-seeds only when the pack itself changes - a local import, a local
+        // REMOVE, or a payload adopted from the other device.
+        val badgePackRevision by StreamBadgeEngine.revision.collectAsStateWithLifecycle()
+        var badgePackInput by remember(profileRowKey, badgePackRevision) {
             mutableStateOf(StreamBadgeEngine.getPackUrl(context))
         }
-        var badgeStatus by remember(profileRowKey) {
+        var badgeStatus by remember(profileRowKey, badgePackRevision) {
             mutableStateOf(
-                if (StreamBadgeEngine.hasPack(context)) {
-                    "Badge pack imported — ${StreamBadgeEngine.filterCount(context)} " +
-                        "filters active"
-                } else {
-                    null
+                when {
+                    StreamBadgeEngine.hasPack(context) ->
+                        "Badge pack imported — ${StreamBadgeEngine.filterCount(context)} " +
+                            "filters active"
+                    // A recorded removal, not a device that never had a pack.
+                    StreamBadgeEngine.wasRemoved(context) -> "Badge pack removed"
+                    else -> null
                 }
             )
         }
@@ -2291,6 +2297,10 @@ private fun PlaybackPaneMobile() {
                     label = "REMOVE",
                     onClick = {
                         StreamBadgeEngine.clearPack(context)
+                        // Seeded remembered state: the store clearing does not
+                        // move the text field, so the URL has to be cleared here
+                        // or it stays on screen until Settings is re-entered.
+                        badgePackInput = ""
                         badgeStatus = "Badge pack removed"
                     }
                 )

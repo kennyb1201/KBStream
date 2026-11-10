@@ -587,7 +587,14 @@ fun SettingsScreen(
     var resumeAuthority by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getResumeAuthority(context))
     }
-    var badgePackInput by remember(profileRowKey) {
+    // The pack's OWN revision, not the broad synced one: this field is typed
+    // into, and re-seeding it on every unrelated synced pref would erase a
+    // half-typed URL. The engine ticks it on a local import, a local REMOVE and
+    // a payload adopted from a sibling, which is exactly when the text on screen
+    // stops being true - the REMOVE that left the old URL showing, and the
+    // removal that lands from the other device.
+    val badgePackRevision by StreamBadgeEngine.revision.collectAsStateWithLifecycle()
+    var badgePackInput by remember(profileRowKey, badgePackRevision) {
         mutableStateOf(StreamBadgeEngine.getPackUrl(context))
     }
     var railShowType by remember(syncedRevision) {
@@ -2968,13 +2975,23 @@ fun SettingsScreen(
                         // update it live.
                         // Keyed like the pack URL beside it: the status
                         // describes THAT profile's pack, so it re-seeds with it.
-                        var badgeStatus by remember(profileRowKey) { mutableStateOf(
-                            if (StreamBadgeEngine.hasPack(context)) {
-                                "Badge pack imported — ${StreamBadgeEngine.filterCount(context)} filters active"
-                            } else {
-                                null
-                            }
-                        ) }
+                        var badgeStatus by remember(profileRowKey, badgePackRevision) {
+                            mutableStateOf(
+                                when {
+                                    StreamBadgeEngine.hasPack(context) ->
+                                        "Badge pack imported — " +
+                                            StreamBadgeEngine.filterCount(context) +
+                                            " filters active"
+                                    // The store says this was a REMOVAL, not a device
+                                    // that never had a pack, so the line survives
+                                    // leaving Settings - and reads the same when
+                                    // the removal arrived from the other device.
+                                    StreamBadgeEngine.wasRemoved(context) ->
+                                        "Badge pack removed"
+                                    else -> null
+                                }
+                            )
+                        }
                         var badgeImporting by remember { mutableStateOf(false) }
                         val scope = rememberCoroutineScope()
 
@@ -3037,6 +3054,12 @@ fun SettingsScreen(
                                 KBCard(
                                     onClick = {
                                         StreamBadgeEngine.clearPack(context)
+                                        // The field is remembered state seeded once
+                                        // from the store, so clearing the store does
+                                        // not move it: REMOVE used to leave the old
+                                        // URL on screen until Settings was left and
+                                        // re-entered.
+                                        badgePackInput = ""
                                         badgeStatus = "Badge pack removed"
                                     },
                                     modifier = Modifier
