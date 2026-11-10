@@ -911,7 +911,15 @@ jobs:
       - name: Build Play-overlay debug APK and verify the overlay applied
         run: |
           set -euo pipefail
-          ./gradlew assembleDebug -PplayBuild --stacktrace \
+          # processReleaseManifest is here because every release build rewrites
+          # the SAME merged-release manifest on disk, and the Play AAB above is
+          # not the last release build: the Sentry-mapping upload step builds
+          # release again - without -PplayBuild - and Gradle restores those
+          # manifest tasks FROM-CACHE, so the non-Play merge lands back on top
+          # of the Play one before this step ever looks. Asking for the task
+          # WITH the flag puts the merge the bundle actually got back in place,
+          # instead of checking a variant this run did not build.
+          ./gradlew assembleDebug processReleaseManifest -PplayBuild --stacktrace \
             --max-workers="$GRADLE_MAX_WORKERS" \
             -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
           # `*/debug/*` rather than `*debug*`: the unit-test manifest
