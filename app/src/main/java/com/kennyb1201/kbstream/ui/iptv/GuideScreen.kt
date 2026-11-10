@@ -1,7 +1,6 @@
 package com.kennyb1201.kbstream.ui.iptv
 
 import android.content.Context
-import android.util.Log
 import android.view.KeyEvent
 import androidx.tv.material3.Border
 import androidx.tv.material3.Surface
@@ -1455,12 +1454,16 @@ LaunchedEffect(channelListState, groupedChannelIds) {
         // exhausted) and this path wrote none, so a first-enter that missed was
         // invisible in COPY DIAGNOSTICS - exactly the silence GuideTrace exists
         // to remove. Same vocabulary as the grid's.
+        //
+        // GuideTrace only, no Log.i: this screen deliberately adds no logcat
+        // volume (GuideTraceDiagnosticsContractTest pins that - the GUIDE tag
+        // belongs to the grid), and the trace is what COPY DIAGNOSTICS ships, so
+        // the line still reaches the field report.
         val listLine = if (focused) {
             "list entry-focus landed attempts=$attempts"
         } else {
             "list entry-focus exhausted attempts=$attempts"
         }
-        Log.i("GUIDE", listLine)
         GuideTrace.note(listLine)
     }
 }

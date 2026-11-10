@@ -260,9 +260,11 @@ class GuideTraceDiagnosticsContractTest {
                 !grid.contains("Log.i(\"GUIDE\", \"grid collapse")
         )
         assertTrue(
-            "the screen adds no logcat line either, only the arming decision",
+            "the screen adds no logcat line either, only its trace notes - the two " +
+                "arming decisions and, since m10, the list's entry grab (the grid's " +
+                "landed/exhausted vocabulary, trace-only so logcat volume is unchanged)",
             !screen.contains("\"GUIDE\",") &&
-                screen.count("GuideTrace.note(") == 2
+                screen.count("GuideTrace.note(") == 3
         )
     }
 
