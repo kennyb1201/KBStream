@@ -261,13 +261,18 @@ class PublicListsWiringContractTest {
                 lib.contains("MdbListClient.likedPublicLists(appContext)")
         )
         assertTrue(
-            "both liked sets must join their vendor's rail, marked as liked",
-            lib.contains("liked = true")
+            "both liked sets must join their vendor's rail through the one row " +
+                "builder, marked as liked",
+            lib.contains("likedListRow(LibrarySource.TRAKT_LIST, card)") &&
+                lib.contains("likedListRow(LibrarySource.MDBLIST_LIST, card)") &&
+                read("com/kennyb1201/kbstream/data/library/LibraryListRows.kt")
+                    .contains("liked = true")
         )
         assertTrue(
             "a saved row must carry the list's OWNER, or it reads as a list the viewer " +
                 "or this app made (spec F5)",
-            lib.contains("owner = card.owner")
+            read("com/kennyb1201/kbstream/data/library/LibraryListRows.kt")
+                .contains("owner = card.owner")
         )
         listOf(read(LIBRARY_SCREEN) to "TV", read(LIBRARY_SCREEN_MOBILE) to "phone")
             .forEach { (src, form) ->

@@ -466,7 +466,7 @@ class LibraryListSyncContractTest {
     fun `an adopted pin for a list already deleted here is not taken`() {
         assertContains(
             payload,
-            "val adopted = com.kennyb1201.kbstream.data.library.withoutDeletedLocalPins( rails, " +
+            "val adopted = com.kennyb1201.kbstream.data.library.withoutDeletedLocalPins( merged, " +
                 "com.kennyb1201.kbstream.data.library.LocalLibraryStore " +
                 ".deletedListIds(context, profileId) )",
             "the sibling's pin row may predate the tombstone it has not seen yet"

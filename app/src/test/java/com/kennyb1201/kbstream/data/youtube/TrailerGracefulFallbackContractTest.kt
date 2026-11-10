@@ -222,11 +222,14 @@ class TrailerGracefulFallbackContractTest {
         )
         assertTrue(
             "the trailer is still resolved through the launcher - now with the " +
-                "cumulative client exclusion the ladder asks for",
-            flat(home).contains(
-                "TrailerPlayerLauncher .resolvePlayableUrl( trailerKey, " +
-                    "excludeClients = pending?.excludedClients ?: emptySet() )"
-            )
+                "cumulative client exclusion the ladder asks for, and the title's " +
+                "own IMDb id beside it",
+            flat(home).contains("TrailerPlayerLauncher .resolvePlayableUrl( trailerKey, ") &&
+                flat(home).contains(
+                    "excludeClients = pending?.excludedClients ?: emptySet(),"
+                ) &&
+                flat(home).contains("imdbId = heroImdbId,") &&
+                flat(home).contains("type = preview.type )")
         )
         assertEquals(
             "the hero keeps exactly one onFailed call site",

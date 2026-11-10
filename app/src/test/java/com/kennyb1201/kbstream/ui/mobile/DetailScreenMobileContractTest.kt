@@ -327,7 +327,10 @@ class DetailScreenMobileContractTest {
         assertTrue(
             "a trailer card plays through the shared launcher and an artwork " +
                 "card opens the viewer",
-            mobile.contains("DetailTrailerLaunch.play(context, scope, video)") &&
+            mobile.contains(
+                "DetailTrailerLaunch.play( context, scope, video, imdbId = trailerImdbId, " +
+                    "tmdbId = tmdbDetail?.id, type = normalizedType )"
+            ) &&
                 mobile.contains("selectedBackdrop = card.fullImageUrl") &&
                 mobile.contains("ImageViewerDialog(")
         )
@@ -627,9 +630,11 @@ class DetailScreenMobileContractTest {
 
         // The shared resolve, the retry ladder, and the pool's release.
         assertTrue(
-            "every resolve goes through the shared launcher, carrying the retry's exclusions",
+            "every resolve goes through the shared launcher, carrying the retry's " +
+                "exclusions and the title's own IMDb id",
             mobile.contains(
-                ".resolvePlayableUrl(key, excludeClients = pending?.excludedClients ?: emptySet())"
+                ".resolvePlayableUrl( key, excludeClients = pending?.excludedClients ?: emptySet(), " +
+                    "imdbId = trailerImdbId, tmdbId = tmdbDetail?.id, type = normalizedType )"
             )
         )
         // The 2026-10-30 report: the trailer died at ~20 s at the same spot on

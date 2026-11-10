@@ -44,6 +44,34 @@ class TrailerBoundaryResumeContractTest {
 
     private fun flat(src: String): String = src.replace(Regex("\\s+"), " ")
 
+    /**
+     * The brace-balanced body of [signature] in [src], whitespace-flattened.
+     *
+     * Substring-to-the-next-brace is not enough for these: a body that contains
+     * a lambda (`?.let { ... }`) ends at the lambda's brace, not the function's.
+     */
+    private fun bodyOf(src: String, signature: String): String {
+        val start = src.indexOf(signature)
+        if (start < 0) return ""
+        val open = src.indexOf('{', start)
+        if (open < 0) return ""
+        var depth = 0
+        var index = open
+        while (index < src.length) {
+            when (src[index]) {
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) {
+                        return src.substring(open + 1, index).replace(Regex("\\s+"), " ")
+                    }
+                }
+            }
+            index++
+        }
+        return ""
+    }
+
     // ── the extractor can exclude a SET of clients ─────────────────────────
 
     @Test
@@ -95,11 +123,11 @@ class TrailerBoundaryResumeContractTest {
             "every pick reads the allowed pools, or one shape slips the exclusion",
             extractor.contains("pickBestHls(allowedHls, PREFERRED_SEPARATE_CLIENT)") &&
                 extractor.contains(
-                    "pickBest(allowedVideo, PREFERRED_SEPARATE_CLIENT, excludeClients)"
+                    "probeOrder(allowedVideo, PREFERRED_SEPARATE_CLIENT, excludeClients)"
                 ) &&
                 extractor.contains("val audioCandidates = audioProbeOrder(") &&
                 extractor.contains(
-                    "pickBest(allowedProgressive, PREFERRED_SEPARATE_CLIENT, excludeClients)"
+                    "probeOrder(allowedProgressive, PREFERRED_SEPARATE_CLIENT, excludeClients)"
                 )
         )
         assertTrue(
@@ -173,12 +201,15 @@ class TrailerBoundaryResumeContractTest {
                     "playerToken = resolved.playerToken, pot = resolved.pot )"
             )
         )
+        // The display answer keeps the trace fallback for a video with no
+        // cached entry (signingClient, lines below), so the exclusion decides by
+        // the strict accessor while a death can still be named.
+        val signing = bodyOf(launcher, "fun signingClient(videoIdOrUrl: String): String? {")
         assertTrue(
-            "with the trace's last resolve as the fallback for an evicted entry",
-            flatLauncher.contains(
-                "sourceCache[normalizeId(videoIdOrUrl)]?.client ?: " +
-                    "PoTokenTrace.resolveClient()"
-            )
+            "the cached entry answers first, and the trace's last resolve is the " +
+                "fallback for an evicted one",
+            signing.contains("sourceCache[id]?.let { return it.client }") &&
+                signing.contains("return PoTokenTrace.resolveClient()")
         )
     }
 
@@ -193,20 +224,18 @@ class TrailerBoundaryResumeContractTest {
             1,
             Regex("fun cachedSigningClient\\(").findAll(launcher).count()
         )
+        val strict = bodyOf(launcher, "fun cachedSigningClient(videoIdOrUrl: String): String? {")
         assertTrue(
-            "it must not fall back to the trace",
-            flat(launcher).contains(
-                "fun cachedSigningClient(videoIdOrUrl: String): String? = " +
-                    "sourceCache[normalizeId(videoIdOrUrl)]?.client"
-            )
+            "it must not fall back to the trace - it answers from the cache, " +
+                "and otherwise names the IMDb source this video actually mounted",
+            strict.contains("sourceCache[id]?.client") &&
+                strict.contains("if (imdbMounted.containsKey(id)) IMDB_CLIENT") &&
+                !strict.contains("PoTokenTrace")
         )
         assertTrue(
             "the display answer keeps its fallback",
-            flat(launcher).contains(
-                "fun signingClient(videoIdOrUrl: String): String? = " +
-                    "sourceCache[normalizeId(videoIdOrUrl)]?.client ?: " +
-                    "PoTokenTrace.resolveClient()"
-            )
+            bodyOf(launcher, "fun signingClient(videoIdOrUrl: String): String? {")
+                .contains("return PoTokenTrace.resolveClient()")
         )
         assertTrue(
             "and the ladder's exclusion is fed from the strict one",

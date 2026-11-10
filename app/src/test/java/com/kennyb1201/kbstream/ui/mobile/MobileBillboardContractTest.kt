@@ -431,7 +431,8 @@ class MobileBillboardContractTest {
                 "ladder's exclusions",
             home.contains(
                 "TrailerPlayerLauncher.resolvePlayableUrl( key, excludeClients = " +
-                    "pending?.excludedClients ?: emptySet() )"
+                    "pending?.excludedClients ?: emptySet(), imdbId = page.imdbId, " +
+                    "tmdbId = page.tmdbId, type = page.preview.type )"
             )
         )
         assertTrue(home.contains("HeroInlineTrailerPlayer("))
