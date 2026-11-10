@@ -74,9 +74,13 @@ class TokenlessResolveWiringContractTest {
             }
         assertEquals(
             "and the flag a winner passes reaches the field: one helper, so no " +
-                "shape can be judged differently from its siblings",
+                "shape can be judged differently from its siblings - and the " +
+                "helper is where a token-free winner is exempted, because its URL " +
+                "needs no mint at all (see TrailerTokenFreeClientTest)",
             1,
-            Regex("potlessByColdMint = potlessByColdMint").findAll(flat(extractor)).count()
+            Regex("potlessByColdMint = tokenlessWall\\(potlessByColdMint, client\\)")
+                .findAll(flat(extractor))
+                .count()
         )
         assertEquals(
             "the declaration and the helper's one construction, so no winner " +
