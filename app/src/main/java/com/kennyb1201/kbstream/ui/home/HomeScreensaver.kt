@@ -29,7 +29,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.nativeKeyEvent
+import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
@@ -172,7 +172,7 @@ internal fun HomeScreensaver(
                 // swallowed every event, so a volume press dismissed the slides
                 // and left the volume alone. They fall through to the window
                 // (which is what actually changes it) and do not exit.
-                when (event.nativeKeyEvent.keyCode) {
+                when (event.key.nativeKeyCode) {
                     android.view.KeyEvent.KEYCODE_VOLUME_UP,
                     android.view.KeyEvent.KEYCODE_VOLUME_DOWN,
                     android.view.KeyEvent.KEYCODE_VOLUME_MUTE -> return@onPreviewKeyEvent false

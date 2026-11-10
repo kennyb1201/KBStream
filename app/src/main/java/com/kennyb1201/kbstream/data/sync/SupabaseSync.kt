@@ -1079,7 +1079,7 @@ object SupabaseSync {
      * runs, with the id passed in instead of read, so a delete cannot be a
      * different (and wrong) delete path.
      */
-    suspend fun clearWatchStateForProfile(pid: String) {
+    suspend fun clearWatchStateForProfile(pid: String?) {
         if (!isSignedIn()) {
             stageSignedOutClear(pid)
             return

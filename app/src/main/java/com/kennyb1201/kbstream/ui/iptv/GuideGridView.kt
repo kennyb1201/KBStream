@@ -892,9 +892,16 @@ internal fun GuideGridView(
             // surface on screen. Not consuming it lets the press fall through to
             // whatever else can take it (Back included), which is the honest
             // answer when the thing it points at does not exist.
-            if (rows.isEmpty()) return false
-            enterGrid(focusedRow.coerceIn(0, rows.lastIndex))
-            true
+            //
+            // Both arms are VALUES: this function is a `when` expression, so a
+            // `return false` here would not compile (it did not - the first CI
+            // run after this landed said so).
+            if (rows.isEmpty()) {
+                false
+            } else {
+                enterGrid(focusedRow.coerceIn(0, rows.lastIndex))
+                true
+            }
         }
         Key.DirectionLeft -> true
         Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {

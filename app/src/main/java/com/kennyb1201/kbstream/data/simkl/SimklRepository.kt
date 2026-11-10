@@ -1366,8 +1366,12 @@ class SimklRepository(
     ): SimklAllShowsResponse? {
 
         // m23: a parked read answers this account's cache instead of walking up
-        // to ten pages again (see [readsAreParked]).
-        if (!forceRefresh && readsAreParked()) return cachedForThisAccount()
+        // to ten pages again (see [readsAreParked]). The same token check the
+        // failure exits use ([cachedForThisAccount] below): a snapshot minted for
+        // another Simkl account must never answer this one's read.
+        if (!forceRefresh && readsAreParked()) {
+            return cachedAllShowItems?.takeIf { cachedAllShowItemsToken == accessToken }
+        }
 
         val now =
             System.currentTimeMillis()
