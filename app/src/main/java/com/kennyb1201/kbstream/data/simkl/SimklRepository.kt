@@ -1730,6 +1730,69 @@ class SimklRepository(
             .orEmpty()
     }
 
+    /**
+     * The number of episodes this show's Simkl record declares for [season] —
+     * the "third declared count" the finale guard reads (F2).
+     *
+     * It exists because TMDB can lag EVERYWHERE at once: on Universal Basic Guys
+     * S3 the season listing held 6 and TMDB's declared count was 6, while the
+     * season was still airing, so the max of the two said finale. Simkl's own
+     * season list (the same cached /sync/all-items body the watched-state
+     * preload already reads) carries the episodes TMDB had not added yet.
+     *
+     * Null means "no answer": no Simkl record for the show, no such season, or
+     * no episode numbers — and the caller must treat it exactly like a missing
+     * source, never like a length of 0.
+     */
+    suspend fun getDeclaredSeasonEpisodeCount(
+        imdbId: String?,
+        tmdbId: Int?,
+        season: Int,
+        accessToken: String =
+            requireAccessToken()
+    ): Int? {
+
+        if (
+            imdbId.isNullOrBlank() &&
+            tmdbId == null
+        ) {
+            return null
+        }
+
+        val body =
+            getAllShowItemsCached(
+                accessToken =
+                    accessToken
+            )
+                ?: return null
+
+        // The same identity order as matchShow, except that either id may
+        // answer: a local card carries only its TMDB id, and a Simkl card's
+        // parent is its IMDb id.
+        val match =
+            body.shows.firstOrNull { item ->
+                (
+                    !imdbId.isNullOrBlank() &&
+                        item.show
+                            ?.ids
+                            ?.imdb == imdbId
+                    ) ||
+                    (
+                        tmdbId != null &&
+                            item.show
+                                ?.ids
+                                ?.tmdb == tmdbId
+                        )
+            }
+                ?: return null
+
+        return match.seasons
+            .firstOrNull { it.number == season }
+            ?.episodes
+            ?.mapNotNull { it.number ?: it.episode }
+            ?.maxOrNull()
+    }
+
     suspend fun getCompletedShowImdbIds(
         accessToken: String =
             requireAccessToken()

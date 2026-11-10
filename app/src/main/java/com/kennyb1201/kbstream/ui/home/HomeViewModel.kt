@@ -9403,10 +9403,73 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
             return false
         }
 
+        // Only a card the two TMDB numbers already call a finale needs a third
+        // opinion, so the read below is paid on the handful of cards that were
+        // about to wear the badge - not on every row.
+        if (
+            !SeasonRules.isSeasonFinale(
+                episodeNumber = episode,
+                seasonLength = seasonLength
+            )
+        ) {
+            return false
+        }
+
+        // F2, the third declared count. The veto above cannot fire when TMDB
+        // lags EVERYWHERE - not just its season listing but the episodes
+        // themselves - because then there is no next episode to air: on
+        // Universal Basic Guys S3 the listing held 6, the declared count was 6
+        // and the show's nextEpisodeToAir was null while E7-E13 were dated on
+        // the network's own schedule. No max of two TMDB numbers can see past
+        // that, so the card's own tracker is asked for its season length: the
+        // Simkl record does not share TMDB's lag. It is read from the SAME
+        // cached body this scope's watched-state preload already loaded, so it
+        // is normally a walk over memory and never a second request.
+        val simklDeclaredEpisodeCount =
+            try {
+                if (
+                    simklRepository.isConfigured() &&
+                    simklRepository.hasToken()
+                ) {
+                    simklRepository.getDeclaredSeasonEpisodeCount(
+                        imdbId = parentId,
+                        tmdbId = tmdbId.takeIf { it > 0 },
+                        season = season
+                    )
+                } else {
+                    null
+                }
+            } catch (_: Exception) {
+                // "No answer" is not "length 0": a failed read leaves the two
+                // TMDB numbers standing exactly as they were.
+                null
+            }
+
+        val finaleSeasonLength =
+            maxOf(
+                seasonLength,
+                simklDeclaredEpisodeCount ?: 0
+            )
+
+        // The counts each source returned, together in one line: when a tag is
+        // still wrong the next report can say WHICH source was behind, which
+        // is the question the last two reads could not answer.
+        if (UP_NEXT_DIAGNOSTICS) {
+            Log.d(
+                "HOME_UPNEXT",
+                "finale sources parent=$parentId s=${season}e$episode " +
+                    "lastListed=$lastListedEpisode " +
+                    "tmdbDeclared=$declaredEpisodeCount " +
+                    "simklDeclared=${simklDeclaredEpisodeCount ?: "none"} " +
+                    "nextToAir=${nextToAir ?: "none"} " +
+                    "seasonLength=$finaleSeasonLength"
+            )
+        }
+
         return SeasonRules
             .isSeasonFinale(
                 episodeNumber = episode,
-                seasonLength = seasonLength
+                seasonLength = finaleSeasonLength
             )
     }
 
