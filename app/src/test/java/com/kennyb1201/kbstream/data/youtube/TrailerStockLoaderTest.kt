@@ -82,7 +82,10 @@ class TrailerStockLoaderTest {
         // client UA is still what the request presents - never a default identity.
         val loader = sourceOf(STOCK_LOADER)
             .substringAfter("internal fun tokenFreeTrailerDataSource")
-            .substringBefore("/** Which DataSource a resolved")
+            // Up to the CHOOSER, not the chunker: the chooser names the chunked
+            // factory legitimately (it is the gated branch), and stopping later
+            // would read that mention as this loader's own.
+            .substringBefore("internal fun trailerDataSourceFactory")
 
         assertTrue(
             loader.contains(
