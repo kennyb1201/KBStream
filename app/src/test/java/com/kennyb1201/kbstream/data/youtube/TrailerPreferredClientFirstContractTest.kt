@@ -107,9 +107,11 @@ class TrailerPreferredClientFirstContractTest {
         assertTrue(
             "and score ranks only WITHIN the chosen pool",
             picks.contains("val preferred = eligible.filter { it.client == preferredClient }") &&
-                picks.contains(
-                    "val pool = if (preferred.isNotEmpty()) preferred else eligible"
-                )
+                // The pools are disjoint by construction: the token-free client
+                // is hoisted above both, and the preferred client is removed
+                // from the gated tail (see TrailerTokenFreeClientTest).
+                picks.contains("val gated = eligible.filterNot { YouTubeClients.isTokenFree(it.client) }") &&
+                picks.contains("gated.filterNot { it.client == preferredClient }.sortedWith(byScore)")
         )
         assertTrue(
             "the adaptive pick is the same rule, applied to the candidates probed " +

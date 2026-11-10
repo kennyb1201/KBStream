@@ -20,6 +20,78 @@ import javax.net.ssl.SSLException
 import okhttp3.OkHttpClient
 
 /**
+ * The plain loader a TOKEN-FREE pick plays through: one ordinary HTTP source,
+ * no chunking, no retry ladder, no PoToken.
+ *
+ * It exists because a token-free client's URLs are not the URLs the chunker was
+ * built around. Measured against a VISIONOS-signed 1080p URL (2026-11-10): it
+ * served 206 for `bytes=0-1023` and `bytes=2400000-2401023`, served an
+ * open-ended request as a 200 with the full Content-Length, and streamed 12 MB
+ * at ~6 Mbit/s - under no UA at all, under the visionos UA, and under a
+ * desktop browser UA alike. Its signed playlist URLs already carry
+ * `ratebypass=yes`, and the master manifest fetched 200 with and without a UA.
+ *
+ * So the URL needs neither a User-Agent nor a `ratebypass` rewrite. The UA is
+ * still set: it costs nothing, it matches the identity that signed the URL, and
+ * it keeps the request from presenting a default client identity to a host that
+ * can recognise one.
+ *
+ * The TRANSPORT is OkHttp, not `DefaultHttpDataSource`: this app's own record
+ * (see [createDataSource] above) is that googlevideo 403s the HttpURLConnection
+ * stack on the URL family the chunker serves, and an unbounded OkHttp read is
+ * what the probe and every other googlevideo request here already use. What is
+ * dropped is the CHUNKING, the UA ladder and the mode switching - not the stack
+ * the app has proved on a device.
+ */
+@UnstableApi
+internal fun tokenFreeTrailerDataSource(userAgent: String? = null): DataSource.Factory =
+    OkHttpDataSource.Factory(
+        OkHttpClient.Builder()
+            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
+    )
+        .setUserAgent(userAgent?.takeIf { it.isNotBlank() } ?: YouTubeClients.DEFAULT_USER_AGENT)
+        .setDefaultRequestProperties(YoutubeChunkedDataSourceFactory.defaultRequestProperties)
+
+/**
+ * Which DataSource a resolved [PlayableSource] plays through - ONE rule for
+ * every trailer surface, decided by the SOURCE's client, never by the surface
+ * or by the URL's host.
+ *
+ * The host cannot answer the question: a gated URL and a token-free URL are both
+ * `*.googlevideo.com`, so a host-based choice (which is what the fullscreen
+ * player made) would send a visionos pick through the chunker - the path whose
+ * token wall is the reason this build prefers visionos at all. And the source's
+ * client is on every [PlayableSource] precisely so the choice travels with the
+ * source.
+ *
+ * Gated clients, the NewPipe/Piped fallback (no client) and IMDb keep the
+ * chunked factory exactly as before; for the latter it passes non-googlevideo
+ * hosts through untouched.
+ */
+@UnstableApi
+internal fun trailerDataSourceFactory(
+    source: PlayableSource,
+    videoId: String? = null
+): DataSource.Factory {
+    val userAgent = when (source) {
+        is PlayableSource.Muxed -> source.userAgent
+        is PlayableSource.Adaptive -> source.userAgent
+    }
+    return if (YouTubeClients.isTokenFree(source.client)) {
+        tokenFreeTrailerDataSource(userAgent)
+    } else {
+        YoutubeChunkedDataSourceFactory(
+            userAgentHint = userAgent,
+            videoIdHint = videoId
+        )
+    }
+}
+
+/**
  * DataSource.Factory that downloads YouTube googlevideo streams in ~1 MB
  * chunks by reopening a fresh connection per chunk. YouTube throttles (and
  * kills) connections that try to pull a whole adaptive stream in one shot,

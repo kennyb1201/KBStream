@@ -212,7 +212,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
 import com.kennyb1201.kbstream.data.youtube.PoTokenTrace
-import com.kennyb1201.kbstream.data.youtube.YoutubeChunkedDataSourceFactory
+import com.kennyb1201.kbstream.data.youtube.trailerDataSourceFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
@@ -867,27 +867,20 @@ internal fun HeroInlineTrailerPlayer(
             "Hero player mounting with source: " + heroSourceOrigin(source)
         )
 
-        // googlevideo signed URLs 403 unless the request carries the same
-        // YouTube client User-Agent that resolved them and uses bounded
-        // range requests. YoutubeChunkedDataSourceFactory handles that for
-        // googlevideo hosts (1 MB chunks via OkHttp, ratebypass fallbacks)
-        // and passes every other host straight through - the same stack the
-        // full player uses for HLS and progressive playback. The resolved
-        // source carries the UA of the client that signed its URL, so the
-        // factory leads with it instead of the legacy hardcoded one.
+        // Which data source plays a trailer is a property of the SOURCE's
+        // client, not of the surface (see `trailerDataSourceFactory`): a
+        // token-free pick plays through the stock HTTP loader - its URL needs no
+        // token, so it must not be chunked - and a gated pick keeps the chunker,
+        // which is built around googlevideo's bounded-range behaviour. The
+        // resolved source carries the UA of the client that signed its URL, so
+        // both paths present the right identity.
         val mediaSourceFactory =
             DefaultMediaSourceFactory(
-                YoutubeChunkedDataSourceFactory(
-                    userAgentHint = when (source) {
-                        is PlayableSource.Muxed -> source.userAgent
-                        is PlayableSource.Adaptive -> source.userAgent
-                    },
-                    // Diagnostics only, and the reason it is passed rather than
-                    // read off the URL: googlevideo's `id` is YouTube's opaque
-                    // id, so a chunk death keyed on it could never be matched
-                    // to the `trailer.death` line this player's owner writes.
-                    videoIdHint = videoId
-                ),
+                // The video id is diagnostics only, and it is passed rather than
+                // read off the URL: googlevideo's `id` is YouTube's opaque id, so
+                // a chunk death keyed on it could never be matched to the
+                // `trailer.death` line this player's owner writes.
+                trailerDataSourceFactory(source, videoId),
                 DefaultExtractorsFactory()
             )
 

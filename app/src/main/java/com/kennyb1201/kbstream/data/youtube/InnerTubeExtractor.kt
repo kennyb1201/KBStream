@@ -112,6 +112,18 @@ object InnerTubeExtractor {
         !visitorData.isNullOrBlank() &&
         mintingEnabled
 
+    /**
+     * Whether a cold mint is a WALL for this winner.
+     *
+     * The cold-mint guard exists for URLs the missing token would have signed
+     * (see [ResolvedSource.potlessByColdMint]). A token-free client's URL needs
+     * no token at all, so a cold mint is not a wall for it - and treating it as
+     * one would throw away exactly the pick this build exists to mount
+     * (2026-11-10: the visionos source is tokenless by design, not by failure).
+     */
+    internal fun tokenlessWall(coldMintTokenless: Boolean, client: String?): Boolean =
+        coldMintTokenless && !YouTubeClients.isTokenFree(client)
+
     private const val DEFAULT_USER_AGENT = YouTubeClients.DEFAULT_USER_AGENT
 
     /**
@@ -130,6 +142,10 @@ object InnerTubeExtractor {
      * 15.1 s; the android replacement resumed and played to the end). A client
      * is preferred here, not banned: when it has no usable source the pool is
      * every eligible client again, android_vr included.
+     *
+     * This is the preferred GATED client. A token-free client's source ranks
+     * above every gated one regardless of this key (see
+     * [TrailerSourcePicks.probeOrder]), because its URL needs no token mint.
      */
     internal const val PREFERRED_SEPARATE_CLIENT = "android"
 
@@ -463,7 +479,8 @@ object InnerTubeExtractor {
             Log.d(TAG, "Using HLS trailer manifest (client=${bestHls.first})")
             return PlayableSource.Muxed(
                 bestHls.third,
-                userAgent = userAgentFor(bestHls.first)
+                userAgent = userAgentFor(bestHls.first),
+                client = bestHls.first
             ).withResolveTokens(
                 videoId,
                 tokens,
@@ -539,14 +556,18 @@ object InnerTubeExtractor {
             // with android-signed still 403ing at ~36 s says the remaining wall
             // is attestation, not the client table.
             Log.d(TAG, "Using adaptive video+audio (client=${bestVideo?.client})")
-            return PlayableSource.Adaptive(resolvedVideo, resolvedAudio, userAgent = clientUa)
-                .withResolveTokens(
-                    videoId,
-                    tokens,
-                    bestVideo?.client,
-                    KIND_ADAPTIVE,
-                    tokenlessByColdMint
-                )
+            return PlayableSource.Adaptive(
+                resolvedVideo,
+                resolvedAudio,
+                userAgent = clientUa,
+                client = bestVideo?.client
+            ).withResolveTokens(
+                videoId,
+                tokens,
+                bestVideo?.client,
+                KIND_ADAPTIVE,
+                tokenlessByColdMint
+            )
         }
 
         // No verified adaptive audio (or no video at all): fall through to
@@ -583,7 +604,8 @@ object InnerTubeExtractor {
             // the normal path for a cold mint.
             return PlayableSource.Muxed(
                 resolvedProgressive,
-                userAgent = userAgentFor(bestProgressive.client)
+                userAgent = userAgentFor(bestProgressive.client),
+                client = bestProgressive.client
             ).withResolveTokens(
                 videoId,
                 tokens,
@@ -817,9 +839,11 @@ object InnerTubeExtractor {
             kind = kind
         )
         return ResolvedSource(
+            // A token-free winner is exempt: its URL needs no mint, so the cold
+            // mint cannot be the reason it would fail (see [tokenlessWall]).
             source = decorated,
             client = client,
-            potlessByColdMint = potlessByColdMint,
+            potlessByColdMint = tokenlessWall(potlessByColdMint, client),
             playerToken = playerToken,
             pot = pot
         )

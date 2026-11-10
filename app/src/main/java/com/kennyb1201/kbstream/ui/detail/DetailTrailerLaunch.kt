@@ -45,6 +45,19 @@ object DetailTrailerLaunch {
 
     const val EXTRA_TRAILER_TYPE = "trailer_type"
 
+    /**
+     * The YouTube client that signed the handed-over trailer source, when one
+     * did.
+     *
+     * The player decides its data source from it (see
+     * `trailerDataSourceFactory`): a token-free pick plays through the stock
+     * loader, a gated one through the chunker. It travels as its own extra
+     * because this is the only place the source is flattened into an intent -
+     * without it the fullscreen player could only guess from the URL's host,
+     * and both URL classes are googlevideo.
+     */
+    const val EXTRA_TRAILER_CLIENT = "trailer_client"
+
     /** The intent that hands [source] to the player for [videoId]. */
     fun intent(
         context: Context,
@@ -71,6 +84,8 @@ object DetailTrailerLaunch {
             userAgent?.let { ua ->
                 putExtra("stream_headers", "User-Agent: $ua")
             }
+
+            source.client?.let { putExtra(EXTRA_TRAILER_CLIENT, it) }
 
             putExtra("parent_type", "movie")
             putExtra("item_name", "Trailer")

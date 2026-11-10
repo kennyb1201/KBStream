@@ -24,8 +24,8 @@ import org.junit.Test
  */
 class HeroTrailerRetryPlanTest {
 
-    /** The five clients that can sign a source (`YouTubeClients.all`'s keys). */
-    private val clients = setOf("android", "tv", "ios", "web_embedded", "android_vr")
+    /** Every client that can sign a source, as the plan's own default reads it. */
+    private val clients = YouTubeClients.all.map { it.key }.toSet()
 
     private fun plan(
         positionMs: Long = 20_400L,
@@ -156,7 +156,7 @@ class HeroTrailerRetryPlanTest {
     @Test
     fun `the ladder is bounded by the class table even when every death names one`() {
         assertEquals(
-            "five clients, five steps, then nothing",
+            "one step per client that can sign a source, then nothing",
             HeroTrailerResumeVerdict.POISON,
             plan(deadClient = "tv", excluded = setOf("android_vr"), attempts = clients.size).verdict
         )

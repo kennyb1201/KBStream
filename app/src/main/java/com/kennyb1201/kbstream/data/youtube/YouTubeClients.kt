@@ -30,7 +30,15 @@ internal enum class ClientKind {
      * A web player embedded in a page: the desktop UA, plus the per-video
      * `context.thirdParty.embedUrl` such a player declares.
      */
-    WEB_EMBEDDED
+    WEB_EMBEDDED,
+
+    /**
+     * An Apple-device client (visionOS): the app presents its platform's
+     * Safari User-Agent, which carries no InnerTube version, so the version the
+     * entry asks with lives in `context` alone. Its URLs are token-free (see
+     * [YouTubeClient.tokenFree]).
+     */
+    APPLE_DEVICE
 }
 
 /**
@@ -60,7 +68,17 @@ internal data class YouTubeClient(
     val userAgent: String,
     val context: JSONObject,
     val priority: Int,
-    val kind: ClientKind = ClientKind.APP
+    val kind: ClientKind = ClientKind.APP,
+    /**
+     * True when this client's signed formats need no GVS/PoToken mint to play.
+     *
+     * That is a property of the IDENTITY, not of one response: the gated
+     * clients' URLs carry a `pot` requirement (or die without one, mid-play),
+     * while a token-free client serves formats whose URLs play as signed. The
+     * trailer ranking reads this to prefer such a client even when a gated one
+     * scores higher, and the player reads it to choose the stock loader.
+     */
+    val tokenFree: Boolean = false
 ) {
     init {
         require(kind != ClientKind.APP || userAgent.contains(version)) {
@@ -93,11 +111,12 @@ internal data class YouTubeClient(
  * at rising rates (android_vr had already started answering LOGIN_REQUIRED).
  * Both copies now derive from this one list.
  *
- * Order is the extractor's fallback chain. `android` is still the preferred
- * client for adaptive picks, `tv` (TVHTML5) is the client YouTube's own TV apps
- * use and, like `ios`, still serves token-free formats, `ios` and `web_embedded`
- * widen the pool, and `android_vr` stays LAST because of its LOGIN_REQUIRED
- * history.
+ * Order is the extractor's fallback chain. `visionos` leads because it is the
+ * token-free client (see [YouTubeClient.tokenFree]) and its formats are always
+ * preferred for a trailer; `android` is still the preferred GATED client for
+ * adaptive picks, `tv` (TVHTML5) is the client YouTube's own TV apps use and,
+ * like `ios`, still serves token-free formats, `ios` and `web_embedded` widen the
+ * pool, and `android_vr` stays LAST because of its LOGIN_REQUIRED history.
  *
  * Versions are the ones the current shipping clients present (checked against
  * yt-dlp's client table, Oct 2026). They are the identity YouTube is asked
@@ -126,6 +145,49 @@ internal object YouTubeClients {
     private const val IOS_VERSION = "21.26.4"
     private const val WEB_EMBEDDED_VERSION = "1.20260708.01.00"
     private const val ANDROID_VR_VERSION = "1.65.10"
+    private const val VISIONOS_VERSION = "1.02"
+
+    /**
+     * The visionOS app's UA: a macOS Safari identity (the app is a web-backed
+     * player on a spatial device), so it carries no InnerTube version - the
+     * [ClientKind.APPLE_DEVICE] entry is the deliberate exception to the
+     * version-in-UA rule the native app clients follow.
+     */
+    private const val VISIONOS_USER_AGENT =
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 " +
+            "(KHTML, like Gecko) Version/26.0 Safari/605.1.15"
+
+    /**
+     * The token-free client, FIRST in the chain and first in every pick.
+     *
+     * Its formats are signed for a client that needs no PoToken mint, which is
+     * the whole reason it exists here: the gated clients' adaptive URLs are what
+     * the chunker and the token were built around, and the field deaths
+     * (2026-11-10, Head of State stalling at 2.4 MB with `pot=false`) are that
+     * path losing its token. A token-free pick is played through the stock
+     * loader instead (see `trailerDataSourceFactory`).
+     *
+     * The id/version/UA/context are the identity YouTube signs these formats
+     * for - do not "tidy" the device fields: a version/device mismatch is one
+     * of the tells a bot-wall checks.
+     */
+    val visionos: YouTubeClient = YouTubeClient(
+        key = "visionos",
+        id = "101",
+        version = VISIONOS_VERSION,
+        userAgent = VISIONOS_USER_AGENT,
+        context = clientContext(
+            name = "VISIONOS",
+            version = VISIONOS_VERSION,
+            "deviceMake" to "Apple",
+            "deviceModel" to "RealityDevice17,1",
+            "osName" to "visionOS",
+            "osVersion" to "26.5.23O471"
+        ),
+        priority = 0,
+        kind = ClientKind.APPLE_DEVICE,
+        tokenFree = true
+    )
 
     /**
      * The most reliable anonymous client, and the preferred one for adaptive
@@ -145,7 +207,7 @@ internal object YouTubeClients {
             "platform" to "MOBILE",
             "androidSdkVersion" to 34
         ),
-        priority = 0
+        priority = 1
     )
 
     /**
@@ -166,7 +228,7 @@ internal object YouTubeClients {
             version = TV_VERSION,
             "platform" to "TV"
         ),
-        priority = 1,
+        priority = 2,
         kind = ClientKind.TV
     )
 
@@ -190,7 +252,7 @@ internal object YouTubeClients {
             "osVersion" to "18.3.2.22D82",
             "platform" to "MOBILE"
         ),
-        priority = 2
+        priority = 3
     )
 
     /**
@@ -209,7 +271,7 @@ internal object YouTubeClients {
             version = WEB_EMBEDDED_VERSION,
             "platform" to "DESKTOP"
         ),
-        priority = 3,
+        priority = 4,
         kind = ClientKind.WEB_EMBEDDED
     )
 
@@ -236,11 +298,18 @@ internal object YouTubeClients {
             "platform" to "MOBILE",
             "androidSdkVersion" to 32
         ),
-        priority = 4
+        priority = 5
     )
 
-    /** The fallback chain, highest priority first. Every client is queried. */
-    val all: List<YouTubeClient> = listOf(android, tv, ios, webEmbedded, androidVr)
+    /**
+     * The fallback chain, highest priority first. Every client is queried.
+     *
+     * visionos leads because its token-free formats are the ones that play
+     * whole through the stock loader; the gated clients follow in their old
+     * order (android, tv, ios, web, android_vr last).
+     */
+    val all: List<YouTubeClient> =
+        listOf(visionos, android, tv, ios, webEmbedded, androidVr)
 
     /**
      * The clients' UAs, in chain order. [YoutubeChunkedDataSourceFactory]'s UA
@@ -255,6 +324,16 @@ internal object YouTubeClients {
 
     /** UA of the client a signed URL belongs to, or null for an unknown key. */
     fun userAgentFor(key: String): String? = byKey[key]?.userAgent
+
+    /**
+     * Whether a signed URL from this client needs no token mint to play.
+     *
+     * Keyed on the client, never on what a response happened to contain: a
+     * gated client can serve a URL without `pot` and still die without one, and
+     * an unknown/absent key (NewPipe, Piped, IMDb) is never token-free - those
+     * sources are exactly the ones the chunker has always served.
+     */
+    fun isTokenFree(key: String?): Boolean = key != null && byKey[key]?.tokenFree == true
 
     private fun clientContext(
         name: String,

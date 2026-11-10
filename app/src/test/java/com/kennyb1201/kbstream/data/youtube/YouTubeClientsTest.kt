@@ -25,22 +25,29 @@ import org.junit.Test
 class YouTubeClientsTest {
 
     @Test
-    fun `the chain is five clients, android first and android_vr last`() {
+    fun `the chain leads with the token-free client and ends with android_vr`() {
         assertEquals(
-            listOf("android", "tv", "ios", "web_embedded", "android_vr"),
+            listOf("visionos", "android", "tv", "ios", "web_embedded", "android_vr"),
             YouTubeClients.all.map { it.key }
         )
-        assertEquals(listOf(0, 1, 2, 3, 4), YouTubeClients.all.map { it.priority })
+        assertEquals(listOf(0, 1, 2, 3, 4, 5), YouTubeClients.all.map { it.priority })
     }
 
     @Test
     fun `the ids are the InnerTube client numbers`() {
         assertEquals(
-            listOf("3", "7", "5", "56", "28"),
+            listOf("101", "3", "7", "5", "56", "28"),
             YouTubeClients.all.map { it.id }
         )
         assertEquals(
-            listOf("ANDROID", "TVHTML5", "IOS", "WEB_EMBEDDED_PLAYER", "ANDROID_VR"),
+            listOf(
+                "VISIONOS",
+                "ANDROID",
+                "TVHTML5",
+                "IOS",
+                "WEB_EMBEDDED_PLAYER",
+                "ANDROID_VR"
+            ),
             YouTubeClients.all.map { it.context.getString("clientName") }
         )
     }
@@ -169,7 +176,15 @@ class YouTubeClientsTest {
     fun `android is still the preferred client for adaptive picks`() {
         assertEquals("android", InnerTubeExtractor.PREFERRED_SEPARATE_CLIENT)
         assertEquals(YouTubeClients.android.key, InnerTubeExtractor.PREFERRED_SEPARATE_CLIENT)
-        assertEquals(0, YouTubeClients.android.priority)
+        // Chain position, not preference: visionos leads the chain (priority 0)
+        // because it is token-free, and android is the preferred GATED client -
+        // a rank the picks still take from this table.
+        assertEquals(1, YouTubeClients.android.priority)
+        assertEquals(
+            "android must rank ahead of every other gated client",
+            YouTubeClients.all.filter { it.key != "visionos" }.minOf { it.priority },
+            YouTubeClients.android.priority
+        )
     }
 
     private companion object {

@@ -12,16 +12,34 @@ import java.util.concurrent.TimeUnit
 
 sealed class PlayableSource {
     /**
+     * The YouTube client that signed this source's URL(s), or null when it
+     * carries no client (NewPipe/Piped, IMDb).
+     *
+     * The PLAYER reads it, because it decides which data source plays the
+     * source: a token-free client's URL plays through the stock loader, a gated
+     * one through the chunker ([YoutubeChunkedDataSourceFactory]). The rule is a
+     * property of the source, so every surface makes the same choice. Kept
+     * beside [userAgent] rather than derived from the URL's host: a googlevideo
+     * URL looks the same whichever client signed it.
+     */
+    abstract val client: String?
+
+    /**
      * [userAgent] is the YouTube client User-Agent the URL was signed for
      * (googlevideo rejects signed URLs requested with a different client's
      * UA). Null for resolvers that don't need a specific UA (NewPipe/Piped,
      * whose players fall back to a sensible UA ladder).
      */
-    data class Muxed(val url: String, val userAgent: String? = null) : PlayableSource()
+    data class Muxed(
+        val url: String,
+        val userAgent: String? = null,
+        override val client: String? = null
+    ) : PlayableSource()
     data class Adaptive(
         val videoUrl: String,
         val audioUrl: String,
-        val userAgent: String? = null
+        val userAgent: String? = null,
+        override val client: String? = null
     ) : PlayableSource()
 }
 

@@ -27,6 +27,7 @@ class InnerTubeFormatAttributionTest {
     @Test
     fun `progressive formats carry the client whose response carried them`() {
         listOf(
+            YouTubeClients.visionos,
             YouTubeClients.android,
             YouTubeClients.tv,
             YouTubeClients.ios,

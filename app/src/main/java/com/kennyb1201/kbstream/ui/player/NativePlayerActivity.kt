@@ -89,6 +89,7 @@ import com.kennyb1201.kbstream.data.youtube.InnerTubeExtractor
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
 import com.kennyb1201.kbstream.data.youtube.PoTokenTrace
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
+import com.kennyb1201.kbstream.data.youtube.YouTubeClients
 import com.kennyb1201.kbstream.data.youtube.isYouTubeIdentityBlocked
 import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
@@ -1788,6 +1789,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * something - and the next resolve is only worth making with a fresh one.
      */
     private var trailerVideoId: String? = null
+
+    /**
+     * The client that signed the trailer source this session was launched with,
+     * or null when it names none (IMDb, NewPipe/Piped, a non-trailer session).
+     *
+     * Read by [createPlayer] to choose the data source, because the SOURCE's
+     * client decides it and the URL cannot: both URL classes are googlevideo
+     * (see `trailerDataSourceFactory`). Refreshed by
+     * [applyTrailerReplacement], so the one resume re-chooses correctly too.
+     */
+    private var trailerSigningClient: String? = null
 
     /**
      * The title's ids as the launching screen knew them, for the one trailer
@@ -3791,6 +3803,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         )
         trailerVideoId = intent
             .getStringExtra(TrailerPlayerLauncher.EXTRA_TRAILER_VIDEO_ID)
+            ?.takeIf { it.isNotBlank() }
+        trailerSigningClient = intent
+            .getStringExtra(DetailTrailerLaunch.EXTRA_TRAILER_CLIENT)
             ?.takeIf { it.isNotBlank() }
         trailerImdbId = intent
             .getStringExtra(DetailTrailerLaunch.EXTRA_TRAILER_IMDB_ID)
@@ -5953,7 +5968,19 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             currentUrl.contains("googlevideo.com") ||
                 currentAudioUrl?.contains("googlevideo.com") == true
         val httpOrYoutubeFactory: androidx.media3.datasource.DataSource.Factory =
-            if (isGooglevideoStream) {
+            if (isGooglevideoStream && YouTubeClients.isTokenFree(trailerSigningClient)) {
+                // A token-free trailer pick reads like any other file. Its URL
+                // needs no mint, so the chunker's bounded-range path is not what
+                // it was built for - and the stock loader is what plays it whole
+                // (the measured case: 206 on both ranges, 200 open-ended, 12 MB
+                // at ~6 Mbit/s). Trailer-only: a non-trailer session passes null
+                // and keeps the branch below.
+                Log.i(
+                    "PLAYER_DV",
+                    "token-free trailer stream; using the stock source"
+                )
+                com.kennyb1201.kbstream.data.youtube.tokenFreeTrailerDataSource(agent)
+            } else if (isGooglevideoStream) {
                 Log.i(
                     "PLAYER_DV",
                     "googlevideo stream detected; using YouTube chunked source"
@@ -12495,6 +12522,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             is PlayableSource.Muxed -> source.userAgent
             is PlayableSource.Adaptive -> source.userAgent
         }
+        // The replacement's own client, so the rebuild picks its data source by
+        // the SOURCE again: a resume off a dead visionos pick onto a gated one
+        // (or the reverse) must change loaders with the source, not keep the
+        // one the session launched with.
+        trailerSigningClient = source.client
         streamHeaders = trailerUserAgent
             ?.takeIf { it.isNotBlank() }
             ?.let { ua -> mapOf("User-Agent" to ua) }

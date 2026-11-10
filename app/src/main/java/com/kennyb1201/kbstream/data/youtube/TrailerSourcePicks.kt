@@ -7,11 +7,19 @@ package com.kennyb1201.kbstream.data.youtube
  * network, no Android and no state - the part that decides whether a trailer
  * opens on a source that lasts, and the part a unit test can drive directly.
  *
- * The rule they share is [PREFERRED_SEPARATE_CLIENT]'s: a preferred client's
+ * Two rules, in this order. First a TOKEN-FREE client's source whenever it has
+ * one: its URL needs no PoToken mint, so it plays whole through the stock
+ * loader, and that is the path that ends the retries rather than improving them
+ * (2026-11-10, Head of State: a gated adaptive URL stalled at 2.4 MB with
+ * `pot=false`). Then [PREFERRED_SEPARATE_CLIENT]'s: a preferred gated client's
  * source whenever it has a usable one, the rest of the pool only when it does
  * not. Score and variant height rank WITHIN a pool; neither may promote another
- * client over the preferred one, which is how an android_vr progressive with a
+ * client over a pool above it, which is how an android_vr progressive with a
  * higher format score opened the 2026-11-05 trailer and died at 15.1 s.
+ *
+ * The token-free rule is a property of the CLIENT (see
+ * [YouTubeClients.isTokenFree]), not of a URL: a gated client can serve a URL
+ * with no `pot` in it and still die without the token mid-play.
  */
 
 /**
@@ -90,12 +98,19 @@ internal const val CANDIDATE_PROBE_TIMEOUT_MS = 2_500L
 internal const val CANDIDATE_PROBE_BUDGET_MS = 4_000L
 
 /**
- * Every eligible candidate in the order it may be probed: the preferred
- * client's pool first, then the rest of the pool, each ranked by score.
+ * Every eligible candidate in the order it may be probed: a token-free client's
+ * pool first, then the preferred gated client's pool, then the rest of the
+ * pool, each ranked by score.
  *
  * [pickBest] is this list's head, which is what keeps the first mount's rule and
- * the probe's order from drifting apart: the preferred client is DEMOTED, not
- * banned, and only when it has nothing does another client's source rank first.
+ * the probe's order from drifting apart: both pools are DEMOTED, not banned, and
+ * only when a pool has nothing does the next one rank first.
+ *
+ * Why token-free leads everything: a gated URL can pass every reachability
+ * check and still die at the token wall mid-play, which is the failure the
+ * probe cannot see (2026-11-10, the Head of State death at 2.4 MB served its
+ * opening ranges). Ranking it low would keep handing trailers the source most
+ * likely to need a retry, whatever the probe says.
  */
 internal fun probeOrder(
     items: List<StreamCandidate>,
@@ -106,16 +121,20 @@ internal fun probeOrder(
     // is the one function that decides what plays, so an excluded client must
     // never win by being the preferred one.
     val eligible = items.filterNot { it.client in excludeClients }
+    val tokenFree = eligible.filter { YouTubeClients.isTokenFree(it.client) }
     val preferred = eligible.filter { it.client == preferredClient }
-    val pool = if (preferred.isNotEmpty()) preferred else eligible
     val byScore = compareByDescending<StreamCandidate> { it.score }
         .thenBy { if (it.hasN) 1 else 0 }
         .thenBy { it.priority }
-    // The preferred pool keeps its place even when it is empty: the rest of the
-    // pool is what is probed then, in exactly the order it would have had.
-    return preferred.sortedWith(byScore) + eligible
-        .filterNot { it.client == preferredClient }
-        .sortedWith(byScore)
+    // Each pool keeps its place even when it is empty: the rest of the pool is
+    // what is probed then, in exactly the order it would have had. The three
+    // groups are DISJOINT - token-free is hoisted out of the gated pool, and the
+    // preferred client out of the last group - so the list is every eligible
+    // candidate exactly once, in the order it may be probed.
+    val gated = eligible.filterNot { YouTubeClients.isTokenFree(it.client) }
+    return tokenFree.sortedWith(byScore) +
+        preferred.sortedWith(byScore) +
+        gated.filterNot { it.client == preferredClient }.sortedWith(byScore)
 }
 
 /**
@@ -151,9 +170,15 @@ internal fun audioProbeOrder(
 }
 
 /**
- * Which parsed manifest plays, in the order the pools are consulted: the
- * preferred client's manifests under the ceiling, then every manifest under the
- * ceiling, then the lowest rendition anyone offers.
+ * Which parsed manifest plays, in the order the pools are consulted: a
+ * token-free client's manifests under the ceiling, then the preferred client's,
+ * then every manifest under the ceiling, then the lowest rendition anyone
+ * offers.
+ *
+ * The token-free pool leads for the same reason it leads [probeOrder]: an HLS
+ * manifest signed by a gated client is the same URL family as a gated adaptive
+ * one, and HLS is the first KIND - so a gated manifest would otherwise make
+ * every pick gated before the token-free client was ever consulted.
  *
  * Within a pool the rule is unchanged: the highest variant at or below
  * [MAX_TRAILER_HEIGHT], then the widest - refusing to play is never the answer.
@@ -171,8 +196,10 @@ internal fun pickHlsManifest(
     parsed: List<Pair<Triple<String, Int, String>, List<ManifestVariant>>>,
     preferredClient: String
 ): Triple<String, Int, String>? {
+    val tokenFree = parsed.filter { YouTubeClients.isTokenFree(it.first.first) }
     val preferred = parsed.filter { it.first.first == preferredClient }
-    return bestHlsUnderCeiling(preferred)
+    return bestHlsUnderCeiling(tokenFree)
+        ?: bestHlsUnderCeiling(preferred)
         ?: bestHlsUnderCeiling(parsed)
         ?: lowestHls(parsed)
 }

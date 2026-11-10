@@ -17,10 +17,11 @@ import org.junit.Test
  * formats are merged - so a client that only ever answers LOGIN_REQUIRED adds
  * latency, not width.
  *
- * The all-clients rule keeps its meaning: LOGIN_REQUIRED from all FIVE is the
- * identity being refused, not one unlucky client, and that is what throws the
- * cached config away. Anything less still resolves from the clients that
- * answered.
+ * The all-clients rule keeps its meaning: LOGIN_REQUIRED from the WHOLE table is
+ * the identity being refused, not one unlucky client, and that is what throws
+ * the cached config away. Anything less still resolves from the clients that
+ * answered. The table now leads with the token-free visionos client (see
+ * TrailerTokenFreeClientTest); it is asked like every other entry.
  */
 class InnerTubeClientChainTest {
 
@@ -32,7 +33,7 @@ class InnerTubeClientChainTest {
             "the chain must be driven by the table, so adding a client asks it too",
             loop.contains("for (client in YouTubeClients.all) {")
         )
-        assertEquals(5, YouTubeClients.all.size)
+        assertEquals(6, YouTubeClients.all.size)
     }
 
     @Test

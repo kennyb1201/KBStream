@@ -23,8 +23,8 @@ import org.junit.Test
  */
 class HeroTrailerResumeLadderTest {
 
-    /** The five clients that can sign a source (`YouTubeClients.all`'s keys). */
-    private val clients = setOf("android", "tv", "ios", "web_embedded", "android_vr")
+    /** Every client that can sign a source, as the ladder's own default reads it. */
+    private val clients = YouTubeClients.all.map { it.key }.toSet()
 
     private fun decide(
         deadClient: String?,
@@ -72,8 +72,8 @@ class HeroTrailerResumeLadderTest {
     @Test
     fun `the cap bounds the one case the set cannot - an unknown signing client`() {
         assertTrue(
-            "the cap is the ladder size minus the initial play: five clients, one " +
-                "excluded per step, four steps",
+            "the cap bounds the one case the set cannot (an unknown signing " +
+                "client) at four steps, however many clients can sign a source",
             MAX_HERO_TRAILER_RESUMES == 4
         )
         val unknownBelowCap = decide(deadClient = null, attempts = MAX_HERO_TRAILER_RESUMES - 1)
