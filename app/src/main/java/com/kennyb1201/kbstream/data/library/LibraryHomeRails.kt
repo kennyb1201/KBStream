@@ -332,6 +332,19 @@ object LibraryHomeRails {
         }
     }
 
+    /**
+     * This profile's stored pins as the store wrote them, or null when the blob
+     * is absent or unreadable.
+     *
+     * For the adoption path (PrefsPayloadApplier.applyLibraryHomeRails): it holds
+     * the prefs file already, and a null-stamped pull has to union against what
+     * is ON DISK for the profile the row names, not against the active one.
+     */
+    internal fun storedPins(raw: String?): List<LibraryHomeRailPin>? {
+        if (raw.isNullOrBlank()) return null
+        return runCatching { adapter.fromJson(raw) }.getOrNull()?.rails
+    }
+
     private fun prefs(context: Context) = prefsFor(context, null)
 
     /** The pins blob of one profile (null = the profile scoped to right now). */

@@ -1103,6 +1103,17 @@ object KBHomeOrderPrefs {
         )
     }
 
+    /** [blob] read as an arrangement, or null when this build cannot parse it. */
+    internal fun parseBlob(blob: String): KBHomeOrder? =
+        runCatching { adapter.fromJson(blob) }.getOrNull()
+
+    /**
+     * [order] in the shape this store writes, so a merged adoption lands in the
+     * same encoding as a local edit (see [parseBlob]).
+     */
+    internal fun encodeBlob(order: KBHomeOrder): String =
+        adapter.toJson(order) ?: "{}"
+
     /**
      * Drop every manual arrangement (used by "Reset order" in Settings).
      *

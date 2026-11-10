@@ -1537,9 +1537,17 @@ object PrefsPayloadApplier {
     }
 
     /**
-     * Pinned Library lists: the blob replaced wholesale, behind the same
-     * last-edit guard the home order and the browse chips use - an older
-     * sibling copy must not revert a pin the viewer just made here.
+     * Pinned Library lists, behind the same last-edit guard the home order and
+     * the browse chips use - an older sibling copy must not revert a pin the
+     * viewer just made here - and with the adoption MERGED when the payload
+     * carries no stamp (see [unionLibraryHomeRailPins]).
+     *
+     * The guard still decides whether the remote is adopted at all; only what is
+     * WRITTEN changed. A stamped remote replaces the pins (its omission is a
+     * deliberate unpin, the only signal one leaves); an unstamped one proves
+     * nothing about deletions, so its pins are unioned onto the local set rather
+     * than replacing it. That is what stops a stale copy taking the Trakt and
+     * MDBList pins off both devices (Kenny, 2026-11-09).
      *
      * An unreadable (or absent) rails array is "nothing to apply", never "clear
      * them": the applier cannot tell an older payload's missing field from an
@@ -1560,24 +1568,51 @@ object PrefsPayloadApplier {
             profileId
         )
         val remoteUpdated = payloadUpdatedAt(payload)
-        if (!HomeListBlobRules.shouldApply(
-                remoteUpdated,
-                prefs.getLong(
-                    com.kennyb1201.kbstream.data.library.LibraryHomeRails.SYNCED_AT_KEY,
-                    0L
-                )
+        val localSyncedAt = prefs.getLong(
+            com.kennyb1201.kbstream.data.library.LibraryHomeRails.SYNCED_AT_KEY,
+            0L
+        )
+        if (!HomeListBlobRules.shouldApply(remoteUpdated, localSyncedAt)) return
+        // An UNSTAMPED payload proves nothing about deletions: it comes from a
+        // build that predates the stamp, which is also a build that may simply
+        // not know a pin. So it is adopted by UNION - a remote pin replaces the
+        // local one with the same key (its title may be newer), a local pin the
+        // remote omits survives, a pin only the remote has arrives. A payload
+        // with a real stamp is the sibling's state AFTER the local pins, so it
+        // is adopted whole: its omissions include a deliberate unpin, which
+        // leaves no other trace (tombstones record removed titles, not pin
+        // events).
+        val merged = if (remoteUpdated == null) {
+            val localPins = com.kennyb1201.kbstream.data.library.LibraryHomeRails
+                .storedPins(
+                    prefs.getString(
+                        com.kennyb1201.kbstream.data.library.LibraryHomeRails
+                            .SYNC_BLOB_KEY,
+                        null
+                    )
+                ).orEmpty()
+            com.kennyb1201.kbstream.data.library.unionLibraryHomeRailPins(
+                localPins,
+                rails
             )
-        ) {
-            return
+        } else {
+            rails
         }
         // A pin whose local list this device already deleted is not adopted: the
         // sibling may not have seen the tombstone yet, and taking its copy would
         // put a rail back for a list that does not exist here.
         val adopted = com.kennyb1201.kbstream.data.library.withoutDeletedLocalPins(
-            rails,
+            merged,
             com.kennyb1201.kbstream.data.library.LocalLibraryStore
                 .deletedListIds(context, profileId)
         )
+        // Never `now`, for the same reason as the home order: an adoption is not
+        // an edit this device made. The stamp only moves forward, so a re-pull of
+        // the same remote re-merges idempotently (`shouldApply` adopts on `>`=
+        // and the applier rejects only a strictly older remote) instead of
+        // stalling, and a merged copy never claims to be newer than the sibling's
+        // write it came from.
+        val stamp = maxOf(localSyncedAt, remoteUpdated ?: localSyncedAt)
         prefs.edit()
             .putString(
                 com.kennyb1201.kbstream.data.library.LibraryHomeRails.SYNC_BLOB_KEY,
@@ -1585,7 +1620,7 @@ object PrefsPayloadApplier {
             )
             .putLong(
                 com.kennyb1201.kbstream.data.library.LibraryHomeRails.SYNCED_AT_KEY,
-                remoteUpdated ?: System.currentTimeMillis()
+                stamp
             )
             .apply()
         // Home reads the pins while it composes, so a rail adopted from the
@@ -1805,12 +1840,38 @@ object PrefsPayloadApplier {
             return
         }
 
+        // ADOPT, then MERGE - not replace. The decision to adopt is the guard
+        // above (an older stamped copy was rejected whole, a blank blob never
+        // gets here); what the adoption WRITES is the remote's arrangement with
+        // every rail only this device knows kept where it sat. A pulled blob
+        // that never knew a rail cannot delete its placement, which is the
+        // arranged BingeCat rail that moved to the end of Home (see
+        // mergeHomeOrderAdopted).
         val local = prefs.getString("home_order_json", null).orEmpty()
-        if (blob == local) return
+        val remoteOrder = com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+            .parseBlob(blob) ?: return
+        val localOrder = com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+            .parseBlob(local)
+        val merged = if (localOrder == null) {
+            // Nothing readable here (first sign-in, or a blob this build cannot
+            // parse): the remote IS the arrangement, as it always was.
+            remoteOrder
+        } else {
+            com.kennyb1201.kbstream.data.kb.mergeHomeOrderAdopted(localOrder, remoteOrder)
+        }
+        val encoded = com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.encodeBlob(merged)
+        val localSyncedAt = prefs.getLong("home_order_synced_at", 0L)
+        // Never `now`: a merge is not an edit this device made. Publishing a
+        // fresh stamp here would let the adoption win a race it never entered
+        // and republish the merged copy over a sibling's real edit - the
+        // `remapAddonKeys` lesson. Equal stamps still converge: shouldApply
+        // adopts on `>=`, so the same remote re-merges idempotently.
+        val stamp = maxOf(localSyncedAt, remoteUpdated ?: localSyncedAt)
+        if (encoded == local && stamp == localSyncedAt) return
 
         prefs.edit()
-            .putString("home_order_json", blob)
-            .putLong("home_order_synced_at", remoteUpdated ?: System.currentTimeMillis())
+            .putString("home_order_json", encoded)
+            .putLong("home_order_synced_at", stamp)
             .apply()
     }
 

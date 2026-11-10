@@ -264,6 +264,33 @@ fun withoutDeletedLocalPins(
 }
 
 /**
+ * [local] pins with [remote]'s added on top, keyed by (source, id).
+ *
+ * The adoption of a pins blob that carries no stamp: such a payload proves
+ * nothing about deletions (it was written by a build that predates the stamp,
+ * which is also, by definition, a build that may simply not know a pin), so its
+ * omissions are not read as unpins. A remote pin REPLACES the local one with the
+ * same key - its name may be the newer title - a local pin the remote omits is
+ * kept, and a pin only the remote has arrives.
+ *
+ * Deliberately NOT the rule for a stamped payload: a real stamp says the sibling
+ * wrote its pins after this device's, and an unpin leaves no tombstone (the
+ * tombstone record is about removed TITLES, not pin events), so a stamped
+ * remote's omission is the only signal a deliberate unpin leaves. Unioning that
+ * case would resurrect every list the viewer unpinned.
+ */
+internal fun unionLibraryHomeRailPins(
+    local: List<LibraryHomeRailPin>,
+    remote: List<LibraryHomeRailPin>
+): List<LibraryHomeRailPin> {
+    if (remote.isEmpty()) return local
+    val remoteByKey = remote.associateBy { it.key }
+    val merged = local.map { pin -> remoteByKey[pin.key] ?: pin }
+    val localKeys = local.mapTo(mutableSetOf()) { it.key }
+    return merged + remote.filterNot { it.key in localKeys }
+}
+
+/**
  * [pins] minus the ones naming a list the service no longer has.
  *
  * A list deleted on Trakt's, MDBList's or BingeCat's own site leaves nothing on
