@@ -98,6 +98,7 @@ fun OnboardingScreenMobile(
     onPasswordChange: (String) -> Unit,
     onOpenAddons: () -> Unit,
     onOpenSimkl: () -> Unit,
+    onOpenTrakt: () -> Unit,
     onOpenGuide: () -> Unit,
     onFinish: () -> Unit
 ) {
@@ -166,6 +167,14 @@ fun OnboardingScreenMobile(
                     description = "Scrobble and sync your watched state",
                     icon = Icons.Filled.Sync,
                     onClick = onOpenSimkl
+                )
+                // m8: Trakt's half of the TV page's row - present here for the
+                // same reason, and absent for the same reason it was there.
+                OnboardingSourceRowMobile(
+                    title = "Connect Trakt",
+                    description = "Scrobble playback and sync watched state",
+                    icon = Icons.Filled.Sync,
+                    onClick = onOpenTrakt
                 )
 
                 Spacer(modifier = Modifier.height(2.dp))

@@ -1731,6 +1731,11 @@ private fun ListsPane(
             items = listItems,
             emptyText = when {
                 loading && selectedList == null -> "Loading lists…"
+                // m5: with no lists at all there is nothing to select, so "Select
+                // a list on the left" pointed at an empty rail and named no way
+                // out. The only path forward is the + NEW LIST chip above it.
+                selectedList == null && lists.isEmpty() ->
+                    "No lists yet. Create one with + NEW LIST on the left."
                 selectedList == null -> "Select a list on the left."
                 else -> "This list is empty. Long-press any poster app-wide " +
                     "and choose \"Add to list…\" to fill it."

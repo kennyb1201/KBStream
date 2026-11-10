@@ -402,6 +402,26 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                 event.exceptions?.forEach { exception ->
                     exception.value = Redaction.text(exception.value)
                 }
+                // m38: the message and the exception value were the only text
+                // scrubbed. The extras and the tag values travel with the same
+                // event and can carry a URL, a header or a token just as easily -
+                // structural today (no leaking call site was found), which is
+                // exactly the time to close it rather than after the first leak.
+                // The stack trace stays untouched. `extras` (not `extra`) is the
+                // map accessor on SentryBaseEvent; `getExtra(key)` is the single
+                // -key getter and `extra` is a private field.
+                event.extras?.let { extras ->
+                    extras.keys.toList().forEach { key ->
+                        val value = extras[key]
+                        if (value is String) extras[key] = Redaction.text(value)
+                    }
+                }
+                event.tags?.let { tags ->
+                    tags.keys.toList().forEach { key ->
+                        val value = tags[key]
+                        if (value != null) tags[key] = Redaction.text(value)
+                    }
+                }
                 event
             }
             // Breadcrumbs carry text too, and a future logcat/HTTP integration

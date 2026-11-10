@@ -1243,8 +1243,15 @@ fun HomeScreenMobile(
                                 color = KBTextLo,
                                 style = MaterialTheme.typography.bodyMedium
                             )
+                            // m1: this card can be on screen WITH rails (a
+                            // partial failure), and onHomeResumed() only rebuilds
+                            // when the rails are empty or stale - so the press
+                            // rebuilt nothing and the error stayed. The force
+                            // refresh is what the TV page's rails-empty retry
+                            // uses, and it is the only thing that answers a
+                            // failure beside rails that are already up.
                             KBButton(label = "RETRY") {
-                                viewModel.onHomeResumed()
+                                viewModel.refreshRailsOnly()
                             }
                         }
                     }

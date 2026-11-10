@@ -310,6 +310,10 @@ fun LibraryScreenMobile(
 
             LibraryFilter.LISTS -> when {
                 state.loading && state.selectedList == null -> "Loading lists…"
+                // m5: the phone's half of the TV label - an empty rail made
+                // "Select a list above." a pointer to nothing with no way out.
+                state.selectedList == null && state.lists.isEmpty() ->
+                    "No lists yet. Create one with + NEW LIST above."
                 state.selectedList == null -> "Select a list above."
                 else -> "This list is empty. Long-press any poster app-wide " +
                     "and choose \"Add to list…\" to fill it."

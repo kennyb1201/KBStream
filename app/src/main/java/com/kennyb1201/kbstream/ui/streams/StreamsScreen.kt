@@ -303,6 +303,11 @@ fun StreamsScreen(
      */
     fun autoplayStart(sources: List<Stream>, addons: List<String?>) {
         resolveScope.launch {
+            // m19: one batched cached check for the whole walk before it starts,
+            // so the per-row calls the walk makes are memo hits instead of serial
+            // round-trips inside its budget. A no-op for a list with fewer than
+            // two hash rows, and best-effort either way.
+            TorBoxResolve.prefetchCached(context, sources)
             val start = AutoplayWalk.start(
                 candidates = sources,
                 pick = { remaining -> autoplayPickFrom(remaining) },

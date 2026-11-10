@@ -256,6 +256,20 @@ fun ProfileEditScreen(
     // state, so a remember keyed on nothing would keep saying "SET".
     var parentPinRevision by remember(effectiveEditId) { mutableStateOf(0) }
     val parentPinFieldRequester = remember { FocusRequester() }
+    // B1 (release-readiness audit, 2026-11-10): the profile DELETE arm.
+    //
+    // The row is destructive and unrecoverable - it closes the scoped DB
+    // handles, tombstones + syncs the deletion, drops tag ownership, deletes
+    // every download and the guide and wipes the namespace - yet the press used
+    // to do it outright, with the parent PIN as its only gate. That gate is a
+    // CREDENTIAL check, not a confirmation: an adult deleting an adult profile
+    // has no PIN to answer, so one D-pad tap destroyed a profile with no undo.
+    // Every other destructive row in the app asks first (backup import,
+    // Clear Continue Watching, CLEAR EYE BADGES); this one now does too, and the
+    // PIN gate still runs after it when the target needs one.
+    var deleteTarget by remember(effectiveEditId) {
+        mutableStateOf<ProfileManager.Profile?>(null)
+    }
     // Tracks whether the custom photo is in effect; selecting a color tile
     // flips this off so a color choice actually replaces the photo on save.
     var useCustomAvatar by remember(effectiveEditId) {
@@ -317,6 +331,22 @@ fun ProfileEditScreen(
                 parentPinPrompt = true
             }
         }
+
+    // The delete itself, run from the confirmation dialog below (never from the
+    // row's own press), through the same parent-PIN gate it always had: C3 -
+    // deleting a profile is a parental act whenever the target carries a PIN of
+    // its own, the target IS the sandbox, or a kid is holding the remote.
+    val deleteProfile: (ProfileManager.Profile) -> Unit = { target ->
+        if (KidsGate.deleteNeedsPin(target, ProfileManager.activeProfile.value)) {
+            gateWithParentPin("Required to delete this profile", target) {
+                ProfileManager.delete(context, target.id)
+                onDone()
+            }
+        } else {
+            ProfileManager.delete(context, target.id)
+            onDone()
+        }
+    }
 
     // The save itself, as its own lambda rather than inline in the SAVE button:
     // the parent-PIN prompt has to run it too, once the PIN it asked for is set.
@@ -1095,19 +1125,9 @@ fun ProfileEditScreen(
                     enabled = true,
                     danger = true
                 ) {
-                    // C3: deleting a profile is a parental act whenever the
-                    // target carries a PIN of its own, the target IS the
-                    // sandbox, or a kid is the one holding the remote.
-                    val target = editing
-                    if (KidsGate.deleteNeedsPin(target, ProfileManager.activeProfile.value)) {
-                        gateWithParentPin("Required to delete this profile", target) {
-                            ProfileManager.delete(context, target.id)
-                            onDone()
-                        }
-                    } else {
-                        ProfileManager.delete(context, target.id)
-                        onDone()
-                    }
+                    // B1: the press only ARMS the delete - the dialog below names
+                    // the profile and what goes with it before anything runs.
+                    deleteTarget = editing
                 }
             }
         }
@@ -1119,6 +1139,52 @@ fun ProfileEditScreen(
                 color = KBTextLo,
                 modifier = Modifier.padding(top = 16.dp)
             )
+        }
+    }
+
+    // ── The delete confirmation (B1) ───────────────────────────────
+    // The one irreversible row in the editor, so it asks in the app's own
+    // dialog rather than acting on the press. The copy names the profile and
+    // what goes with it: a viewer cannot tell "remove the tile" from "erase
+    // the profile" once it has happened.
+    deleteTarget?.let { target ->
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { deleteTarget = null }
+        ) {
+            KBDialogPanel(
+                title = "Delete profile",
+                subtitle = target.name,
+                width = 480.dp
+            ) {
+                Text(
+                    text = "Its watch history and progress, downloads, lists " +
+                        "and channel guide are deleted with it. This cannot be " +
+                        "undone.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.padding(top = 8.dp)
+                ) {
+                    KBButton(
+                        label = "DELETE",
+                        enabled = true,
+                        danger = true
+                    ) {
+                        // Closed BEFORE the gate opens: two dialogs must never
+                        // stack, and the gate belongs to the action, not here.
+                        deleteTarget = null
+                        deleteProfile(target)
+                    }
+                    KBButton(
+                        label = "CANCEL",
+                        enabled = true
+                    ) {
+                        deleteTarget = null
+                    }
+                }
+            }
         }
     }
 

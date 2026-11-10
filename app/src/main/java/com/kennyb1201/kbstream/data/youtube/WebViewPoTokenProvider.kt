@@ -586,6 +586,14 @@ internal class WebViewPoTokenMinter(
             val minted = try {
                 mintOn(page, videoId ?: WARM_PAGE_VIDEO_ID, visitorData)
             } catch (e: CancellationException) {
+                // m16: the same arm [mintOn]'s caller already had, which this one
+                // was missing. A cancelled pre-warm used to rethrow with the
+                // page still loaded on the YouTube embed - an offscreen WebView
+                // playing a muted video until the next mint re-navigated it,
+                // which on a 1.7 GB box is exactly the cost that arm was added
+                // to stop. The page is kept (the process stays warm); only its
+                // document is torn down.
+                parkPage(page)
                 throw e
             } catch (error: Throwable) {
                 Log.w(TAG, "PO token pre-warm failed; dropping the warm page", error)

@@ -2116,12 +2116,20 @@ internal object DolbyVisionCompat {
      * The advertised codec string is NOT read off this rewritten SPS: callers
      * derive it from the ORIGINAL one before this runs, exactly as before this
      * rewrite took the SPS. [rewriteSpsToHdr10] rebuilds the set around a
-     * Main-tier Main10 profile_tier_level and drops the DV extension, and a
-     * Dolby Vision container's SPS routinely declares High tier (the field
-     * file's `hvc1.2.4.H150.B0`) - besides which the set it writes does not read
-     * back as Main10 through [hevcCodecFromInitData] at all today (the open
-     * offset issue pinned in DolbyVisionVpsInitDataRewriteTest) - so a string
-     * derived afterwards would advertise a profile the set does not carry.
+     * Main-tier Main10 profile_tier_level and drops the DV extension, and that
+     * set DOES read back as Main10 through [hevcCodecFromInitData] -
+     * `hvc1.2.4.L<source level>.B0`, pinned in
+     * DolbyVisionVpsInitDataRewriteTest; the two-bit displacement that used to
+     * make it read back as profile_idc 0 was the fixed half of the
+     * 2026-10-16 finding, not an open one. The reason to read the original
+     * stays: a Dolby Vision container's SPS routinely declares High tier (the
+     * field file's `hvc1.2.4.H150.B0`), and the relabel arms deliberately keep
+     * advertising that High-tier string while configuring the decoder with the
+     * Main-tier set. Re-deriving the string here would quietly delete that
+     * deliberate disagreement and change what the relabel advertises - and
+     * whether the disagreement itself is what stalls the MTK box is exactly the
+     * question still held for a device run (PLAYER_DV logs), so this is not the
+     * place to answer it by accident.
      *
      * [rewriteInitDataVps] is the mutating strip's counterpart; it rewrites the
      * same two sets and additionally patches the hvcC record's declared

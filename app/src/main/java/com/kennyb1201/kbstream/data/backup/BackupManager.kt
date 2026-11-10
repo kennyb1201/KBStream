@@ -36,6 +36,15 @@ object BackupManager {
     private const val APP_TAG = "kbstream"
     private const val BACKUP_VERSION = 1
 
+    /**
+     * Characters this importer will read from a chosen file (m26).
+     *
+     * A real backup - even a very large history - is a few MB; 64 million
+     * characters is an order of magnitude of headroom and still refuses the
+     * mislabeled video file that used to be read whole into a 192 MB heap.
+     */
+    private const val MAX_BACKUP_CHARS = 64 * 1024 * 1024
+
     private const val PLAYER_PREFS = "kbstream_player_prefs"
     private const val ADDON_PREFS = "kbstream_addons"
     private const val WATCHED_OVERRIDES_PREFS = "kbstream_watched_overrides"
@@ -110,7 +119,26 @@ object BackupManager {
     private suspend fun importBlocking(context: Context, uri: Uri): String {
         val stream = context.contentResolver.openInputStream(uri)
             ?: error("Could not open the chosen file")
-        val text = stream.bufferedReader().use { it.readText() }
+        // m26: read bounded. readText() materialized whatever the picker
+        // returned - a mislabeled multi-GB file was fully in memory on a device
+        // class with a 192 MB heap, before any parsing. The cap is far above a
+        // real backup (a 50k-row history is a few MB) and is checked as the
+        // bytes arrive, so the refusal happens before the allocation grows.
+        val text = stream.bufferedReader().use { reader ->
+            val buffer = CharArray(64 * 1024)
+            val out = StringBuilder()
+            var read = 0
+            while (true) {
+                val n = reader.read(buffer)
+                if (n < 0) break
+                read += n
+                if (read > MAX_BACKUP_CHARS) {
+                    error("That file is too large to be a KBStream backup and was not imported")
+                }
+                out.append(buffer, 0, n)
+            }
+            out.toString()
+        }
 
         val json = runCatching { JSONObject(text) }
             .getOrElse { error("Not a valid backup file") }
@@ -138,8 +166,32 @@ object BackupManager {
         // file; this is the same objection one level down.
         val historyArr = json.optJSONArray("watchHistory")
             ?: error("This backup file is missing its watch history and was not imported")
-        val history = (0 until historyArr.length()).mapNotNull { i ->
+        // m26: a PRESENT-but-garbage array bypassed the guard above. Every row
+        // mapper is default-filled and never null, so malformed objects became
+        // rows with blank ids, passed the guard, wiped both tables and upserted
+        // onto each other - while reporting "Backup restored". Validate BEFORE
+        // anything is cleared: a row needs the two ids every later read joins
+        // on, and a file whose rows mostly fail that is refused outright rather
+        // than half-imported over the viewer's library.
+        val parsedHistory = (0 until historyArr.length()).mapNotNull { i ->
             historyArr.optJSONObject(i)?.toWatchHistoryEntity()
+        }
+        val history = parsedHistory.filter { row ->
+            row.id.isNotBlank() && row.parentId.isNotBlank()
+        }
+        val droppedHistory = parsedHistory.size - history.size
+        if (parsedHistory.isEmpty() || history.isEmpty()) {
+            error(
+                "This backup's watch history is unreadable and nothing was " +
+                    "imported. Your library is unchanged."
+            )
+        }
+        if (droppedHistory > parsedHistory.size / 2) {
+            error(
+                "This backup's watch history is damaged (${droppedHistory} of " +
+                    "${parsedHistory.size} entries unreadable) and nothing was " +
+                    "imported. Your library is unchanged."
+            )
         }
 
         val watched = json.optJSONArray("watchedStatus")
@@ -200,7 +252,9 @@ object BackupManager {
 
         return "Backup restored — " +
             "${history.size} title${if (history.size == 1) "" else "s"}, " +
-            "${watched.size} watched marker${if (watched.size == 1) "" else "s"}"
+            "${watched.size} watched marker${if (watched.size == 1) "" else "s"}" +
+            // m26: a partial restore says so instead of reading as a clean one.
+            if (droppedHistory > 0) ", $droppedHistory unreadable skipped" else ""
     }
 
     private fun restorePrefsMap(

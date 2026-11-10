@@ -17,16 +17,19 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.nativeKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
@@ -41,6 +44,7 @@ import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 
 /**
@@ -107,8 +111,22 @@ internal fun HomeScreensaver(
     // Take the D-pad. The rails behind are still composed; while this node holds
     // focus their cards cannot receive a press, and the handler below consumes
     // every key before the focus system can walk anywhere.
+    //
+    // m4: retried frame by frame until the node reports focus, not asked once.
+    // One unretried request can land before this overlay has attached, and it is
+    // then silently missed - the trap the top-bar drive documents (HOME_FOCUS)
+    // and KBStatusMessage retries around. Missed, the overlay holds no focus,
+    // its onPreviewKeyEvent never sees a key, and a press acts on the rail card
+    // behind it while the picture stays up. The cap is a runaway guard only.
+    var overlayHasFocus by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        runCatching { focusRequester.requestFocus() }
+        var frames = 0
+        while (!overlayHasFocus && frames < SCREENSAVER_FOCUS_MAX_FRAMES) {
+            awaitFrame()
+            if (overlayHasFocus) break
+            runCatching { focusRequester.requestFocus() }
+            frames++
+        }
     }
 
     // The dwell: advance to the next cycle, which is the next slide. Keyed on
@@ -146,7 +164,19 @@ internal fun HomeScreensaver(
             .background(Color.Black)
             .focusRequester(focusRequester)
             .focusable()
+            // Read by the focus drive above: the overlay knows whether it
+            // actually took the D-pad, which is the only evidence the retry has.
+            .onFocusChanged { overlayHasFocus = it.isFocused }
             .onPreviewKeyEvent { event ->
+                // m13: the volume keys are not this overlay's to consume. It
+                // swallowed every event, so a volume press dismissed the slides
+                // and left the volume alone. They fall through to the window
+                // (which is what actually changes it) and do not exit.
+                when (event.nativeKeyEvent.keyCode) {
+                    android.view.KeyEvent.KEYCODE_VOLUME_UP,
+                    android.view.KeyEvent.KEYCODE_VOLUME_DOWN,
+                    android.view.KeyEvent.KEYCODE_VOLUME_MUTE -> return@onPreviewKeyEvent false
+                }
                 if (event.type == KeyEventType.KeyDown) {
                     onExit()
                 }
@@ -278,3 +308,10 @@ private val ScreensaverGenreGap = 10.dp
  * tightened for a line this small.
  */
 private val ScreensaverGenreTracking = 2.sp
+
+/**
+ * How many frames the overlay keeps asking for focus before it stops trying.
+ * A runaway guard, not a schedule: the drive ends the moment the node reports
+ * focus, and 12 frames is the cap the app's other key hand-offs use.
+ */
+private const val SCREENSAVER_FOCUS_MAX_FRAMES = 12

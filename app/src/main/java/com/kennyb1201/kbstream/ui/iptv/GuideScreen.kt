@@ -1450,6 +1450,17 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                 .getOrDefault(false)
             attempts++
         }
+        // m10: the grid's entry grab writes a GUIDE line either way (landed /
+        // exhausted) and this path wrote none, so a first-enter that missed was
+        // invisible in COPY DIAGNOSTICS - exactly the silence GuideTrace exists
+        // to remove. Same vocabulary as the grid's.
+        val listLine = if (focused) {
+            "list entry-focus landed attempts=$attempts"
+        } else {
+            "list entry-focus exhausted attempts=$attempts"
+        }
+        Log.i("GUIDE", listLine)
+        GuideTrace.note(listLine)
     }
 }
 
@@ -2322,9 +2333,17 @@ Spacer(modifier = Modifier.height(14.dp))
                 if (digitEntry.isNotEmpty()) {
                     // Same rule as resolveChannelNumber (and the player): the
                     // typed number is normalized, so "07" finds channel 7.
+                    val digitChnos = unhiddenChannels.map { item -> item.channel.tvgChno }
                     val digitMatch = ChannelNumberEntry
-                        .target(unhiddenChannels.map { item -> item.channel.tvgChno }, digitEntry)
+                        .target(digitChnos, digitEntry)
                         .let { index -> unhiddenChannels.getOrNull(index) }
+                    // m11: a number nothing can match is a MISS, said so, rather
+                    // than the same generic prompt a number still being typed
+                    // gets. Before this, typing a channel the lineup does not
+                    // carry looked identical to having typed nothing yet, and
+                    // the tune silently did nothing.
+                    val digitMiss = digitMatch == null &&
+                        !ChannelNumberEntry.couldMatch(digitChnos, digitEntry)
                     Surface(
                         shape = KBShapeCard,
                         colors = SurfaceDefaults.colors(
@@ -2347,8 +2366,10 @@ Spacer(modifier = Modifier.height(14.dp))
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = digitMatch?.channel?.displayName ?: "Enter channel number",
-                                color = KBTextLo,
+                                text = digitMatch?.channel?.displayName
+                                    ?: if (digitMiss) "No channel $digitEntry"
+                                    else "Enter channel number",
+                                color = if (digitMiss) KBDanger else KBTextLo,
                                 style = MaterialTheme.typography.bodySmall,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,

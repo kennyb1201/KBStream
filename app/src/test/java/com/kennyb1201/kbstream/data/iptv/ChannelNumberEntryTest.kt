@@ -2,7 +2,9 @@ package com.kennyb1201.kbstream.data.iptv
 
 import android.view.KeyEvent
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -106,6 +108,38 @@ class ChannelNumberEntryTest {
         assertEquals(-1, ChannelNumberEntry.target(unnumbered, "0"))
         assertEquals(-1, ChannelNumberEntry.target(unnumbered, "3"))
         assertEquals(-1, ChannelNumberEntry.target(emptyList(), "1"))
+    }
+
+    // ── the partial-entry check ─────────────────────────────────────
+
+    @Test
+    fun `a prefix that some channel still starts with could match`() {
+        // m11: the Guide shows "No channel N" on a real miss. Saying it while
+        // the digits are still the beginning of a channel number would call a
+        // channel the viewer is halfway through typing nonexistent.
+        val lineup = listOf("12", "125", "7", null)
+        assertTrue(ChannelNumberEntry.couldMatch(lineup, "1"))
+        assertTrue(ChannelNumberEntry.couldMatch(lineup, "12"))
+        assertTrue(ChannelNumberEntry.couldMatch(lineup, "125"))
+        assertTrue("leading zeros still match the normalised number",
+            ChannelNumberEntry.couldMatch(lineup, "07"))
+    }
+
+    @Test
+    fun `digits no channel starts with are a real miss`() {
+        val lineup = listOf("12", "125", "7")
+        assertFalse(ChannelNumberEntry.couldMatch(lineup, "2"))
+        assertFalse(ChannelNumberEntry.couldMatch(lineup, "13"))
+    }
+
+    @Test
+    fun `an unnumbered lineup or an empty entry is never a miss`() {
+        // No numbers in the playlist means positions are the fallback, so a
+        // partial number cannot be ruled out - and an empty entry is not a
+        // search at all.
+        assertTrue(ChannelNumberEntry.couldMatch(listOf(null, "", null), "9"))
+        assertTrue(ChannelNumberEntry.couldMatch(listOf("12"), ""))
+        assertTrue(ChannelNumberEntry.couldMatch(emptyList(), "9"))
     }
 
     @Test

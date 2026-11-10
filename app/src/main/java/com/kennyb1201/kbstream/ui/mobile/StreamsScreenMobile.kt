@@ -278,6 +278,9 @@ fun StreamsScreenMobile(
          */
         fun autoplayStart(sources: List<Stream>, addons: List<String?>) {
             resolveScope.launch {
+                // m19: the phone's half of the TV warm - one batched cached
+                // check before the walk, so its own rows are memo hits.
+                TorBoxResolve.prefetchCached(context, sources)
                 val start = AutoplayWalk.start(
                     candidates = sources,
                     pick = { remaining -> autoplayPickFrom(remaining) },

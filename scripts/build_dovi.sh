@@ -118,8 +118,16 @@ ndk_clang() {
 # but never gated.
 verify_alignment() {
   local so="$1" abi="$2" label="$3"
-  local page
-  page="$("$READELF" -lW "$so" | awk '$1 == "LOAD" { if ($NF == "0x4000") found = 1 } END { exit(found ? 0 : 1) }' && echo aligned || echo unaligned)"
+  local page page_value aligned=0
+  # >= 0x4000, not == 0x4000 (m37): a 64 KB page size (0x10000) is MORE
+  # aligned and used to fail this equality test. bash arithmetic because
+  # Ubuntu's awk is mawk, which cannot parse hex.
+  while read -r page_value; do
+    case "$page_value" in
+      0x*|0X*) if (( page_value >= 0x4000 )); then aligned=1; fi ;;
+    esac
+  done < <("$READELF" -lW "$so" 2>/dev/null | awk '$1 == "LOAD" { print $NF }')
+  if (( aligned )); then page=aligned; else page=unaligned; fi
   if [[ "$abi" == "arm64-v8a" && "$page" != "aligned" ]]; then
     fail "$label (${abi}) is not 16 KB page aligned: it crashes on a 16 KB page-size device (Android 15+) and Play rejects it from 1 February 2027"
   fi

@@ -184,6 +184,15 @@ fun ProfileEditScreenMobile(
     // leaves this screen (see [ParentPinSession]).
     val parentPinSession = rememberParentPinSession(effectiveEditId)
 
+    // B1 (release-readiness audit, 2026-11-10): the profile DELETE arm, the TV
+    // editor's rule on the phone. The row is destructive and unrecoverable, and
+    // the parent PIN beside it is a credential check rather than a confirmation
+    // - an adult deleting an adult profile has none to answer - so the press
+    // opened straight onto the wipe. It arms the dialog below instead.
+    var deleteTarget by remember(effectiveEditId) {
+        mutableStateOf<ProfileManager.Profile?>(null)
+    }
+
     var useCustomAvatar by remember(effectiveEditId) {
         mutableStateOf(editing?.customAvatarUrl != null || editing?.avatarData != null)
     }
@@ -234,6 +243,20 @@ fun ProfileEditScreenMobile(
                 parentPinPrompt = true
             }
         }
+
+    // The delete itself, run from the confirmation dialog, through the same
+    // parent-PIN gate it always had (see the TV editor's deleteProfile).
+    val deleteProfile: (ProfileManager.Profile) -> Unit = { target ->
+        if (KidsGate.deleteNeedsPin(target, ProfileManager.activeProfile.value)) {
+            gateWithParentPin("Required to delete this profile", target) {
+                ProfileManager.delete(context, target.id)
+                onDone()
+            }
+        } else {
+            ProfileManager.delete(context, target.id)
+            onDone()
+        }
+    }
 
     // The save, as a lambda because the parent-PIN prompt runs it too. Same
     // validation order and the same writes as the TV editor.
@@ -816,20 +839,8 @@ fun ProfileEditScreenMobile(
                         .fillMaxWidth()
                         .padding(top = 10.dp)
                 ) {
-                    val target = editing
-                    if (KidsGate.deleteNeedsPin(
-                            target,
-                            ProfileManager.activeProfile.value
-                        )
-                    ) {
-                        gateWithParentPin("Required to delete this profile", target) {
-                            ProfileManager.delete(context, target.id)
-                            onDone()
-                        }
-                    } else {
-                        ProfileManager.delete(context, target.id)
-                        onDone()
-                    }
+                    // B1: arms the confirmation dialog below rather than acting.
+                    deleteTarget = editing
                 }
             }
 
@@ -841,6 +852,45 @@ fun ProfileEditScreenMobile(
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 16.dp)
                 )
+            }
+        }
+
+        // ── The delete confirmation (B1) ──
+        // The phone's half of the TV editor's dialog: named profile, what goes
+        // with it, DELETE tinted as the destructive arm.
+        deleteTarget?.let { target ->
+            androidx.compose.ui.window.Dialog(
+                onDismissRequest = { deleteTarget = null }
+            ) {
+                KBDialogPanel(
+                    title = "Delete profile",
+                    subtitle = target.name,
+                    width = 480.dp
+                ) {
+                    Text(
+                        text = "Its watch history and progress, downloads, lists " +
+                            "and channel guide are deleted with it. This cannot be " +
+                            "undone.",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    KBButton(
+                        label = "DELETE",
+                        danger = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp)
+                    ) {
+                        deleteTarget = null
+                        deleteProfile(target)
+                    }
+                    KBButton(
+                        label = "CANCEL",
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        deleteTarget = null
+                    }
+                }
             }
         }
 

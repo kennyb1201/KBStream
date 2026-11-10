@@ -118,7 +118,17 @@ class DeferredDeleteWiringContractTest {
 
     @Test
     fun `a signed-out clear continues watching is staged, not dropped`() {
-        val body = functionBody("suspend fun clearWatchStateForActiveProfile(")
+        // m25 moved the body into clearWatchStateForProfile(pid) so a DELETED
+        // profile can be purged with the same pass; the active-profile entry
+        // point is now a one-line delegation and must stay one.
+        val active = readSource(SYNC).lineSequence()
+            .firstOrNull { it.contains("suspend fun clearWatchStateForActiveProfile(") }
+            .orEmpty()
+        assertTrue(
+            "the reset must stay the same purge a profile delete runs",
+            active.contains("= clearWatchStateForProfile(currentProfileId())")
+        )
+        val body = functionBody("suspend fun clearWatchStateForProfile(")
         assertTrue(
             "the signed-out branch must stage the wipe from the local rows",
             body.contains("stageSignedOutClear(pid)")
@@ -197,8 +207,37 @@ class DeferredDeleteWiringContractTest {
         )
     }
 
+    @Test
+    fun `deleting a profile purges its cloud rows, before the local wipe`() {
+        // m25. The profile id is tombstoned and never reissued, so rows left
+        // under it can never be read again by anything - they just accumulate in
+        // the account for good. The purge is the SAME pass the Clear Continue
+        // Watching reset runs, fired off the delete's thread.
+        val delete = readSource(PROFILES)
+            .substringAfter("fun delete(context: Context, profileId: String) {")
+        assertTrue("ProfileManager.delete must still exist", delete.isNotEmpty())
+        val purge = delete.indexOf("launchDeletedProfileRowPurge(context, profileId)")
+        val local = delete.indexOf("wipeLocalProfileData(context, profileId)")
+        assertTrue("the delete must fire the cloud purge", purge >= 0)
+        assertTrue(
+            "and fire it BEFORE the local wipe: signed out the purge is staged from the local " +
+                "rows, so a wipe first would stage an empty set",
+            purge in 0 until local
+        )
+        val body = functionBody("fun launchDeletedProfileRowPurge(")
+        assertTrue(
+            "the launcher runs the shared purge for the deleted id",
+            body.contains("clearWatchStateForProfile(profileId)")
+        )
+        assertTrue(
+            "and off the caller's thread - a delete must not wait on the network",
+            body.contains("scope.launch")
+        )
+    }
+
     private companion object {
         const val SYNC = "com/kennyb1201/kbstream/data/sync/SupabaseSync.kt"
+        const val PROFILES = "com/kennyb1201/kbstream/data/sync/ProfileManager.kt"
         const val SOURCE_STORE = "com/kennyb1201/kbstream/data/sync/SyncDeferredDeletes.kt"
     }
 }

@@ -253,6 +253,70 @@ class DetailFocusHandBackContractTest {
         )
     }
 
+    @Test
+    fun `UP from an episode card puts the season row back before it asks the chip`() {
+        // Kenny, 2026-11-10: UP from an episode card "skips the chips". The chip
+        // row is its OWN vertical list item ("seasonrow"), separate from the
+        // episode cards, so once the scroll disposed it every requester filed
+        // for it is detached - the horizontal scroll cannot bring back a node
+        // that does not exist, the retries all fail, and the handler falls back
+        // to the chain's UP, whose next row above EPISODES is KEYWORDS. That is
+        // the skip. The fix is the reveal the section handoff already does.
+        assertTrue(
+            "the section handoff reveals through revealRail - and the chip ask must use it too",
+            detail.contains("detailListState.revealRail(SEASON_ROW_KEY, hint)")
+        )
+        val chip = slice(
+            "suspend fun focusSeasonChip(season: Int): Boolean",
+            "LaunchedEffect(effectiveSeason, seasons)"
+        )
+        val hint = chip.indexOf("firstOrNull { it.key == EPISODES_ROW_KEY }?.index")
+        val reveal = chip.indexOf("revealRail(SEASON_ROW_KEY, hint)")
+        val horizontal = chip.indexOf("bringSeasonChipIntoView(index)")
+        val retries = chip.indexOf("repeat(10)")
+        assertTrue(
+            "the hint is the episode row's own item: the card the press came from is focused, " +
+                "so its item is on screen",
+            hint >= 0
+        )
+        assertTrue(
+            "and the order is the whole fix: vertical reveal, then the horizontal chip scroll, " +
+                "then the retries ($hint < $reveal < $horizontal < $retries)",
+            hint < reveal && reveal < horizontal && horizontal < retries
+        )
+    }
+
+    @Test
+    fun `the chip's failure path says which of the three branches fired`() {
+        // The field test can only tell the causes apart if the log names them:
+        // (a) no season on screen, (b) the season has no chip in the row, (c) the
+        // requester is missing or never attached. (a) and (b) are decided by the
+        // card's pre-check, before the ask exists, so that line is in the
+        // handler; (c) is the ask's own.
+        val chip = slice(
+            "suspend fun focusSeasonChip(season: Int): Boolean",
+            "LaunchedEffect(effectiveSeason, seasons)"
+        )
+        assertTrue("branch b is named in the chip ask", chip.contains("branch=b"))
+        assertTrue(
+            "and branch c, with the season, the index and whether a requester exists at all",
+            chip.contains("branch=c season=\$season index=\$index")
+        )
+        assertTrue(
+            "a and b are the handler's to report, because that pre-check never reaches the ask",
+            detail.contains("branch=a/b") &&
+                detail.contains("season-chip UP skipped: branch=a/b")
+        )
+    }
+
+    private fun slice(from: String, to: String): String {
+        val start = detail.indexOf(from)
+        assertTrue("source missing: $from", start >= 0)
+        val end = detail.indexOf(to, start)
+        assertTrue("source missing after $from: $to", end > start)
+        return detail.substring(start, end)
+    }
+
     private fun read(relativePath: String): String =
         File(findMainSourceRoot(), relativePath).readText()
 

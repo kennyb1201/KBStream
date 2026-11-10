@@ -615,13 +615,23 @@ for abi in $ABIS; do
   case "$abi" in
     arm64-v8a|x86_64)
       if [[ -x "$READELF" ]]; then
-        if "$READELF" -l "$so" | awk '$1 == "LOAD" { if ($NF == "0x4000") found = 1 } END { exit(found ? 0 : 1) }'; then
+        # >= 0x4000, not == 0x4000 (m37): 0x10000 (a 64 KB page size) is MORE
+        # aligned and used to fail this equality test. bash arithmetic because
+        # Ubuntu's awk is mawk, which cannot parse hex.
+        aligned=0
+        while read -r page; do
+          case "$page" in
+            0x*|0X*) if (( page >= 0x4000 )); then aligned=1; fi ;;
+          esac
+        done < <("$READELF" -l "$so" | awk '$1 == "LOAD" { print $NF }')
+        if (( aligned )); then
           printf '  ok   %s is 16 KB aligned\n' "$abi"
         else
-          die "${abi}/libassjni.so is not 16 KB aligned; rebuild with NDK r28 (this run used ${ANDROID_NDK})"
+          die "${abi}/libassjni.so has no LOAD segment aligned >= 0x4000, so it is not 16 KB page aligned; rebuild with NDK r28 (this run used ${ANDROID_NDK})"
         fi
       else
-        log "llvm-readelf not found at ${READELF}; skipping the 16 KB alignment check"
+        # m29: fail closed rather than shipping a library nothing checked.
+        die "llvm-readelf not found at ${READELF}; refusing to place libassjni.so whose 16 KB alignment was never checked"
       fi
       ;;
   esac

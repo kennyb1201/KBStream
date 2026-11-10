@@ -1365,6 +1365,10 @@ class SimklRepository(
             false
     ): SimklAllShowsResponse? {
 
+        // m23: a parked read answers this account's cache instead of walking up
+        // to ten pages again (see [readsAreParked]).
+        if (!forceRefresh && readsAreParked()) return cachedForThisAccount()
+
         val now =
             System.currentTimeMillis()
 
@@ -1487,6 +1491,8 @@ class SimklRepository(
                         e
                     )
 
+                    // m23: see readsAreParked().
+                    parkReads(code = null, retryAfter = null)
                     return@withLock cachedForThisAccount()
                 }
 
@@ -1510,6 +1516,12 @@ class SimklRepository(
                         "body=$errorText"
                 )
 
+                // m23: a 429 parks for its Retry-After; anything else backs off
+                // briefly. Either way the next Home pass stops re-firing this.
+                parkReads(
+                    code = response.code(),
+                    retryAfter = response.headers()["Retry-After"]
+                )
                 return@withLock cachedForThisAccount()
             }
 
@@ -2183,6 +2195,39 @@ class SimklRepository(
         }
     }
 
+    /**
+     * When the read legs may ask Simkl again (m23), 0 when they may ask now.
+     *
+     * Shared by the CW feed and the all-shows read: both are what a Home pass
+     * fires, and a 429 from either is equally an instruction about the account.
+     */
+    @Volatile
+    private var readsParkedUntilMs: Long = 0L
+
+    internal fun readsAreParked(): Boolean =
+        System.currentTimeMillis() < readsParkedUntilMs
+
+    /**
+     * Parks the read legs for a 429's `Retry-After`, or for [READ_FAILURE_BACKOFF_MS]
+     * on a plain failure. @Synchronized so two failing legs cannot race the
+     * park's deadline backwards.
+     */
+    @Synchronized
+    internal fun parkReads(code: Int?, retryAfter: String?) {
+        val now = System.currentTimeMillis()
+        val parkMs = when {
+            code == 429 -> retryAfter
+                ?.trim()
+                ?.toLongOrNull()
+                ?.times(1_000L)
+                ?.coerceIn(READ_PARK_MIN_MS, READ_PARK_MAX_MS)
+                ?: READ_PARK_DEFAULT_MS
+            else -> READ_FAILURE_BACKOFF_MS
+        }
+        val until = now + parkMs
+        if (until > readsParkedUntilMs) readsParkedUntilMs = until
+    }
+
     suspend fun getContinueWatching(
         accessToken: String =
             requireAccessToken(),
@@ -2211,6 +2256,14 @@ class SimklRepository(
         ) {
             return cachedContinueWatching.orEmpty()
         }
+
+        // m23: the write legs park on a 429 honouring Retry-After, and the read
+        // legs treated one as any other failure - so while Simkl was rate-
+        // limiting, every Home/Continue-Watching build re-fired the whole read
+        // set (playback + watching + up to ten pages of completed shows) because
+        // nothing recorded that the last attempt failed. The TTLs above only gate
+        // SUCCESSFUL fetches. A parked read answers the cache it has.
+        if (!forceRefresh && readsAreParked()) return cachedContinueWatching.orEmpty()
 
         // Disk fallback so the rail renders immediately on a cold start
         // instead of waiting for playback + watching-shows network calls.
@@ -2801,6 +2854,8 @@ class SimklRepository(
                 e
             )
 
+            // m23: a failed read backs off before the next Home pass asks again.
+            parkReads(code = null, retryAfter = null)
             return cachedContinueWatching
                 .orEmpty()
         }
@@ -3473,6 +3528,22 @@ class SimklRepository(
          */
         private const val CONTINUE_WATCHING_TTL_MS =
             3L * 60L * 1000L
+
+        /**
+         * How long the READ legs hold off after Simkl refuses or fails (m23).
+         *
+         * The write legs already park on a 429 honouring `Retry-After`; the
+         * reads did not, so a rate-limited Simkl was asked the whole read set on
+         * every Home/Continue-Watching build. The park honours `Retry-After`
+         * when it is a sane number of seconds, defaults to a minute when it is
+         * absent or unparseable, and a plain failure backs off for half a minute
+         * - long enough that a retry is a new question, short enough that a
+         * transient blip does not freeze the rail until the next cold start.
+         */
+        private const val READ_PARK_DEFAULT_MS = 60_000L
+        private const val READ_PARK_MIN_MS = 5_000L
+        private const val READ_PARK_MAX_MS = 10L * 60L * 1000L
+        private const val READ_FAILURE_BACKOFF_MS = 30_000L
 
         private const val CONTINUE_WATCHING_DISK_TTL_MS =
             6L * 60L * 60L * 1000L

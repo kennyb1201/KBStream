@@ -2422,12 +2422,51 @@ fun DetailScreen(
      * the answer: a press eaten by a chip that never took the focus is an UP
      * that visibly did nothing, so the card falls back to the chain's own UP
      * when this says no.
+     *
+     * THE VERTICAL REVEAL, and the reported skip (Kenny, 2026-11-10): UP from an
+     * episode card often landed nowhere near the chips. The chip row is its own
+     * item in the vertical list (`seasonrow`, composed separately from the
+     * episode cards), so once the scroll has taken that item out of composition
+     * every requester filed for it is detached - the horizontal scroll below
+     * cannot resurrect it, and each of the ten retries fails against a node that
+     * no longer exists. The handler then fell back to the chain's own UP, whose
+     * next row above EPISODES is KEYWORDS, so the chips were skipped entirely.
+     * That is why it read as intermittent: it worked while the season row
+     * happened to still be composed.
+     *
+     * So the row is brought back into composition FIRST, exactly as
+     * [revealAndFocusEpisodes] does for the section - the same
+     * [revealRail] helper, with the episode card's own item as the scroll hint
+     * (the card it was pressed from is focused, so its item is on screen), then
+     * the horizontal scroll, then the retries. The reveal belongs here rather
+     * than in the key handler because this is the one place that knows what "the
+     * chip" means: its index, the row's state and its requester. A reveal in
+     * the handler would duplicate that knowledge and rot the next time the
+     * section changes shape.
      */
     suspend fun focusSeasonChip(season: Int): Boolean {
         val index = seasonChipIndex(season)
         if (index < 0) {
+            // F2 branch (b): the season has no chip in the row. The caller's own
+            // pre-check catches this first today; the line is here as well
+            // because this function owns "which chip", and a future caller must
+            // not lose the one line that tells the field log what happened.
+            Log.w(
+                TAG,
+                "season-chip focus missed: branch=b season=$season index=-1" +
+                    " requester=${seasonFocusRequesters[season] != null}"
+            )
             return false
         }
+
+        // The vertical half of the reveal - see the note above. A failed reveal
+        // is not returned on: the retries below are the real answer, and the
+        // caller's fallback runs when they fail too.
+        val hint = detailListState.layoutInfo.visibleItemsInfo
+            .firstOrNull { it.key == EPISODES_ROW_KEY }?.index
+            ?: detailListState.layoutInfo.visibleItemsInfo.firstOrNull()?.index
+            ?: 0
+        val revealed = detailListState.revealRail(SEASON_ROW_KEY, hint)
 
         bringSeasonChipIntoView(index)
 
@@ -2449,6 +2488,15 @@ fun DetailScreen(
             delay(40L)
         }
 
+        // F2 branch (c): the requester is missing or never attached. One line
+        // per press, so the next field paste says which of the three causes it
+        // was instead of leaving it to elimination.
+        Log.w(
+            TAG,
+            "season-chip focus missed: branch=c season=$season index=$index" +
+                " revealed=$revealed" +
+                " requester=${seasonFocusRequesters[season] != null}"
+        )
         return false
     }
 
@@ -5593,8 +5641,13 @@ fun DetailScreen(
                                         .focusRestorer()
                                 ) {
                                     itemsIndexed(
-                                        keywords,
-                                        key = { _, kw -> kw.id }
+                                        // m3: a repeated TMDB id in one payload
+                                        // threw LazyRow's duplicate-key crash -
+                                        // the class the Actor rail hit as
+                                        // ANDROID-1D. Distinct at the build, like
+                                        // the cast rail above.
+                                        keywords.distinctBy { it.id },
+                                        key = { _, kw -> "keyword:${kw.id}" }
                                     ) { keywordIndex, kw ->
                                         val chipKey = "keyword:${kw.id}"
                                         val chipFocusRequester =
@@ -6176,7 +6229,22 @@ fun DetailScreen(
                                                                                 null ||
                                                                             seasonChipIndex(
                                                                                 chipSeason
-                                                                            ) < 0                                        ) {
+                                                                            ) < 0
+                                                                        ) {
+                                            // F2 branch (a)/(b): no season on
+                                            // screen, or one with no chip in
+                                            // the row. This path never reaches
+                                            // focusSeasonChip, so its line is
+                                            // here - one line per press, with
+                                            // the same branch= token as the
+                                            // other two.
+                                            val chipIndex =
+                                                chipSeason?.let { seasonChipIndex(it) } ?: -1
+                                            Log.w(
+                                                TAG,
+                                                "season-chip UP skipped: branch=a/b" +
+                                                    " season=$chipSeason index=$chipIndex"
+                                            )
                                             false
                                         } else {
                                             startFocusMove {
@@ -6514,8 +6582,8 @@ fun DetailScreen(
                                         // that column; a chip can.
                                 ) {
                                     itemsIndexed(
-                                        networks,
-                                        key = { _, n -> n.id }
+                                        networks.distinctBy { it.id },
+                                        key = { _, n -> "network:${n.id}" }
                                     ) { networkIndex, n ->
                                         val chipKey = "network:${n.id}"
                                         val chipFocusRequester =
@@ -6622,8 +6690,8 @@ fun DetailScreen(
                                         .focusRestorer()
                                 ) {
                                     itemsIndexed(
-                                        companies,
-                                        key = { _, c -> c.id }
+                                        companies.distinctBy { it.id },
+                                        key = { _, c -> "company:${c.id}" }
                                     ) { companyIndex, c ->
                                         val chipKey = "company:${c.id}"
                                         val chipFocusRequester =
@@ -6729,8 +6797,8 @@ fun DetailScreen(
                                         .focusRestorer()
                                 ) {
                                     itemsIndexed(
-                                        collectionParts,
-                                        key = { _, part -> part.id }
+                                        collectionParts.distinctBy { it.id },
+                                        key = { _, part -> "collection:${part.id}" }
                                     ) { partIndex, part ->
                                         // Focus requester for restoring focus
                                         // after the long-press menu dismisses.
@@ -6912,8 +6980,8 @@ fun DetailScreen(
                                         .focusRestorer()
                                 ) {
                                     itemsIndexed(
-                                        recommendations.take(30),
-                                        key = { _, rec -> rec.id }
+                                        recommendations.distinctBy { it.id }.take(30),
+                                        key = { _, rec -> "rec:${rec.id}" }
                                     ) { recIndex, rec ->
                                         // Focus requester for restoring focus
                                         // after the long-press menu dismisses.
@@ -7121,8 +7189,8 @@ fun DetailScreen(
                                         .focusRestorer()
                                 ) {
                                     itemsIndexed(
-                                        reviews.take(60),
-                                        key = { _, review -> review.id }
+                                        reviews.distinctBy { it.id }.take(60),
+                                        key = { _, review -> "review:${review.id}" }
                                     ) { reviewIndex, review ->
                                         val reviewFocusRequester =
                                             remember(review.id) {

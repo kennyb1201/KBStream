@@ -109,6 +109,22 @@ internal object PlayerTrackBridge {
     var titleKey: String? = null
         private set
 
+    /**
+     * True when this session is a live channel (M1, release-readiness audit
+     * 2026-11-10).
+     *
+     * A channel has no title key, so nothing here is remembered for it - but
+     * "null title" is not the same fact, and this object had no live concept at
+     * all. That gap UNDID the activity's live subtitle fix one listener later:
+     * the activity disables the text track on live and latches the decision,
+     * then this object's READY listener (registered after the activity's, so it
+     * runs after its pass) re-armed a track from the global subtitle language on
+     * every ready transition - first load, rebuffer and zap alike. Set from the
+     * activity, where `isLiveChannel` is known. See [reapplyLanguageSelection].
+     */
+    @Volatile
+    private var live = false
+
     /** One audio track of the playing file, as the panel lists it. */
     data class AudioTrackOption(
         val signature: String,
@@ -231,9 +247,14 @@ internal object PlayerTrackBridge {
         context: Context,
         titleKey: String?,
         globalAudioLanguage: String,
-        globalSubtitleLanguage: String
+        globalSubtitleLanguage: String,
+        // The activity's `isLiveChannel`. Not derivable from a null titleKey:
+        // that also means "a title with no id yet", and the two need opposite
+        // subtitle behavior (see [live]).
+        isLive: Boolean = false
     ) {
         this.titleKey = titleKey
+        live = isLive
         val remembered = PlayerTitlePrefs.get(context, titleKey)
 
         // "" is "Auto" = follow the global Language settings, which is exactly
@@ -437,6 +458,19 @@ internal object PlayerTrackBridge {
             applyLanguage(player, C.TRACK_TYPE_TEXT, "")
             return
         }
+        // 2. A live channel arms no subtitle on its own, ever.
+        //
+        // The activity already disabled the text track for this session and
+        // latched the decision (NativePlayerActivity's live branch), but this
+        // pass runs AFTER it on every READY: media3 fires listeners in
+        // registration order, and this one is added when the view attaches the
+        // player at the end of createPlayer(). So the language pass below put a
+        // caption back on a channel - the live fix read as landed in the
+        // activity and undid itself here. Audio above still applies (a channel's
+        // language preference is a real choice), and a caption the viewer picks
+        // by hand survives through [applyRememberedSubtitleTrack], which runs
+        // after this call and is deliberately not skipped.
+        if (live) return
         // 2. A remembered specific track is re-asserted by
         //    [applyRememberedSubtitleTrack] instead; running the language pass
         //    as well would replace it with the first track in that language.
@@ -454,6 +488,8 @@ internal object PlayerTrackBridge {
     /**
      * Called for every player instance the playback view attaches: puts the
      * language preferences back and re-applies a remembered specific track.
+     * On a live channel the text half of that pass is skipped entirely - the
+     * channel's own decision belongs to the activity (see [reapplyLanguageSelection]).
      *
      * Runs at STATE_READY, and one instance at a time — the view attaches the
      * player at the END of the activity's createPlayer(), so this listener is

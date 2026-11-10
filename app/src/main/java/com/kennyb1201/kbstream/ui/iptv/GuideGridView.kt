@@ -886,7 +886,14 @@ internal fun GuideGridView(
         Key.DirectionRight -> {
             // Into the grid on the row the viewer was on, and the sidebar
             // leaves the way (F1a, F-E).
-            if (rows.isNotEmpty()) enterGrid(focusedRow.coerceIn(0, rows.lastIndex))
+            //
+            // m14: with an empty guide there is no grid to enter, and this used
+            // to swallow the press anyway - a dead Right on the only focusable
+            // surface on screen. Not consuming it lets the press fall through to
+            // whatever else can take it (Back included), which is the honest
+            // answer when the thing it points at does not exist.
+            if (rows.isEmpty()) return false
+            enterGrid(focusedRow.coerceIn(0, rows.lastIndex))
             true
         }
         Key.DirectionLeft -> true

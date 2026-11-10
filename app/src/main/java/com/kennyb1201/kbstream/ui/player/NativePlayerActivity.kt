@@ -147,6 +147,10 @@ private const val MIN_RESUME_POSITION_MS = 10_000L
 // or an offset nudge still lands on screen.
 private const val ASS_FRAME_INTERVAL_MS = 33L
 private const val ASS_IDLE_INTERVAL_MS = 250L
+// m18: the cadence while a cue is HELD - the render reports no change. Between
+// the two above: slow enough to stop re-rendering a still frame at refresh rate,
+// fast enough that a new line or a karaoke step appears without visible lag.
+private const val ASS_STATIC_INTERVAL_MS = 100L
 // Drop-in directory for fansub fonts under the app's private files dir.
 private const val ASS_FONT_DIR = "fonts"
 // A subtitle file is kilobytes; an unbounded readText() on a hostile or
@@ -2707,6 +2711,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private var drmLicenseUrl: String? = null
     private var drmHeaders = emptyMap<String, String>()
     private var externalSubtitleUri: Uri? = null
+    // Who that sidecar is (m15): the name it came under, the source that
+    // supplied it, and the episode it was fetched for. Read by the INFO panel's
+    // subtitles block so a wrong-episode sidecar can be diagnosed from a COPY
+    // DIAGNOSTICS capture instead of guessed at.
+    private var externalSubtitleLabel: String? = null
+    private var externalSubtitleSource: String? = null
+    private var externalSubtitleFetchedFor: String? = null
     // Online subtitle search (OpenSubtitles): pending query results, loading
     // flag for the picker, and the resolved uri being applied right now.
     private var onlineSubResults: List<SubtitleSearchResult> = emptyList()
@@ -3038,7 +3049,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // Some providers do not offer persistable permissions; the current
             // playback session can still use the granted URI permission.
         }
-        attachExternalSubtitle(uri)
+        // m15: a file the viewer picked from storage, named for INFO by its own
+        // URI leaf - nothing else here knows what it is.
+        attachExternalSubtitle(uri, source = "picked from this device")
     }
 
     /**
@@ -3071,8 +3084,28 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * from the playhead (offsets included), which the negative-offset mode has
      * always done for an external file.
      */
-    private fun attachExternalSubtitle(uri: Uri, rebuild: Boolean = true) {
+    private fun attachExternalSubtitle(
+        uri: Uri,
+        rebuild: Boolean = true,
+        /**
+         * Identity of the file for the INFO panel (m15): the name it was
+         * fetched or picked under, who supplied it, and the episode it was
+         * fetched FOR. Every one of these is optional and null-safe - a file
+         * picked from storage has only its URI leaf.
+         */
+        label: String? = null,
+        source: String? = null,
+        fetchedFor: String? = null
+    ) {
         externalSubtitleUri = uri
+        // Kept beside the URI because that is the only thing the attach retains:
+        // INFO could say "external subtitle file" and nothing else, so the
+        // wrong-episode sidecar (the Rubble & Crew report) had no diagnosis at
+        // all - not which file, not where it came from, not which episode it
+        // was fetched for.
+        externalSubtitleLabel = label ?: uri.lastPathSegment
+        externalSubtitleSource = source
+        externalSubtitleFetchedFor = fetchedFor
         // Remembered per video (not per show: a sidecar file belongs to one
         // episode) so reopening it re-attaches automatically. Profile-scoped
         // and device-local — the URI only resolves on this device.
@@ -3194,7 +3227,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         return@launch
                     }
                     val uri = SubtitleSearchHelper.toCacheUri(this@NativePlayerActivity, hit, result.body)
-                    attachExternalSubtitle(uri)
+                    attachExternalSubtitle(
+                        uri,
+                        label = hit.fileName,
+                        source = "picked from online search (OpenSubtitles)"
+                    )
                 }
             }
         }
@@ -3772,6 +3809,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         parentType = intent.getStringExtra("parent_type").orEmpty()
         sessionProfileId = PlaybackHistoryWriter.sessionProfileId(this, intent)
         isLiveChannel = parentType == "channel"
+        // m20: the live program block and channel bar only exist on a channel
+        // session now. Still here rather than in bindViews() because that runs
+        // before the type is known, and still BEFORE setupListeners() (which
+        // binds their click listeners), so the wiring order is unchanged.
+        if (isLiveChannel) bindLiveViews()
         // Arm the live previous-channel toggle: the channel this session opens
         // on is now the last-watched one, and whatever the last session (or the
         // last zap) was on becomes the channel LEFT/RIGHT goes back to. See
@@ -3912,7 +3954,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             context = this,
             titleKey = titleKey,
             globalAudioLanguage = globalAudioLang,
-            globalSubtitleLanguage = globalSubtitleLang
+            globalSubtitleLanguage = globalSubtitleLang,
+            // M1: the bridge's ready-time pass runs AFTER this activity's, so
+            // without this its subtitle-language step re-armed a caption on
+            // every live READY - the disable in autoSelectPreferredLanguages
+            // held only until the next ready transition.
+            isLive = isLiveChannel
         )
         preferredAudioLang = PlayerTrackBridge.audioLanguage.ifBlank { globalAudioLang }
         preferredSubtitleLang = PlayerTrackBridge.subtitleLanguage.ifBlank { globalSubtitleLang }
@@ -4438,22 +4485,18 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     // OnBackPressedCallback dismisses the same panels when the press reaches
     // the dispatcher; these view listeners pre-empt it so the focused row keeps
     // the press first. Device-tested migration, tracked with the API-36 pass.
-    @SuppressLint("GestureBackNavigation")
-    private fun bindViews() {
-        playerView = findViewById(R.id.player_view)
-        subtitleText = findViewById(R.id.custom_subtitle_text)
-        subtitleAssImage = findViewById(R.id.custom_subtitle_image)
-        p5VideoGlesView = findViewById(R.id.p5_video_gles_view)
-        liveBadge = findViewById(R.id.live_badge)
-        zapBanner = findViewById(R.id.zap_banner)
-        zapLogo = findViewById(R.id.zap_logo)
-        zapChannelLabel = findViewById(R.id.zap_channel_label)
-        zapChannelName = findViewById(R.id.zap_channel_name)
-        zapNowTitle = findViewById(R.id.zap_now_title)
-        zapNowMeta = findViewById(R.id.zap_now_meta)
-        zapNowProgress = findViewById(R.id.zap_now_progress)
-        zapNowDesc = findViewById(R.id.zap_now_desc)
-        zapNextTitle = findViewById(R.id.zap_next_title)
+    /**
+     * The live-only chrome: the program block inside the info scroll and the
+     * channel buttons leading the control bar (m20).
+     *
+     * Both used to be inflated in [bindViews] and revealed on EVERY session -
+     * VOD included - on top of a 115-view static layout, for two blocks nothing
+     * on a VOD session can ever show. They are inflated here instead, once, and
+     * only when [isLiveChannel] is true. Their clicks are wired by
+     * [setupListeners], which runs after the call site for exactly that reason.
+     */
+    private fun bindLiveViews() {
+        if (liveProgramBlock != null) return
         // Engine-only views inflated into the shared chrome's slots, so they keep
         // the exact place they had in this layout before the overlay was unified:
         // the live program block inside the info scroll, the channel buttons
@@ -4480,6 +4523,28 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         btnChannelUp = channelBar.findViewById(R.id.btn_channel_up)
         btnChannelDown = channelBar.findViewById(R.id.btn_channel_down)
         btnGuide = channelBar.findViewById(R.id.btn_guide)
+    }
+
+    @SuppressLint("GestureBackNavigation")
+    private fun bindViews() {
+        playerView = findViewById(R.id.player_view)
+        subtitleText = findViewById(R.id.custom_subtitle_text)
+        subtitleAssImage = findViewById(R.id.custom_subtitle_image)
+        p5VideoGlesView = findViewById(R.id.p5_video_gles_view)
+        liveBadge = findViewById(R.id.live_badge)
+        zapBanner = findViewById(R.id.zap_banner)
+        zapLogo = findViewById(R.id.zap_logo)
+        zapChannelLabel = findViewById(R.id.zap_channel_label)
+        zapChannelName = findViewById(R.id.zap_channel_name)
+        zapNowTitle = findViewById(R.id.zap_now_title)
+        zapNowMeta = findViewById(R.id.zap_now_meta)
+        zapNowProgress = findViewById(R.id.zap_now_progress)
+        zapNowDesc = findViewById(R.id.zap_now_desc)
+        zapNextTitle = findViewById(R.id.zap_next_title)
+        // The live-only chrome is NOT inflated here (m20): bindLiveViews() does
+        // that, and only for a channel session. It used to happen on every
+        // session including VOD, adding the program block and the channel
+        // buttons to a layout that already carries 115 views.
         channelGuideContainer = findViewById(R.id.channel_guide_container)
         channelGuideTitle = findViewById(R.id.channel_guide_title)
         channelGuideList = findViewById(R.id.channel_guide_list)
@@ -9141,7 +9206,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // would otherwise describe are deliberately not drawn.
             assRenderer.active -> "Drawn by: ASS overlay (libass typesetting)"
             drawingBitmaps -> "Drawn by: bitmap subtitles (images)"
-            externalSubtitleCues.isNotEmpty() -> "Drawn by: external subtitle file"
+            externalSubtitleCues.isNotEmpty() -> buildString {
+                append("Drawn by: external subtitle file")
+                externalSubtitleLabel?.takeIf { it.isNotBlank() }?.let { append(" • File: $it") }
+                externalSubtitleSource?.takeIf { it.isNotBlank() }?.let { append(" • Source: $it") }
+                externalSubtitleFetchedFor?.takeIf { it.isNotBlank() }?.let {
+                    append(" • Fetched for: $it")
+                }
+            }
             subtitleLines.isEmpty() -> "Off"
             else -> "Drawn by: embedded track"
         }
@@ -9579,7 +9651,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     // not an event the viewer needs announcing, and the rebuild
                     // it used to cost re-opened the stream mid-playback. The
                     // subtitle appearing IS the feedback.
-                    attachExternalSubtitle(hit.uri, rebuild = false)
+                    attachExternalSubtitle(
+                        hit.uri,
+                        rebuild = false,
+                        label = hit.fileName,
+                        source = "prefetch (OpenSubtitles)",
+                        fetchedFor = "S${season}E$episode"
+                    )
                     return@launch
                 }
                 val results = SubtitleSearchHelper.search(
@@ -9627,7 +9705,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         // without a rebuild and without a toast, so a subtitle
                         // this app fetched for the viewer never stops the film.
                         Log.i("PLAYER_LANG", "auto subtitle fetch: attached ${pick.fileName}")
-                        attachExternalSubtitle(uri, rebuild = false)
+                        attachExternalSubtitle(
+                            uri,
+                            rebuild = false,
+                            label = pick.fileName,
+                            source = "auto-fetch (OpenSubtitles)",
+                            fetchedFor = "S${season}E$episode"
+                        )
                     }
                 }
             } finally {
@@ -10823,8 +10907,19 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // typesets the selected track it owns the subtitle area.
             externalSubtitleCues = emptyList()
             if (subtitleText.visibility != View.GONE) subtitleText.visibility = View.GONE
-            drawAssFrame()
-            val delay = if (exoPlayer?.isPlaying == true) ASS_FRAME_INTERVAL_MS else ASS_IDLE_INTERVAL_MS
+            val changed = drawAssFrame()
+            // m18: a frame per refresh only while something MOVES. The native
+            // render still runs on every tick - detect_change is only known
+            // after it - so a 5-second held line cost ~150 full-frame renders at
+            // 30 fps on a 1.7 GB box. Backing off to 100 ms when the render
+            // reports no change cuts that ~3x while keeping a new cue's start
+            // within a tenth of a second (the 250 ms idle cadence would be a
+            // visible delay on animated signs).
+            val delay = when {
+                exoPlayer?.isPlaying != true -> ASS_IDLE_INTERVAL_MS
+                changed -> ASS_FRAME_INTERVAL_MS
+                else -> ASS_STATIC_INTERVAL_MS
+            }
             handler.postDelayed(this, delay)
         }
     }
@@ -10925,9 +11020,15 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * rectangle, and rendering before it is known would place every line
      * against the cap rectangle instead of the video's aspect ratio.
      */
-    private fun drawAssFrame() {
-        val renderer = assRenderer.takeIf { it.active } ?: return
-        val player = exoPlayer ?: return
+    /**
+     * Draws the ASS overlay at the playhead.
+     *
+     * @return true when libass reported a changed picture (or the overlay had to
+     * be made visible), false for a held frame - the tick's cadence reads it (m18).
+     */
+    private fun drawAssFrame(): Boolean {
+        val renderer = assRenderer.takeIf { it.active } ?: return false
+        val player = exoPlayer ?: return false
         val size = player.videoSize
         if (size.width > 0 && size.height > 0) {
             val viewport = AssSubtitleSource.viewport(size.width, size.height)
@@ -10935,7 +11036,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
         // The user's offset shifts ASS exactly as it shifts text cues.
         val timeMs = (player.currentPosition + subtitleOffsetMs).coerceAtLeast(0L)
-        val frame = renderer.render(timeMs) ?: return
+        val frame = renderer.render(timeMs) ?: return false
         // Coming back from hidden (a fresh attach, a rebuild, a source switch)
         // needs the draw regardless of what libass says about this tick.
         val becomingVisible = subtitleAssImage.visibility != View.VISIBLE
@@ -10954,6 +11055,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // to redraw.
             subtitleAssImage.invalidate()
         }
+        return frame.changed || becomingVisible
     }
 
     /** Stops the overlay and frees the native instance, keeping the script. */
@@ -14792,9 +14894,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // over": the successor activity starts before this one's onStop, and a
         // PiP window here would skip that onStop teardown entirely and leave a
         // stopped player floating over the session that took the screen.
+        // m7: the window is the video's own shape, not a hardcoded 16:9 - a 4:3
+        // title used to get a wide window with pillarboxing inside it. The size
+        // is ExoPlayer's; zero on an engine state that has none, and the helper
+        // keeps 16:9 for that.
+        val size = exoPlayer?.videoSize
         enterPipMode(
             this,
-            handingOver = mpvHandoffStarted || externalHandoffStarted || nextEpisodeHandoffStarted
+            handingOver = mpvHandoffStarted || externalHandoffStarted || nextEpisodeHandoffStarted,
+            videoWidth = size?.width ?: 0,
+            videoHeight = size?.height ?: 0
         )
     }
 

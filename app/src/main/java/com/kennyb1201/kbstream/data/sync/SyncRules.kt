@@ -1917,6 +1917,16 @@ internal object HiddenTitlesRules {
     const val MAX_REMOVED = 2_000
 
     /**
+     * The live entries' own ceiling (m27), the other half of the same spec.
+     *
+     * Removal records were capped from the start; the entries set was not, and
+     * `encodedForSync` ships it whole - so the hidden_titles payload could grow
+     * without bound and every bulk push/pull carried all of it. Enforced at
+     * HiddenTitles.write, oldest-first, exactly as [MAX_REMOVED] is.
+     */
+    const val MAX_ENTRIES = 2_000
+
+    /**
      * True when a removal record wins over a hide.
      *
      * A tie goes to the UNHIDE: hide-then-unhide inside one millisecond must not

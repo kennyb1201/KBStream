@@ -138,8 +138,10 @@ class SubtitlePrefetchWiringContractTest {
         // Each engine attaches the hit the way its own download path does.
         assertTrue(
             "native must attach the prefetched uri, without a player rebuild - an " +
-                "automatic subtitle must not cost a rebuffer mid-playback",
-            nativeAutoFetch.contains("attachExternalSubtitle(hit.uri, rebuild = false)")
+                "automatic subtitle must not cost a rebuffer mid-playback. The call now spans " +
+                "lines because it also carries the sidecar identity (m15), so the pin is a regex.",
+            Regex("attachExternalSubtitle\\(\\s*hit\\.uri,\\s*rebuild = false")
+                .containsMatchIn(nativeAutoFetch)
         )
         assertTrue(
             "mpv must apply the prefetched uri",

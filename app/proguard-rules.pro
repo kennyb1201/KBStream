@@ -64,7 +64,9 @@
     native <methods>;
 }
 
-# --- mpv JNI bridge (mpvlibAndroid) ---
+# --- mpv JNI bridge (fortunasxp mpv-android-libdovi) ---
+# m35: this header still named the retired Riteshp2001/mpvlibAndroid engine; the
+# keep rules below apply to whichever AAR scripts/fetch_mpv_aar.sh places.
 # The AAR ships no consumer proguard.txt (the dev.jdtech.mpv one it replaces
 # shipped `-keep class dev.jdtech.mpv.MPVLib { *; }`), so the rule has to live
 # here now. The library's native side looks classes up by NAME and constructs

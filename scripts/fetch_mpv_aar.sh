@@ -118,15 +118,22 @@ if command -v readelf >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; then
       # column onto a continuation line, so plain -l reads an aligned library as
       # unaligned. A 16 KB aligned object reports 0x4000 (or larger).
       while IFS= read -r align; do
+        # ALLOWLIST: a LOAD is compliant only when its alignment is >= 0x4000.
+        # The old case failed 0x1000|0x800|0x400|0x200 and passed everything
+        # else, so a 0x2000 (8 KB) LOAD - not 16 KB-aligned, rejected by Play,
+        # crashes on a 16 KB-page device - went through the only fetch-time gate
+        # this AAR has.
         case "${align}" in
-          0x1000|0x800|0x400|0x200)
-            echo "ERROR: ${abi}/$(basename "${so}") has a LOAD segment aligned ${align}," >&2
-            echo "  not 16 KB. It would crash on a 16 KB page-size device and Play" >&2
-            echo "  rejects it from Feb 1 2027. Do not ship this AAR." >&2
-            rm -rf "${check_dir}"
-            exit 1
-            ;;
+          0x*|0X*) ;;
+          *) continue ;;
         esac
+        if (( align < 0x4000 )); then
+          echo "ERROR: ${abi}/$(basename "${so}") has a LOAD segment aligned ${align}," >&2
+          echo "  not 16 KB (needs >= 0x4000). It would crash on a 16 KB page-size" >&2
+          echo "  device and Play rejects it from Feb 1 2027. Do not ship this AAR." >&2
+          rm -rf "${check_dir}"
+          exit 1
+        fi
       done < <(readelf -lW "${so}" 2>/dev/null | awk '/^[[:space:]]*LOAD/{print $NF}')
     done
   done
@@ -138,8 +145,13 @@ if command -v readelf >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; then
   fi
   echo "${ASSET} is 16 KB page aligned across ${checked} 64-bit libraries"
 else
-  echo "WARNING: readelf/unzip unavailable; skipping the 16 KB alignment gate." >&2
-  echo "  The release workflow's APK-level check still covers this." >&2
+  # m29: refusing beats skipping. A local release build from this script would
+  # otherwise place an AAR nothing checked, and the workflow scan runs only in
+  # CI - which is exactly the "it passed locally" build nobody re-checks.
+  echo "ERROR: readelf/unzip unavailable, so the 16 KB alignment gate cannot run." >&2
+  echo "  Refusing to place an unverified AAR. Install binutils (readelf) and unzip." >&2
+  rm -rf "${check_dir}" "${tmp}"
+  exit 1
 fi
 
 mv -f "${tmp}" "${DEST}"

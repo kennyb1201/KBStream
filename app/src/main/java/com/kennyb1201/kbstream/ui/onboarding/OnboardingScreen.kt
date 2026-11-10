@@ -138,6 +138,7 @@ fun OnboardingScreen(
     onPasswordChange: (String) -> Unit,
     onOpenAddons: () -> Unit,
     onOpenSimkl: () -> Unit,
+    onOpenTrakt: () -> Unit,
     onOpenGuide: () -> Unit,
     onFinish: () -> Unit
 ) {
@@ -240,6 +241,16 @@ fun OnboardingScreen(
                     description = "Scrobble and sync your watched state",
                     icon = Icons.Filled.Sync,
                     onClick = onOpenSimkl
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                // m8: Trakt had no row here at all while Simkl did, so the
+                // second tracker could only be found in Settings → Trackers.
+                // Same hand-off shape, its own page and its own token store.
+                OnboardingSourceRow(
+                    title = "Connect Trakt",
+                    description = "Scrobble playback and sync watched state",
+                    icon = Icons.Filled.Sync,
+                    onClick = onOpenTrakt
                 )
 
                 Spacer(modifier = Modifier.height(22.dp))
@@ -477,6 +488,11 @@ private fun OnboardingAccountPanel(
                         .padding(top = 10.dp)
                 )
 
+                // m8: the press on a not-ready button says why it did nothing.
+                // The card is reachable either way, so a D-pad user who lands
+                // here learns the rule instead of finding a node that is not
+                // there at all.
+                var blockedNote by remember { mutableStateOf<String?>(null) }
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -485,17 +501,31 @@ private fun OnboardingAccountPanel(
                     OnboardingActionButton(
                         label = if (busy) "SIGNING IN…" else "SIGN IN",
                         credentialsValid = credentialsValid,
-                        busy = busy
+                        busy = busy,
+                        onBlocked = {
+                            blockedNote = "Enter an email and a password of 6+ characters first."
+                        }
                     ) {
                         SupabaseSync.signIn(context, email, password)
                     }
                     OnboardingActionButton(
                         label = "CREATE ACCOUNT",
                         credentialsValid = credentialsValid,
-                        busy = busy
+                        busy = busy,
+                        onBlocked = {
+                            blockedNote = "Enter an email and a password of 6+ characters first."
+                        }
                     ) {
                         SupabaseSync.signUp(context, email, password)
                     }
+                }
+                blockedNote?.let { note ->
+                    Text(
+                        text = note,
+                        color = KBDanger,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
                 }
 
                 Text(
@@ -514,51 +544,35 @@ private fun OnboardingAccountPanel(
  * The Settings → Sync button, with one difference that is the whole point of
  * this signature being split in two.
  *
- * [credentialsValid] controls whether the card is DRAWN AT ALL and therefore
- * whether it can hold focus; [busy] only controls whether it acts. The first
- * version used a single flag, so pressing OK on SIGN IN flipped the button from
- * a focusable `KBCard` to a plain (unfocusable) `Surface` and disposed the very
- * node the D-pad was sitting on, mid-press. Focus was then nowhere for the
- * whole round trip. While a sign-in is in flight the card now stays exactly
- * where it is - dimmed, label swapped to SIGNING IN…, presses ignored - and
- * only gives way when the form itself does.
+ * [credentialsValid] says whether the form is ready, NOT whether the card is
+ * drawn. It used to swap the focusable `KBCard` for a plain (unfocusable)
+ * `Surface` while the form was incomplete, which made SIGN IN and CREATE
+ * ACCOUNT unreachable by D-pad on a first run and said nothing about why (m8) -
+ * and it is the same disposal that dropped focus mid-press when a single flag
+ * was used. The card is always a card now: ready acts, not-ready explains
+ * itself through [onBlocked], and [busy] only dims the label.
+ */
  */
 @Composable
 private fun OnboardingActionButton(
     label: String,
     credentialsValid: Boolean,
     busy: Boolean,
+    onBlocked: () -> Unit,
     onClick: () -> Unit
 ) {
     val ready = credentialsValid && !busy
-    if (credentialsValid) {
-        KBCard(onClick = { if (ready) onClick() }) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-                // KBCard paints its content bright in both focus states (see
-                // its own comment), and a busy button must not read as ready.
-                color = if (ready) KBTextHi else KBTextLo.copy(alpha = 0.6f),
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
-            )
-        }
-    } else {
-        androidx.tv.material3.Surface(
-            shape = KBShapeCard,
-            colors = SurfaceDefaults.colors(
-                containerColor = KBSurface.copy(alpha = 0.50f),
-                contentColor = KBTextLo.copy(alpha = 0.50f)
-            )
-        ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = KBTextLo.copy(alpha = 0.50f),
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
-            )
-        }
+    KBCard(onClick = { if (ready) onClick() else onBlocked() }) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            // KBCard paints its content bright in both focus states (see
+            // its own comment), and a form that is not ready must not read as
+            // one that is.
+            color = if (ready) KBTextHi else KBTextLo.copy(alpha = 0.6f),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
+        )
     }
 }
 

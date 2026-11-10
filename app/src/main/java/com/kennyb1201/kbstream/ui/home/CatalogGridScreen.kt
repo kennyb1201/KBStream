@@ -1,7 +1,6 @@
 package com.kennyb1201.kbstream.ui.home
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +27,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -44,6 +44,7 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import androidx.compose.animation.core.tween
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
+import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KB_ART_FADE_MS
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBSkeletonGrid
@@ -68,6 +69,7 @@ import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.search.successorIndexAfter
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
+import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.android.awaitFrame
@@ -653,20 +655,32 @@ fun CatalogGridScreen(
                             key = "grid_footer",
                             span = { GridItemSpan(maxLineSpan) }
                         ) {
-                            Row(
+                            // m2: the footer is a D-pad stop, so it has to SHOW
+                            // the focus it takes. It used to be a plain Row with
+                            // .clickable - no border, no glow, no background - so
+                            // a viewer could land on it and press with no visible
+                            // selection anywhere on screen. KBCard is the app's
+                            // shared focused plate, which is what every other
+                            // focusable in this grid draws.
+                            Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(vertical = 14.dp)
-                                    .clickable { lazyItems.retry() },
-                                horizontalArrangement = Arrangement.Center
+                                    .padding(vertical = 10.dp),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Text(
-                                    text = "Couldn't load more - press to retry",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = KBTextLo,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                                KBCard(onClick = { lazyItems.retry() }) {
+                                    Text(
+                                        text = "Couldn't load more - press to retry",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = KBTextHi,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.padding(
+                                            horizontal = 16.dp,
+                                            vertical = 9.dp
+                                        )
+                                    )
+                                }
                             }
                         }
                     }

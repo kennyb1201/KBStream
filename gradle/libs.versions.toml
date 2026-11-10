@@ -84,7 +84,6 @@ androidx-tv-foundation = { module = "androidx.tv:tv-foundation", version.ref = "
 androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "compose-bom" }
 androidx-compose-runtime = { module = "androidx.compose.runtime:runtime" }
 androidx-compose-ui-base = { module = "androidx.compose.ui:ui" }
-androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
 androidx-compose-ui-tooling-debug = { module = "androidx.compose.ui:ui-tooling" }
 androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
 androidx-compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended" }
@@ -126,10 +125,12 @@ media3-datasource = { module = "androidx.media3:media3-datasource", version.ref 
 
 # --- Playback engines / stream extraction ---
 # The MPV engine's native library is no longer a Maven coordinate: it is the
-# Riteshp2001/mpvlibAndroid (Mpv∞) release AAR, fetched into app/libs/ and
-# consumed as a file dependency (see app/build.gradle.kts and
-# scripts/fetch_mpv_aar.sh). The `libmpv` alias dev.jdtech.mpv:libmpv used to
-# live here and is deliberately retired - nothing may point back at it.
+# fortunasxp `mpv-android-libdovi` release AAR (libplacebo built with -Ddovi),
+# digest-pinned and fetched into app/libs/ by scripts/fetch_mpv_aar.sh, and
+# consumed as a file dependency (see app/build.gradle.kts). It replaced the
+# Riteshp2001/mpvlibAndroid (Mpv∞) build on 2026-10-15; the `libmpv` alias
+# dev.jdtech.mpv:libmpv used to live here and is deliberately retired - nothing
+# may point back at it. m35: this comment still named the old engine.
 # `io.github.abdallahmehiz:mpv-android-lib` used to be aliased here as a second,
 # build-time-chosen MPV engine backend. It was trialled for the `vo=gpu`
 # black-screen failure and removed: it produced the same black screen, so the

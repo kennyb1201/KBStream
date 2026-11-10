@@ -38,7 +38,16 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
  * platform really shrinks the window is answered by `enterPictureInPictureMode`
  * itself, not by a manifest flag.
  */
-internal fun enterPipMode(activity: Activity, handingOver: Boolean = false): Boolean {
+internal fun enterPipMode(
+    activity: Activity,
+    handingOver: Boolean = false,
+    /**
+     * The playing video's own size in pixels, or zeros for an engine that does
+     * not report one (MPV hands nothing over here). See [pipAspectRatio].
+     */
+    videoWidth: Int = 0,
+    videoHeight: Int = 0
+): Boolean {
     if (activity.isFinishing || activity.isDestroyed) return false
     // See the class kdoc: an in-flight handoff gives the successor engine the
     // screen, and a PiP window here defeats the hand-back its `onStop` owes.
@@ -49,7 +58,7 @@ internal fun enterPipMode(activity: Activity, handingOver: Boolean = false): Boo
     return runCatching {
         activity.enterPictureInPictureMode(
             android.app.PictureInPictureParams.Builder()
-                .setAspectRatio(Rational(16, 9))
+                .setAspectRatio(pipAspectRatio(videoWidth, videoHeight))
                 .build()
         )
     }.onFailure { error ->
@@ -61,3 +70,28 @@ internal fun enterPipMode(activity: Activity, handingOver: Boolean = false): Boo
 
 /** The log tag every engine's PiP failures land under. */
 internal const val PIP_TAG = "PLAYER_PIP"
+
+/** Android rejects a PiP window wider than 2.39:1 or taller than 1:2.39. */
+private const val PIP_MAX_RATIO = 2.39
+private const val PIP_MIN_RATIO = 1.0 / PIP_MAX_RATIO
+
+/**
+ * The PiP window's shape: the video's own (m7).
+ *
+ * It was hardcoded 16:9, so a 4:3 title got a wide window with pillarboxing
+ * inside it and a 21:9 title got a short one - the window never matched the
+ * picture it was showing. The platform's own limits are applied here rather than
+ * left to `setAspectRatio`, which THROWS outside them: an ultra-wide letterboxed
+ * film is clamped to 2.39:1, which is the widest window Android will draw
+ * anyway. Zeros - an engine with no reported size, or audio-only - keep 16:9,
+ * exactly the behavior every call had before.
+ */
+internal fun pipAspectRatio(videoWidth: Int, videoHeight: Int): Rational {
+    if (videoWidth <= 0 || videoHeight <= 0) return Rational(16, 9)
+    val ratio = videoWidth.toDouble() / videoHeight.toDouble()
+    return when {
+        ratio <= PIP_MIN_RATIO -> Rational(100, 239)
+        ratio >= PIP_MAX_RATIO -> Rational(239, 100)
+        else -> Rational(videoWidth, videoHeight)
+    }
+}

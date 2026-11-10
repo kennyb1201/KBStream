@@ -2291,6 +2291,9 @@ fun AppRoot(
                 onPasswordChange = { onboardingPassword = it },
                 onOpenAddons = { screen = Screen.Addons(returnTo = Screen.Home) },
                 onOpenSimkl = { screen = Screen.Simkl(returnTo = Screen.Home) },
+                // m8: the tracker the first run never offered, beside the one it
+                // did - the same page Settings → Trackers opens.
+                onOpenTrakt = { screen = Screen.Trakt(returnTo = Screen.Home) },
                 onOpenGuide = { screen = Screen.Guide },
                 onFinish = finishOnboarding
             )
@@ -2303,6 +2306,7 @@ fun AppRoot(
             onPasswordChange = { onboardingPassword = it },
             onOpenAddons = { screen = Screen.Addons(returnTo = Screen.Home) },
             onOpenSimkl = { screen = Screen.Simkl(returnTo = Screen.Home) },
+            onOpenTrakt = { screen = Screen.Trakt(returnTo = Screen.Home) },
             onOpenGuide = { screen = Screen.Guide },
             onFinish = finishOnboarding
         )

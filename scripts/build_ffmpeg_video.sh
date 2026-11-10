@@ -398,16 +398,28 @@ if [[ -x "$READELF" ]]; then
     [[ -n "$entry" ]] || continue
     SO_FILE="$(mktemp)"
     unzip -p "$OUTPUT" "$entry" >"$SO_FILE"
-    if "$READELF" -l "$SO_FILE" | awk '$1 == "LOAD" { if ($NF == "0x4000") found = 1 } END { exit(found ? 0 : 1) }'; then
+    # >= 0x4000, not == 0x4000 (m37): a library linked with max-page-size=65536
+    # is 0x10000, which is MORE aligned, not less - the equality test failed it.
+    # The comparison is bash arithmetic because Ubuntu's awk is mawk, which has
+    # no strtonum, so the hex cannot be compared there.
+    aligned=0
+    while read -r page; do
+      case "$page" in
+        0x*|0X*) if (( page >= 0x4000 )); then aligned=1; fi ;;
+      esac
+    done < <("$READELF" -l "$SO_FILE" | awk '$1 == "LOAD" { print $NF }')
+    if (( aligned )); then
       printf '  ok   %s is 16 KB aligned\n' "$entry"
     else
       rm -f "$SO_FILE"
-      die "$entry is not 16 KB aligned, so it crashes on 16 KB page-size devices; rebuild with NDK r28 (this run used ${ANDROID_NDK})"
+      die "$entry has no LOAD segment aligned >= 0x4000, so it is not 16 KB page aligned and crashes on 16 KB page-size devices; rebuild with NDK r28 (this run used ${ANDROID_NDK})"
     fi
     rm -f "$SO_FILE"
   done
 else
-  log "llvm-readelf not found at ${READELF}; skipping the 16 KB alignment check"
+  # m29: fail closed. Skipping here let a local release build place a library
+  # nothing ever checked, and the workflow's scan runs only in CI.
+  die "llvm-readelf not found at ${READELF}; refusing to place a library whose 16 KB alignment was never checked. Install binutils/llvm and re-run."
 fi
 
 log "done. Rebuild the app (./gradlew assembleDebug) and it uses this AAR;"

@@ -120,6 +120,7 @@ import com.kennyb1201.kbstream.ui.components.touch.MobileDivider
 import com.kennyb1201.kbstream.ui.components.touch.KBEpisodeRailCardTouch
 import com.kennyb1201.kbstream.ui.components.touch.KBEpisodeRailTouch
 import com.kennyb1201.kbstream.ui.components.touch.MobileSectionHeader
+import com.kennyb1201.kbstream.ui.components.touch.MobileStatus
 import com.kennyb1201.kbstream.ui.components.touch.episodeRuntimeLabel
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterCard
@@ -272,7 +273,13 @@ fun DetailScreenMobile(
         // empty state forever. Same arguments, same freshness gate in the
         // ViewModel - and the deep-link flag is what keeps the loading splash
         // up for a Continue Watching open that is about to auto-play.
-        LaunchedEffect(type, id) {
+        // M4 (release-readiness audit, 2026-11-10): the retry the TV page has
+        // had since its own dead-end fix, and every sibling phone screen has.
+        // A failed load is never "fresh" in the ViewModel - isFreshDetailLoad
+        // returns false while `error` is set - so re-running this effect is
+        // exactly what closing and re-opening the page does, arguments and all.
+        var detailRetryTick by remember(type, id) { mutableIntStateOf(0) }
+        LaunchedEffect(type, id, detailRetryTick) {
             viewModel.load(
                 type = type,
                 id = id,
@@ -304,6 +311,10 @@ fun DetailScreenMobile(
         val episodes by viewModel.episodes.collectAsStateWithLifecycle()
         val loadedSeason by viewModel.loadedSeason.collectAsStateWithLifecycle()
         val episodesLoading by viewModel.episodesLoading.collectAsStateWithLifecycle()
+        // M3: the phone page never read this flow at all, so a season whose
+        // episodes failed to load painted a blank area under the "Episodes"
+        // title - the same picture as a season that has none.
+        val episodeError by viewModel.episodeError.collectAsStateWithLifecycle()
         val resumeInfo by viewModel.resumeInfo.collectAsStateWithLifecycle()
         val targetEpisode by viewModel.targetEpisode.collectAsStateWithLifecycle()
         val playButtonText by viewModel.playButtonText.collectAsStateWithLifecycle()
@@ -1503,11 +1514,16 @@ fun DetailScreenMobile(
                             )
                         }
                     } else {
-                        Text(
-                            text = error ?: "This title could not be loaded.",
-                            color = KBTextLo,
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(24.dp)
+                        // M4: a bare line of text was a dead end - the viewer
+                        // had to back out and re-open the title to try again.
+                        // The retry re-runs the load effect above; the
+                        // ViewModel decides what that means (a failed load is
+                        // never fresh, so it fetches).
+                        MobileStatus(
+                            title = "This title could not be loaded",
+                            message = error ?: "The details never arrived.",
+                            actionLabel = "TRY AGAIN",
+                            onAction = { detailRetryTick++ }
                         )
                     }
                 }
@@ -1980,6 +1996,32 @@ fun DetailScreenMobile(
                                     )
                                 }
                             }
+                        }
+                    }
+
+                    // M3 (release-readiness audit, 2026-11-10): the TV page's
+                    // three episode statuses, which this page never rendered.
+                    // A failed season load painted NOTHING under the
+                    // "Episodes" title, so "couldn't load" and "this season
+                    // has no episodes" were the same blank area, and there was
+                    // no way to retry either one. Same order as the TV list:
+                    // loading, error, empty.
+                    when {
+                        episodesLoading -> item(key = "episodesloading") {
+                            MobileStatus(message = "Loading episodes…")
+                        }
+                        episodeError != null -> item(key = "episodeserror") {
+                            MobileStatus(
+                                title = "Couldn't load episodes",
+                                message = episodeError.orEmpty(),
+                                actionLabel = "TRY AGAIN",
+                                onAction = {
+                                    viewModel.loadEpisodesForSeason(currentSeason)
+                                }
+                            )
+                        }
+                        episodes.isEmpty() -> item(key = "episodesempty") {
+                            MobileStatus(message = "No episodes found for this season.")
                         }
                     }
 

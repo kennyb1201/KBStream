@@ -185,6 +185,37 @@ internal object TorBoxResolve {
         isUnresolved(stream) || TorBoxCloudPicker.isCloudRow(stream)
 
     /**
+     * Warms the cached-answer memo for a whole candidate list in ONE request
+     * (m19).
+     *
+     * The badge pass is fire-and-forget, so an autoplay launched straight from
+     * Detail or Continue Watching on a fresh process used to reach the walk with
+     * a cold memo - and [playableStream] then paid one live `checkCached` per
+     * hash row, serially, inside the walk's own budget. Several unmemoized rows
+     * burned that budget on round-trips instead of preparing candidates. One
+     * batched call beforehand is the same total information for one request, and
+     * every row's own check afterwards is a memo hit.
+     *
+     * Best-effort by design: a failed or unavailable answer leaves the walk
+     * exactly as it was, and the per-row checks still ask.
+     */
+    suspend fun prefetchCached(context: Context, streams: List<Stream>) {
+        val hashes = streams
+            .asSequence()
+            .filter { isUnresolved(it) }
+            .mapNotNull { normalizedHash(it.infoHash) }
+            .distinct()
+            .toList()
+        // One hash is what the row itself asks for; batching it buys nothing.
+        if (hashes.size < 2) return
+        runCatching {
+            TorBoxClient.checkCached(context, hashes)
+        }.onFailure {
+            Log.w(TAG, "cached prefetch failed: ${it.javaClass.simpleName}")
+        }
+    }
+
+    /**
      * The CDN link for one file of a cloud row, built through the same
      * `requestDownloadUrl` (and its retry) an add-on-matched row uses.
      *

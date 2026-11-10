@@ -65,7 +65,11 @@ class AutoFetchSubtitlesContractTest {
         assertTrue(player.contains("AppPreferences.getAutoFetchSubtitles(this)"))
         assertTrue(player.contains("AppPreferences.getOpensubtitlesApiKey(this).isBlank()"))
         assertTrue(player.contains("AutoSubtitleRules.pick("))
-        assertTrue(player.contains("attachExternalSubtitle(uri)"))
+        // The manual pick keeps its rebuild and now names the sidecar's source
+        // (m15), so the pin is the labelled call rather than the bare uri one.
+        assertTrue(
+            player.contains("attachExternalSubtitle(uri, source = \"picked from this device\")")
+        )
     }
 
     @Test

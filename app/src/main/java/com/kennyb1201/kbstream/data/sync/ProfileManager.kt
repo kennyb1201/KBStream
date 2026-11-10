@@ -668,6 +668,20 @@ object ProfileManager {
                 .deleteAllForProfile(context, profileId)
         }
 
+        // m25: the profile's CLOUD rows go with it. A delete used to wipe the
+        // local namespace and leave every history row and watched marker the
+        // profile had ever pushed behind, under an id that is tombstoned and
+        // never reissued - so nothing could ever read them again and nothing
+        // would ever remove them. Fired BEFORE the local wipe on purpose: signed
+        // out, the purge is staged from the local rows (see
+        // SupabaseSync.stageSignedOutClear), so wiping first would stage an
+        // empty set and leave the cloud copies forever. Off this thread and
+        // best-effort, like the downloads removal above: a delete must not
+        // wait on a network round-trip, and the local delete is already done.
+        runCatching {
+            SupabaseSync.launchDeletedProfileRowPurge(context, profileId)
+        }
+
         // Wipe the profile's local namespace.
         wipeLocalProfileData(context, profileId)
 

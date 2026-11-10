@@ -205,6 +205,13 @@ class TraktRepository private constructor(private val context: Context?) {
         // do not make the screen wait on three different refresh schedules.
         private const val SNAPSHOT_TTL_MS = 15L * 60L * 1_000L
 
+        /**
+         * How long the paused-session list stays fresh (m22). Shorter than the
+         * watched snapshot's 15 minutes: resume positions move as the viewer
+         * watches, and a stale one is a resume that starts in the wrong place.
+         */
+        private const val PLAYBACK_SESSIONS_TTL_MS = 5L * 60L * 1_000L
+
         /** The review rail is a handful of the best comments, not a feed. */
         private const val MAX_COMMENTS = 20
 
@@ -236,6 +243,15 @@ class TraktRepository private constructor(private val context: Context?) {
     internal val guard = TraktRateGuard()
 
     private val snapshotMutex = Mutex()
+
+    // The paused-session list's own cache (m22), keyed by access token so a
+    // profile switch cannot be answered from another account's read.
+    @Volatile
+    private var playbackSessionsCache: List<TraktPlaybackSession>? = null
+    @Volatile
+    private var playbackSessionsCachedFor: String? = null
+    @Volatile
+    private var playbackSessionsCachedAtMs = 0L
 
     /**
      * Serializes token refreshes.
@@ -832,6 +848,9 @@ class TraktRepository private constructor(private val context: Context?) {
      */
     internal fun onSyncedSessionChanged() {
         invalidateWatchedSnapshot()
+        // m22: the paused-session list answers from the account too, so a
+        // session the account changed must not outlive its own cache.
+        invalidatePlaybackSessions()
     }
 
     /**
@@ -880,6 +899,23 @@ class TraktRepository private constructor(private val context: Context?) {
     suspend fun playbackSessions(): List<TraktPlaybackSession> {
         if (!TraktConfig.isConfigured) return emptyList()
         val token = validAccessToken() ?: return emptyList()
+        // m22: the answer is cached for a few minutes, keyed by the access
+        // token. Home resumes re-fire this read, and it was two full page walks
+        // of /sync/playback with no cache, disk fallback or snapshot - unlike
+        // every sibling leg (MDBList 15 min, Simkl 3 min, Trakt's own watched
+        // snapshot 15 min). Each page spends a rate-guard token, and the guard's
+        // 900/5 min sits just under Trakt's 1,000 ceiling, so Home<->Detail
+        // navigation spent the shared budget on identical answers. The key is the
+        // token because a profile switch is a different token, and a shorter TTL
+        // than the watched snapshot's because resume positions move.
+        val now = System.currentTimeMillis()
+        playbackSessionsCache?.let { cached ->
+            if (playbackSessionsCachedFor == token &&
+                now - playbackSessionsCachedAtMs < PLAYBACK_SESSIONS_TTL_MS
+            ) {
+                return cached
+            }
+        }
         val authorization = "Bearer $token"
         // PAGED. Both reads used to take `limit = 100` and no page walk, so an
         // account with more paused sessions than that silently lost the tail of
@@ -891,7 +927,7 @@ class TraktRepository private constructor(private val context: Context?) {
         val episodes = readAllPlaybackRows(authorization) { page, limit ->
             api.playbackEpisodes(authorization, page = page, limit = limit)
         }
-        return buildList {
+        val answer = buildList {
             movies.orEmpty().forEach { row ->
                 row.asPlaybackSession(isMovie = true)?.let(::add)
             }
@@ -899,6 +935,26 @@ class TraktRepository private constructor(private val context: Context?) {
                 row.asPlaybackSession(isMovie = false)?.let(::add)
             }
         }
+        // Only a complete read is cached: a failed page answers what it had,
+        // and storing that would freeze a truncated resume list for the TTL.
+        if (movies != null && episodes != null) {
+            playbackSessionsCache = answer
+            playbackSessionsCachedFor = token
+            playbackSessionsCachedAtMs = System.currentTimeMillis()
+        }
+        return answer
+    }
+
+    /**
+     * Drops the cached paused-session list (m22).
+     *
+     * Called when this device's own playback state changes, so a scrobble is
+     * reflected on the next Home pass instead of after the TTL.
+     */
+    fun invalidatePlaybackSessions() {
+        playbackSessionsCache = null
+        playbackSessionsCachedFor = null
+        playbackSessionsCachedAtMs = 0L
     }
 
     /**

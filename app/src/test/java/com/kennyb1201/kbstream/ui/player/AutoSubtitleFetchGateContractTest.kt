@@ -90,7 +90,21 @@ class AutoSubtitleFetchGateContractTest {
      * `NativePlayerActivity.attachExternalSubtitle`). The manual routes keep
      * the rebuild, because the viewer asked for that one and expects a beat.
      */
-    private val nativeAutoAttach = "attachExternalSubtitle(uri, rebuild = false)"
+    // A regex, not a literal: the attach now carries the sidecar identity the
+    // INFO panel prints (m15: label/source/fetchedFor), so the call spans lines
+    // and the old one-line string would pin the argument list instead of the
+    // behaviour - no rebuild, and the uri that was downloaded.
+    private val nativeAutoAttach = Regex("attachExternalSubtitle\\(\\s*uri,\\s*rebuild = false")
+
+    /** Where the auto-fetch attaches, or -1 (same contract as indexOf). */
+    private val nativeAutoAttachAt: Int
+        get() = nativeAutoAttach.find(nativeAuto)?.range?.first ?: -1
+
+    /** The manual pick's attach, which keeps the rebuild and the source label. */
+    private val nativeManualAttach = Regex("attachExternalSubtitle\\(\\s*uri,")
+
+    private val nativeManualAttachAt: Int
+        get() = nativeManualAttach.find(nativeManual)?.range?.first ?: -1
 
     @Test
     fun `all four download routes gate on the shared usability rule`() {
@@ -107,13 +121,13 @@ class AutoSubtitleFetchGateContractTest {
     @Test
     fun `native routes reject before the player is rebuilt`() {
         val autoCheck = nativeAuto.indexOf(gate)
-        val autoAttach = nativeAuto.indexOf(nativeAutoAttach)
+        val autoAttach = nativeAutoAttachAt
         assertTrue(
             "the auto-fetch must still attach a usable body, without a rebuild",
             autoAttach > autoCheck
         )
         val manualCheck = nativeManual.indexOf(gate)
-        val manualAttach = nativeManual.indexOf("attachExternalSubtitle(uri)")
+        val manualAttach = nativeManualAttachAt
         assertTrue("the manual pick must still attach a usable body", manualAttach > manualCheck)
     }
 
@@ -129,7 +143,7 @@ class AutoSubtitleFetchGateContractTest {
         )
         assertTrue(
             "and it must attach without rebuilding the player",
-            nativeAuto.contains(nativeAutoAttach)
+            nativeAutoAttach.containsMatchIn(nativeAuto)
         )
     }
 
@@ -137,7 +151,7 @@ class AutoSubtitleFetchGateContractTest {
     fun `a manual pick with no readable cues is reported, not loaded`() {
         // ExoPlayer: an honest, visible failure instead of a silent rebuild.
         val check = nativeManual.indexOf(gate)
-        val attach = nativeManual.indexOf("attachExternalSubtitle(uri)")
+        val attach = nativeManualAttachAt
         val reject = nativeManual.substring(check, attach)
         assertTrue("the rejected body must leave the coroutine", reject.contains("return@launch"))
         assertTrue("the viewer must be told", reject.contains("Toast.LENGTH_LONG"))
@@ -158,7 +172,7 @@ class AutoSubtitleFetchGateContractTest {
     fun `an auto-fetch with no readable cues is dropped silently, never announced`() {
         // ExoPlayer: log and bail before the attach; no toast for a bad body.
         val check = nativeAuto.indexOf(gate)
-        val attach = nativeAuto.indexOf(nativeAutoAttach)
+        val attach = nativeAutoAttachAt
         val reject = nativeAuto.substring(check, attach)
         assertTrue("the rejected body must leave the coroutine", reject.contains("return@launch"))
         assertTrue("the rejected body must be logged", reject.contains("Log.w("))
@@ -201,7 +215,7 @@ class AutoSubtitleFetchGateContractTest {
             capture < nativeAuto.indexOf("SubtitleSearchHelper.search(")
         )
 
-        val attach = nativeAuto.indexOf(nativeAutoAttach)
+        val attach = nativeAutoAttachAt
         assertTrue("the route must still attach", attach > capture)
         assertTrue(
             "the identity must be re-checked right before the attach",

@@ -268,8 +268,10 @@ class BingeCatContractTest {
             repository.contains("return rows.takeIf { it.isNotEmpty() }")
         )
         assertTrue(
-            "the lists read walks pages, like its siblings",
-            repository.contains("if (body.lists.size < PAGE_SIZE) break")
+            "the lists read walks pages, like its siblings, and a SHORT page is what proves the walk " +
+                "reached the end of the set (m24: a short page clears the truncation flag)",
+            Regex("if \\(body\\.lists\\.size < PAGE_SIZE\\) \\{\\s*truncated = false\\s*break")
+                .containsMatchIn(repository)
         )
         val lists = between(
             repository,

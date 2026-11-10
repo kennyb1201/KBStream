@@ -196,6 +196,39 @@ class LiveSubtitleStartContractTest {
         )
     }
 
+    // ── M1: the bridge's ready-time pass cannot undo it ─────────────────────
+
+    @Test
+    fun `the track bridge never re-arms a caption on a live channel`() {
+        // The activity's disable is only half the fix (M1, release-readiness
+        // audit 2026-11-10): this object's READY listener is registered when the
+        // view attaches the player, i.e. AFTER the activity's, so it ran its
+        // subtitle-language pass over the disabled channel and put a caption
+        // back. T4 above cannot catch that - the activity latch stops the
+        // activity's pass, not this one.
+        val bridge = File(mainSourceRoot(), BRIDGE).readText()
+        val reapply = functionBody(bridge, "fun reapplyLanguageSelection(player: Player?) {")
+        assertTrue(
+            "the bridge has to be told the session is live: a null titleKey is not " +
+                "the same fact",
+            bridge.contains("isLive: Boolean = false") &&
+                bridge.contains("live = isLive")
+        )
+        assertTrue(
+            "and its subtitle-language pass must stop there",
+            reapply.contains("if (live) return")
+        )
+        assertTrue(
+            "the audio pass still runs above it, and a hard OFF is still re-asserted",
+            reapply.indexOf("C.TRACK_TYPE_AUDIO") in 0 until reapply.indexOf("if (live) return") &&
+                reapply.indexOf("if (subtitlesOff)") in 0 until reapply.indexOf("if (live) return")
+        )
+        assertTrue(
+            "and the activity hands its live flag over",
+            source().contains("isLive = isLiveChannel")
+        )
+    }
+
     private fun mainSourceRoot(): File {
         val prefixes = listOf("", "app/")
         var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
@@ -214,5 +247,7 @@ class LiveSubtitleStartContractTest {
     private companion object {
         private const val NATIVE =
             "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt"
+        private const val BRIDGE =
+            "com/kennyb1201/kbstream/ui/player/PlayerTrackBridge.kt"
     }
 }

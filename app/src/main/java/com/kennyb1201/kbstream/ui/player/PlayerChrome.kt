@@ -584,8 +584,17 @@ class PlayerChrome(
         }
     }
 
-    /** The controls that hold the overlay open while focused. */
+    /**
+     * The controls that hold the overlay open while focused.
+     *
+     * m9: the seek bar is one of them. It is what [focusControls] lands on
+     * FIRST, so without it the bar hid underneath the control the D-pad had just
+     * selected: sit idle for the auto-hide and the next Left/Right was spent
+     * re-showing the chrome instead of scrubbing. The list carried every button
+     * and this one surface, which is the one the rule was written for.
+     */
     private fun controls(): List<View> = listOfNotNull(
+        seekBar,
         playPauseButton,
         nextButton,
         sourceButton,

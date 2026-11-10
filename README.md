@@ -429,11 +429,12 @@ scripts/           # TMDB id-verification probes used while curating the
                    # 1280x720 banner and a 1024x500 feature graphic, both laid
                    # out from the same plate as the TV banner) -- rasterizing
                    # them to res/ and to docs/brand/ (run it after any design
-                   # change; nothing is hand-edited). The launcher banner ships
-                   # in two forms -- translucent (what android:banner points
-                   # at, inset so a launcher's rounded, scaled-up card cannot
-                   # clip it) and @drawable/tv_banner_plate, the same lockup on
-                   # the opaque plate. `--preview
+                   # change; nothing is hand-edited). The launcher banner is
+                   # @drawable/tv_banner, the opaque full-bleed plate the
+                   # manifest names; the translucent and plate variants the
+                   # script also draws are NOT in the APK (m36: unused, and
+                   # shrinkResources stripped them anyway) -- regenerate and
+                   # point android:banner at one to swap cards. `--preview
                    # banner|plate|promo|icon|logo|mark|round` prints one as
                    # ASCII. patch_source.py applies a verified edit spec (a
                    # JSON list of anchored find/replace pairs, hard-erroring

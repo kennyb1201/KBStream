@@ -4157,17 +4157,18 @@ private fun GameDetailSheet(
                         }
                     }
                 } else {
-                    // With no WATCH the pinned footer has no focusable node. An
-                    // upcoming game has no stat rows either (its summary is
-                    // never fetched), so the sheet's only node was the invisible
-                    // anchor - and focus landing nowhere visible reads as a dead
-                    // D-pad until Back. The anchor IS the stop here.
+                    // m12: with no WATCH the footer's only focusable node used to
+                    // be the invisible anchor, so the sheet opened with no focus
+                    // ring anywhere and a press did nothing - a dead D-pad until
+                    // Back, as the old comment here conceded. CLOSE is visible,
+                    // focusable, and the honest action for this sheet.
+                    val closeButton = remember { FocusRequester() }
                     LaunchedEffect(Unit) {
                         var landed = false
                         var attempts = 0
                         while (!landed && attempts < HUB_ENTRY_FOCUS_ATTEMPTS) {
                             awaitFrame()
-                            landed = runCatching { topAnchor.requestFocus() }
+                            landed = runCatching { closeButton.requestFocus() }
                                 .getOrDefault(false)
                             attempts++
                         }
@@ -4187,6 +4188,14 @@ private fun GameDetailSheet(
                             label = SportsDetailRules.watchLabel(false, lineupMissing, matchingDone),
                             enabled = false
                         )
+                    }
+                    KBButton(
+                        label = "CLOSE",
+                        modifier = Modifier
+                            .padding(top = 8.dp)
+                            .focusRequester(closeButton)
+                    ) {
+                        onClose()
                     }
                 }
             }

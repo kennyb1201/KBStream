@@ -1064,8 +1064,22 @@ object SupabaseSync {
      * [stageSignedOutClear]). Without this the reset looked like it worked and
      * then every resume row and marker came straight back on the next sync.
      */
-    suspend fun clearWatchStateForActiveProfile() {
-        val pid = currentProfileId()
+    suspend fun clearWatchStateForActiveProfile() = clearWatchStateForProfile(currentProfileId())
+
+    /**
+     * The same cloud purge, for a profile that is being DELETED (m25).
+     *
+     * Deleting a profile wiped its local namespace and left every cloud row it
+     * had ever written behind, keyed by a profile id nothing would ever read
+     * again: the rows could not be merged into anyone else's state (the key is
+     * scoped), could not be pulled into a re-used id (a deleted id is
+     * tombstoned and never reissued), and so accumulated forever in the
+     * viewer's account - one dead profile's whole watch history and marker
+     * table per delete. This is the SAME pass [clearWatchStateForActiveProfile]
+     * runs, with the id passed in instead of read, so a delete cannot be a
+     * different (and wrong) delete path.
+     */
+    suspend fun clearWatchStateForProfile(pid: String) {
         if (!isSignedIn()) {
             stageSignedOutClear(pid)
             return
@@ -1723,6 +1737,26 @@ object SupabaseSync {
     fun onProfileSwitched(context: Context) {
         if (isSignedIn()) {
             pullAll(context)
+        }
+    }
+
+    /**
+     * Purges a DELETED profile's cloud rows (m25), off the caller's thread.
+     *
+     * ProfileManager.delete is synchronous and must not wait on the network -
+     * the same reason [launchLauncherRepublish] exists - so the purge runs on
+     * [scope]. Signed OUT, [clearWatchStateForProfile] stages the clear against
+     * the local rows and replays it when that account signs in again, which is
+     * why this is still worth calling before the local wipe.
+     */
+    fun launchDeletedProfileRowPurge(context: Context, profileId: String) {
+        if (profileId.isBlank()) return
+        scope.launch {
+            runCatchingCancellable {
+                clearWatchStateForProfile(profileId)
+            }.onFailure { e ->
+                Log.w(TAG, "deleted-profile purge failed: ${Redaction.text(e.message)}")
+            }
         }
     }
 

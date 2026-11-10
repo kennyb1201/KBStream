@@ -421,8 +421,11 @@ object HiddenTitles {
         }
         val finalRemoved = pruneRemoved(liveRemoved)
 
+        // m27: the merge enforces the same ceiling [write] does - the union of
+        // two devices' sets is exactly how this outgrew the payload.
+        val finalEntries = kept.sortedByDescending { it.at }.take(HiddenTitlesRules.MAX_ENTRIES)
         val encodedEntries =
-            json.encodeToString(Store.serializer(), Store(kept))
+            json.encodeToString(Store.serializer(), Store(finalEntries))
         val encodedRemoved =
             json.encodeToString(RemovedStore.serializer(), RemovedStore(finalRemoved))
         if (encodedEntries == prefs.getString(KEY_ENTRIES, null) &&
@@ -440,7 +443,7 @@ object HiddenTitles {
         // written and left there for that profile's next switch.
         if (storeName(app, profileId) == ProfileStorage.prefsName(app, PREFS_BASE)) {
             loadedFor = storeName(app, profileId)
-            _entries.value = kept.sortedByDescending { it.at }
+            _entries.value = finalEntries
             _version.value = _version.value + 1
         }
         return changed
@@ -593,11 +596,24 @@ object HiddenTitles {
     }
 
     private fun write(context: Context, store: Store) {
+        // m27: entries are capped like the removal records beside them, at the
+        // one choke point every write goes through - [hide], the merge and the
+        // sync publish all end here. The delivered sync spec's 2,000 covered
+        // "entries + removed tombstones"; only the tombstone half landed, so a
+        // heavy hider (or two devices unioning offline sets) grew the
+        // hidden_titles payload without bound. Oldest-first eviction, the same
+        // rule the removals use: the newest hides are the ones a viewer is
+        // still acting on.
+        val capped = store.copy(
+            entries = store.entries
+                .sortedByDescending { it.at }
+                .take(HiddenTitlesRules.MAX_ENTRIES)
+        )
         prefs(context).edit()
-            .putString(KEY_ENTRIES, json.encodeToString(Store.serializer(), store))
+            .putString(KEY_ENTRIES, json.encodeToString(Store.serializer(), capped))
             .apply()
         loadedFor = ProfileStorage.prefsName(context, PREFS_BASE)
-        _entries.value = store.entries.sortedByDescending { it.at }
+        _entries.value = capped.entries.sortedByDescending { it.at }
         _version.value = _version.value + 1
     }
 

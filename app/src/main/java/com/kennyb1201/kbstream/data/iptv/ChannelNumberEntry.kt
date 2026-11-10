@@ -45,6 +45,24 @@ internal object ChannelNumberEntry {
         return if (index in chnos.indices) index else -1
     }
 
+    /**
+     * True when [entry] can still become a channel on [chnos] (m11).
+     *
+     * The guide's overlay uses this to tell "keep typing" from "no such
+     * channel": `1` on a lineup that carries 12 is not a miss, while `99` on a
+     * lineup that ends at 80 is, and the old overlay said "Enter channel
+     * number" for both - so a dead number looked exactly like an unfinished
+     * one. A lineup with no numbers at all falls back to 1-based position (see
+     * [target]), where no prefix means anything: it always answers true.
+     */
+    fun couldMatch(chnos: List<String?>, entry: String): Boolean {
+        val wanted = normalize(entry)
+        if (wanted.isEmpty()) return true
+        val numbers = chnos.map { it?.let(::normalize).orEmpty() }.filter { it.isNotEmpty() }
+        if (numbers.isEmpty()) return true
+        return numbers.any { it == wanted || it.startsWith(wanted) }
+    }
+
     /** Blank for a missing number, otherwise the digits without leading zeros. */
     private fun normalize(raw: String): String {
         val trimmed = raw.trim()

@@ -309,6 +309,13 @@ object MdbListClient {
     private const val TOTAL_CEILING = MDBLIST_TOTAL_CEILING
 
     /**
+     * Requests per persisted spend count (m28). The counter used to be written
+     * to prefs on every request; a daily ceiling tolerates losing the last few
+     * counts to a process kill far better than it tolerates an apply() per call.
+     */
+    private const val BUDGET_PERSIST_EVERY = 5
+
+    /**
      * Tags a request that must go out (a write) rather than a refetch.
      *
      * `internal` for the ratings leg (MdbListRatingWrites.kt): a rating write is
@@ -363,10 +370,10 @@ object MdbListClient {
             .toEpochMilli()
 
     /** Rolls THIS key's persisted counter over when the UTC day changes. */
-    private fun ensureBudget(budget: KeyBudget, tag: String) {
+    private fun ensureBudget(budget: KeyBudget, tag: String) = synchronized(budget) {
         val now = System.currentTimeMillis()
         val today = utcDay(now)
-        if (budget.day == today) return
+        if (budget.day == today) return@synchronized
         val context = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
         val stored = if (context != null) {
             val prefs = budgetPrefs(context)
@@ -388,14 +395,30 @@ object MdbListClient {
     }
 
     private fun countRequest(budget: KeyBudget, tag: String) {
-        ensureBudget(budget, tag)
-        budget.count.incrementAndGet()
-        val context = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
-        context?.let {
-            budgetPrefs(it).edit()
-                .putString(budgetDayKey(tag), budget.day)
-                .putInt(budgetCountKey(tag), budget.count.get())
-                .apply()
+        // m28: the check-then-set is one critical section. The interceptor runs
+        // on OkHttp threads, and two of them racing a UTC-day rollover could
+        // both pass the day check, one increment and persist, and the other
+        // then reset the in-memory count to the stale persisted value -
+        // under-counting spend, so the device overshot the 850/980 ceilings and
+        // earned a real 429 instead of a clean local refusal. `ensureBudget`
+        // takes the same monitor (re-entrant), so the reset and the increment
+        // cannot interleave.
+        synchronized(budget) {
+            ensureBudget(budget, tag)
+            val count = budget.count.incrementAndGet()
+            // Persisted every few requests rather than on every one: an
+            // apply() per MDBList call was write amplification on the main
+            // thread's own disk, and the counter is a daily ceiling that
+            // tolerates losing the last few counts to a process kill.
+            if (count <= BUDGET_PERSIST_EVERY || count % BUDGET_PERSIST_EVERY == 0) {
+                val context = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
+                context?.let {
+                    budgetPrefs(it).edit()
+                        .putString(budgetDayKey(tag), budget.day)
+                        .putInt(budgetCountKey(tag), count)
+                        .apply()
+                }
+            }
         }
     }
 

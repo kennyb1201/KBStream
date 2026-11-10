@@ -297,6 +297,18 @@ class MpvPlayerView @JvmOverloads constructor(
     // mpv's event thread by [event] to classify END_FILE.
     @Volatile
     private var fileLoaded = false
+
+    /**
+     * Whether this file's own end has already been reported.
+     *
+     * m17: `@Volatile` like the rest of the verdict's flags. It is written on
+     * the main thread ([startPendingLoad], [load]) and on mpv's event thread
+     * (the END_FILE handler), and read on the event thread to classify that same
+     * event - the one flag in the set that was a plain `var`, so a stale read
+     * could answer ENDED_NORMALLY for a stream that died mid-playback (no error
+     * card, no retry) or the reverse.
+     */
+    @Volatile
     private var endNotified = false
 
     /**

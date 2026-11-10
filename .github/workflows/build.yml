@@ -702,7 +702,10 @@ jobs:
       # Severity policy is in the lint block of app/build.gradle.kts: errors
       # fail, warnings are reported and uploaded below.
       - name: Run Android Lint
-        run: ./gradlew lintDebug --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
+        # m33: lintRelease too. The PR gate has run both since the sweep-8 F5
+        # report, but a direct push to main only ran the debug variant, so a
+        # release-only lint issue could reach a tagged build ungated.
+        run: ./gradlew lintDebug lintRelease --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
 
@@ -786,14 +789,23 @@ jobs:
               while IFS= read -r so; do
                 checked=$((checked + 1))
                 while IFS= read -r align; do
+                  # ALLOWLIST, not a denylist: a LOAD is compliant only when its
+                  # alignment is >= 0x4000 (16 KB). This was a case matching
+                  # 0x1000|0x800|0x400|0x200 and PASSING everything else - so a
+                  # 0x2000 (8 KB) LOAD sailed through a gate whose whole job is
+                  # to stop it: Play rejects an 8 KB-aligned library and it
+                  # crashes on a 16 KB-page device. The three per-library gates
+                  # already test positively; this last line before publish now
+                  # fails closed, and accepts 0x10000 too (a 64 KB page size is
+                  # MORE aligned, not less - it used to fail one).
                   case "$align" in
-                    # Positively-detected 4 KB (or smaller) alignment is the only
-                    # failure, so a parsing quirk cannot spuriously block a release.
-                    0x1000|0x800|0x400|0x200)
-                      echo "::error file=$so::LOAD segment not 16 KB aligned ($align)"
-                      fail=1
-                      ;;
+                    0x*|0X*) ;;
+                    *) continue ;;
                   esac
+                  if (( align < 0x4000 )); then
+                    echo "::error file=$so::LOAD segment aligned ${align}, not 16 KB (needs >= 0x4000)"
+                    fail=1
+                  fi
                 done < <(readelf -lW "$so" | awk '/^[[:space:]]*LOAD/{print $NF}')
               done < <(find "$root/${prefix}lib/$abi" -name '*.so' | sort)
             done
@@ -861,9 +873,13 @@ jobs:
       # matching daemon arguments mean this reuses the daemon the release
       # build already started (the mapping-upload task itself is then
       # up-to-date or a short upload) instead of booting a second JVM.
-      - name: Upload Sentry mappings (best-effort)
+      # m32: best-effort on a push, REQUIRED on a tag. A wrong or read-only
+      # token used to leave a green run and a published release whose native and
+      # R8 reports arrive unsymbolicated - the failure is invisible precisely
+      # when it matters. A tag build now fails instead.
+      - name: Upload Sentry mappings
         if: success()
-        continue-on-error: true
+        continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: ./gradlew uploadSentryProguardMappingsRelease --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
@@ -911,6 +927,22 @@ jobs:
           echo "Checking $MERGED"
           if grep -q 'REQUEST_INSTALL_PACKAGES' "$MERGED"; then
             echo "::error::$MERGED still declares REQUEST_INSTALL_PACKAGES, so -PplayBuild did not overlay the Play manifest"
+            exit 1
+          fi
+          # m31: the debug merge above is NOT the artifact Play receives. The
+          # signed release AAB built earlier with -PplayBuild is, and its merged
+          # manifest was never inspected - so a variant-specific merge
+          # difference would have shipped unseen. Same guard, release variant.
+          RELEASE_MERGED="$(find app/build/intermediates -path '*merged_manifest*' \
+            -name AndroidManifest.xml -path '*/release/*' -printf '%T@ %p\n' \
+            | sort -n | tail -n1 | cut -d' ' -f2-)"
+          if [ -z "$RELEASE_MERGED" ]; then
+            echo "::error::the release build produced no merged manifest to check"
+            exit 1
+          fi
+          echo "Checking $RELEASE_MERGED"
+          if grep -q 'REQUEST_INSTALL_PACKAGES' "$RELEASE_MERGED"; then
+            echo "::error::$RELEASE_MERGED still declares REQUEST_INSTALL_PACKAGES, so -PplayBuild did not overlay the RELEASE manifest"
             exit 1
           fi
         env:

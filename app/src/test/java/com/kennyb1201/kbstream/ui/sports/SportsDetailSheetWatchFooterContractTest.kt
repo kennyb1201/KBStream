@@ -91,18 +91,20 @@ class SportsDetailSheetWatchFooterContractTest {
                 sheetCall.contains("watchButton.requestFocus()") &&
                 sheetCall.contains("while (!landed && attempts < HUB_ENTRY_FOCUS_ATTEMPTS) {")
         )
-        // Two now, one per mutually exclusive branch: the action's when there is
-        // a channel, and the anchor's when there is not (with no channel the
-        // footer has no focusable node at all, so the sheet used to open with
-        // focus nowhere and the D-pad read as dead). Both are outside the scroll.
+        // Two mutually exclusive branches: the action's when there is a channel,
+        // and CLOSE's when there is not. The no-channel branch used to ask the
+        // invisible anchor for focus, which is not focusable at all, so the sheet
+        // opened with focus nowhere and the D-pad read as dead until Back (m12).
+        // Both requests are outside the scroll.
         assertTrue(
             "both branches claim focus, and neither request lives in the scroll",
             sheetCall.contains("landed = runCatching { watchButton.requestFocus() }") &&
-                sheetCall.contains("landed = runCatching { topAnchor.requestFocus() }") &&
+                sheetCall.contains("landed = runCatching { closeButton.requestFocus() }") &&
                 !body.contains("requestFocus")
         )
         assertEquals(
-            "exactly these two focus requests in the whole sheet: the action's and the anchor's",
+            "exactly two focus requests in the whole sheet - one per branch: the action's, and" +
+                " CLOSE's (the anchor's is gone, not added to)",
             2,
             Regex("requestFocus\\(\\)").findAll(sheet).count()
         )
@@ -182,9 +184,11 @@ class SportsDetailSheetWatchFooterContractTest {
         )
         val disabled = sheetCall.substring(sheetCall.indexOf("} else {"))
         assertTrue(
-            "only the matched branch carries the requester",
+            "only the matched branch carries the WATCH requester - the no-channel branch focuses its" +
+                " own visible CLOSE instead, because the anchor it used to point at takes no focus",
             enabled.contains(".focusRequester(watchButton)") &&
-                !disabled.contains("focusRequester")
+                !disabled.contains("focusRequester(watchButton)") &&
+                disabled.contains(".focusRequester(closeButton)")
         )
     }
 

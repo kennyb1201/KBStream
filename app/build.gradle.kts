@@ -180,8 +180,10 @@ val ciGitSha = System.getenv("GIT_SHA")?.takeIf { it.isNotBlank() } ?: "local"
 // `mpvlib-1.1.2.aar` build, which had no Dolby Vision decode at all: its
 // libplacebo was built without `-Ddovi`, so a DV title could only ever be
 // played as its HDR10 base layer. This one carries libplacebo with
-// `-Ddovi=enabled` (DV reshape + HDR metadata read from the RPU), libdovi 3.3.2
-// statically linked, FFmpeg n8.1.1 with `dovi_rpudec`, and mpv on `vo=gpu-next`
+// `-Ddovi=enabled` (DV reshape + HDR metadata read from the RPU), libdovi 3.4.0
+// statically linked (m35: this said 3.3.2; build.yml's DOVI_VERSION and
+// scripts/build_dovi.sh both pin 3.4.0), FFmpeg n8.1.1 with `dovi_rpudec`, and
+// mpv on `vo=gpu-next`
 // - so P5, P7, 8.1 and 8.4 are decoded as Dolby Vision rather than flattened.
 //
 // The two libraries are NOT drop-in compatible at the source level, and that is
@@ -860,6 +862,15 @@ dependencies {
 // captures THAT rather than the build script: the configuration cache refuses
 // a task action holding a reference to the script, and a release build would
 // then lose its cache entry every time.
+//
+// m30: this covers the three jniLibs files only. The mpv AAR's .so files, the
+// FFmpeg extension's libffmpegJNI.so and sentry-native's libraries come from
+// dependencies, so they do not exist in a directory a configuration-time check
+// can read - and after packaging they are already inside the artifact. The gate
+// for those is the workflow's packaged-APK/AAB scan ("Verify 16 KB page
+// alignment of native libraries"), which globs every *.so in both artifacts.
+// A LOCAL release build is therefore not alignment-checked for them: use CI for
+// anything that will be published.
 tasks.matching { it.name == "preReleaseBuild" }.configureEach {
     val jniLibsRoot = file("src/main/jniLibs")
     doFirst {

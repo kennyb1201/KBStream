@@ -1400,15 +1400,24 @@ class BingeCatRepository private constructor(private val context: Context?) {
         if (!isReady()) return null
         val rows = mutableListOf<BingeCatRow>()
         var page = 1
+        var truncated = true
         while (page <= MAX_PAGES) {
             val body = authorizedBody { auth ->
                 service.listItems(authorization = auth, ref = ref, page = page, limit = PAGE_SIZE)
             } ?: return null
             rows += body.items.mapNotNull { bingecatListRow(it) }
-            if (body.items.size < PAGE_SIZE) break
+            if (body.items.size < PAGE_SIZE) {
+                truncated = false
+                break
+            }
             page += 1
         }
-        return rows
+        // m24: a walk that stopped because MAX_PAGES ran out is NOT the list -
+        // it is the first 1,000 entries of it, and callers draw what they get as
+        // the whole thing. Null is this file's own answer for "not the complete
+        // set" (see the failure arm below and readLists' doc), so a >1,000-item
+        // list now reads as unavailable instead of as a silently short one.
+        return if (truncated) null else rows
     }
 
     /** The cached snapshot, for a screen that cannot wait (never a network read). */
@@ -1496,6 +1505,9 @@ class BingeCatRepository private constructor(private val context: Context?) {
     ): List<BingeCatRow>? {
         val rows = mutableListOf<BingeCatRow>()
         var page = 1
+        // m24: set false only by a SHORT page - the one end-of-walk signal this
+        // API has. Still true after the loop means MAX_PAGES ran out mid-list.
+        var truncated = true
         while (page <= MAX_PAGES) {
             val body = authorizedBody { auth ->
                 service.savedItems(
@@ -1508,10 +1520,14 @@ class BingeCatRepository private constructor(private val context: Context?) {
                 )
             } ?: return null
             rows += body.mapNotNull { bingecatSavedRow(it) }
-            if (body.size < PAGE_SIZE) break
+            if (body.size < PAGE_SIZE) {
+                truncated = false
+                break
+            }
             page += 1
         }
-        return rows
+        // m24: the same ceiling rule as listRows - see there.
+        return if (truncated) null else rows
     }
 
     /**
@@ -1526,6 +1542,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
     private suspend fun readLists(mapped: Long): List<BingeCatList>? {
         val lists = mutableListOf<BingeCatList>()
         var page = 1
+        var truncated = true
         while (page <= MAX_PAGES) {
             val body = authorizedBody { auth ->
                 service.lists(
@@ -1542,9 +1559,16 @@ class BingeCatRepository private constructor(private val context: Context?) {
                 val name = summary.name?.takeIf { it.isNotBlank() } ?: continue
                 lists += BingeCatList(ref = ref, name = name, itemCount = summary.itemCount ?: 0)
             }
-            if (body.lists.size < PAGE_SIZE) break
+            if (body.lists.size < PAGE_SIZE) {
+                truncated = false
+                break
+            }
         }
-        return lists
+        // m24: a >1,000-list account used to lose its tail silently, and this
+        // set is what prunes Home rails - so the loss showed up as missing rails
+        // with nothing to explain them. Null refuses the truncated answer
+        // outright, which is the rule this file already states for a failed page.
+        return if (truncated) null else lists
     }
 
     /**
@@ -1583,6 +1607,10 @@ class BingeCatRepository private constructor(private val context: Context?) {
         val items = mutableListOf<BingeCatHistoryItem>()
         var cursor: String? = null
         var pages = 0
+        // m24: true until the API says there is no next page. A cursor that
+        // stopped moving, or the MAX_PAGES ceiling, both leave the tail unread -
+        // and this snapshot decides which cards show as watched.
+        var truncated = true
 
         while (pages < MAX_PAGES) {
             val body = authorizedBody { auth ->
@@ -1596,7 +1624,11 @@ class BingeCatRepository private constructor(private val context: Context?) {
 
             items += body.items
 
-            val next = body.nextCursor?.takeIf { it.isNotBlank() } ?: break
+            val next = body.nextCursor?.takeIf { it.isNotBlank() }
+            if (next == null) {
+                truncated = false
+                break
+            }
             // A cursor that does not move would spin the loop on the same page;
             // MAX_PAGES bounds it either way, but stopping is the honest answer.
             if (next == cursor) break
@@ -1604,6 +1636,9 @@ class BingeCatRepository private constructor(private val context: Context?) {
             pages++
         }
 
+        // m24: the same rule as the other walks - a truncated history is not
+        // the history, so it is refused rather than served as complete.
+        if (truncated) return null
         return bingeCatWatchedSnapshot(items)
     }
 
