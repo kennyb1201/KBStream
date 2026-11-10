@@ -139,7 +139,9 @@ class LibraryHomeRailRenameContractTest {
         )
         assertTrue(
             "and the pin the rename just wrote is not pruned by a read that lagged it",
-            block.contains("liveListIds + (pin.source to (live + pin.id))")
+            block.contains(
+                "liveListIds + (pin.source to (live + LibraryHomeRailLiveList(pin.id, setOf(pin.id))))"
+            )
         )
         assertTrue(
             "the rename hands its new pin to that prune",

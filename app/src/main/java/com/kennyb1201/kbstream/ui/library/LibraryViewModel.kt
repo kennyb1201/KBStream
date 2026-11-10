@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
+import com.kennyb1201.kbstream.data.library.LibraryHomeRailLiveList
 import com.kennyb1201.kbstream.data.library.LibraryHomeRails
 import com.kennyb1201.kbstream.data.library.LibraryHomeRailPin
 import com.kennyb1201.kbstream.data.library.LibraryItem
@@ -19,9 +20,10 @@ import com.kennyb1201.kbstream.data.library.TastePlacement
 import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.library.WATCHLIST_REMOTE_ID
 import com.kennyb1201.kbstream.data.library.libraryHomeRailId
+import com.kennyb1201.kbstream.data.library.libraryHomeRailLiveList
 import com.kennyb1201.kbstream.data.library.libraryHomeRailPinFor
 import com.kennyb1201.kbstream.data.library.libraryListRowKey
-import com.kennyb1201.kbstream.data.library.likedListShelfId
+import com.kennyb1201.kbstream.data.library.likedListRow
 import com.kennyb1201.kbstream.data.library.placementOf
 import com.kennyb1201.kbstream.data.library.traktListShelfId
 import com.kennyb1201.kbstream.data.library.watchlistShelfId
@@ -1087,18 +1089,10 @@ class LibraryViewModel(
                         val id = card.ref.toIntOrNull() ?: return@filterNot false
                         mdbLists.any { it.id == id }
                     }
-                    .map { card ->
-                        LibraryList(
-                            id = card.ref.toIntOrNull()
-                                ?: likedListShelfId(PublicListVendor.MDBLIST.wire, card.ref),
-                            name = card.name,
-                            itemCount = card.itemCount,
-                            source = LibrarySource.MDBLIST_LIST,
-                            remoteId = card.ref,
-                            liked = true,
-                            owner = card.owner
-                        )
-                    }
+                    // The great builder the launch reconcile reads too: the
+                    // row's shelf id is half of every pin spelling the prune
+                    // has to recognise (see likedListRow).
+                    .map { card -> likedListRow(LibrarySource.MDBLIST_LIST, card) }
             } else {
                 emptyList()
             }
@@ -1156,17 +1150,7 @@ class LibraryViewModel(
                     // again would offer two rows for one list with two different
                     // promises behind their delete.
                     .filterNot { card -> card.ref in traktOwnedRefs }
-                    .map { card ->
-                        LibraryList(
-                            id = likedListShelfId(PublicListVendor.TRAKT.wire, card.ref),
-                            name = card.name,
-                            itemCount = card.itemCount,
-                            source = LibrarySource.TRAKT_LIST,
-                            remoteId = card.ref,
-                            liked = true,
-                            owner = card.owner
-                        )
-                    }
+                    .map { card -> likedListRow(LibrarySource.TRAKT_LIST, card) }
             } else {
                 emptyList()
             }
@@ -1270,16 +1254,20 @@ class LibraryViewModel(
                 // now, so an own-lists answer with the liked read failed would
                 // otherwise read every saved community list as gone and prune
                 // its rail.
+                // Each row contributes its CURRENT id beside every spelling a
+                // pin for it may carry (see libraryHomeRailLiveList): a pin
+                // written under an older spelling is re-pointed by the
+                // reconcile instead of being read as a deleted list.
                 if (mdbListsAnswered && mdbLikedAnswered) {
                     put(
                         LibrarySource.MDBLIST_LIST.name,
-                        (mdbLists + mdbLiked).mapTo(mutableSetOf()) { libraryHomeRailId(it) }
+                        (mdbLists + mdbLiked).map { libraryHomeRailLiveList(it) }
                     )
                 }
                 if (traktListsAnswered && traktLikedAnswered) {
                     put(
                         LibrarySource.TRAKT_LIST.name,
-                        (traktLists + traktLiked).mapTo(mutableSetOf()) { libraryHomeRailId(it) }
+                        (traktLists + traktLiked).map { libraryHomeRailLiveList(it) }
                     )
                 }
                 // BingeCat is stale-while-revalidate: snapshot() answers with
@@ -1296,7 +1284,7 @@ class LibraryViewModel(
                 ) {
                     put(
                         LibrarySource.BINGECAT_LIST.name,
-                        bingecatLists.mapTo(mutableSetOf()) { libraryHomeRailId(it) }
+                        bingecatLists.map { libraryHomeRailLiveList(it) }
                     )
                 }
             }
@@ -1320,7 +1308,7 @@ class LibraryViewModel(
             val openList = _uiState.value.selectedList
             if (openList != null &&
                 liveListIds[openList.source.name]
-                    ?.contains(libraryHomeRailId(openList)) == false
+                    ?.any { live -> libraryHomeRailId(openList) in live.spellings } == false
             ) {
                 _uiState.value = _uiState.value.copy(selectedList = null)
             }
@@ -1508,7 +1496,7 @@ class LibraryViewModel(
                 ) {
                     put(
                         LibrarySource.BINGECAT_LIST.name,
-                        bingecatLists.mapTo(mutableSetOf()) { libraryHomeRailId(it) }
+                        bingecatLists.map { libraryHomeRailLiveList(it) }
                     )
                 }
             }
@@ -1518,7 +1506,7 @@ class LibraryViewModel(
             // be the fix un-doing itself.
             val liveForPrune = keepPin?.let { pin ->
                 liveListIds[pin.source]?.let { live ->
-                    liveListIds + (pin.source to (live + pin.id))
+                    liveListIds + (pin.source to (live + LibraryHomeRailLiveList(pin.id, setOf(pin.id))))
                 } ?: liveListIds
             } ?: liveListIds
 

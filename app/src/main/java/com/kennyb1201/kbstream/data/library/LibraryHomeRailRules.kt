@@ -88,6 +88,98 @@ internal fun libraryHomeRailIdSpellings(list: LibraryList): Set<String> =
     setOf(libraryHomeRailId(list), "id:" + list.id)
 
 /**
+ * Every spelling the PRUNE accepts for [list] - [libraryHomeRailIdSpellings],
+ * plus the bare number for a row that is addressed as `id:<n>`.
+ *
+ * Deliberately not the same function the pin toggle reads. The toggle asks "is
+ * this row already on Home", where the two spellings the rail itself writes
+ * are the whole answer; the prune asks "does this pin still name a list", where
+ * a bare number written before the `id:` form existed names the same list and
+ * must not be read as a deletion. An MDBList own list has no remoteId, so a pin
+ * from an older build carries `"<n>"` while the row says `"id:<n>"` - the
+ * reported case.
+ */
+internal fun libraryHomeRailLiveSpellings(list: LibraryList): Set<String> =
+    buildSet {
+        addAll(libraryHomeRailIdSpellings(list))
+        val canonical = libraryHomeRailId(list)
+        if (canonical.startsWith("id:")) {
+            canonical.removePrefix("id:").toIntOrNull()?.let { add(it.toString()) }
+        }
+    }
+
+/**
+ * One live list as the reconcile needs it: [id], the identity a pin should
+ * carry today, and [spellings], every id a pin for the same list may still be
+ * written under (see [libraryHomeRailLiveSpellings]).
+ *
+ * The pair is what makes a kept pin enough on its own. Keeping a pin that names
+ * a list by an old spelling leaves the Home load reading an id the service does
+ * not answer for, so the rail draws nothing; the reconcile has to re-point the
+ * pin, and to re-point it it needs the row's current id beside the spellings.
+ */
+data class LibraryHomeRailLiveList(
+    val id: String,
+    val spellings: Set<String>
+)
+
+/** [list] as the reconcile sees it. */
+internal fun libraryHomeRailLiveList(list: LibraryList): LibraryHomeRailLiveList =
+    LibraryHomeRailLiveList(
+        id = libraryHomeRailId(list),
+        spellings = libraryHomeRailLiveSpellings(list)
+    )
+
+/**
+ * [pins] with every pin an older spelling still names re-pointed at the id its
+ * live list carries today.
+ *
+ * A re-point is not a prune: the pin keeps its slot and its name, and only the
+ * id moves to the spelling this build writes (so the Home load finds the list
+ * again and the next read needs no old spelling). A pin whose source did not
+ * answer is untouched - the same rule [withoutVanishedPins] follows - and a pin
+ * that already carries the current id is returned as it is.
+ *
+ * One rail per list afterwards, too: a pin under an old spelling beside one
+ * under the current spelling is ONE list written twice, and re-pointing the
+ * first at the second's id would otherwise leave two identical rails on Home.
+ */
+internal fun repointedToLiveIds(
+    pins: List<LibraryHomeRailPin>,
+    live: Map<String, List<LibraryHomeRailLiveList>>
+): List<LibraryHomeRailPin> {
+    if (live.isEmpty()) return pins
+    return pins
+        .map { pin ->
+            val current = live[pin.source]
+                ?.firstOrNull { pin.id in it.spellings }
+                ?.id
+            if (current != null && current != pin.id) pin.copy(id = current) else pin
+        }
+        .distinctBy { it.key }
+}
+
+/**
+ * The reconcile's whole decision, without the store: [pins] minus the ones no
+ * spelling names ([withoutVanishedPins]) and with the survivors re-pointed at
+ * their live ids ([repointedToLiveIds]).
+ *
+ * Order is preserved, so a caller can compare the answer with the stored list
+ * and skip the write when nothing moved - which is what keeps an ordinary
+ * reconcile from publishing anything at all.
+ */
+internal fun reconciledPins(
+    pins: List<LibraryHomeRailPin>,
+    live: Map<String, List<LibraryHomeRailLiveList>>
+): List<LibraryHomeRailPin> {
+    if (live.isEmpty()) return pins
+    val spellings = live.mapValues { (_, rows) ->
+        rows.flatMapTo(mutableSetOf()) { row -> row.spellings }
+    }
+    return repointedToLiveIds(withoutVanishedPins(pins, spellings), live)
+}
+
+/**
  * What a pinned Library rail's heading says about its content, as a suffix.
  *
  * A list is not single-type the way the Because You Watched rails are: it can be

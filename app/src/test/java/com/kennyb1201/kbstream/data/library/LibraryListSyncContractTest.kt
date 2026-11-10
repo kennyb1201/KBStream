@@ -591,23 +591,33 @@ class LibraryListSyncContractTest {
             "LibraryHomeRails.reconcilePins(appContext, liveListIds)",
             "the refresh is where a website-side delete becomes visible"
         )
-        // Both reads behind the source feed the id set now: a saved community
+        // Both reads behind the source feed the live list now: a saved community
         // list is a row on the same rail, and leaving it out would prune its pin
-        // on every refresh.
+        // on every refresh. Each row goes in with its current id AND its
+        // spellings, so an older pin is re-pointed rather than read as gone.
         assertContains(
             refresh,
-            "(mdbLists + mdbLiked).mapTo(mutableSetOf()) { libraryHomeRailId(it) }",
-            "the live ids are the pin's own identity helper, never a second scheme"
+            "(mdbLists + mdbLiked).map { libraryHomeRailLiveList(it) }",
+            "the live rows are the pin's own identity helpers, never a second scheme"
         )
         assertContains(
             rails,
-            "fun reconcilePins(context: Context, liveIds: Map<String, Set<String>>): Boolean",
+            "fun reconcilePins(\n        context: Context,\n        live: Map<String, List<LibraryHomeRailLiveList>>\n    ): Boolean",
             "the store drops them"
         )
         val reconcile = rails
-            .substringAfter("fun reconcilePins(context: Context, liveIds: Map<String, Set<String>>): Boolean {")
+            .substringAfter("fun reconcilePins(")
             .substringBefore("internal fun dropLocalPinsAdopted(")
-        assertContains(reconcile, "withoutVanishedPins(current, liveIds)", "through the shared rule")
+        assertContains(
+            reconcile,
+            "reconciledPins(current, live)",
+            "spelling expansion, prune and re-point are one shared decision"
+        )
+        assertContains(
+            reconcile,
+            "if (kept == current) return false",
+            "an unchanged answer writes nothing, so a reconcile cannot publish a no-op"
+        )
         assertContains(
             reconcile,
             "write(context, kept)",
@@ -621,7 +631,7 @@ class LibraryListSyncContractTest {
         val refresh = vm.substringAfter("fun refresh() {").substringBefore("private fun refreshListsOnly(")
         assertContains(
             refresh,
-            "liveListIds[openList.source.name] ?.contains(libraryHomeRailId(openList)) == false",
+            "liveListIds[openList.source.name] ?.any { live -> libraryHomeRailId(openList) in live.spellings } == false",
             "an open list that the site deleted closes back to the merged view"
         )
         assertContains(
@@ -707,10 +717,17 @@ class LibraryListSyncContractTest {
             runOnce.indexOf("return false") < runOnce.indexOf("delay(STARTUP_DELAY_MS)")
         )
         assertContains(launch, "const val STARTUP_DELAY_MS = 2_500L", "settle first, then ask")
-        // Same identity rule as the Library rail, on every source it reads.
+        // Same identity rule as the Library rail, on every source it reads -
+        // and both spellings of it, so an older pin is not read as a delete.
         assertTrue(
-            "the ids come from the shared helper, not a second scheme",
-            Regex(Regex.escape("libraryHomeRailId(")).findAll(launch).count() == 3
+            "the live rows come from the shared helper, not a second scheme",
+            Regex(Regex.escape("libraryHomeRailLiveList(")).findAll(launch).count() == 3 &&
+                !launch.contains("libraryHomeRailId(")
+        )
+        assertTrue(
+            "and the liked rows come from the Library's own builder, so the band id cannot differ",
+            launch.contains("likedListRow(LibrarySource.TRAKT_LIST, card)") &&
+                launch.contains("likedListRow(LibrarySource.MDBLIST_LIST, card)")
         )
         // A source that did not answer is absent, never empty.
         assertContains(

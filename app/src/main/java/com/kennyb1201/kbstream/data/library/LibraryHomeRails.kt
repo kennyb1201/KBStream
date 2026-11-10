@@ -204,12 +204,24 @@ object LibraryHomeRails {
      * Publishing matters twice over: the sibling devices lose the rail, and the
      * account's pin row stops naming a list that is gone, so no later adoption
      * can bring it back.
+     *
+     * [live] carries each live list's current id AND its spellings (see
+     * [libraryHomeRailLiveList]), because keeping a pin is only half the job: a
+     * pin an older build wrote under another spelling names a list the Home
+     * load cannot read, so [reconciledPins] also re-points it at the id the row
+     * carries today - in this same write, so the corrected pin reaches the
+     * account as one edit and the old spelling is never needed again. An
+     * unchanged answer writes nothing: a reconcile that moved no pin must not
+     * publish, and a re-point must not publish an empty blob either.
      */
-    fun reconcilePins(context: Context, liveIds: Map<String, Set<String>>): Boolean {
-        if (liveIds.isEmpty()) return false
+    fun reconcilePins(
+        context: Context,
+        live: Map<String, List<LibraryHomeRailLiveList>>
+    ): Boolean {
+        if (live.isEmpty()) return false
         val current = pins(context)
-        val kept = withoutVanishedPins(current, liveIds)
-        if (kept.size == current.size) return false
+        val kept = reconciledPins(current, live)
+        if (kept == current) return false
         write(context, kept)
         return true
     }

@@ -14,15 +14,16 @@ import org.junit.Test
  *
  * A LIKED (saved public) MDBList list is a row on the Library rail whose
  * `remoteId` is the card's ref, so its Home pin carries that bare ref
- * (`"800238"`). Own MDBList lists have no remoteId, so their pins carry
- * `"id:<n>"`. The launch reconcile used to read only `/lists/user` (own lists),
- * so a liked pin could never appear in its live set: it was pruned on every
- * launch and the loss was published to the account, which is why the rails drew
- * fine for a session and vanished after a restart.
+ * (`"800238"`) - and an older pin may carry `"id:800238"` instead. Own MDBList
+ * lists have no remoteId, so their pins carry `"id:<n>"` - or the bare number,
+ * from a build that predates the `id:` form. Every one of those names the same
+ * live list, and the prune used to compare only one spelling: a liked pin could
+ * never appear in its live set at all, and every `id:`-form pin of an own list
+ * was deleted and the deletion published.
  *
  * The live set is now built by [LibraryHomeRailReconcile.mdbListLiveListIds]
- * from both reads, and the prune rule itself ([withoutVanishedPins]) is
- * unchanged - so these tests drive the seam the reconcile actually calls.
+ * from both reads, each row carrying its current id beside its spellings, and
+ * [reconciledPins] is the decision the store writes (prune + re-point).
  */
 class MdbListLikedPinReconcileTest {
 
@@ -43,11 +44,11 @@ class MdbListLikedPinReconcileTest {
     private fun pin(id: String) = LibraryHomeRailPin(source = source, id = id, name = "Rail $id")
 
     /** The branch under test: a source is in the map only if it answered. */
-    private fun liveSet(
+    private fun liveMap(
         own: List<MdbListUserList>?,
         liked: List<PublicListCard>?
-    ): Map<String, Set<String>> {
-        val live = mutableMapOf<String, Set<String>>()
+    ): Map<String, List<LibraryHomeRailLiveList>> {
+        val live = mutableMapOf<String, List<LibraryHomeRailLiveList>>()
         LibraryHomeRailReconcile.mdbListLiveListIds(own, liked)?.let { live[source] = it }
         return live
     }
@@ -56,17 +57,49 @@ class MdbListLikedPinReconcileTest {
     fun `a liked pin and an own pin both survive the launch prune`() {
         val pins = listOf(pin("800238"), pin("id:123"))
 
-        val kept = withoutVanishedPins(
+        val kept = reconciledPins(
             pins,
-            liveSet(own = listOf(ownList(123)), liked = listOf(likedList("800238")))
+            liveMap(own = listOf(ownList(123)), liked = listOf(likedList("800238")))
         )
 
         assertEquals("the reported case: a liked list's pin must not be pruned", pins, kept)
     }
 
     @Test
+    fun `a pin carrying the liked list's other spelling is kept and re-pointed`() {
+        val old = pin("id:800238")
+
+        val kept = reconciledPins(
+            listOf(old),
+            liveMap(own = emptyList(), liked = listOf(likedList("800238")))
+        )
+
+        assertEquals(
+            "the pin survives under the spelling it was written with AND moves to the id this build writes",
+            listOf(old.copy(id = "800238")),
+            kept
+        )
+    }
+
+    @Test
+    fun `a pin carrying an own list's bare number is kept and re-pointed`() {
+        val old = pin("123")
+
+        val kept = reconciledPins(
+            listOf(old),
+            liveMap(own = listOf(ownList(123)), liked = emptyList())
+        )
+
+        assertEquals(
+            "an older build wrote the bare number; the row's id today is id:123",
+            listOf(old.copy(id = "id:123")),
+            kept
+        )
+    }
+
+    @Test
     fun `a failed liked read never prunes a liked pin`() {
-        val map = liveSet(own = listOf(ownList(123)), liked = null)
+        val map = liveMap(own = listOf(ownList(123)), liked = null)
 
         assertTrue(
             "an unanswered half of the source is absent, not empty",
@@ -74,18 +107,18 @@ class MdbListLikedPinReconcileTest {
         )
         assertEquals(
             listOf(pin("800238")),
-            withoutVanishedPins(listOf(pin("800238")), map)
+            reconciledPins(listOf(pin("800238")), map)
         )
     }
 
     @Test
     fun `a failed own read never prunes either`() {
-        val map = liveSet(own = null, liked = listOf(likedList("800238")))
+        val map = liveMap(own = null, liked = listOf(likedList("800238")))
 
         assertTrue("both reads must answer before the source publishes", map.isEmpty())
         assertEquals(
             listOf(pin("id:123")),
-            withoutVanishedPins(listOf(pin("id:123")), map)
+            reconciledPins(listOf(pin("id:123")), map)
         )
     }
 
@@ -93,29 +126,43 @@ class MdbListLikedPinReconcileTest {
     fun `a genuinely gone liked list is still pruned`() {
         val pins = listOf(pin("800238"), pin("id:123"))
 
-        val kept = withoutVanishedPins(
+        val kept = reconciledPins(
             pins,
-            liveSet(own = listOf(ownList(123)), liked = listOf(likedList("800239")))
+            liveMap(own = listOf(ownList(123)), liked = listOf(likedList("800239")))
         )
 
         assertEquals("keep-everything would be the opposite bug", listOf(pin("id:123")), kept)
     }
 
     @Test
-    fun `the liked id is the bare ref, not its own-list spelling`() {
-        val map = liveSet(own = emptyList(), liked = listOf(likedList("800238")))
+    fun `the liked row's current id is the bare ref, and the id colon form is its other spelling`() {
+        val row = likedListRow(LibrarySource.MDBLIST_LIST, likedList("800238"))
 
-        assertEquals(
-            "the pin's own spelling, not libraryHomeRailId's",
-            setOf("800238"),
-            map[source]
+        assertEquals("the pin's current spelling, not the rail's own-list spelling", "800238", libraryHomeRailId(row))
+        assertTrue(
+            "and the id: form names the same list, so it must not read as a deletion",
+            "id:800238" in libraryHomeRailLiveSpellings(row)
         )
         assertTrue(
-            "the old leg could only ever produce the id: form, which the pin never carries",
+            "the old single-spelling set is what pruned it",
             withoutVanishedPins(
-                listOf(pin("800238")),
-                mapOf(source to setOf("id:800238"))
+                listOf(pin("id:800238")),
+                mapOf(source to setOf("800238"))
             ).isEmpty()
+        )
+    }
+
+    @Test
+    fun `nothing to change writes nothing`() {
+        val pins = listOf(pin("800238"), pin("id:123"))
+
+        assertEquals(
+            "the store compares the answer with what it holds, and must not publish a no-op",
+            pins,
+            reconciledPins(
+                pins,
+                liveMap(own = listOf(ownList(123)), liked = listOf(likedList("800238")))
+            )
         )
     }
 
@@ -138,6 +185,10 @@ class MdbListLikedPinReconcileTest {
         assertTrue(
             "and both halves are required before the source publishes",
             branch.contains("mdbListLiveListIds(own, liked)")
+        )
+        assertTrue(
+            "the liked rows come from the Library's own builder, so the band id cannot differ",
+            reconcile.contains("likedListRow(LibrarySource.MDBLIST_LIST, card)")
         )
         assertNull(
             "the own read must still answer empty on failure, never null-as-empty",

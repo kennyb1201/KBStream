@@ -73,13 +73,16 @@ object LibraryHomeRailReconcile {
             .filterTo(mutableSetOf()) { it in REMOTE_LIST_SOURCES }
 
     /**
-     * The ids each of [wanted] still has. A source that did not answer - not
+     * The live list of each of [wanted]. A source that did not answer - not
      * configured, no token, a failed read - is ABSENT rather than empty: its
      * pins are then left alone.
      *
-     * The ids are [libraryHomeRailId]'s, the same helper the Library rail and
-     * the pin itself use, so a list cannot be known by one name here and
-     * another there.
+     * Each row contributes EVERY spelling a pin for it may carry, beside the id
+     * this build writes today (see [libraryHomeRailLiveList]) - not just the
+     * current one. A pin written before the current form is not a deleted list,
+     * and the prune used to read it as one, delete it and publish the deletion.
+     * The row's own builder supplies both, so a list cannot be known by one name
+     * here and another at the rail.
      *
      * A remote source answers with BOTH of its reads or with neither: a saved
      * community list is a Library row on the same rail as an own list (the
@@ -90,8 +93,8 @@ object LibraryHomeRailReconcile {
     private suspend fun liveListIds(
         context: Context,
         wanted: Set<String>
-    ): Map<String, Set<String>> {
-        val live = mutableMapOf<String, Set<String>>()
+    ): Map<String, List<LibraryHomeRailLiveList>> {
+        val live = mutableMapOf<String, List<LibraryHomeRailLiveList>>()
 
         if (LibrarySource.TRAKT_LIST.name in wanted) {
             val trakt = TraktRepository.getInstance(context)
@@ -103,28 +106,30 @@ object LibraryHomeRailReconcile {
                 val liked = runCatchingCancellable { trakt.likedPublicLists() }.getOrNull()
                     ?.let { answer -> (answer as? PublicListsAnswer.Loaded)?.value }
                 if (own != null && liked != null) {
-                    val ids = own.mapNotNullTo(mutableSetOf()) { list ->
+                    val ownRows = own.mapNotNull { list ->
                         val traktId = list.ids?.trakt ?: 0
                         val remoteId = list.ids?.slug
                             ?: traktId.takeIf { it > 0 }?.toString()
-                            ?: return@mapNotNullTo null
-                        libraryHomeRailId(
-                            LibraryList(
-                                id = traktListShelfId(traktId),
-                                name = list.name.orEmpty(),
-                                itemCount = list.itemCount ?: 0,
-                                source = LibrarySource.TRAKT_LIST,
-                                remoteId = remoteId
-                            )
+                            ?: return@mapNotNull null
+                        LibraryList(
+                            id = traktListShelfId(traktId),
+                            name = list.name.orEmpty(),
+                            itemCount = list.itemCount ?: 0,
+                            source = LibrarySource.TRAKT_LIST,
+                            remoteId = remoteId
                         )
                     }
                     // A saved community list is a row on the same rail, so its
                     // pin has to be counted as live or every launch would prune
-                    // it. The card's ref IS the id that row's pin carries (the
-                    // Library builds the row's `remoteId` from it), which is why
-                    // this needs no LibraryList of its own.
-                    liked.mapTo(ids) { card -> card.ref }
-                    live[LibrarySource.TRAKT_LIST.name] = ids
+                    // it. The row comes from the Library's own builder, which is
+                    // what makes its `id:<band>` spelling the one the rail and
+                    // the pin both use - deriving that id here a second way is
+                    // how a live pin was read as a gone list before.
+                    val likedRows = liked.map { card ->
+                        likedListRow(LibrarySource.TRAKT_LIST, card)
+                    }
+                    live[LibrarySource.TRAKT_LIST.name] =
+                        (ownRows + likedRows).map { libraryHomeRailLiveList(it) }
                 }
             }
         }
@@ -162,9 +167,9 @@ object LibraryHomeRailReconcile {
                     snapshot.refreshedAtMs >= readAt
                 ) {
                     live[LibrarySource.BINGECAT_LIST.name] =
-                        snapshot.lists.mapIndexedNotNullTo(mutableSetOf()) { index, list ->
+                        snapshot.lists.mapIndexedNotNull { index, list ->
                             list.name.takeIf { it.isNotBlank() }?.let { name ->
-                                libraryHomeRailId(
+                                libraryHomeRailLiveList(
                                     LibraryList(
                                         // Shelf id by position, exactly as the
                                         // rail builds it; the pin's identity is
@@ -187,7 +192,7 @@ object LibraryHomeRailReconcile {
     }
 
     /**
-     * The MDBList source's live ids, or null when that source did not answer.
+     * The MDBList source's live lists, or null when that source did not answer.
      *
      * Both reads behind the source must have answered before either
      * contributes: an own-lists answer with the liked read failed would
@@ -195,30 +200,29 @@ object LibraryHomeRailReconcile {
      * refresh's live-set build). A successful read with a genuinely empty set
      * is a real answer, so it still publishes.
      *
-     * Own lists map through [libraryHomeRailId] on the row, exactly as they are
-     * drawn, which for an MDBList list is `"id:<n>"`. A LIKED (saved public)
-     * list is a row on the same rail whose `remoteId` is the card's ref, so its
-     * pin carries the bare ref - that ref is added verbatim here, because
-     * running it through [libraryHomeRailId] on a synthesized row would answer
-     * `"id:<n>"` and never match the pin. Missing that mapping is what pruned
-     * every liked MDBList pin at launch.
+     * Own lists are rows whose `remoteId` is absent, so the identity this build
+     * writes is `"id:<n>"` and an older pin carrying the bare `"<n>"` is the
+     * same list (see [libraryHomeRailLiveSpellings]). A LIKED (saved public)
+     * list is a row built by [likedListRow] - the Library's own builder - whose
+     * `remoteId` is the card's ref, so the pin's current spelling is that bare
+     * ref and its `id:<band>` form is the other one. Contributing only the bare
+     * ref is what pruned every pin written under the band at launch.
      */
     internal fun mdbListLiveListIds(
         own: List<MdbListUserList>?,
         liked: List<PublicListCard>?
-    ): Set<String>? {
+    ): List<LibraryHomeRailLiveList>? {
         if (own == null || liked == null) return null
-        val ids = own.mapTo(mutableSetOf()) { list ->
-            libraryHomeRailId(
-                LibraryList(
-                    id = list.id,
-                    name = list.name,
-                    itemCount = list.itemCount,
-                    source = LibrarySource.MDBLIST_LIST
-                )
+        val rows = own.map { list ->
+            LibraryList(
+                id = list.id,
+                name = list.name,
+                itemCount = list.itemCount,
+                source = LibrarySource.MDBLIST_LIST
             )
+        } + liked.map { card ->
+            likedListRow(LibrarySource.MDBLIST_LIST, card)
         }
-        liked.mapTo(ids) { card -> card.ref }
-        return ids
+        return rows.map { libraryHomeRailLiveList(it) }
     }
 }
