@@ -3760,8 +3760,13 @@ Log.d(
 
     /**
      * The Upcoming card for one caught-up candidate, or null when the show
-     * turns out not to be caught up, has no next episode to air, or cannot be
-     * resolved.
+     * turns out not to be caught up or cannot be resolved.
+     *
+     * "TMDB names no next episode" is NOT a refusal: the card is built with a
+     * null season, episode and air date - the same null-air card the tracker leg
+     * builds - and the schedule builder, where every leg converges, lets the
+     * second source date it or drops it with a line (see
+     * [buildUpcomingSchedule]'s fallback).
      *
      * The detail is the same cached lookup the Continue Watching cards make,
      * and "caught up" is the app's own rule over the episodes the candidate's
@@ -3791,14 +3796,29 @@ Log.d(
         // unaired episode is re-derived from the season episode list, which is
         // the fresher fetch Detail already shows (see
         // [upcomingAirForCaughtUp] and [deriveNextUpcomingAir]).
+        // F1: null here means TMDB names no next episode - `next_episode_to_air`
+        // is null (or stale) and the season walk found nothing unaired. That is
+        // exactly Universal Basic Guys: caught up, an episode coming, and TMDB
+        // simply has not listed it yet. Refusing here dropped the show BEFORE
+        // the rail's second source could ever see it, so the card is built with
+        // no pair and no date instead - the shape the Simkl leg already builds
+        // (see [buildSimklUpNextItem], whose resolved pair stays the item's
+        // nulls) - and the builder decides. Nothing is invented: season, episode
+        // and air date stay null until a source supplies them, so no "S1 E1"
+        // phantom can appear from this path.
         val air =
             upcomingAirForCaughtUp(detail, candidate)
-                ?: return null
 
-        // Re-checked rather than trusted: the happy path answered with TMDB's
-        // field, and the derived answer passes by construction. An air date of
-        // TODAY is deliberately kept, matching the schedule builder.
+        // Re-checked rather than trusted, but only when TMDB named an episode:
+        // the happy path answered with TMDB's field, and the derived answer
+        // passes by construction, so a stale or past-dated air still refuses the
+        // card exactly as before. A null air has nothing to check - its
+        // protection is downstream ([AirDateCorrection.nextAiring] returns only
+        // dates at or after today, and the builder's start-of-today gate runs
+        // after it). An air date of TODAY is deliberately kept, matching the
+        // schedule builder.
         if (
+            air != null &&
             !nextAirStillUpcoming(
                 seasonNumber = air.seasonNumber,
                 episodeNumber = air.episodeNumber,
@@ -3876,8 +3896,11 @@ Log.d(
             showTitle = detail.name ?: title,
             parentId = candidate.parentId,
             parentType = "series",
-            season = air.seasonNumber,
-            episode = air.episodeNumber,
+            // Null on a TMDB-dateless show, and deliberately so: the pair
+            // arrives from the builder's second source, or the card is dropped
+            // with the builder's drop line naming it.
+            season = air?.seasonNumber,
+            episode = air?.episodeNumber,
             backdrop = backdrop,
             clearLogo = candidate.clearLogo,
             nextEpisodeAir = air,
@@ -3903,9 +3926,11 @@ Log.d(
      * (the common season-boundary case), and a show with nothing dated in two
      * seasons has nothing this rail can advertise.
      *
-     * Returns null exactly where the builder used to return null - no next
-     * episode to name, no resolvable IMDb id for the season fetch, or nothing
-     * future found - so a finished show still gets no phantom card.
+     * Returns null when no next episode can be NAMED: no resolvable IMDb id for
+     * the season fetch, or nothing future found. Null no longer means "no card" -
+     * the caller builds a null-air card and the schedule builder picks the second
+     * source's date for it, or drops it with its own line. A finished show still
+     * gets no card, and now says so where the date is decided.
      */
     private suspend fun upcomingAirForCaughtUp(
         detail: TmdbDetail,

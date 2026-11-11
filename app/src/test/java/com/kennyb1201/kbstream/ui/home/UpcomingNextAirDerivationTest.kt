@@ -187,9 +187,11 @@ class UpcomingNextAirDerivationTest {
             builder.contains("detail.nextEpisodeToAir")
         )
         assertTrue(
-            "and the derived episode is what the card carries",
-            builder.contains("season = air.seasonNumber") &&
-                builder.contains("episode = air.episodeNumber") &&
+            "and the derived episode is what the card carries - or, when nothing can be " +
+                "named, no pair at all, which the schedule builder dates from its second " +
+                "source or drops with its own line (see UpcomingLocalNullAirCardContractTest)",
+            builder.contains("season = air?.seasonNumber") &&
+                builder.contains("episode = air?.episodeNumber") &&
                 builder.contains("nextEpisodeAir = air")
         )
     }
