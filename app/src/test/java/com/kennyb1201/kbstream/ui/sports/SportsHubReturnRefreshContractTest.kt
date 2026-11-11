@@ -101,7 +101,8 @@ class SportsHubReturnRefreshContractTest {
         )
         assertTrue(
             "a partial merge survives only where it belongs - the 30s beat",
-            viewModel.contains("private suspend fun refreshLeagues(paths: List<String>): Boolean") &&
+            viewModel.contains("private suspend fun refreshLeagues(") &&
+                viewModel.contains("paths: List<String>,") &&
                 viewModel.contains("SportsLivePollRules.liveLeagues(")
         )
         assertTrue(

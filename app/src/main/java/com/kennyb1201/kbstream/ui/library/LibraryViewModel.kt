@@ -25,6 +25,7 @@ import com.kennyb1201.kbstream.data.library.libraryHomeRailPinFor
 import com.kennyb1201.kbstream.data.library.libraryListRowKey
 import com.kennyb1201.kbstream.data.library.likedListRow
 import com.kennyb1201.kbstream.data.library.placementOf
+import com.kennyb1201.kbstream.data.library.sameListAs
 import com.kennyb1201.kbstream.data.library.traktListShelfId
 import com.kennyb1201.kbstream.data.library.watchlistShelfId
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
@@ -148,6 +149,24 @@ data class LibraryUiState(
      * which is only cleared once the remote half has an answer.
      */
     val remoteLoading: Boolean = false,
+
+    /**
+     * True while the OPEN list's rows are being fetched - i.e. from the moment
+     * [LibraryViewModel.selectList] swaps the selection until that list's own
+     * read answers.
+     *
+     * Switching lists used to leave the previous list's posters on screen for
+     * the whole round trip: the rail highlighted the new row while the pane
+     * still drew [selectedListItems], and nothing said the truth was in flight.
+     * [selectedListItems] is cleared on a switch, so this flag is what the pane
+     * draws while it is empty because it is WAITING rather than because the
+     * list is empty.
+     *
+     * Cleared only by a publish that owns the selection: the version-guarded
+     * [LibraryViewModel.loadListItems] answer, or a refresh that re-derives the
+     * open list itself. A superseded fetch never clears it (spec F2).
+     */
+    val listLoading: Boolean = false,
 
     /**
      * The trackers whose last read FAILED, so the empty state can tell a
@@ -382,11 +401,28 @@ class LibraryViewModel(
         pushDisplay()
     }
 
+    /**
+     * Opens [list]'s pane, and clears the rows it is replacing FIRST.
+     *
+     * The selection is swapped immediately while the rows arrive on a fetch, so
+     * leaving them in place showed the previous list's posters under the new
+     * list's highlighted row for the whole round trip (spec F2). Clearing them
+     * and raising [LibraryUiState.listLoading] before the read starts makes the
+     * pane a loading state instead, and the version guard in [loadListItems]
+     * already keeps an older read from landing on a newer selection.
+     *
+     * [null] is unchanged: with no list open the pane's own "Select a list" is
+     * the right answer, so nothing is cleared and no flag is raised.
+     */
     fun selectList(list: LibraryList?) {
-        _uiState.value = _uiState.value.copy(selectedList = list)
-        if (list != null) {
-            loadListItems(list)
+        if (list == null) {
+            _uiState.value = _uiState.value.copy(selectedList = null)
+            return
         }
+        canonicalListItems = emptyList()
+        _uiState.value = _uiState.value.copy(selectedList = list, listLoading = true)
+        pushDisplay()
+        loadListItems(list)
     }
 
     /** Creates a local personal list and selects it. */
@@ -446,7 +482,9 @@ class LibraryViewModel(
             }
             if (source == LibrarySource.LOCAL_LIST) return@launch
             if (created) {
-                refreshListsOnly()
+                // F4: the create's confirmation is the list being open - the
+                // refresh publishes the new row and selects it.
+                refreshListsOnly(selectCreated = source to trimmed)
             } else {
                 noteListAction("Couldn't create \"$trimmed\" on ${listSourceName(source)}.")
             }
@@ -1363,8 +1401,12 @@ class LibraryViewModel(
             _uiState.value = _uiState.value.copy(
                 loading = false,
                 // The remote half has answered (successfully or not), so the
-                // empty state may now speak for it.
+                // empty state may now speak for it. The open list's rows were
+                // re-derived on this refresh's own version just above, so a
+                // switch this refresh superseded is answered rather than left
+                // loading (spec F2).
                 remoteLoading = false,
+                listLoading = false,
                 failedRemotes = failedRemotes,
                 lists = lists,
                 simklConnected = simklConnected,
@@ -1392,7 +1434,18 @@ class LibraryViewModel(
      * mutation's answer is the newer truth, and the refresh's publish is skipped
      * rather than allowed to overwrite it.
      */
-    private fun refreshListsOnly(keepPin: LibraryHomeRailPin? = null) {
+    private fun refreshListsOnly(
+        keepPin: LibraryHomeRailPin? = null,
+        /**
+         * A list just CREATED on this source, by name: once the refreshed rail
+         * publishes, the first row matching it is selected (spec F4). The
+         * selection filling the pane is the create's confirmation - the local
+         * branch has always selected the list it made, and a remote create's
+         * row only exists in this read's answer, so it cannot be selected
+         * before it.
+         */
+        selectCreated: Pair<LibrarySource, String>? = null
+    ) {
         val version = ++requestVersion
         viewModelScope.launch {
             val appContext = getApplication<Application>()
@@ -1522,10 +1575,46 @@ class LibraryViewModel(
             // account's watchlist holds (and must not drop the rows, or every
             // rename here would take the pinnable watchlists away until the
             // next full refresh).
-            _uiState.value = _uiState.value.copy(
-                lists = localLists + mdbLists + traktLists + bingecatLists +
+            // F3a: the rail is rebuilt from the source's answer, so the ids in
+            // it are NEW - a BingeCat row's id is its index in the snapshot
+            // (see bingecatShelfId), and deleting one list renumbers every
+            // later one. The held selection is therefore re-resolved by the
+            // identity that survives a refresh (sameListAs: source + remoteId,
+            // else id), so the rail's highlight stays on the list the viewer is
+            // reading. No match (the list vanished - a website deleted it) keeps
+            // the selection as it was: a refresh must never kick the viewer out.
+            val refreshed =
+                localLists + mdbLists + traktLists + bingecatLists +
                     _uiState.value.lists.filter { it.source.isWatchlistSource }
+            val openList = _uiState.value.selectedList
+            val resolvedOpen = openList?.let { held ->
+                refreshed.firstOrNull { it.sameListAs(held) } ?: held
+            }
+            // F2: this read superseded whatever was in flight, and it does not
+            // fetch list items itself - so a list switch whose load it replaced
+            // is re-issued here, on this refresh's own fresh selection, rather
+            // than leaving the pane cleared with no loading state behind it.
+            val wasSwitching = _uiState.value.listLoading
+
+            _uiState.value = _uiState.value.copy(
+                lists = refreshed,
+                selectedList = resolvedOpen,
+                listLoading = false
             )
+
+            // F4: the create's own row, by source and name - the first match,
+            // because a duplicate name selects the first list too. No match (the
+            // service normalized the name, or the read raced the write) leaves
+            // the selection alone; a wrong list is never opened.
+            val created = selectCreated?.let { (source, name) ->
+                refreshed.firstOrNull {
+                    it.source == source && it.name.equals(name, ignoreCase = true)
+                }
+            }
+            when {
+                created != null -> selectList(created)
+                wasSwitching && resolvedOpen != null -> loadListItems(resolvedOpen)
+            }
         }
     }
 
@@ -1545,8 +1634,11 @@ class LibraryViewModel(
         val version = ++requestVersion
         viewModelScope.launch {
             val items = fetchListItems(list)
+            // A superseded fetch returns here WITHOUT clearing the loading flag:
+            // the request that superseded it owns the pane and will clear it.
             if (version != requestVersion) return@launch
             canonicalListItems = items
+            _uiState.value = _uiState.value.copy(listLoading = false)
             pushDisplay()
             enrich(items, version)
         }

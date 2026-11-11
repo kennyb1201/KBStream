@@ -201,6 +201,12 @@ class SettingsSearchTest {
                 SettingsPane.INTEGRATIONS,
                 SettingsPane.COLLECTIONS,
                 SettingsPane.PLAYBACK,
+                // VIDEO and LANGUAGE joined with the four-minor spec (2026-11-11):
+                // every audio-tuning, buffering, picture and language row was
+                // drawn but unfindable, which left the pane a viewer opens to fix
+                // sound with nothing in the index at all.
+                SettingsPane.VIDEO,
+                SettingsPane.LANGUAGE,
                 SettingsPane.SUBTITLES,
                 SettingsPane.INTERFACE,
                 SettingsPane.DATA,

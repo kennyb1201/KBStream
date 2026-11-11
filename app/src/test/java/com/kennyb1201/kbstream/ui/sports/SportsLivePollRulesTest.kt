@@ -7,6 +7,7 @@ import com.kennyb1201.kbstream.data.sports.SportsTeam
 import com.kennyb1201.kbstream.data.sports.TournamentEvent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -152,5 +153,151 @@ class SportsLivePollRulesTest {
     fun `an empty section is not live`() {
         assertFalse(SportsLivePollRules.hasLive(section("football/nfl")))
         assertFalse(SportsLivePollRules.hasLive(null))
+    }
+
+    // ── Favorites is scoped to what it actually follows ────────────────────
+
+    /** A followed game and a stranger's, both in one league. */
+    private fun mixedLeague(
+        followedState: GameState,
+        strangerState: GameState = GameState.LIVE,
+        followedDateMs: Long = 0L,
+        strangerDateMs: Long = 0L,
+    ): LeagueSection {
+        val followed = team("NYY", id = "10")
+        val stranger = team("BOS", id = "11")
+        return section(
+            "baseball/mlb",
+            games = listOf(
+                game("f1", "baseball/mlb", followedState, away = followed, home = stranger)
+                    .copy(dateMs = followedDateMs),
+                game("s1", "baseball/mlb", strangerState, away = stranger, home = team("TOR", id = "12"))
+                    .copy(dateMs = strangerDateMs),
+            )
+        )
+    }
+
+    @Test
+    fun `the favourites tab stops polling a league whose followed game is final`() {
+        // The league tab still has a game to watch; Favorites does not. This is
+        // the whole-section test the tick used to ask (hasLive), and why a tab
+        // with nothing of its own in play kept polling every 30s.
+        val league = mixedLeague(followedState = GameState.FINAL)
+        val keys = setOf("10")
+
+        assertTrue("the section is still live for the league tab", SportsLivePollRules.hasLive(league))
+        assertFalse(
+            "but nothing the favourites tab follows is",
+            SportsLivePollRules.hasFavoriteLive(league, keys)
+        )
+        assertFalse(
+            "and nothing it follows is about to start",
+            SportsLivePollRules.hasFavoriteKickoffArmed(league, keys, System.currentTimeMillis())
+        )
+    }
+
+    @Test
+    fun `a followed game inside the kickoff arm keeps the favourites tab alive`() {
+        val now = 1_000_000_000L
+        val keys = setOf("10")
+        val armed = mixedLeague(
+            followedState = GameState.UPCOMING,
+            followedDateMs = now + 2 * 60_000L,
+        )
+        val later = mixedLeague(
+            followedState = GameState.UPCOMING,
+            followedDateMs = now + SportsLivePollRules.KICKOFF_ARM_MS + 60_000L,
+        )
+
+        assertTrue(SportsLivePollRules.hasFavoriteKickoffArmed(armed, keys, now))
+        assertFalse(
+            "the arm is the five-minute window, not every upcoming game",
+            SportsLivePollRules.hasFavoriteKickoffArmed(later, keys, now)
+        )
+        assertFalse(
+            "and no clock is no answer, exactly as the whole-section arm reads it",
+            SportsLivePollRules.hasFavoriteKickoffArmed(armed, keys, 0L)
+        )
+    }
+
+    @Test
+    fun `the waits differ only by whose games they are`() {
+        val now = 1_000_000_000L
+        val keys = setOf("10")
+        val league = mixedLeague(
+            followedState = GameState.FINAL,
+            strangerState = GameState.UPCOMING,
+            strangerDateMs = now + 10 * 60_000L,
+        )
+
+        assertEquals(
+            "a league tab still wakes for the next game in the league (the doubleheader fix)",
+            10 * 60_000L,
+            SportsLivePollRules.delayUntilNextStartMs(listOf(league), listOf("baseball/mlb"), now)
+        )
+        assertNull(
+            "and the favourites tab has no start of its own to wake for",
+            SportsLivePollRules.delayUntilNextStartMs(
+                sections = listOf(league),
+                paths = listOf("baseball/mlb"),
+                nowMs = now,
+                favoriteKeys = keys,
+                favoritesOnly = true,
+            )
+        )
+    }
+
+    @Test
+    fun `the favourites tab wakes for its own next start`() {
+        val now = 1_000_000_000L
+        val keys = setOf("10")
+        val league = mixedLeague(
+            followedState = GameState.UPCOMING,
+            followedDateMs = now + 60 * 60_000L,
+            strangerState = GameState.UPCOMING,
+            strangerDateMs = now + 10 * 60_000L,
+        )
+
+        assertEquals(
+            "it sleeps until the followed game, not the nearer game nobody follows",
+            60 * 60_000L,
+            SportsLivePollRules.delayUntilNextStartMs(
+                sections = listOf(league),
+                paths = listOf("baseball/mlb"),
+                nowMs = now,
+                favoriteKeys = keys,
+                favoritesOnly = true,
+            )
+        )
+        assertEquals(
+            "while a league tab still takes the nearest game",
+            10 * 60_000L,
+            SportsLivePollRules.delayUntilNextStartMs(listOf(league), listOf("baseball/mlb"), now)
+        )
+    }
+
+    @Test
+    fun `a tournament is never a favourites start`() {
+        val now = 1_000_000_000L
+        val golf = section(
+            "golf/pga",
+            tournaments = listOf(event("g1", "golf/pga", GameState.UPCOMING).copy(dateMs = now + 10 * 60_000L))
+        )
+
+        assertEquals(
+            "a league tab wakes for it",
+            10 * 60_000L,
+            SportsLivePollRules.delayUntilNextStartMs(listOf(golf), listOf("golf/pga"), now)
+        )
+        assertNull(
+            "a field is not a team, so Favorites has nothing here",
+            SportsLivePollRules.delayUntilNextStartMs(
+                sections = listOf(golf),
+                paths = listOf("golf/pga"),
+                nowMs = now,
+                favoriteKeys = setOf("10"),
+                favoritesOnly = true,
+            )
+        )
     }
 }

@@ -283,6 +283,32 @@ data class LibraryList(
 }
 
 /**
+ * True when [other] is this list, across a refresh that renumbered the rail.
+ *
+ * [LibraryList.id] is not the list. A BingeCat row's id is its INDEX in the
+ * snapshot ([bingecatShelfId]), so deleting one list shifts every later one's
+ * id down by one: a selection held across that refresh now matches the list
+ * that moved into its slot, and the rail highlights one row while the pane
+ * shows another. The identity that survives is the service's own:
+ *
+ *  - [remoteId] when BOTH sides carry one - BingeCat's `ref`, a Trakt
+ *    slug/id, an MDBList id. This is the stable identity for every remote
+ *    list, and the one a Home pin already prefers;
+ *  - [id] otherwise, which is the stable creation-time id of a local list
+ *    (and the only identity a list has before a read fills its remote one).
+ *
+ * [source] always has to match first: the four watchlists share
+ * [WATCHLIST_REMOTE_ID] on purpose, and the source is what tells them apart.
+ */
+fun LibraryList.sameListAs(other: LibraryList?): Boolean {
+    if (other == null) return false
+    if (source != other.source) return false
+    val mine = remoteId?.takeIf { it.isNotBlank() }
+    val theirs = other.remoteId?.takeIf { it.isNotBlank() }
+    return if (mine != null && theirs != null) mine == theirs else id == other.id
+}
+
+/**
  * The list-control dialogs' words, for this row.
  *
  * Every one of them delegates to [ListControlWording], so the TV dialog and the

@@ -2977,6 +2977,25 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 nextUpCountdown.text = "Stopping here - sleep timer"
                 return
             }
+            // A paused session must not advance. This runnable is wall-clock
+            // only, so a viewer who paused in the final seconds to read the card
+            // still got the next episode launched under them - and the handoff
+            // counted toward the "Are you still there?" binge watchdog. The tick
+            // HOLDS (no decrement, re-posted) rather than disarming, so a resume
+            // picks the countdown up where it stopped; only the sleep timer's
+            // block above stops and clears it.
+            //
+            // playWhenReady, not isPlaying: they disagree while the player is
+            // buffering, and a rebuffer is still playback - the countdown should
+            // not freeze through a stall.
+            if (exoPlayer?.playWhenReady != true) {
+                if (nextUpCountdownRemaining > 0) {
+                    nextUpCountdown.text = "Paused - playing next when you resume"
+                    nextUpCountdownBar.progress = nextUpCountdownRemaining
+                }
+                nextUpCountdownHandler.postDelayed(this, 1_000L)
+                return
+            }
             nextUpCountdownRemaining--
             if (nextUpCountdownRemaining <= 0) {
                 // The countdown fired unattended: count this as an
@@ -9816,12 +9835,29 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // locale default when unchecked.
         val formatter =
             if (AppPreferences.getUse24HourClock(this)) clock24Format else clock12Format
-        playerClock.text = DateFormats.now(formatter)
         val durationMs = exoPlayer?.duration ?: 0L
+        // No duration, no estimate. A live channel's duration is unset (and a
+        // VOD's can still be until it loads), so the arithmetic below produced
+        // zero remaining and printed the current clock time back: "Ends at 9:41
+        // PM" at 9:41 PM. The same rule the seek bar already follows
+        // (`durationMs <= 0` is "no duration"), applied to the estimate.
+        //
+        // This is the shared bar's own view (`chrome_ends_at`), so the chrome's
+        // refreshClock writes it too - both writers hide it here, and the sleep
+        // suffix that rides the clock line moves with it.
+        if (durationMs <= 0L || durationMs == C.TIME_UNSET) {
+            playerClock.text = DateFormats.now(formatter) + playerSleepSuffix()
+            endsAtClock.visibility = View.GONE
+            return
+        }
+        playerClock.text = DateFormats.now(formatter)
+        endsAtClock.visibility = View.VISIBLE
         val positionMs = exoPlayer?.currentPosition ?: 0L
         val remainingMs = (durationMs - positionMs).coerceAtLeast(0L)
         val endsAt = DateFormats.time(System.currentTimeMillis() + remainingMs, formatter)
-        endsAtClock.text = "Ends at $endsAt"
+        // The chrome's refreshClock writes this same line, so both carry the
+        // suffix - otherwise the two writers flicker it on and off every second.
+        endsAtClock.text = "Ends at $endsAt${playerSleepSuffix()}"
     }
 
     /** Renders the current source's badge chips. */

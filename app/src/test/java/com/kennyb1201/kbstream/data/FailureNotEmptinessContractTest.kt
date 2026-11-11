@@ -160,9 +160,12 @@ class FailureNotEmptinessContractTest {
                 .contains("val gridState = key(collectionId) { rememberLazyGridState() }")
         )
         assertTrue(
-            "and a catalog grid by the catalog it opened",
+            "and a catalog grid by the catalog it opened - every identity key the route " +
+                "carries, catalogId included, because a name pair can collide",
             source("com/kennyb1201/kbstream/ui/mobile/CatalogGridScreenMobile.kt")
-                .contains("val gridState = key(title, addonName) { rememberLazyGridState() }")
+                .contains(
+                    "val gridState = key(title, addonName, catalogId) { rememberLazyGridState() }"
+                )
         )
     }
 

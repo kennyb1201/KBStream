@@ -1174,6 +1174,118 @@ object SupabaseSync {
     }
 
     /**
+     * Purges a DELETED profile's `sync_prefs` rows - m25's second half.
+     *
+     * [clearWatchStateForProfile] took the history and watched rows; every
+     * `p:<profileId>:*` row in [TABLE_PREFS] stayed, and the auth keys among them
+     * are live credentials (Simkl's access token, Trakt's and BingeCat's access
+     * plus refresh tokens - see `buildSimklAuth` / `buildTraktAuth` /
+     * `buildBingeCatAuth`). A deleted profile - possibly a kids one - therefore
+     * kept a working tracker session in the account for ever. The rows are inert
+     * (the pull filters by active profile and profile ids are never reused), so
+     * this is token hygiene, not a live-breaking fix: nothing could resurrect
+     * the profile, but nothing would ever remove the tokens either.
+     *
+     * Same mechanism and same rule as the history half: a delete is a NEWER
+     * WRITE through the durable outbox, never a cloud delete, because a real
+     * delete is invisible to a sibling that still holds its copy.
+     * [OutboxStore.replaceNow] (via [replaceProfileScoped]) also drops the queued
+     * uploads for those keys first, or one of them would flush after the wipe and
+     * put the row straight back.
+     *
+     * The account-wide profiles blob is skipped: it is not profile-scoped, it is
+     * applied before the profile filter, and removing the deleted id from it is
+     * the delete flow's own job (see [PrefsPayloadBuilder.KEY_PROFILES]).
+     */
+    suspend fun clearPrefsForProfile(pid: String?) {
+        if (pid.isNullOrBlank()) return
+        // Signed out there is no session to enumerate the cloud rows with: that
+        // half is staged from the profile's LOCAL stores before the local wipe
+        // (see [stageSignedOutPrefsClear], which the launcher calls for exactly
+        // that reason).
+        if (!isSignedIn()) return
+
+        withContext(Dispatchers.IO) {
+            val c = client
+            val now = System.currentTimeMillis()
+            val tombstones = if (c == null) {
+                emptyList()
+            } else {
+                runCatching {
+                    pullRows(TABLE_PREFS, "pref_key")
+                        .mapNotNull { row -> row.prefKey }
+                        .filter { storedKey -> storedKey != PrefsPayloadBuilder.KEY_PROFILES }
+                        .filter { storedKey -> storedKeyMatchesProfile(storedKey, pid) }
+                        .map { storedKey ->
+                            OutboxItem(
+                                TABLE_PREFS,
+                                "pref_key",
+                                storedKey,
+                                PrefsRowTombstones.payloadFor(unscopedKey(storedKey), now)
+                            )
+                        }
+                }.onFailure { e ->
+                    Log.w(TAG, "clearPrefs failed: ${Redaction.text(e.message)}")
+                    (e as? Exception)?.let { recordSyncError("Clear", it) }
+                }.getOrDefault(emptyList())
+            }
+
+            // One awaited write, and it runs even when the enumeration above
+            // failed: dropping the queued writes is not optional, or one of them
+            // flushes after the purge and puts the row back (the history half's
+            // rule, and [OutboxStore.replaceNow]).
+            val durable = outbox.replaceProfileScoped(TABLE_PREFS, "pref_key", pid, tombstones)
+            if (!durable) {
+                Log.w(TAG, "clearPrefs: tombstones queued for profile=$pid, not yet durable")
+            }
+            Log.i(TAG, "clearPrefs: queued ${tombstones.size} tombstones for profile=$pid")
+        }
+
+        scheduleFlush()
+    }
+
+    /**
+     * The signed-out half of [clearPrefsForProfile]: file the deleted profile's
+     * prefs tombstones under the last account, for replay on its next sign-in.
+     *
+     * Not suspend, and called from [launchDeletedProfileRowPurge] BEFORE its
+     * coroutine is launched: the enumeration reads the profile's LOCAL stores
+     * and the caller wipes them the moment that function returns
+     * (`wipeLocalProfileData` in ProfileManager.delete), so doing it inside the
+     * coroutine would race the wipe and stage nothing. That ordering is why this
+     * is not folded into [clearPrefsForProfile]'s signed-out branch.
+     *
+     * What can be enumerated is the device's own record of the row
+     * ([PrefsPayloadBuilder.localPrefKeysForProfile]); the account's other rows
+     * need a session to read, which is the same limitation
+     * [stageSignedOutClear] documents.
+     */
+    internal fun stageSignedOutPrefsClear(context: Context, profileId: String) {
+        if (profileId.isBlank()) return
+        val accountId = SyncDeferredDeletes.lastAccountId(context) ?: return
+        val now = System.currentTimeMillis()
+        val keys = PrefsPayloadBuilder.localPrefKeysForProfile(context, profileId)
+        if (keys.isEmpty()) return
+        keys.forEach { key ->
+            SyncDeferredDeletes.stage(
+                context,
+                SyncDeferredDeletes.Staged(
+                    accountId = accountId,
+                    table = TABLE_PREFS,
+                    keyColumn = "pref_key",
+                    key = scopedKey(key, profileId),
+                    payloadJson = PrefsRowTombstones.payloadFor(key, now).toString(),
+                    enqueuedAtMs = now
+                )
+            )
+        }
+        Log.i(
+            TAG,
+            "staged signed-out prefs clear for $accountId (${keys.size} keys: $keys)"
+        )
+    }
+
+    /**
      * Publishes a cleared set of rows as WRITES instead of cloud deletes.
      *
      * Extracted from [clearWatchStateForActiveProfile] for the one-time
@@ -1751,9 +1863,21 @@ object SupabaseSync {
      */
     fun launchDeletedProfileRowPurge(context: Context, profileId: String) {
         if (profileId.isBlank()) return
+        // Signed out, BOTH halves are staged from this device's local state, and
+        // the caller wipes that state as soon as this returns - so the prefs
+        // keys are read and filed here, synchronously, instead of from the
+        // coroutine below. (The history half's own staging reads Room inside that
+        // coroutine; the prefs side cannot afford that race.)
+        if (!isSignedIn()) {
+            runCatching { stageSignedOutPrefsClear(context, profileId) }
+                .onFailure { e ->
+                    Log.w(TAG, "deleted-profile prefs staging failed: ${Redaction.text(e.message)}")
+                }
+        }
         scope.launch {
             runCatchingCancellable {
                 clearWatchStateForProfile(profileId)
+                clearPrefsForProfile(profileId)
             }.onFailure { e ->
                 Log.w(TAG, "deleted-profile purge failed: ${Redaction.text(e.message)}")
             }

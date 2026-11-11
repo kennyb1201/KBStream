@@ -289,7 +289,15 @@ fun CatalogGridScreen(
     // open catalog replaced in the same composition slot restored the previous
     // one's offset instead of starting at the top (grid I1 - mobile fixed this
     // exact failure and this is the TV half of it).
-    val gridState = key(title, addonName) { rememberLazyGridState() }
+    //
+    // All THREE identity keys, `catalogId` included: the route carries it
+    // precisely because a name pair can collide (see this screen's own doc),
+    // and two rails that share a title + add-on name are still two grids - the
+    // content was already seeded by catalogId (openCatalogInGrid), so keying the
+    // scroll on the pair alone opened B at A's offset. A null catalogId is the
+    // route saying the pair already identifies the catalog, and keeps the old
+    // behaviour.
+    val gridState = key(title, addonName, catalogId) { rememberLazyGridState() }
 
     // Leaving the grid: a trip to a title page keeps its pager and its place,
     // any other way out drops them.

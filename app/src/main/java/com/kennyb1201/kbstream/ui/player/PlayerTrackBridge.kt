@@ -381,6 +381,19 @@ internal object PlayerTrackBridge {
                 .buildUpon()
                 .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
                 .build()
+            // "Default" is the language preference, and it has to take effect
+            // NOW. Clearing the override alone let media3 fall back to the
+            // file's own default track - on a dual-audio EN/RU release the
+            // first, Russian, one - until something else re-applied the
+            // language: the auto-select only runs on READY, tracks-changed
+            // does not re-run it, and the app never sets media3's own preferred
+            // audio language. MPV's picker already re-applies its language in
+            // this branch; this is the Exo half. The exact call is the one
+            // [reapplyLanguageSelection] makes when the signature is blank,
+            // which is also why a blank effective language ("Auto" with no
+            // global default) is safe: applyLanguage returns false and leaves
+            // the file's own choice alone.
+            applyLanguage(player, C.TRACK_TYPE_AUDIO, effectiveAudioLanguage())
             refreshAudioTracks()
             return
         }

@@ -216,7 +216,13 @@ fun CatalogGridScreenMobile(
         // scopes that saveable record to THIS catalog, as the Actor/KBFolder
         // grids do: unkeyed, opening another catalog in the same slot restored
         // the previous one's offset instead of starting at the top.
-        val gridState = key(title, addonName) { rememberLazyGridState() }
+        //
+        // The name pair is not the identity on its own: two rails can share a
+        // title and an add-on name, which is why the route carries catalogId.
+        // Keying all three puts the scroll on the same identity as the content
+        // (seeded by catalogId), so a same-name replacement starts at the top
+        // while reopening a catalog still restores its own offset.
+        val gridState = key(title, addonName, catalogId) { rememberLazyGridState() }
 
         // Leaving the grid: a trip to a title page keeps its pager and its
         // place, any other way out drops them.

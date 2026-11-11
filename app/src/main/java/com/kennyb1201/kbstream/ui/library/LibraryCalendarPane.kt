@@ -1,9 +1,11 @@
 package com.kennyb1201.kbstream.ui.library
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,6 +40,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -48,7 +51,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.FormFactor
+import com.kennyb1201.kbstream.data.notifications.AirReminderRules
+import com.kennyb1201.kbstream.data.notifications.AirReminderStore
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
+import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.rememberKBFeedback
+import com.kennyb1201.kbstream.ui.components.rememberLongPressModifier
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_STEPS
 import com.kennyb1201.kbstream.ui.home.formatAirDateLabel
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -58,6 +67,7 @@ import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import com.kennyb1201.kbstream.work.NewEpisodeWorker
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.MaterialTheme
@@ -248,65 +258,87 @@ private fun CalendarPaneLayout(
         }
     }
 
-    if (touch) {
-        Column(modifier = modifier.fillMaxSize()) {
-            CalendarMonthSection(
-                state = state,
-                today = today,
-                touch = touch,
-                dayRequesters = dayRequesters,
-                onSelect = onSelect,
-                onOpenDay = onEnterDayList,
-                onPrevMonth = onPrevMonth,
-                onNextMonth = onNextMonth,
-                onToday = onToday,
-                onEnterDayList = onEnterDayList,
-                modifier = Modifier.fillMaxWidth()
-            )
+    // The episode whose air-reminder menu is open, if any (see
+    // [CalendarEpisodeMenu]). Held HERE, above both arrangements, because the
+    // menu is a full-screen overlay and both branches below are laid out inside
+    // this one Box - a menu composed inside the Column would be clipped to the
+    // list's box instead of covering the pane.
+    var reminderEpisode by remember { mutableStateOf<CalendarEpisode?>(null) }
 
-            Spacer(modifier = Modifier.height(10.dp))
+    val onEpisodeMenu: (CalendarEpisode) -> Unit = { reminderEpisode = it }
 
-            CalendarDayList(
-                state = state,
-                touch = touch,
-                firstEpisodeRequester = firstEpisodeRequester,
-                onUpToGrid = backToGrid,
-                onOpenDetails = onOpenDetails,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-            )
+    Box(modifier = modifier.fillMaxSize()) {
+        if (touch) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                CalendarMonthSection(
+                    state = state,
+                    today = today,
+                    touch = touch,
+                    dayRequesters = dayRequesters,
+                    onSelect = onSelect,
+                    onOpenDay = onEnterDayList,
+                    onPrevMonth = onPrevMonth,
+                    onNextMonth = onNextMonth,
+                    onToday = onToday,
+                    onEnterDayList = onEnterDayList,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                CalendarDayList(
+                    state = state,
+                    touch = touch,
+                    firstEpisodeRequester = firstEpisodeRequester,
+                    onUpToGrid = backToGrid,
+                    onOpenDetails = onOpenDetails,
+                    onEpisodeMenu = onEpisodeMenu,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                )
+            }
+        } else {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(22.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                CalendarMonthSection(
+                    state = state,
+                    today = today,
+                    touch = touch,
+                    dayRequesters = dayRequesters,
+                    onSelect = onSelect,
+                    onOpenDay = onEnterDayList,
+                    onPrevMonth = onPrevMonth,
+                    onNextMonth = onNextMonth,
+                    onToday = onToday,
+                    onEnterDayList = onEnterDayList,
+                    modifier = Modifier
+                        .weight(1.1f)
+                        .fillMaxHeight()
+                )
+
+                CalendarDayList(
+                    state = state,
+                    touch = touch,
+                    firstEpisodeRequester = firstEpisodeRequester,
+                    onUpToGrid = backToGrid,
+                    onOpenDetails = onOpenDetails,
+                    onEpisodeMenu = onEpisodeMenu,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                )
+            }
         }
-    } else {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(22.dp),
-            modifier = modifier.fillMaxSize()
-        ) {
-            CalendarMonthSection(
-                state = state,
-                today = today,
-                touch = touch,
-                dayRequesters = dayRequesters,
-                onSelect = onSelect,
-                onOpenDay = onEnterDayList,
-                onPrevMonth = onPrevMonth,
-                onNextMonth = onNextMonth,
-                onToday = onToday,
-                onEnterDayList = onEnterDayList,
-                modifier = Modifier
-                    .weight(1.1f)
-                    .fillMaxHeight()
-            )
 
-            CalendarDayList(
-                state = state,
-                touch = touch,
-                firstEpisodeRequester = firstEpisodeRequester,
-                onUpToGrid = backToGrid,
-                onOpenDetails = onOpenDetails,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
+        // Over the whole pane, which is what the scrim needs (see
+        // PosterContextMenu).
+        reminderEpisode?.let { episode ->
+            CalendarEpisodeMenu(
+                episode = episode,
+                onDismiss = { reminderEpisode = null }
             )
         }
     }
@@ -790,6 +822,8 @@ private fun CalendarDayList(
     firstEpisodeRequester: FocusRequester,
     onUpToGrid: () -> Unit,
     onOpenDetails: (String) -> Unit,
+    /** A row was asked for its menu: phone long-press, TV Select held. */
+    onEpisodeMenu: (CalendarEpisode) -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (!state.hasShows && !state.loading) {
@@ -876,6 +910,7 @@ private fun CalendarDayList(
                     watched = state.isWatched(episode),
                     touch = touch,
                     onClick = { onOpenDetails(episode.openId) },
+                    onLongPress = { onEpisodeMenu(episode) },
                     // Only the first row carries the entry request; the rest
                     // are ordinary focus stops between it and the bottom.
                     requester = if (index == 0) firstEpisodeRequester else null,
@@ -911,17 +946,29 @@ private fun CalendarNotice(text: String, modifier: Modifier = Modifier) {
  * the row's bright copy, which is the "hard to read what you're focused on"
  * report. A phone presses the row through a foundation clickable - the TV
  * `Surface` is a focus surface, and a finger cannot press it.
+ *
+ * A HOLD on the row offers the air reminder ([CalendarEpisodeMenu]), on the same
+ * gesture its poster menu uses: on a phone `combinedClickable`'s long-press, on a
+ * television Select held down ([rememberLongPressModifier], the shared helper for
+ * surfaces that cannot use KBCard). The tap is untouched - it still opens
+ * Detail; the reminder is an additional action, not a replacement.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CalendarEpisodeRow(
     episode: CalendarEpisode,
     watched: Boolean,
     touch: Boolean,
     onClick: () -> Unit,
+    onLongPress: () -> Unit,
     requester: FocusRequester?,
     onUpPressed: (() -> Unit)?
 ) {
     var focused by remember { mutableStateOf(false) }
+
+    // Built before the branches: it is a @Composable, and the TV plate below is
+    // the only user of it.
+    val holdToMenu = rememberLongPressModifier(onLongClick = onLongPress)
 
     if (touch) {
         Row(
@@ -931,7 +978,7 @@ private fun CalendarEpisodeRow(
                 .fillMaxWidth()
                 .clip(KBShapeCard)
                 .background(KBSurface)
-                .clickable(onClick = onClick)
+                .combinedClickable(onClick = onClick, onLongClick = onLongPress)
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             CalendarEpisodeContent(episode = episode, watched = watched)
@@ -970,6 +1017,7 @@ private fun CalendarEpisodeRow(
                 if (requester == null) Modifier else Modifier.focusRequester(requester)
             )
             .onFocusChanged { focused = it.isFocused }
+            .then(holdToMenu)
             .onPreviewKeyEvent { event ->
                 if (
                     onUpPressed != null &&
@@ -991,6 +1039,86 @@ private fun CalendarEpisodeRow(
             CalendarEpisodeContent(episode = episode, watched = watched)
         }
     }
+}
+
+/**
+ * The Calendar row's menu: the air reminder for the SHOW the episode belongs to.
+ *
+ * The reminder system already exists and is per show
+ * ([AirReminderStore], offered as "Remind me when it airs" / "Reminder on ✓"
+ * from a poster's menu, and always checked by the new-episode round even with
+ * the global toggle off), but the only way to reach it from the Calendar was to
+ * find the same show's poster somewhere else and long-press that. A calendar
+ * row is the one place a viewer already knows a show is about to air.
+ *
+ * Every part mirrors the poster menu's row rather than re-deciding it: the same
+ * two labels, the same store and toggle, the same id derivation
+ * ([AirReminderRules.showIdFor], IMDb first then TMDB), the same re-arm of the
+ * round, and the same confirmation on the app's shared feedback channel. The
+ * flag covers the show's FUTURE airings - one flag, not one per episode - which
+ * is how the store already works.
+ */
+@Composable
+private fun CalendarEpisodeMenu(episode: CalendarEpisode, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val feedback = rememberKBFeedback()
+
+    val reminderShowId = AirReminderRules.showIdFor(
+        // The row carries both ids the derivation needs: `openId` is the IMDb id
+        // when the show has one (else the bare TMDB number) and `showId` is
+        // always "tmdb:<n>".
+        imdbId = episode.openId.takeIf { it.startsWith("tt", ignoreCase = true) },
+        tmdbId = episode.showId.removePrefix("tmdb:").toIntOrNull()
+    )
+
+    // Read as the menu composes, as the poster menu does: the sheet only exists
+    // while it is open, so the answer is as fresh as the row that was held.
+    var reminderOn by remember(reminderShowId) {
+        mutableStateOf(
+            reminderShowId != null && AirReminderStore(context).isFlagged(reminderShowId)
+        )
+    }
+
+    val rows = if (reminderShowId == null) {
+        emptyList()
+    } else {
+        listOf(
+            PosterContextAction(
+                label = if (reminderOn) "Reminder on ✓" else "Remind me when it airs",
+                description = if (reminderOn) {
+                    "You'll be alerted on the day a new episode airs"
+                } else {
+                    "Get a notification on the day a new episode airs"
+                }
+            ) {
+                val nowOn = AirReminderStore(context).toggle(reminderShowId)
+                reminderOn = nowOn
+                // The pref alone schedules nothing: re-arm the round so a show
+                // flagged for an episode airing today is checked now, and a
+                // removed flag can drop the work when it was the last one.
+                runCatching {
+                    NewEpisodeWorker.syncScheduleForPrefs(context, runImmediate = nowOn)
+                }
+                feedback.show(
+                    text = if (nowOn) {
+                        "Reminder on: ${episode.showTitle}"
+                    } else {
+                        "Reminder off: ${episode.showTitle}"
+                    }
+                )
+            }
+        )
+    }
+
+    PosterContextMenu(
+        title = episode.showTitle,
+        subtitle = listOfNotNull(
+            "S%02d · E%02d".format(episode.season, episode.episode),
+            episode.episodeTitle
+        ).joinToString("  "),
+        actions = rows,
+        onDismiss = onDismiss
+    )
 }
 
 /**

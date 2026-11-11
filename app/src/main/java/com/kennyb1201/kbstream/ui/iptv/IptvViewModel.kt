@@ -31,6 +31,7 @@ import com.kennyb1201.kbstream.data.iptv.GuideImportState
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
 import com.kennyb1201.kbstream.data.iptv.guideWindowFingerprint
 import com.kennyb1201.kbstream.data.iptv.landed
+import com.kennyb1201.kbstream.data.reporting.GuideTrace
 import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.data.sports.GameState
 import com.kennyb1201.kbstream.data.sports.LiveScoreFeed
@@ -1122,6 +1123,10 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      * `(channel, windowStart, windowEnd)` triples already read. Bounded: a long
      * session that pages the axis for hours forgets the oldest keys rather than
      * growing an unbounded set (a re-read costs one query and is still correct).
+     *
+     * A key goes in only after its read ANSWERS (see [requestGuideGridWindow]):
+     * a read that threw is not an answer, so that window is read again on the
+     * next request instead of leaving a row of gaps that never heals.
      */
     private val gridWindowReads = LinkedHashSet<String>()
 
@@ -1161,18 +1166,12 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             gridWindowKey(channel.id, windowStart, windowEnd) !in gridWindowReads
         }
         if (missing.isEmpty()) return
-        missing.forEach { gridWindowReads += gridWindowKey(it.id, windowStart, windowEnd) }
-        while (gridWindowReads.size > GRID_WINDOW_READ_MEMORY) {
-            val eldest = gridWindowReads.iterator()
-            eldest.next()
-            eldest.remove()
-        }
 
         val missingIds = missing.map { it.id }.toSet()
         _gridLoadingChannelIds.value = _gridLoadingChannelIds.value + missingIds
 
         viewModelScope.launch {
-            val loaded = runCatching {
+            val result = runCatching {
                 repository.loadGuideGridWindow(
                     playlist = playlist.copy(channels = missing),
                     epgUrls = allEpgUrls(),
@@ -1180,21 +1179,74 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     windowEnd = windowEnd,
                     perChannelLimit = perChannelLimit
                 )
-            }.getOrDefault(emptyMap())
+            }
 
-            val merged = mergeWindowAnswer(
-                existing = _gridPrograms.value,
-                requestedIds = missingIds,
-                loaded = loaded,
-            )
-            _gridPrograms.value = merged
+            // F1: the (channel, window) keys are remembered only once the read
+            // has ANSWERED. They used to be added here, before the launch, so a
+            // read that threw marked itself read: for a channel with no
+            // programs for that window yet the row stayed all gaps, and every
+            // later onRequestWindow for it found nothing missing and returned
+            // without reading. The only exits were the 4,096-key eviction or an
+            // import's clearGuideGrid - i.e. a blank row that never healed.
+            //
+            // The criterion is SUCCESS, not a non-empty answer: a window that
+            // legitimately holds no programs for a channel (no EPG data there)
+            // has been read, and marking only non-empty answers would re-read
+            // that window on every scroll instead.
+            result.onSuccess { loaded ->
+                missing.forEach { gridWindowReads += gridWindowKey(it.id, windowStart, windowEnd) }
+                while (gridWindowReads.size > GRID_WINDOW_READ_MEMORY) {
+                    val eldest = gridWindowReads.iterator()
+                    eldest.next()
+                    eldest.remove()
+                }
+
+                // Unchanged: a successful read merges over what the rows hold
+                // and never blanks them.
+                _gridPrograms.value =
+                    mergeWindowAnswer(
+                        existing = _gridPrograms.value,
+                        requestedIds = missingIds,
+                        loaded = loaded,
+                    )
+
+                Log.d(
+                    TAG,
+                    "GUIDE GRID window=$windowStart..$windowEnd channels=${missing.size} " +
+                        "answered=${loaded.size} rows=${loaded.values.sumOf { it.size }}"
+                )
+            }
+
+            // F2: a failed read gets its own line. The success line above is
+            // identical for a failed read and a genuinely-empty window
+            // (answered=0 rows=0), so a paste could not tell the two apart.
+            // The failure is also NOTED in GuideTrace: the release APK has no
+            // logcat and a TV has no way to read one, so COPY DIAGNOSTICS is
+            // the only place this can be seen.
+            result.onFailure { error ->
+                val reason =
+                    Redaction.text(error.message)
+                        .ifBlank { error.javaClass.simpleName }
+                val failedLine =
+                    "GUIDE GRID window=$windowStart..$windowEnd read failed: $reason"
+
+                Log.w(TAG, failedLine)
+                GuideTrace.note(failedLine)
+
+                // Unchanged as well: the empty answer is merged over what the
+                // rows already hold (mergeWindowPrograms keeps existing rows),
+                // so a failed re-read can never blank a row. The keys stay
+                // UNMARKED, which is the whole fix - the next window request
+                // finds them missing and reads again.
+                _gridPrograms.value =
+                    mergeWindowAnswer(
+                        existing = _gridPrograms.value,
+                        requestedIds = missingIds,
+                        loaded = emptyMap(),
+                    )
+            }
+
             _gridLoadingChannelIds.value = _gridLoadingChannelIds.value - missingIds
-
-            Log.d(
-                TAG,
-                "GUIDE GRID window=$windowStart..$windowEnd channels=${missing.size} " +
-                    "answered=${loaded.size} rows=${loaded.values.sumOf { it.size }}"
-            )
         }
     }
 

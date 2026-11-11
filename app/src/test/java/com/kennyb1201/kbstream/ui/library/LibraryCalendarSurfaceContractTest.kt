@@ -325,12 +325,16 @@ class LibraryCalendarSurfaceContractTest {
         )
 
         assertTrue(
-            "a phone presses the same plate through a plain foundation clickable: " +
+            "a phone presses the same plate through a foundation clickable: " +
                 "a tv `Surface` is a FOCUS surface and a finger cannot press it at " +
-                "all, which is why the whole calendar was dead to touch",
+                "all, which is why the whole calendar was dead to touch. The " +
+                "episode row's is combinedClickable because a HOLD on it raises " +
+                "the air reminder (see the parity test) - the tap is unchanged",
             chip.contains(".clickable(onClick = onClick)") &&
                 dayCell.contains(".clickable { onSelect(day) }") &&
-                episodeRow.contains(".clickable(onClick = onClick)")
+                episodeRow.contains(
+                    ".combinedClickable(onClick = onClick, onLongClick = onLongPress)"
+                )
         )
         assertTrue(
             "and that branch is wired from the form factor the pane already reads",

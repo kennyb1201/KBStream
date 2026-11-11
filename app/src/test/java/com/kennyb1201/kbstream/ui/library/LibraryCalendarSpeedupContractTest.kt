@@ -96,7 +96,7 @@ class LibraryCalendarSpeedupContractTest {
         val resolve = section(
             source(VIEW_MODEL),
             "private suspend fun resolveMonth(",
-            "/**\n     * Files one resolved show"
+            "/**\n     * Files one candidate's answer"
         )
         assertTrue(
             "the end of a build cancels any incremental pass and replaces the set",

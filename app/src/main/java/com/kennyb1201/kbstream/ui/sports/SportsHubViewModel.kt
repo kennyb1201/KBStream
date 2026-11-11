@@ -1022,10 +1022,16 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         livePollJob = null
         // Nothing polls while the hub is not the screen in front of the viewer.
         if (pollPaused) return
+        // The tab the loop was armed for decides what keeps it alive, not the
+        // whole section: Favorites is a view over the leagues, and a league with
+        // somebody else's game still live has nothing for this tab (see
+        // [SportsLivePollRules.hasFavoriteLive]).
+        val favoritesOnly = _selectedLeaguePath.value == SportsLeagues.FAVORITES_PATH
+        val favoriteKeys = _favoriteTeamKeys.value
         val paths = SportsLivePollRules.liveLeagues(
             sections = _sections.value,
             selectedPath = _selectedLeaguePath.value,
-            favoriteKeys = _favoriteTeamKeys.value,
+            favoriteKeys = favoriteKeys,
             // The clock the kickoff arm reads (see [SportsLivePollRules.
             // KICKOFF_ARM_MS]): without it a hub open on a slate that has not
             // started yet was polled by nobody, so the card stayed UPCOMING
@@ -1039,7 +1045,7 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 // A failed poll keeps the last good scores (the repository
                 // hands back its cache) and simply tries again on the next
                 // beat - never an error card from a background poll.
-                if (refreshLeagues(paths)) continue
+                if (refreshLeagues(paths, favoritesOnly, favoriteKeys)) continue
                 // Nothing in play and no kickoff inside the arm. This used to
                 // END the loop, and that was the doubleheader bug: game 1 goes
                 // final, game 2 tips off forty minutes later, and a hub left
@@ -1051,6 +1057,10 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                     sections = _sections.value,
                     paths = paths,
                     nowMs = System.currentTimeMillis(),
+                    // Same scope as the return above: Favorites wakes for its own
+                    // teams' kickoffs only, a league tab for the whole league.
+                    favoriteKeys = favoriteKeys,
+                    favoritesOnly = favoritesOnly,
                 ) ?: break
                 delay(waitMs)
             }
@@ -1063,7 +1073,11 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      * updates cards without clearing them). Returns whether anything in [paths]
      * is still in play; false is the caller's signal to stop polling.
      */
-    private suspend fun refreshLeagues(paths: List<String>): Boolean {
+    private suspend fun refreshLeagues(
+        paths: List<String>,
+        favoritesOnly: Boolean = false,
+        favoriteKeys: Set<String> = emptySet(),
+    ): Boolean {
         val fresh = HashMap<String, LeagueSection>()
         paths.forEach { path ->
             val league = SportsLeagues.byPath(path) ?: return@forEach
@@ -1078,11 +1092,22 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         // "Still worth polling" is live OR about to be: stopping on hasLive
         // alone would end the tick the moment a poll landed the last beat
         // before kickoff, which is the case the arm exists for.
+        //
+        // Which items count is the TAB's question. The Favorites tab only ever
+        // polled leagues for a followed game ([SportsLivePollRules.liveLeagues]),
+        // so once that game goes final the tab has nothing in play even while
+        // another game in the same league is still live - the whole-section test
+        // kept the loop running every 30s for a slate nobody here follows.
         val now = System.currentTimeMillis()
         return paths.any { path ->
             val section = updated.firstOrNull { it.league.path == path }
-            SportsLivePollRules.hasLive(section) ||
-                SportsLivePollRules.hasKickoffArmed(section, now)
+            if (favoritesOnly) {
+                SportsLivePollRules.hasFavoriteLive(section, favoriteKeys) ||
+                    SportsLivePollRules.hasFavoriteKickoffArmed(section, favoriteKeys, now)
+            } else {
+                SportsLivePollRules.hasLive(section) ||
+                    SportsLivePollRules.hasKickoffArmed(section, now)
+            }
         }
     }
 
@@ -1189,10 +1214,18 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             // Only when the LAST pass finished against this same lineup: a new
             // lineup (retryLineup, a profile switch) has to be matched from
             // scratch, however unchanged the cards are.
+            // No "and the map is not empty": a completed pass that matched
+            // NOTHING still recorded the key below, and on a zero-match slate
+            // every card is unmatched - so the emptiness test made the skip
+            // unreachable exactly where it was needed most, and every 30s beat
+            // re-paid the full FTS cost and re-blinked "Finding channel…" on
+            // every card. "This exact slate was matched against this exact
+            // lineup and found nothing" is a valid skip: the key is only filed
+            // at the end of a pass that ran to completion, so a failed or
+            // cancelled one never reaches it.
             if (matchKey == lastMatchKey &&
                 lastMatchLineupGeneration == lineupGeneration &&
-                lastMatchGuideGeneration == guideAtPassStart &&
-                _matches.value.isNotEmpty()
+                lastMatchGuideGeneration == guideAtPassStart
             ) {
                 // Nothing new to look up. The map is left as it is, and
                 // `_matchingDone` is not moved: it is already true, so the

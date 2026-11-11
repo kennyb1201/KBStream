@@ -209,8 +209,10 @@ class CredentialSyncWiringContractTest {
     fun `the MDBList migration still owns the legacy omdb slot`() {
         val mdb = memberText(prefs, "fun getMdbListApiKey(context: Context): String")
         assertTrue(
-            "the pre-MDBList ratings key still migrates out of the omdb_api_key slot: $mdb",
-            mdb.contains("migrateApiKey(context, KEY_OMDB_API_KEY)")
+            "the pre-MDBList ratings key still migrates out of the omdb_api_key slot - ACROSS to " +
+                "the MDBList slot, so the next read finds it there instead of serving it once " +
+                "and then leaving it under OMDb's name: $mdb",
+            mdb.contains("migrateApiKey(context, KEY_OMDB_API_KEY, KEY_MDBLIST_API_KEY)")
         )
     }
 

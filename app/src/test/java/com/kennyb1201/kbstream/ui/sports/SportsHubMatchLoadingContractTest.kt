@@ -137,7 +137,13 @@ class SportsHubMatchLoadingContractTest {
                 "card back to a loading line for the length of an EPG pass",
             resolve.contains("if (matchKey == lastMatchKey &&") &&
                 resolve.contains("lastMatchLineupGeneration == lineupGeneration &&") &&
-                resolve.contains("_matches.value.isNotEmpty()")
+                resolve.contains("lastMatchGuideGeneration == guideAtPassStart")
+        )
+        assertFalse(
+            "including the slate the playlist matches nothing in: requiring a NON-EMPTY map made " +
+                "the skip unreachable exactly there, so every beat re-ran the pass and re-blinked " +
+                "the loading line on every card (see SportsHubMinorsContractTest)",
+            resolve.contains("_matches.value.isNotEmpty()")
         )
         val skip = resolve.indexOf("PerfTrace.record(\"sports.match.skipped\"")
         assertTrue(

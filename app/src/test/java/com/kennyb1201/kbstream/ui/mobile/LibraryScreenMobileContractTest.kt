@@ -332,8 +332,21 @@ class LibraryScreenMobileContractTest {
         assertTrue(
             "Simkl rows link back to their own page, as its attribution rules ask",
             mobile.contains("simklItemUrl(") &&
-                mobile.contains("\"View on Simkl\"") &&
-                mobile.contains("\"Managed on Simkl\"")
+                mobile.contains("\"View on Simkl\"")
+        )
+        // The watchlist's removal is the TV's real one. The old "Managed on
+        // Simkl" row promised a removal and only dismissed the menu, and the
+        // list bucket has no removal API - so it is a real Remove row for the
+        // watchlist and no row at all for a SIMKL_LIST entry.
+        assertTrue(
+            "the Simkl watchlist can be removed from here, as on the TV",
+            mobile.contains("\"Remove from Simkl\"") &&
+                mobile.contains("viewModel.removeItem(selected)")
+        )
+        assertFalse(
+            "and the dead row the phone used to draw is gone",
+            mobile.contains("label = \"Managed on Simkl\"") ||
+                mobile.contains("Remove it from your watchlist on simkl.com")
         )
         assertTrue(
             "and every row can go to its details, be added to a list and be hidden",

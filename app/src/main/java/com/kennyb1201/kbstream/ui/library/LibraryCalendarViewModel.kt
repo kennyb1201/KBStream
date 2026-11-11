@@ -18,6 +18,7 @@ import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.episodeCountForSeason
 import com.kennyb1201.kbstream.data.trakt.TraktIdKeys
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.trakt.TraktWatchedSnapshot
@@ -193,6 +194,19 @@ class LibraryCalendarViewModel(
          */
         val shows = HashSet<String>()
         var lastPublishedAt = 0L
+
+        /**
+         * Candidates this build could not answer for - a failed TMDB read, not
+         * a show with nothing to say.
+         *
+         * Reset at the start of every [resolveMonth], and read when the build
+         * finishes: a month that lost shows to failures is not CACHED as
+         * complete (see [resolveMonth]), so opening it again retries exactly
+         * the ones that failed. Before this, the only rebuild trigger was a
+         * changed show set, so one TMDB blip during a cold build dropped those
+         * shows from every month until a profile switch or force-stop.
+         */
+        var failed = 0
     }
 
     private val progress = LinkedHashMap<YearMonth, MonthProgress>()
@@ -679,6 +693,12 @@ class LibraryCalendarViewModel(
      * stand between the viewer and an empty grid. The month being LEFT is
      * dropped at once (rather than staying up under a spinner) so a slow build
      * can never show October's episodes under a November header.
+     *
+     * A month that lost shows to a failed lookup is not in [monthCache] at all
+     * (see [resolveMonth]), so it takes this path again on the next open and
+     * retries only the candidates [MonthProgress] has not resolved - which is
+     * what makes the retry invisible for the rows that did land: they are
+     * republished from [MonthProgress] before the first request goes out.
      */
     private fun loadMonth(month: YearMonth, landingDay: LocalDate?) {
         buildJob?.cancel()
@@ -720,15 +740,22 @@ class LibraryCalendarViewModel(
         selectedWhenStarted: LocalDate
     ) {
         val remaining = showIds.filterNot { it in build.resolved }
+        // Only this attempt's failures decide whether the month may be cached;
+        // a previous attempt's count is spent (its candidates are in
+        // [remaining] above and are tried again here).
+        build.failed = 0
         val semaphore = Semaphore(CALENDAR_CONCURRENCY)
 
         coroutineScope {
             remaining.map { id ->
                 async {
                     semaphore.withPermit {
+                        // A thrown failure is the same statement as a failed
+                        // lookup: this candidate has no answer yet, so it must
+                        // not count as resolved (see noteResolved).
                         val show = runCatchingCancellable {
                             calendarShowFor(id, month)
-                        }.getOrNull()
+                        }.fold(onSuccess = { it }, onFailure = { Result.failure(it) })
                         noteResolved(month, build, id, show)
                     }
                 }
@@ -739,9 +766,18 @@ class LibraryCalendarViewModel(
             month = month,
             days = calendarSortedDays(build.days)
         )
-        monthCache[month] = built
-        trimMonthCache(keep = month)
-        progress.remove(month)
+        // Cache a month only if every candidate answered. A build that lost
+        // shows to a failed read is PUBLISHED (the rows that did land are on
+        // screen) but not remembered as complete: [MonthProgress] stays, so the
+        // next open resumes past the shows that resolved and asks again for the
+        // ones that did not. Caching it here is what made one cold-build blip
+        // permanent for the session, because the cached-month fast path in
+        // [loadMonth] returns before any retry can happen.
+        if (build.failed == 0) {
+            monthCache[month] = built
+            trimMonthCache(keep = month)
+            progress.remove(month)
+        }
 
         // The viewer may have walked the grid while this was landing; their day
         // wins over the one the month would have chosen for them.
@@ -756,17 +792,29 @@ class LibraryCalendarViewModel(
     }
 
     /**
-     * Files one resolved show (or one that had nothing to say) and paints the
-     * month if it gained anything - or at most every [PARTIAL_PUBLISH_MS], so a
-     * hundred misses do not compose a hundred times.
+     * Files one candidate's answer and paints the month if it gained anything -
+     * or at most every [PARTIAL_PUBLISH_MS], so a hundred misses do not compose
+     * a hundred times.
+     *
+     * Only an ANSWERED candidate is resolved: a [Result] failure means the
+     * lookup did not complete (a TMDB error, a timeout), which is not the same
+     * statement as "this show has nothing in this month". It used to be treated
+     * as one - a repeat was marked resolved too - so a show that failed during a
+     * cold build was never asked about again for the life of the process.
      */
     private fun noteResolved(
         month: YearMonth,
         build: MonthProgress,
         candidateId: String,
-        show: CalendarShow?
+        result: Result<CalendarShow?>
     ) {
+        if (result.isFailure) {
+            build.failed++
+            return
+        }
+
         build.resolved += candidateId
+        val show = result.getOrNull()
         var gained = false
         // One show, folded once - however many candidate ids named it (see
         // MonthProgress.shows). A repeat is still marked resolved so it is not
@@ -836,8 +884,12 @@ class LibraryCalendarViewModel(
     private suspend fun calendarShowFor(
         candidateId: String,
         month: YearMonth
-    ): CalendarShow? {
-        val detail = detailFor(candidateId) ?: return null
+    ): Result<CalendarShow?> {
+        // A failed detail is a failure, not "this show has nothing": it has to
+        // reach [noteResolved] as one so the month is retried (see [detailFor]).
+        val detail = detailFor(candidateId)
+            .getOrElse { return Result.failure(it) }
+            ?: return Result.success(null)
 
         val imdbId = candidateId
             .takeIf { it.startsWith("tt", ignoreCase = true) }
@@ -873,7 +925,7 @@ class LibraryCalendarViewModel(
                 imdbId
             )
         ) {
-            return null
+            return Result.success(null)
         }
 
         val seasonNumbers = seasonsCoveringMonth(detail.seasons, month)
@@ -914,7 +966,7 @@ class LibraryCalendarViewModel(
         // CalendarShow.nextEpisode).
         val announced = announcedNextEpisode(detail.nextEpisodeToAir)
 
-        if (seasons.isEmpty() && announced == null) return null
+        if (seasons.isEmpty() && announced == null) return Result.success(null)
 
         // The second source corrects TMDB's dates exactly as the Upcoming rail
         // does; without it the calendar and the rail could label one episode
@@ -925,21 +977,32 @@ class LibraryCalendarViewModel(
             }
             .orEmpty()
 
-        return CalendarShow(
-            showId = "tmdb:${detail.id}",
-            // Detail is routed by the id the app already opens titles with: an
-            // IMDb id when there is one, else the TMDB number.
-            openId = imdbId ?: detail.id.toString(),
-            title = title,
-            poster = detail.posterPath
-                ?.takeIf { it.isNotBlank() }
-                ?.let { TmdbRepository.POSTER_BASE + it },
-            backdrop = detail.backdropPath
-                ?.takeIf { it.isNotBlank() }
-                ?.let { TmdbRepository.BACKDROP_BASE + it },
-            seasons = seasons,
-            sourceDates = sourceDates,
-            nextEpisode = announced
+        return Result.success(
+            CalendarShow(
+                showId = "tmdb:${detail.id}",
+                // Detail is routed by the id the app already opens titles with:
+                // an IMDb id when there is one, else the TMDB number.
+                openId = imdbId ?: detail.id.toString(),
+                title = title,
+                poster = detail.posterPath
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { TmdbRepository.POSTER_BASE + it },
+                backdrop = detail.backdropPath
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { TmdbRepository.BACKDROP_BASE + it },
+                seasons = seasons,
+                sourceDates = sourceDates,
+                nextEpisode = announced,
+                // The finale veto's other half (see CalendarShow): what TMDB
+                // says each of these seasons is, so the payload's last row can
+                // tell "the season is over" from "TMDB has not finished
+                // adding it".
+                declaredEpisodeCounts = seasonNumbers
+                    .mapNotNull { number ->
+                        detail.episodeCountForSeason(number)?.let { count -> number to count }
+                    }
+                    .toMap()
+            )
         )
     }
 
@@ -979,9 +1042,22 @@ class LibraryCalendarViewModel(
         )
     }
 
-    /** One cached TMDB series detail; a miss (null) is remembered for the session. */
-    private suspend fun detailFor(candidateId: String): TmdbDetail? {
-        if (details.containsKey(candidateId)) return details[candidateId]
+    /**
+     * One cached TMDB series detail, with a FAILED lookup kept apart from a
+     * detail that answered.
+     *
+     * Only a detail that came back is stored. A miss used to be remembered for
+     * the session too ("a miss (null) is remembered for the session"), which is
+     * how one failed read during a cold month build silenced that show for the
+     * rest of the process: the null was cached, [noteResolved] marked the
+     * candidate resolved on the strength of it, and the cached month kept the
+     * gap. A failure is not an answer, so it is neither cached nor resolved -
+     * the next build asks again, and the repository's own detail cache is what
+     * keeps that from being a second network read when the failure was the
+     * exception rather than the rule.
+     */
+    private suspend fun detailFor(candidateId: String): Result<TmdbDetail?> {
+        details[candidateId]?.let { return Result.success(it) }
 
         val resolved = runCatchingCancellable {
             when {
@@ -998,9 +1074,9 @@ class LibraryCalendarViewModel(
 
                 else -> null
             }
-        }.getOrNull()
+        }
 
-        details[candidateId] = resolved
+        resolved.getOrNull()?.let { details[candidateId] = it }
         return resolved
     }
 

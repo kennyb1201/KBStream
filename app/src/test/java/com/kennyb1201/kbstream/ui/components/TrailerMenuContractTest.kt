@@ -336,6 +336,17 @@ class TrailerMenuContractTest {
             "$ROOT/ui/mobile/CollectionScreenMobile.kt" to listOf(
                 "tmdbId = part.id",
                 "type = \"movie\""
+            ),
+            // The search rails joined this set when the minor closed the one
+            // inconsistency left by this spec's scope: the same title could
+            // play its trailer from a browse page and not from a result.
+            "$ROOT/ui/search/SearchScreen.kt" to listOf(
+                "tmdbId = resultIds.tmdbId",
+                "imdbId = resultIds.imdbId"
+            ),
+            "$ROOT/ui/mobile/SearchScreenMobile.kt" to listOf(
+                "tmdbId = resultIds.tmdbId",
+                "imdbId = resultIds.imdbId"
             )
         )
 
@@ -347,8 +358,6 @@ class TrailerMenuContractTest {
             "$ROOT/ui/mobile/DetailScreenMobile.kt",
             "$ROOT/ui/library/LibraryScreen.kt",
             "$ROOT/ui/mobile/LibraryScreenMobile.kt",
-            "$ROOT/ui/search/SearchScreen.kt",
-            "$ROOT/ui/mobile/SearchScreenMobile.kt",
             "$ROOT/ui/actor/ActorScreen.kt",
             "$ROOT/ui/mobile/ActorScreenMobile.kt",
             "$ROOT/ui/kb/KBFolderScreen.kt",

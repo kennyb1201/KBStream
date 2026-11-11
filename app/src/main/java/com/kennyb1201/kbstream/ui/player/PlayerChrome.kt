@@ -292,7 +292,11 @@ class PlayerChrome(
         // The clock rides the overlay's visibility, the way both activities kept
         // it: shown and ticking exactly while the bar is, gone otherwise.
         KbViewMotion.fadeIn(clock)
-        KbViewMotion.fadeIn(endsAt)
+        // The "Ends at" estimate is hidden by [refreshClock] when there is no
+        // duration to count from (a live channel, a VOD that has not loaded).
+        // Fading it in unconditionally would bring a stale line back for the
+        // frame before the next tick hides it again.
+        if (endsAt?.visibility != View.GONE) KbViewMotion.fadeIn(endsAt)
         focusControls()
         keepVisible()
     }
@@ -675,36 +679,40 @@ class PlayerChrome(
         android.view.LayoutInflater.from(context)
             .inflate(R.layout.cast_member_item, this, false)
 
-    /** The wall clock + "Ends at" estimate, from the playhead and the device clock. */
+    /**
+     * The wall clock + "Ends at" estimate, from the playhead and the device clock.
+     *
+     * The estimate needs a DURATION to exist, and live TV has none:
+     * [PlayerChromeHost.chromeDurationMs] answers 0 when the engine's duration is
+     * unset. The math below then worked out to zero remaining and printed the
+     * current clock time back - "Ends at 9:41 PM" at 9:41 PM, as if the
+     * channel's programme ended that instant. The seek bar already reads
+     * `durationMs <= 0` as "no duration", and this is that same rule: the line
+     * is hidden instead of being filled with a guess. It also covers a VOD whose
+     * duration has not loaded yet; a VOD with a known duration is unchanged.
+     *
+     * The sleep suffix stays VISIBLE either way - it moves onto the clock line,
+     * where it already reads beside the estimate. Otherwise the timer would
+     * vanish exactly on the channels where the estimate is hidden, and the live
+     * programme block already carries the programme's own end, so nothing is
+     * lost by dropping the estimate there.
+     */
     private fun refreshClock(positionMs: Long, durationMs: Long) {
         val clockView = clock ?: return
         val endsView = endsAt ?: return
         val formatter =
             if (AppPreferences.getUse24HourClock(root.context)) clock24Format else clock12Format
+        val suffix = playerSleepSuffix()
+        if (durationMs <= 0L) {
+            clockView.text = DateFormats.now(formatter) + suffix
+            endsView.visibility = View.GONE
+            return
+        }
         clockView.text = DateFormats.now(formatter)
+        endsView.visibility = View.VISIBLE
         val remainingMs = (durationMs - positionMs).coerceAtLeast(0L)
         val endsAtTime = DateFormats.time(System.currentTimeMillis() + remainingMs, formatter)
-        endsView.text = "Ends at $endsAtTime${sleepSuffix()}"
-    }
-
-    /**
-     * An armed sleep timer, on the bar beside the "Ends at" estimate.
-     *
-     * The countdown used to exist only inside the Settings panel's Sleep row, so
-     * a viewer who armed "20 minutes" had no way to see it running - and no way
-     * to tell a timer that was about to stop playback from one that had never
-     * been armed. [refreshClock] runs on the bar's own per-second tick, so this
-     * needs no clock of its own; it reads the shared [SleepTimer] state.
-     */
-    private fun sleepSuffix(): String {
-        val sleep = SleepTimer.state.value
-        if (!sleep.isArmed) return ""
-        // An end-of-item timer has no deadline to count down: it fires when the
-        // episode does, so the bar names the moment rather than a number.
-        if (sleep.stopsAtEndOfItem) return " \u00b7 Sleep at end"
-        val remaining = sleep.deadlineMs?.minus(System.currentTimeMillis())
-        if (remaining != null) return " \u00b7 Sleep in ${sleepCountdownText(remaining)}"
-        return if (sleep.label.isNotBlank()) " \u00b7 Sleep: ${sleep.label}" else " \u00b7 Sleep on"
+        endsView.text = "Ends at $endsAtTime$suffix"
     }
 
     companion object {
@@ -718,4 +726,30 @@ class PlayerChrome(
         /** The bar's own resolution; the existing bars used the same 1000. */
         private const val SEEKBAR_MAX = 1000
     }
+}
+
+/**
+ * An armed sleep timer, on the bar beside the clock and the "Ends at" estimate.
+ *
+ * The countdown used to exist only inside the Settings panel's Sleep row, so a
+ * viewer who armed "20 minutes" had no way to see it running - and no way to
+ * tell a timer that was about to stop playback from one that had never been
+ * armed. It rides the bar's own per-second clock but has no clock of its own:
+ * it reads the shared [SleepTimer] state.
+ *
+ * Top level rather than a member because BOTH writers of the bar's clock text
+ * need it: [PlayerChrome.refreshClock] and `NativePlayerActivity.updateClock`
+ * paint the same two views, and whichever runs last must not drop the suffix.
+ * It also has to survive the estimate being hidden (no duration to count from),
+ * which is why the clock line carries it too.
+ */
+internal fun playerSleepSuffix(): String {
+    val sleep = SleepTimer.state.value
+    if (!sleep.isArmed) return ""
+    // An end-of-item timer has no deadline to count down: it fires when the
+    // episode does, so the bar names the moment rather than a number.
+    if (sleep.stopsAtEndOfItem) return " \u00b7 Sleep at end"
+    val remaining = sleep.deadlineMs?.minus(System.currentTimeMillis())
+    if (remaining != null) return " \u00b7 Sleep in ${sleepCountdownText(remaining)}"
+    return if (sleep.label.isNotBlank()) " \u00b7 Sleep: ${sleep.label}" else " \u00b7 Sleep on"
 }

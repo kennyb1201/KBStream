@@ -74,6 +74,7 @@ import com.kennyb1201.kbstream.data.library.removeConfirmAction
 import com.kennyb1201.kbstream.data.library.removeConfirmBody
 import com.kennyb1201.kbstream.data.library.removeConfirmTitle
 import com.kennyb1201.kbstream.data.library.renameUnavailableNote
+import com.kennyb1201.kbstream.data.library.sameListAs
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
@@ -573,6 +574,7 @@ fun LibraryScreen(
                     selectedList = state.selectedList,
                     listItems = state.selectedListItems,
                     loading = state.loading,
+                    listLoading = state.listLoading,
                     onListSelect = { viewModel.selectList(it) },
                     onListLongPress = { list ->
                         // EVERY list row gets the menu now, not only the ones
@@ -1483,6 +1485,12 @@ private fun ListsPane(
     selectedList: LibraryList?,
     listItems: List<LibraryItem>,
     loading: Boolean,
+    /**
+     * True while the OPEN list's rows are in flight (spec F2). The pane's rows
+     * are cleared on a switch, so without this it fell through to "This list is
+     * empty" for the whole fetch - a sentence about the wrong thing.
+     */
+    listLoading: Boolean,
     onListSelect: (LibraryList) -> Unit,
     onListLongPress: (LibraryList) -> Unit,
     /**
@@ -1553,7 +1561,10 @@ private fun ListsPane(
             // fatal crash in a lazy list (ANDROID-T). See libraryListRowKey.
             items(lists, key = { list -> libraryListRowKey(list) }) { list ->
                 var focused by remember { mutableStateOf(false) }
-                val selected = selectedList?.id == list.id
+                // F3b: by the list's IDENTITY, not its id - a BingeCat row's id
+                // is its slot in the snapshot, so a stale selection after a
+                // delete used to highlight the row that shifted into that slot.
+                val selected = list.sameListAs(selectedList)
                 // The manage gesture: rename and delete for a list this app
                 // can actually change - a local list, or one of the accounts'
                 // own managed lists. A source with neither (Simkl) gets no
@@ -1737,10 +1748,15 @@ private fun ListsPane(
                 selectedList == null && lists.isEmpty() ->
                     "No lists yet. Create one with + NEW LIST on the left."
                 selectedList == null -> "Select a list on the left."
+                // F2: BEFORE the empty sentence, or a switch reads as "this
+                // list is empty" while its rows are still arriving.
+                listLoading -> "Loading list…"
                 else -> "This list is empty. Long-press any poster app-wide " +
                     "and choose \"Add to list…\" to fill it."
             },
-            loading = loading,
+            // The wait the copy names is the list's own, so the status plate
+            // draws the spinner for it.
+            loading = loading || listLoading,
             sourceLabel = { it.source.label },
             onItemClick = onItemClick,
             onItemLongClick = onItemLongClick,

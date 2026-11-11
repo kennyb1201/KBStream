@@ -439,6 +439,16 @@ private fun DetailBody(
                 color = KBTextLo,
                 style = MaterialTheme.typography.labelSmall
             )
+            // F6: the header counts the PROVIDER's titles, so a title with no
+            // id - skipped below because there is nothing to open - has to be
+            // accounted for rather than quietly missing from the rows.
+            if (titles.droppedCount > 0) {
+                Text(
+                    text = publicListDroppedTitlesNote(titles.droppedCount),
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
             if (titles.rows.isEmpty()) {
                 Text(
                     text = "This list has no titles ${card.vendor.label} can show.",
@@ -455,6 +465,21 @@ private fun DetailBody(
         }
     }
 }
+
+/**
+ * The line a list's detail shows when some of its titles could not be listed.
+ *
+ * A row with neither an IMDb nor a TMDB id has nothing for the Detail screen to
+ * open, so it is skipped. The header keeps the provider's own count, which is
+ * why this exists: it reconciles the two without pretending the list is
+ * shorter than the provider says.
+ */
+internal fun publicListDroppedTitlesNote(count: Int): String =
+    if (count == 1) {
+        "1 title couldn't be shown - it has no ID."
+    } else {
+        "$count titles couldn't be shown - they have no IDs."
+    }
 
 @Composable
 private fun TitleRow(row: PublicListTitle, onClick: () -> Unit) {

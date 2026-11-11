@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -1390,6 +1391,169 @@ object PrefsPayloadBuilder {
                     .orEmpty()
             )
         }
+
+    /**
+     * The cloud pref keys this device can PROVE [profileId] holds local state
+     * for - everything a signed-out delete can retire.
+     *
+     * Signed out there is no session to enumerate the account's rows with, so
+     * the deleted profile's own stores are the only record of what was
+     * published (the same reasoning as SupabaseSync's signed-out history/watched
+     * staging). The probes below are the builders' own reads, addressed to
+     * [profileId] instead of the active profile:
+     *
+     *  - the three sessions go through the same "has something to say" rules the
+     *    push uses, so a profile that never connected a tracker retires nothing;
+     *  - taste signals and hidden titles expose a profile-addressed read of their
+     *    stored blob;
+     *  - every other key is one prefs file per profile ([STORE_KEYS]), and a file
+     *    with any content is the row's local copy.
+     *
+     * Deliberately NOT enumerated: the API-keys row. Its store is behind
+     * [com.kennyb1201.kbstream.data.security.SecureTokenStore], which has no
+     * profile-addressed accessor outside AppPreferences, and reading it as a
+     * plain prefs file would silently prove nothing rather than the truth. An
+     * auth key pasted for a deleted profile is therefore left to the signed-in
+     * purge, which enumerates the cloud rows and needs no local probe.
+     */
+    fun localPrefKeysForProfile(context: Context, profileId: String): List<String> {
+        if (profileId.isBlank()) return emptyList()
+        val keys = mutableListOf<String>()
+
+        val simkl = simklAuthPrefs(context, profileId)
+        val simklToken = simkl.getString(SIMKL_ACCESS_TOKEN_KEY, null)
+        val simklSignedOut = simklToken.isNullOrBlank() &&
+            simkl.getBoolean(SimklAuthRules.SIGNED_OUT_FIELD, false)
+        if (SimklAuthRules.shouldPublish(simklToken, simklSignedOut)) keys += KEY_SIMKL_AUTH
+
+        val trakt = traktAuthStore(context, profileId)
+        if (TraktAuthRules.shouldPublish(trakt.accessToken(), trakt.isSignedOut())) {
+            keys += KEY_TRAKT_AUTH
+        }
+
+        val bingecat = bingecatAuthStore(context, profileId)
+        val bingecatSession = bingecat.read()
+        if (BingeCatAuthRules.shouldPublish(
+                bingecatSession?.accessToken,
+                bingecatSession == null && bingecat.isSignedOut()
+            )
+        ) {
+            keys += KEY_BINGECAT_AUTH
+        }
+
+        if (com.kennyb1201.kbstream.data.library.TasteSignals
+                .encodedForSync(context, profileId) != null
+        ) {
+            keys += KEY_TASTE_SIGNALS
+        }
+        if (com.kennyb1201.kbstream.data.library.HiddenTitles
+                .encodedForSync(context, profileId) != null
+        ) {
+            keys += KEY_HIDDEN_TITLES
+        }
+
+        STORE_KEYS.forEach { (key, stores) ->
+            if (stores.any { store -> hasLocalPrefs(context, profileId, store) }) keys += key
+        }
+        return keys.distinct()
+    }
+
+    /** True when this profile's prefs file for [baseName] holds anything. */
+    private fun hasLocalPrefs(context: Context, profileId: String, baseName: String): Boolean =
+        context.getSharedPreferences(
+            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(profileId, baseName),
+            Context.MODE_PRIVATE
+        ).all.isNotEmpty()
+
+    /**
+     * One cloud pref key per set of prefs files it is built from.
+     *
+     * Read from the builders above, not guessed: each entry is the exact store
+     * [scopedPrefs] hands its [buildAll] builder. Only the SIGNED-OUT delete purge
+     * reads this (see [localPrefKeysForProfile]).
+     */
+    private val STORE_KEYS: List<Pair<String, List<String>>> = listOf(
+        KEY_DISPLAY_PREFS to listOf(DISPLAY_PREFS_STORE),
+        KEY_ADDONS to listOf("kbstream_addons"),
+        KEY_LIBRARY_HOME_RAILS to
+            listOf(com.kennyb1201.kbstream.data.library.LibraryHomeRails.SYNC_STORE),
+        KEY_IPTV to listOf("iptv_prefs", "iptv_guide_preferences"),
+        KEY_WATCHED_OVERRIDES to listOf(WatchedOverridesRules.STORE),
+        KEY_HOME_ORDER to listOf("kbstream_kb_home_order"),
+        KEY_BROWSE_SHORTCUTS to
+            listOf(com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts.SYNC_STORE),
+        KEY_CUSTOM_CATALOGS to
+            listOf(com.kennyb1201.kbstream.data.catalogs.CustomCatalogStore.SYNC_STORE),
+        KEY_COLLECTIONS to listOf("kbstream_kb_collections"),
+        KEY_BADGE_PACK to listOf(StreamBadgeEngine.PREFS_NAME),
+        KEY_LIBRARY to listOf("kbstream_library"),
+        KEY_LIBRARY_LISTS to listOf("kbstream_library"),
+        KEY_DISMISSALS to listOf("continue_watching_dismissals"),
+        KEY_BINGECAT_PROFILE_MAP to listOf(BINGECAT_MAP_SYNC_STORE)
+    )
+}
+
+/**
+ * The payload that RETIRES one deleted profile's cloud pref row.
+ *
+ * m25's unfinished half: deleting a profile purged its history and watched rows
+ * but left every `p:<profileId>:*` row in `sync_prefs` behind - including the
+ * live Simkl, Trakt and BingeCat sessions, which are the credentials the finding
+ * names. A delete is a newer WRITE here, like every other delete in this file
+ * (see [HistoryTombstoneRules]): the row is replaced, never cloud-deleted, so a
+ * sibling that still holds its copy pulls the replacement and drops it too.
+ *
+ * Two shapes, both the tree's own:
+ *
+ *  - the three auth rows take their builder's deliberate-disconnect blob (blank
+ *    tokens plus the signed-out marker), so [PrefsPayloadApplier]'s existing
+ *    handlers clear the tokens on every device rather than storing a blank
+ *    session that looks connected;
+ *  - every other row takes [RETIRED_FIELD], which means "this profile is gone".
+ *    Its local copy IS the deleted profile's stores, and those are wiped by the
+ *    profiles blob's delete path (see
+ *    [com.kennyb1201.kbstream.data.sync.ProfileManager.applyProfilesPayload]), so
+ *    the marker only has to stop the row coming back.
+ *
+ * The account-wide profiles blob never gets one: it is not profile-scoped, and
+ * removing the deleted id from it is the delete flow's own job.
+ */
+internal object PrefsRowTombstones {
+
+    /** Top-level marker on a retired row: "do not read this as a value". */
+    const val RETIRED_FIELD = "retired"
+
+    fun isRetired(payload: JsonObject): Boolean =
+        (payload[RETIRED_FIELD] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() == true
+
+    /** What replaces [prefKeyName]'s row for a deleted profile, stamped [now]. */
+    fun payloadFor(prefKeyName: String, now: Long): JsonObject = when (prefKeyName) {
+        PrefsPayloadBuilder.KEY_SIMKL_AUTH -> buildJsonObject {
+            put("updatedAt", now)
+            put(SIMKL_ACCESS_TOKEN_KEY, "")
+            put(SimklAuthRules.SIGNED_OUT_FIELD, true)
+        }
+        PrefsPayloadBuilder.KEY_TRAKT_AUTH -> buildJsonObject {
+            put("updatedAt", now)
+            put(TraktTokenStore.KEY_ACCESS_TOKEN, "")
+            put(TraktTokenStore.KEY_REFRESH_TOKEN, "")
+            put(TraktTokenStore.KEY_EXPIRES_AT, 0L)
+            put(TraktTokenStore.KEY_ACCOUNT_SLUG, "")
+            put(TraktAuthRules.SIGNED_OUT_FIELD, true)
+        }
+        PrefsPayloadBuilder.KEY_BINGECAT_AUTH -> buildJsonObject {
+            put("updatedAt", now)
+            put(BingeCatTokenStore.KEY_ACCESS_TOKEN, "")
+            put(BingeCatTokenStore.KEY_REFRESH_TOKEN, "")
+            put(BingeCatTokenStore.KEY_EXPIRES_AT, 0L)
+            put(BingeCatTokenStore.KEY_SCOPE, "")
+            put(BingeCatAuthRules.SIGNED_OUT_FIELD, true)
+        }
+        else -> buildJsonObject {
+            put("updatedAt", now)
+            put(RETIRED_FIELD, true)
+        }
+    }
 }
 
 /**
@@ -1504,6 +1668,14 @@ object PrefsPayloadApplier {
         }
 
         val live = profileId == ProfileStorage.activeProfileId(context)
+
+        // A retired row is a deleted profile's tombstone, not a value (see
+        // [PrefsRowTombstones]): applying it as data would write blanks into
+        // stores that are already being wiped with the profile. The three auth
+        // keys are the exception and they are NOT retired - they carry their
+        // builders' disconnect blobs, which the handlers below already clear
+        // with, so a sibling's tokens go with them.
+        if (PrefsRowTombstones.isRetired(payload)) return
 
         when (prefKey) {
             PrefsPayloadBuilder.KEY_DISPLAY_PREFS ->

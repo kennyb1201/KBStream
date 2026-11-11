@@ -80,6 +80,7 @@ import com.kennyb1201.kbstream.data.library.removeConfirmAction
 import com.kennyb1201.kbstream.data.library.removeConfirmBody
 import com.kennyb1201.kbstream.data.library.removeConfirmTitle
 import com.kennyb1201.kbstream.data.library.renameUnavailableNote
+import com.kennyb1201.kbstream.data.library.sameListAs
 import com.kennyb1201.kbstream.ui.library.LibraryCalendarEntry
 import com.kennyb1201.kbstream.ui.library.LibraryCalendarPane
 import com.kennyb1201.kbstream.ui.library.LibraryFilter
@@ -121,8 +122,9 @@ import kotlinx.coroutines.delay
  *    FROM HOME for any list, and a confirmed delete for a list this device
  *    owns - and "+ NEW LIST" opens an inline name field;
  *  - **the menu**: Go to Details, watched-independent hide, Add to list, and
- *    the per-source removal row - from this list, from the library, or the
- *    explanatory "Managed on Simkl" row with its attribution link;
+ *    the per-source removal row - from this list, from the library, or from a
+ *    Simkl watchlist (the TV's real removal; a Simkl LIST entry has no removal
+ *    API, so it keeps only the attribution link);
  *  - **a row with no ids** says so instead of swallowing the tap: a tracker
  *    entry can carry only a title and a poster, and those have no detail page.
  *
@@ -315,6 +317,10 @@ fun LibraryScreenMobile(
                 state.selectedList == null && state.lists.isEmpty() ->
                     "No lists yet. Create one with + NEW LIST above."
                 state.selectedList == null -> "Select a list above."
+                // F2: BEFORE the empty sentence - a switch clears the rows
+                // first, so the phone drew "This list is empty" over a list
+                // whose rows were still arriving.
+                state.listLoading -> "Loading list…"
                 else -> "This list is empty. Long-press any poster app-wide " +
                     "and choose \"Add to list…\" to fill it."
             }
@@ -480,7 +486,10 @@ fun LibraryScreenMobile(
                             state.lists.forEach { list ->
                                 ListRow(
                                     list = list,
-                                    selected = state.selectedList?.id == list.id,
+                                    // F3b: the list's identity, not its id -
+                                    // a BingeCat row's id is its slot in the
+                                    // snapshot.
+                                    selected = list.sameListAs(state.selectedList),
                                     onClick = { viewModel.selectList(list) },
                                     // Every row gets the menu, not only the ones
                                     // this app can rename: "Show on Home" is an
@@ -705,43 +714,64 @@ fun LibraryScreenMobile(
                             // and no BingeCat row has a link out.
                             LibrarySource.BINGECAT_SAVED -> Unit
 
-                            LibrarySource.SIMKL_WATCHLIST,
-                            LibrarySource.SIMKL_LIST -> {
-                                // Simkl's attribution rule: name Simkl and link
-                                // back to the page for THAT item.
-                                simklItemUrl(
-                                    item.mediaType,
-                                    item.simklId,
-                                    item.simklSlug
-                                )?.let { url ->
-                                    add(
-                                        PosterContextAction(
-                                            label = "View on Simkl",
-                                            description =
-                                                "Open this title's page on simkl.com"
-                                        ) {
-                                            try {
-                                                context.startActivity(
-                                                    Intent(
-                                                        Intent.ACTION_VIEW,
-                                                        Uri.parse(url)
-                                                    )
-                                                )
-                                            } catch (_: ActivityNotFoundException) {
-                                                // No browser on this device: the
-                                                // row is a link out, so there is
-                                                // nothing else to do.
-                                            }
-                                            menuItem = null
-                                        }
-                                    )
+                            // Simkl's watchlist is writable now (as a
+                            // `plantowatch` entry, and its list-only inverse on
+                            // a removal), so this is a real Remove row - the
+                            // TV's branch, which had it while the phone still
+                            // drew "Managed on Simkl" over a row that only
+                            // closed the menu.
+                            LibrarySource.SIMKL_WATCHLIST -> add(
+                                PosterContextAction(
+                                    label = "Remove from Simkl",
+                                    description =
+                                        "Take it off your Simkl watchlist",
+                                    isDestructive = true
+                                ) {
+                                    val selected = item
+                                    menuItem = null
+                                    viewModel.removeItem(selected)
                                 }
+                            )
+
+                            // The list bucket has no removal API to call, so a
+                            // Simkl list row keeps the explanatory copy (the
+                            // sheet's attribution note) and no dead removal.
+                            LibrarySource.SIMKL_LIST -> Unit
+                        }
+
+                        // Simkl's API rules: wherever Simkl data appears, name
+                        // Simkl and link back to the page for THAT item - a bare
+                        // link to simkl.com is explicitly not attribution. The
+                        // id came in with the read itself, so this costs no
+                        // request. The TV adds it the same way, outside its own
+                        // per-source branch.
+                        if (
+                            item.source == LibrarySource.SIMKL_WATCHLIST ||
+                            item.source == LibrarySource.SIMKL_LIST
+                        ) {
+                            simklItemUrl(
+                                item.mediaType,
+                                item.simklId,
+                                item.simklSlug
+                            )?.let { url ->
                                 add(
                                     PosterContextAction(
-                                        label = "Managed on Simkl",
+                                        label = "View on Simkl",
                                         description =
-                                            "Remove it from your watchlist on simkl.com"
+                                            "Open this title's page on simkl.com"
                                     ) {
+                                        try {
+                                            context.startActivity(
+                                                Intent(
+                                                    Intent.ACTION_VIEW,
+                                                    Uri.parse(url)
+                                                )
+                                            )
+                                        } catch (_: ActivityNotFoundException) {
+                                            // No browser on this device: the
+                                            // row is a link out, so there is
+                                            // nothing else to do.
+                                        }
                                         menuItem = null
                                     }
                                 )
@@ -874,9 +904,18 @@ fun LibraryScreenMobile(
                             onValueChange = { renameListDraft = it },
                             placeholder = "List name",
                             modifier = Modifier.fillMaxWidth(),
+                            // F5: an unchanged name is not a rename. The TV's
+                            // dialog refuses it and stays open, and SAVE without
+                            // an edit used to dismiss this one silently - it
+                            // read as if it had saved.
                             onDone = {
-                                viewModel.renameList(list, renameListDraft)
-                                listPendingRename = null
+                                if (
+                                    renameListDraft.isNotBlank() &&
+                                    renameListDraft.trim() != list.name
+                                ) {
+                                    viewModel.renameList(list, renameListDraft)
+                                    listPendingRename = null
+                                }
                             }
                         )
                         Row(
@@ -894,8 +933,15 @@ fun LibraryScreenMobile(
                                 enabled = renameListDraft.isNotBlank(),
                                 modifier = Modifier.weight(1f)
                             ) {
-                                viewModel.renameList(list, renameListDraft)
-                                listPendingRename = null
+                                // F5: same rule as Done - the dialog stays open
+                                // and nothing is written for an unchanged name.
+                                if (
+                                    renameListDraft.isNotBlank() &&
+                                    renameListDraft.trim() != list.name
+                                ) {
+                                    viewModel.renameList(list, renameListDraft)
+                                    listPendingRename = null
+                                }
                             }
                         }
                     }

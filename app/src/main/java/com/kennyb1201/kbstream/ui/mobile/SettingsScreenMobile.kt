@@ -1724,6 +1724,7 @@ private fun PlaybackPaneMobile() {
         SettingsSectionMobile("Player Engine", first = true)
         SettingsChoiceMobile(
             label = "Engine",
+            searchKey = "playback.engine",
             options = listOf(
                 "ExoPlayer" to AppPreferences.PLAYER_ENGINE_EXO,
                 "ExoPlayer only" to AppPreferences.PLAYER_ENGINE_EXO_ONLY,
@@ -2455,6 +2456,9 @@ private fun VideoPaneMobile() {
         SettingsSectionMobile("Audio", first = true)
         SettingsChoiceMobile(
             label = "Decoder priority",
+            // This screen's wording for the TV page's "Audio Decoder" row: one
+            // index entry, found here by key (settings reorg §15.2.5).
+            searchKey = "video.audio-decoder",
             options = listOf(
                 "Device only" to AppPreferences.AUDIO_DECODER_DEVICE_ONLY,
                 "Prefer device" to AppPreferences.AUDIO_DECODER_PREFER_DEVICE,
@@ -2469,6 +2473,7 @@ private fun VideoPaneMobile() {
         )
         SettingsChoiceMobile(
             label = "Output",
+            searchKey = "video.audio-output",
             // The shared option lists, not a second copy of the values: this is
             // the same list the TV row and the in-player panel draw.
             options = PlayerAudioTuning.AUDIO_OUTPUT_OPTIONS,
@@ -2482,6 +2487,7 @@ private fun VideoPaneMobile() {
         )
         SettingsChoiceMobile(
             label = "Downmix",
+            searchKey = "video.audio-downmix",
             options = PlayerAudioTuning.DOWNMIX_OPTIONS,
             selected = audioDownmix,
             onSelect = { value ->
@@ -2499,6 +2505,7 @@ private fun VideoPaneMobile() {
         )
         SettingsChoiceMobile(
             label = "Volume boost",
+            searchKey = "video.volume-boost",
             options = PlayerAudioTuning.VOLUME_OPTIONS,
             selected = audioVolumeBoost,
             onSelect = { value ->
@@ -2516,6 +2523,7 @@ private fun VideoPaneMobile() {
         SettingsSectionMobile("Buffering & Playback")
         SettingsChoiceMobile(
             label = "Network buffer",
+            searchKey = "video.network-buffer",
             options = listOf("Auto" to 2, "Balanced (4K-ready)" to 0, "Low latency" to 1),
             selected = bufferMode,
             onSelect = {
@@ -2545,6 +2553,7 @@ private fun VideoPaneMobile() {
         SettingsSectionMobile("Picture")
         SettingsChoiceMobile(
             label = "Default aspect ratio",
+            searchKey = "video.aspect-ratio",
             options = listOf(
                 "Fit" to 0,
                 "Zoom" to 1,
@@ -2573,6 +2582,7 @@ private fun LanguagePaneMobile() {
         SettingsSectionMobile("Audio Language", first = true)
         SettingsChoiceMobile(
             label = "Preferred audio language",
+            searchKey = "language.audio",
             options = PlayerTrackBridge.LANGUAGE_OPTIONS,
             selected = audioLang,
             onSelect = { code ->
@@ -2616,6 +2626,7 @@ private fun SubtitlesPaneMobile() {
         SettingsSectionMobile("Language & Fetching", first = true)
         SettingsChoiceMobile(
             label = "Preferred subtitle language",
+            searchKey = "subtitles.language",
             options = PlayerTrackBridge.LANGUAGE_OPTIONS,
             selected = subtitleLang,
             onSelect = { code ->
@@ -2667,6 +2678,7 @@ private fun SubtitlesPaneMobile() {
         SettingsSectionMobile("Appearance")
         SettingsChoiceMobile(
             label = "Default size",
+            searchKey = "subtitles.size",
             options = listOf("Small" to 0, "Normal" to 1, "Large" to 2),
             selected = size,
             onSelect = {
@@ -2676,6 +2688,7 @@ private fun SubtitlesPaneMobile() {
         )
         SettingsChoiceMobile(
             label = "Default background",
+            searchKey = "subtitles.background",
             options = listOf("None" to 0, "Semi" to 1, "Solid" to 2, "Text" to 3),
             selected = background,
             onSelect = {
@@ -2801,6 +2814,17 @@ private fun InterfacePaneMobile() {
             onChange = {
                 newEpisodeNotifications = it
                 AppPreferences.setNewEpisodeNotifications(context, it)
+                // The pref alone changes nothing: switching off has to cancel
+                // the scheduled round, and switching on should alert about an
+                // episode that already aired rather than waiting up to 12h for
+                // the next window. Same call the TV row makes (the only other
+                // sync point is app start).
+                runCatching {
+                    com.kennyb1201.kbstream.work.NewEpisodeWorker.syncScheduleForPrefs(
+                        context,
+                        runImmediate = it
+                    )
+                }
             }
         )
         SettingsToggleMobile(
@@ -2810,6 +2834,17 @@ private fun InterfacePaneMobile() {
             onChange = {
                 liveReminders = it
                 AppPreferences.setLiveReminderNotifications(context, it)
+                // Both halves are real work: off cancels every armed alert (or
+                // a reminder fires for a program starting minutes from now,
+                // until the next cold start), on re-arms the reminders that
+                // haven't started yet. The permission ask is not duplicated
+                // here - the launch path asks once when any alert is enabled.
+                runCatching {
+                    com.kennyb1201.kbstream.work.ReminderWorker.syncSchedule(
+                        context,
+                        it
+                    )
+                }
             }
         )
 
@@ -2827,8 +2862,15 @@ private fun InterfacePaneMobile() {
         )
         SettingsToggleMobile(
             label = "Pure black surfaces",
-            description = "Paint card plates black as well as the background.",
-            checked = pureBlack,
+            description = "Paint card plates black as well as the background. " +
+                "Requires AMOLED Black.",
+            // Gated exactly as on the TV page: the theme needs BOTH switches
+            // (`pureBlackActive`), so with AMOLED off this one is shown OFF and
+            // cannot be moved. The stored value is untouched - a chosen ON is
+            // still there, waiting for AMOLED - but it no longer looks active
+            // on a screen that is drawing default surfaces.
+            checked = pureBlack && amoled,
+            enabled = amoled,
             onChange = {
                 pureBlack = it
                 AppPreferences.setPureBlackSurface(context, it)

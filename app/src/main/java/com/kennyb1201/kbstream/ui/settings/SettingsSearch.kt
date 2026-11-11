@@ -55,7 +55,11 @@ internal val TV_ONLY_SEARCH_KEYS: Set<String> = setOf(
     "playback.prefer-whole-frame-rate",
     // The screensaver is Home's TV overlay: the phone screen draws neither its
     // toggle nor its timeout row, so the phone's results must not name it.
-    "interface.tv-screensaver"
+    "interface.tv-screensaver",
+    // Tunneled playback keeps A/V in sync over an HDMI link into an AVR, which
+    // a phone does not have - so the phone draws no row for it (the stored pref
+    // is left alone for the TV that shares the profile).
+    "video.tunneling"
 )
 
 /**
@@ -285,6 +289,17 @@ internal object SettingsSearchIndex {
         ),
 
         // ── Playback ──────────────────────────────────────────────────────────
+        // The engine chips lead the pane, and had no entry at all: the one row
+        // that decides which player opens a title was the pane's least findable
+        // setting. Drawn as bare text + chips on both pages (the phone calls it
+        // "Engine"), so both call sites carry their own anchor and key.
+        SettingSearchEntry(
+            "playback.engine",
+            SettingsPane.PLAYBACK,
+            "Playback engine",
+            "engine player exoplayer mpv libmpv external vlc mx player backup decoder " +
+                "which player"
+        ),
         SettingSearchEntry(
             "playback.ask-every-time",
             SettingsPane.PLAYBACK,
@@ -403,6 +418,113 @@ internal object SettingsSearchIndex {
             "Prefer 24 Hz Over 23.976 Hz",
             "frame rate refresh hz judder 23.976 24 panel mode fractional " +
                 "whole rate"
+        ),
+
+        // ── Video & Audio ─────────────────────────────────────────────────────
+        // Fourteen rows that were drawn, labelled and reachable by scrolling -
+        // and findable by no query at all: the pane the viewer goes to for
+        // "why does this sound wrong" had nothing in the index. Order is the
+        // pane's own (settings reorg §14.2, U3): audio first, then buffering,
+        // then picture. Every one of these is a chip group or a custom row, so
+        // each carries an explicit `searchAnchor` at its call site.
+        SettingSearchEntry(
+            "video.audio-decoder",
+            SettingsPane.VIDEO,
+            "Audio Decoder",
+            "audio decoder codec ffmpeg dts truehd device app priority decoders"
+        ),
+        SettingSearchEntry(
+            "video.audio-output",
+            SettingsPane.VIDEO,
+            "Audio Output",
+            "audio output passthrough decode bitstream pcm receiver avr soundbar"
+        ),
+        SettingSearchEntry(
+            "video.audio-downmix",
+            SettingsPane.VIDEO,
+            "Audio Downmix",
+            "audio downmix stereo surround 5.1 7.1 fold channels matrix"
+        ),
+        SettingSearchEntry(
+            "video.volume-boost",
+            SettingsPane.VIDEO,
+            "Volume Boost",
+            "volume boost gain louder quiet limiter dynamics loudness"
+        ),
+        SettingSearchEntry(
+            "video.network-buffer",
+            SettingsPane.VIDEO,
+            "Network Buffer",
+            "network buffer buffering cache latency buffering stutter spinner stream"
+        ),
+        SettingSearchEntry(
+            "video.tunneling",
+            SettingsPane.VIDEO,
+            "Tunneled Playback",
+            "tunneled tunneling tunnel hdmi avr sync passthrough audio video"
+        ),
+        SettingSearchEntry(
+            "video.pip",
+            SettingsPane.VIDEO,
+            "Picture-in-Picture",
+            "picture in picture pip window floating multitask home leave app"
+        ),
+        SettingSearchEntry(
+            "video.aspect-ratio",
+            SettingsPane.VIDEO,
+            "Default Aspect Ratio",
+            "aspect ratio fit zoom fill 16:9 4:3 stretch crop picture"
+        ),
+
+        // ── Language ─────────────────────────────────────────────────────────
+        // The pane is one chip grid (audio language only since the subtitle
+        // language moved to Subtitles), so it had no entry of its own.
+        SettingSearchEntry(
+            "language.audio",
+            SettingsPane.LANGUAGE,
+            "Preferred Audio Language",
+            "audio language preferred track dub spoken dialogue subtitle language " +
+                "original"
+        ),
+
+        // ── Subtitles ────────────────────────────────────────────────────────
+        // Auto-fetch is declared with the Integrations rows it used to live
+        // with; the pane's own rows follow here, five of them chip groups.
+        SettingSearchEntry(
+            "subtitles.language",
+            SettingsPane.SUBTITLES,
+            "Preferred Subtitle Language",
+            "subtitle language preferred captions subtitles language track"
+        ),
+        SettingSearchEntry(
+            "subtitles.mode",
+            SettingsPane.SUBTITLES,
+            "Mode",
+            "subtitle mode subtitles off forced on always captions"
+        ),
+        SettingSearchEntry(
+            "subtitles.clean-sdh",
+            SettingsPane.SUBTITLES,
+            "Clean SDH",
+            "clean sdh captions deaf hard of hearing sound effects sdh subtitles"
+        ),
+        SettingSearchEntry(
+            "subtitles.size",
+            SettingsPane.SUBTITLES,
+            "Default Size",
+            "subtitle size subtitle size small normal large text captions font"
+        ),
+        SettingSearchEntry(
+            "subtitles.background",
+            SettingsPane.SUBTITLES,
+            "Default Background",
+            "subtitle background box semi solid text captions backdrop"
+        ),
+        SettingSearchEntry(
+            "subtitles.position",
+            SettingsPane.SUBTITLES,
+            "Position",
+            "subtitle position low mid high captions lift letterbox bottom"
         ),
 
         // ── Interface ─────────────────────────────────────────────────────────

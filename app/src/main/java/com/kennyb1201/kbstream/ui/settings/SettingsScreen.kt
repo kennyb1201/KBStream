@@ -2144,7 +2144,11 @@ fun SettingsScreen(
                     text = "Playback engine",
                     color = KBTextHi,
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(bottom = 4.dp)
+                    // A chip row, not a primitive: the entry alone would be a
+                    // result that switches pane and jumps nowhere.
+                    modifier = Modifier
+                        .searchAnchor(SettingsSearchIndex.entryForLabel("Playback engine"))
+                        .padding(bottom = 4.dp)
                 )
                 Text(
                     text = "Which engine opens a title. ExoPlayer drives the full player panel, this " +
@@ -3607,7 +3611,9 @@ fun SettingsScreen(
                     text = "Audio Decoder",
                     color = KBTextHi,
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(bottom = 4.dp)
+                    modifier = Modifier
+                        .searchAnchor(SettingsSearchIndex.entryForLabel("Audio Decoder"))
+                        .padding(bottom = 4.dp)
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(
@@ -3733,7 +3739,9 @@ fun SettingsScreen(
                     text = "Network Buffer",
                     color = KBTextHi,
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(bottom = 4.dp)
+                    modifier = Modifier
+                        .searchAnchor(SettingsSearchIndex.entryForLabel("Network Buffer"))
+                        .padding(bottom = 4.dp)
                 )
                 // Buffer mode: pref 0=Balanced, 1=LowLatency, 2=Auto
                 val bufferPrefToIndex = intArrayOf(1, 2, 0)  // pref 0→UI 1, pref 1→UI 2, pref 2→UI 0
@@ -3781,7 +3789,11 @@ fun SettingsScreen(
                             Text(
                                 text = "Tunneled Playback",
                                 color = KBTextHi,
-                                style = MaterialTheme.typography.bodySmall
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier
+                                    .searchAnchor(
+                                        SettingsSearchIndex.entryForLabel("Tunneled Playback")
+                                    )
                             )
                             Text(
                                 // The skip is stated where the switch is: a
@@ -3837,7 +3849,11 @@ fun SettingsScreen(
                                 Text(
                                     text = "Picture-in-Picture",
                                     color = KBTextHi,
-                                    style = MaterialTheme.typography.bodySmall
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier
+                                        .searchAnchor(
+                                            SettingsSearchIndex.entryForLabel("Picture-in-Picture")
+                                        )
                                 )
                                 Text(
                                     text = "Auto-enter PiP when pressing Home",
@@ -3868,7 +3884,9 @@ fun SettingsScreen(
                     text = "Default Aspect Ratio",
                     color = KBTextHi,
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(bottom = 4.dp)
+                    modifier = Modifier
+                        .searchAnchor(SettingsSearchIndex.entryForLabel("Default Aspect Ratio"))
+                        .padding(bottom = 4.dp)
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("Fit", "Zoom", "Fill", "16:9", "4:3").forEachIndexed { index, label ->
@@ -3893,7 +3911,11 @@ fun SettingsScreen(
                     text = "Preferred Audio Language",
                     color = KBTextHi,
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(bottom = 4.dp)
+                    modifier = Modifier
+                        .searchAnchor(
+                            SettingsSearchIndex.entryForLabel("Preferred Audio Language")
+                        )
+                        .padding(bottom = 4.dp)
                 )
                 LanguageChipGrid(
                     selected = preferredAudioLang,
@@ -3918,7 +3940,11 @@ fun SettingsScreen(
                     text = "Preferred Subtitle Language",
                     color = KBTextHi,
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(bottom = 4.dp)
+                    modifier = Modifier
+                        .searchAnchor(
+                            SettingsSearchIndex.entryForLabel("Preferred Subtitle Language")
+                        )
+                        .padding(bottom = 4.dp)
                 )
                 LanguageChipGrid(
                     selected = preferredSubtitleLang,
@@ -3952,7 +3978,9 @@ fun SettingsScreen(
                     text = "Mode",
                     color = KBTextHi,
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(bottom = 4.dp)
+                    modifier = Modifier
+                        .searchAnchor(SettingsSearchIndex.entryForLabel("Mode"))
+                        .padding(bottom = 4.dp)
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     SubtitleModeRules.OPTIONS.forEach { (label, value) ->
@@ -3982,7 +4010,9 @@ fun SettingsScreen(
                     text = "Clean SDH",
                     color = KBTextHi,
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(bottom = 4.dp)
+                    modifier = Modifier
+                        .searchAnchor(SettingsSearchIndex.entryForLabel("Clean SDH"))
+                        .padding(bottom = 4.dp)
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("Off", "On").forEachIndexed { index, label ->
@@ -4012,7 +4042,9 @@ fun SettingsScreen(
                     text = "Default Size",
                     color = KBTextHi,
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(bottom = 4.dp)
+                    modifier = Modifier
+                        .searchAnchor(SettingsSearchIndex.entryForLabel("Default Size"))
+                        .padding(bottom = 4.dp)
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("Small", "Normal", "Large").forEachIndexed { index, label ->
@@ -4031,7 +4063,9 @@ fun SettingsScreen(
                     text = "Default Background",
                     color = KBTextHi,
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(bottom = 4.dp)
+                    modifier = Modifier
+                        .searchAnchor(SettingsSearchIndex.entryForLabel("Default Background"))
+                        .padding(bottom = 4.dp)
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("None", "Semi", "Solid", "Text").forEachIndexed { index, label ->
@@ -4050,7 +4084,9 @@ fun SettingsScreen(
                     text = "Position",
                     color = KBTextHi,
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(bottom = 4.dp)
+                    modifier = Modifier
+                        .searchAnchor(SettingsSearchIndex.entryForLabel("Position"))
+                        .padding(bottom = 4.dp)
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("Low", "Mid", "High").forEachIndexed { index, label ->
@@ -5633,7 +5669,12 @@ private fun AudioTuningRow(
         text = label,
         color = KBTextHi,
         style = MaterialTheme.typography.bodySmall,
-        modifier = Modifier.padding(bottom = 4.dp)
+        // Bound by its own label, the way the shared row primitives are: the
+        // tuning rows (Audio Output, Audio Downmix, Volume Boost) are custom
+        // layouts, so nothing else would register them with the search index.
+        modifier = Modifier
+            .searchAnchor(SettingsSearchIndex.entryForLabel(label))
+            .padding(bottom = 4.dp)
     )
     options.chunked(4).forEach { row ->
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

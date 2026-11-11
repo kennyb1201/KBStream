@@ -1989,16 +1989,29 @@ object AppPreferences {
      * first time a getter runs after the upgrade. The plaintext copy is dropped
      * either way, so no credential is left in the clear.
      */
-    private fun migrateApiKey(context: Context, keyName: String): String {
-        val legacy = prefs(context).getString(keyName, "")?.trim().orEmpty()
+    private fun migrateApiKey(context: Context, keyName: String): String =
+        migrateApiKey(context, keyName, keyName)
+
+    /**
+     * The cross-slot form: [fromKey]'s plaintext value moves into the secure
+     * store under [toKey].
+     *
+     * The same-name form above is right for every key whose plaintext slot WAS
+     * its own. MDBList is the exception: its pre-rename slot was OMDb's, so the
+     * value has to land - and be stamped - under the MDBList name, or the next
+     * read finds nothing there and the credential is stranded under a key that
+     * belongs to a different service.
+     */
+    private fun migrateApiKey(context: Context, fromKey: String, toKey: String): String {
+        val legacy = prefs(context).getString(fromKey, "")?.trim().orEmpty()
         if (legacy.isBlank()) return ""
-        apiKeyPrefs(context).edit().putString(keyName, legacy).apply()
-        prefs(context).edit().remove(keyName).apply()
+        apiKeyPrefs(context).edit().putString(toKey, legacy).apply()
+        prefs(context).edit().remove(fromKey).apply()
         // A migrated key is a real credential this device holds: stamp it, so
         // the sync blob can carry it to the account's other devices instead of
         // treating it as something this device never touched (see
-        // [SYNCED_API_KEYS]).
-        stampApiKeyEdit(context, keyName, System.currentTimeMillis())
+        // [SYNCED_API_KEYS]). Under [toKey], the slot the value now lives in.
+        stampApiKeyEdit(context, toKey, System.currentTimeMillis())
         return legacy
     }
 
@@ -2114,8 +2127,22 @@ object AppPreferences {
         val stored = secure.getString(KEY_MDBLIST_API_KEY, "")?.trim().orEmpty()
         if (stored.isNotBlank()) return stored
 
+        // Cross-slot, deliberately: the OMDb-named plaintext slot is the
+        // PRE-MDBLIST ratings slot, so its value is an MDBList key and has to
+        // land under [KEY_MDBLIST_API_KEY]. The same-name form used here wrote
+        // it under [KEY_OMDB_API_KEY] instead, which broke the migration twice
+        // over - MDBList served the key exactly once (the next read found both
+        // its slots empty) while the OMDb getter started handing a ratings key
+        // to the OMDb client, and a genuine OMDb key pasted later was clobbered
+        // by the next MDBList read.
+        //
+        // Devices that already ran the old path cannot be repaired here: a
+        // value sitting under [KEY_OMDB_API_KEY] in the secure store is
+        // indistinguishable from a genuine OMDb key (both are stamped under
+        // that name), so this fixes the migration going forward and never
+        // guesses which of the two a stored value is.
         val legacy = migrateApiKey(context, KEY_MDBLIST_API_KEY)
-            .ifBlank { migrateApiKey(context, KEY_OMDB_API_KEY) }
+            .ifBlank { migrateApiKey(context, KEY_OMDB_API_KEY, KEY_MDBLIST_API_KEY) }
         if (legacy.isNotBlank()) return legacy
         // The build-time key is the FALLBACK (a pasted key always wins). This
         // getter used to stop at "" while the comment promised BuildConfig

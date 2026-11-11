@@ -35,7 +35,19 @@ sealed interface PublicListLevel {
 sealed interface PublicListTitlesState {
     data object Loading : PublicListTitlesState
 
-    data class Titles(val rows: List<PublicListTitle>) : PublicListTitlesState
+    /**
+     * The rows that can be drawn, and how many fetched titles could not be.
+     *
+     * [droppedCount] is the reconciliation the header needs: it counts the
+     * provider's full `itemCount`, while a title with no IMDb and no TMDB id has
+     * no [PublicListTitle.detailId] to open and is skipped by the detail body
+     * (spec F6). Without it the header said "42 titles" over 38 rows with
+     * nothing to explain the gap.
+     */
+    data class Titles(
+        val rows: List<PublicListTitle>,
+        val droppedCount: Int = 0
+    ) : PublicListTitlesState
 
     data class Failed(val message: String) : PublicListTitlesState
 }
@@ -380,8 +392,13 @@ class PublicListsViewModel(app: Application) : AndroidViewModel(app) {
                     // for Library rows: a community list is not a promise that
                     // its titles are age-screened (spec F5).
                     val allowed = tmdbRepository.kidsFilter(answer.value) { row -> row.ceilingKey }
+                    // F6: counted where the rows are built, so the detail body
+                    // never has to guess why its rows and the header disagree.
                     _uiState.value = _uiState.value.copy(
-                        titles = PublicListTitlesState.Titles(allowed)
+                        titles = PublicListTitlesState.Titles(
+                            rows = allowed,
+                            droppedCount = allowed.count { it.detailId == null }
+                        )
                     )
                 }
 

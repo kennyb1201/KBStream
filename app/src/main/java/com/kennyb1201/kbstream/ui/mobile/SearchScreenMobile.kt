@@ -68,6 +68,7 @@ import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
 import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscape
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
+import com.kennyb1201.kbstream.ui.components.trailerMenuAction
 import com.kennyb1201.kbstream.ui.components.voiceSearchAvailable
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
 import com.kennyb1201.kbstream.ui.components.touch.MobileStatus
@@ -1067,6 +1068,16 @@ fun SearchScreenMobile(
                             viewModel.onResultOpened(selected)
                             onItemClick(selected.meta)
                         },
+                        // The TV menu's trailer row, unchanged: the ids are
+                        // already split above, and the shared action owns the
+                        // show-always / one-toast contract.
+                        trailerMenuAction(
+                            context = context,
+                            tmdbId = resultIds.tmdbId,
+                            type = result.type,
+                            imdbId = resultIds.imdbId,
+                            onDismissFirst = { menuResult = null }
+                        ),
                         PosterContextAction(
                             label = watchedMenuLabel(
                                 isWatched = isWatched,

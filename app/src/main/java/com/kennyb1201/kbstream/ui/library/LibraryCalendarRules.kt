@@ -84,7 +84,21 @@ internal data class CalendarShow(
      * so a normal episode is never drawn twice. Null means "nothing extra to
      * place".
      */
-    val nextEpisode: CalendarNextEpisode? = null
+    val nextEpisode: CalendarNextEpisode? = null,
+    /**
+     * Each season's DECLARED episode count, from the series detail's season
+     * list (`TmdbSeasonSummary.episodeCount`), for the seasons this month
+     * asked about.
+     *
+     * The payload's last episode is the season's last only when TMDB says so.
+     * A season whose episode list is still being filled in ends at whatever has
+     * been added so far, and labelling that one FINALE claimed a season was
+     * over that had barely started (see [calendarSeasonFinale]).
+     *
+     * A season missing here means TMDB declares no count, which is the old
+     * behavior rather than a veto.
+     */
+    val declaredEpisodeCounts: Map<Int, Int> = emptyMap()
 )
 
 /**
@@ -428,6 +442,44 @@ internal val calendarEpisodeOrder: Comparator<CalendarEpisode> =
         .thenBy { it.episode }
 
 /**
+ * Whether the payload's last episode of [season] is really that season's last.
+ *
+ * The rule the Upcoming rail has (its `isSeasonFinale`, gated by the
+ * `next_episode_to_air` veto and Simkl's own count) and the calendar did not:
+ * the payload's highest episode number was labelled FINALE with no check of
+ * any kind, so every season whose episode list was still being populated
+ * carried a FINALE badge on whichever episode TMDB had added last - until the
+ * next one appeared and the badge moved. A season is over when TMDB's own
+ * declared count says the payload has reached it:
+ *
+ *  - [declaredCount] null: TMDB declares nothing for this season, so the old
+ *    behavior stands (payload last reads FINALE);
+ *  - [nextSeason] equal to [season]: the detail still points at an episode of
+ *    THIS season, which is TMDB saying something later is coming - never a
+ *    finale, whatever the count says.
+ *
+ * The rail's OTHER veto - Simkl's own per-show episode count - is deliberately
+ * not mirrored: the calendar's call site has no Simkl read in hand (the month
+ * builder reads Simkl for the candidate list, never per show), and building a
+ * second source of truth for it here is not this fix.
+ *
+ * The limit this does NOT close, stated plainly because it is shared with the
+ * rail: Universal Basic Guys S3 is declared as six episodes by TMDB while it
+ * actually runs to eight, so the payload's sixth reads FINALE here and on the
+ * rail until TMDB's count is corrected. This closes the
+ * payload-behind-the-declared-count case, not the declared-count-is-wrong one.
+ */
+internal fun calendarSeasonFinale(
+    season: Int,
+    payloadLast: Int,
+    declaredCount: Int?,
+    nextSeason: Int?
+): Boolean {
+    if (nextSeason == season) return false
+    return declaredCount == null || declaredCount == payloadLast
+}
+
+/**
  * ONE show's episodes that land in [month], indexed by day.
  *
  * Split out of [buildCalendarMonth] so a month can be assembled a show at a
@@ -440,7 +492,16 @@ internal val calendarEpisodeOrder: Comparator<CalendarEpisode> =
  * and last episode NUMBER of that season, so an episode that opened a season in
  * September still reads as a premiere when the calendar shows October. That is
  * the same first/last rule the Detail screen's season list implies, applied
- * once here so both the badge and any future summary agree.
+ * once here so both the badge and any future summary agree - and the finale
+ * half is checked against TMDB's DECLARED count ([calendarSeasonFinale]),
+ * because "last of the payload" is only the season's last once the payload has
+ * reached the end.
+ *
+ * Rows also come from two places the payload does not: the detail's announced
+ * next episode, and the second source's own dates for episodes TMDB does not
+ * list yet ([CalendarShow.sourceDates], the rail's own fallback). Both are
+ * never a finale, and both are placed only where no payload row could date the
+ * same episode.
  *
  * "First and last" is the season's NUMBERING, and the payload is sorted here to
  * make that true: the badges used to read `first()`/`last()` straight off
@@ -473,6 +534,14 @@ internal fun calendarEpisodesFor(
         val episodes = payload.sortedBy { it.episodeNumber }
         val premiere = episodes.first().episodeNumber
         val finale = episodes.last().episodeNumber
+        // "Last of the payload" is only "last of the season" when TMDB's own
+        // declared count says so (see [calendarSeasonFinale]).
+        val finaleIsDeclared = calendarSeasonFinale(
+            season = season,
+            payloadLast = finale,
+            declaredCount = show.declaredEpisodeCounts[season],
+            nextSeason = show.nextEpisode?.season
+        )
 
         for (episode in episodes) {
             val date = correctedAirDate(
@@ -495,7 +564,7 @@ internal fun calendarEpisodesFor(
                 episodeTitle = episode.name?.takeIf { it.isNotBlank() },
                 airDate = date,
                 isPremiere = episode.episodeNumber == premiere,
-                isFinale = episode.episodeNumber == finale
+                isFinale = finaleIsDeclared && episode.episodeNumber == finale
             )
         }
     }
@@ -530,6 +599,54 @@ internal fun calendarEpisodesFor(
                 isFinale = false
             )
         }
+    }
+
+    // Every episode the SECOND source dates and the payload does not list at
+    // all - the fallback the Upcoming rail has always had and the calendar
+    // never did.
+    //
+    // The rail picks its one next airing out of this same map
+    // (AirDateCorrection.nextAiring), so a show TMDB has fallen behind on still
+    // got its card; the calendar only ever used the map to CORRECT the dates of
+    // rows the payload already had, so an episode with no payload row had no row
+    // to attach its date to and was simply absent. Live case: Universal Basic
+    // Guys S3 - TMDB lists six, `next_episode_to_air` is null, TVmaze dates E7
+    // (Nov 15) and E8 (Nov 22), so the rail showed S3E7 while November had no
+    // UBG row at all.
+    //
+    // Every in-month entry is placed, not just the next one: this is a month
+    // view, not a single next airing, and both of UBG's episodes belong in
+    // November. The map holds dates and nothing else - no titles - so these
+    // rows are untitled. A date that a payload row already carries is skipped
+    // above (`dated`), and the funnel below ([calendarSortedDays]) drops a
+    // duplicate anyway.
+    //
+    // Keys are [AirDateCorrection.episodeKey]'s "season:episode" shape - the
+    // same text [AirDateCorrection.nextAiring] parses for the rail.
+    for ((key, raw) in show.sourceDates) {
+        val season = key.substringBefore(':').toIntOrNull() ?: continue
+        val episode = key.substringAfter(':').toIntOrNull() ?: continue
+        if ((season to episode) in dated) continue
+        val date = AirDateCorrection.parse(raw) ?: continue
+        if (YearMonth.from(date) != month) continue
+
+        days.getOrPut(date) { ArrayList() } += CalendarEpisode(
+            showId = show.showId,
+            openId = show.openId,
+            showTitle = show.title,
+            poster = show.poster,
+            backdrop = show.backdrop,
+            season = season,
+            episode = episode,
+            // Dates only in this map, so there is no title to draw.
+            episodeTitle = null,
+            airDate = date,
+            isPremiere = episode == 1,
+            // Never a finale: this row comes from a date, not from a numbered
+            // list, so nothing here knows whether the season runs further - the
+            // same rule the announced tail above follows.
+            isFinale = false
+        )
     }
 
     return days

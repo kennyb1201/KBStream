@@ -54,6 +54,7 @@ import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.trailerMenuAction
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.mobile.SearchScreenMobile
@@ -1267,6 +1268,23 @@ fun SearchScreen(
                         viewModel.onResultOpened(selected)
                         onItemClick(selected.meta)
                     },
+                    // The trailer row every other Browse/Search tile menu has.
+                    // Search rails were scoped out of the long-press trailer
+                    // spec, which left one inconsistency: the same title from
+                    // a browse page could play its trailer and from a search
+                    // result could not. The ids are already split above, and
+                    // the shared action owns the rest of the contract (always
+                    // shown; a null tmdbId or no videos takes the one toast).
+                    trailerMenuAction(
+                        context = context,
+                        tmdbId = resultIds.tmdbId,
+                        type = result.type,
+                        imdbId = resultIds.imdbId,
+                        // The menu's own state clear, like every other row here:
+                        // this surface's dismiss is not a focus hand-off (see
+                        // the menu's dismissTitleMenu), so nothing more is owed.
+                        onDismissFirst = { menuResult = null }
+                    ),
                     PosterContextAction(
                         label = watchedMenuLabel(
                             isWatched = isWatched,

@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.sports
 
 import com.kennyb1201.kbstream.data.sports.GameState
+import com.kennyb1201.kbstream.data.sports.SportsGame
 import com.kennyb1201.kbstream.data.sports.SportsLeagues
 import com.kennyb1201.kbstream.data.sports.involvesFavorite
 
@@ -70,6 +71,46 @@ internal object SportsLivePollRules {
         state == GameState.UPCOMING && dateMs > 0L && dateMs <= nowMs + KICKOFF_ARM_MS
 
     /**
+     * The Favorites test, in halves so that [liveLeagues]' pick and the tick's
+     * keep-alive cannot drift apart.
+     *
+     * The tab's live set is "a game a followed team plays in, LIVE or inside the
+     * kickoff arm" ([liveLeagues]); the two questions the poll asks afterwards
+     * are those same two states. Written once here, the pick is their OR by
+     * construction, so a change to what "favorite" means reaches all three.
+     */
+    private fun SportsGame.isFavoriteLive(favoriteKeys: Set<String>): Boolean =
+        involvesFavorite(favoriteKeys) && state == GameState.LIVE
+
+    private fun SportsGame.isFavoriteKickoffArmed(favoriteKeys: Set<String>, nowMs: Long): Boolean =
+        involvesFavorite(favoriteKeys) && isKickoffArmed(state, dateMs, nowMs)
+
+    /**
+     * True when [section] holds a LIVE game a followed team is playing - the
+     * Favorites tab's answer to [hasLive].
+     *
+     * [hasLive] is whole-section, which is right for a league tab and wrong for
+     * this one: once the followed game goes final while another game in the same
+     * league is still live, the league tab has something to watch and Favorites
+     * does not, yet both kept polling (and the tick kept waking for kickoffs
+     * nobody follows). Games only, like [liveLeagues]' own pick.
+     */
+    fun hasFavoriteLive(section: LeagueSection?, favoriteKeys: Set<String>): Boolean {
+        if (section == null) return false
+        return section.games.any { it.isFavoriteLive(favoriteKeys) }
+    }
+
+    /** True when [section] holds a favorite game inside the kickoff arm. */
+    fun hasFavoriteKickoffArmed(
+        section: LeagueSection?,
+        favoriteKeys: Set<String>,
+        nowMs: Long,
+    ): Boolean {
+        if (section == null || nowMs <= 0L) return false
+        return section.games.any { it.isFavoriteKickoffArmed(favoriteKeys, nowMs) }
+    }
+
+    /**
      * How long the poll should sleep, when nothing in its tab is live, until
      * that tab's next scheduled start - or null when the tab has none left.
      *
@@ -85,11 +126,20 @@ internal object SportsLivePollRules {
      * wait is clamped to [MAX_REARM_MS] so a game two days out is re-checked
      * rather than slept through (an ESPN date can move), and floored at the
      * poll interval so a start that has just passed cannot spin the loop.
+     *
+     * [favoritesOnly] scopes that wait the same way the tick's own keep-alive is
+     * scoped (see [hasFavoriteLive]): on the Favorites tab the next start worth
+     * waking for is the next start of a GAME a followed team plays in, never a
+     * tournament (a field is not a team) and never a game nobody follows. A
+     * league tab passes nothing and keeps the whole-section wait, doubleheader
+     * included.
      */
     fun delayUntilNextStartMs(
         sections: List<LeagueSection>,
         paths: List<String>,
         nowMs: Long,
+        favoriteKeys: Set<String> = emptySet(),
+        favoritesOnly: Boolean = false,
     ): Long? {
         if (nowMs <= 0L) return null
         val nextStart = paths
@@ -97,11 +147,18 @@ internal object SportsLivePollRules {
                 val section = sections.firstOrNull { it.league.path == path }
                     ?: return@mapNotNull null
                 val games = section.games
-                    .filter { it.state == GameState.UPCOMING && it.dateMs > nowMs }
+                    .filter {
+                        it.state == GameState.UPCOMING && it.dateMs > nowMs &&
+                            (!favoritesOnly || it.involvesFavorite(favoriteKeys))
+                    }
                     .minOfOrNull { it.dateMs } ?: Long.MAX_VALUE
-                val tournaments = section.tournaments
-                    .filter { it.state == GameState.UPCOMING && it.dateMs > nowMs }
-                    .minOfOrNull { it.dateMs } ?: Long.MAX_VALUE
+                val tournaments = if (favoritesOnly) {
+                    Long.MAX_VALUE
+                } else {
+                    section.tournaments
+                        .filter { it.state == GameState.UPCOMING && it.dateMs > nowMs }
+                        .minOfOrNull { it.dateMs } ?: Long.MAX_VALUE
+                }
                 minOf(games, tournaments).takeIf { it != Long.MAX_VALUE }
             }
             .minOrNull()
@@ -136,9 +193,8 @@ internal object SportsLivePollRules {
             return sections
                 .filter { section ->
                     section.games.any {
-                        it.involvesFavorite(favoriteKeys) &&
-                            (it.state == GameState.LIVE ||
-                                isKickoffArmed(it.state, it.dateMs, nowMs))
+                        it.isFavoriteLive(favoriteKeys) ||
+                            it.isFavoriteKickoffArmed(favoriteKeys, nowMs)
                     }
                 }
                 .map { it.league.path }

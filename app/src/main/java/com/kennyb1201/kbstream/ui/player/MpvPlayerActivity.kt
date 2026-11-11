@@ -726,6 +726,20 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 nextUpCountdown?.text = "Stopping here - sleep timer"
                 return
             }
+            // A paused session must not advance (see the Exo engine's twin - its
+            // own comment already conceded this Handler fires whether or not the
+            // surface is playing). Holding, not disarming: no decrement, the tick
+            // re-posts, and a resume continues from the remaining count. The
+            // surface's paused flag is this engine's playWhenReady equivalent
+            // (the same one isPlaybackActive reads).
+            if (surface?.isPaused() != false) {
+                if (nextUpCountdownRemaining > 0) {
+                    nextUpCountdown?.text = "Paused - playing next when you resume"
+                    nextUpCountdownBar?.progress = nextUpCountdownRemaining
+                }
+                nextUpCountdownHandler.postDelayed(this, 1_000L)
+                return
+            }
             nextUpCountdownRemaining--
             if (nextUpCountdownRemaining <= 0) {
                 // The countdown fired unattended: count this as an auto-advanced
