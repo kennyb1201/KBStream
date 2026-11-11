@@ -2407,12 +2407,23 @@ private fun HomeHero(
                                     // solid black column beside it -- only
                                     // the falloff was shortened so less of
                                     // the backdrop gets darkened by it.
+                                    //
+                                    // The middle is roughly half what it was
+                                    // (the hero trailer read as dim), and the
+                                    // clear point moved in to 0.36 so less of
+                                    // the picture sits under any darkening at
+                                    // all. Every edge still ramps to black or
+                                    // to transparent the way it did: the 1.00
+                                    // anchor is untouched, which is the stop
+                                    // that makes the seam into that column
+                                    // invisible -- this is a lighter middle,
+                                    // not a lighter edge.
                                     0.00f to Color.Black.copy(alpha = 1.00f),
-                                    0.06f to Color.Black.copy(alpha = 0.80f),
-                                    0.14f to Color.Black.copy(alpha = 0.50f),
-                                    0.22f to Color.Black.copy(alpha = 0.24f),
-                                    0.32f to Color.Black.copy(alpha = 0.08f),
-                                    0.42f to Color.Transparent,
+                                    0.06f to Color.Black.copy(alpha = 0.55f),
+                                    0.14f to Color.Black.copy(alpha = 0.30f),
+                                    0.22f to Color.Black.copy(alpha = 0.12f),
+                                    0.32f to Color.Black.copy(alpha = 0.04f),
+                                    0.36f to Color.Transparent,
                                     1.00f to Color.Transparent
                                 )
                             )

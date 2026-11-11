@@ -271,11 +271,23 @@ class MobileBillboardContractTest {
         )
 
         // The description is gone from a hero page, the meta line is near-white,
-        // and the scrim is lighter because the controls now live on it.
+        // and the scrim is lighter because the controls now live on it -
+        // lighter again since the billboard trailer read as dim (0.18 / 0.65).
         assertFalse(hero.contains("meta.description?.takeIf"))
         assertTrue(hero.contains("color = KBTextHi.copy(alpha = 0.90f)"))
-        assertTrue(hero.contains("KBVoid.copy(alpha = 0.30f)"))
-        assertTrue(hero.contains("KBVoid.copy(alpha = 0.85f)"))
+        assertTrue(hero.contains("KBVoid.copy(alpha = 0.18f)"))
+        assertTrue(
+            "the bottom stop stays DARK, it only stops being near-black: it is the " +
+                "edge that melts the billboard into the rails below",
+            hero.contains("KBVoid.copy(alpha = 0.65f)")
+        )
+        assertTrue(
+            "and the scrim is still a ramp of three stops in that order - transparent, " +
+                "the lighter middle, then the dark bottom edge - so every edge keeps its " +
+                "fade and no hard line can appear",
+            hero.indexOf("Color.Transparent,") < hero.indexOf("KBVoid.copy(alpha = 0.18f)") &&
+                hero.indexOf("KBVoid.copy(alpha = 0.18f)") < hero.indexOf("KBVoid.copy(alpha = 0.65f)")
+        )
         assertFalse("the heavy scrim stops must be gone", hero.contains("0.94f"))
 
         // The segments overlay the image's bottom edge, and the count the visible

@@ -1961,8 +1961,17 @@ private fun MobileHero(
                             // the pills and the segments now live ON this scrim,
                             // and the heavier one was darkening the art to buy
                             // legibility for copy that has since left the page.
-                            KBVoid.copy(alpha = 0.30f),
-                            KBVoid.copy(alpha = 0.85f)
+                            //
+                            // Lightened again for the dim billboard trailer:
+                            // the middle drops to 0.18 and the bottom stop to
+                            // 0.65. The bottom does NOT go transparent and does
+                            // NOT go light -- that edge is what melts the
+                            // billboard into the rails below, so it stays a
+                            // dark ramp, just a less black one. The pills and
+                            // segments carry their own backgrounds on top of
+                            // it, so their contrast is not this stop's job.
+                            KBVoid.copy(alpha = 0.18f),
+                            KBVoid.copy(alpha = 0.65f)
                         )
                     )
                 )
