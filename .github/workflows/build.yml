@@ -416,6 +416,24 @@ jobs:
           # step dies on exit code 100 before a single line of the build runs -
           # blocking a release on a package mirror that has nothing to do with
           # it. The gate itself is unchanged: no libass, no release.
+          #
+          # The install is also skipped entirely when the cached dependency
+          # prefixes are already complete. Those packages are needed by the
+          # autotools/meson stages that build FreeType, HarfBuzz, fontconfig,
+          # fribidi, expat and libass - and scripts/build_libass.sh skips every
+          # one of those stages on a cache hit, linking the JNI bridge with CMake
+          # and the NDK alone (see its build_prefix_complete gate). The cache key
+          # covers this script and the JNI sources, so a hit means those stages
+          # would not run. Blocking the release on apt there bought nothing.
+          deps_cached() {
+            local abi lib
+            for abi in arm64-v8a armeabi-v7a; do
+              for lib in libass libharfbuzz libfreetype libfribidi libfontconfig libexpat; do
+                [[ -f "build/libass-ext/prefix/${abi}/lib/${lib}.a" ]] || return 1
+              done
+            done
+          }
+
           install_build_deps() {
             sudo apt-get update -qq || true
             sudo apt-get install -y -qq \
@@ -433,18 +451,22 @@ jobs:
               2>/dev/null || true
           }
 
-          attempts=0
-          until install_build_deps; do
-            attempts=$((attempts + 1))
-            if [[ "$attempts" -ge 4 ]]; then
-              echo "::error::could not install the libass build dependencies after ${attempts} attempts"
-              exit 1
-            fi
-            if [[ "$attempts" -eq 2 ]]; then
-              use_upstream_archive
-            fi
-            sleep 15
-          done
+          if deps_cached; then
+            echo "cached dependency prefixes are complete: skipping the package install"
+          else
+            attempts=0
+            until install_build_deps; do
+              attempts=$((attempts + 1))
+              if [[ "$attempts" -ge 4 ]]; then
+                echo "::error::could not install the libass build dependencies after ${attempts} attempts"
+                exit 1
+              fi
+              if [[ "$attempts" -eq 2 ]]; then
+                use_upstream_archive
+              fi
+              sleep 15
+            done
+          fi
           bash scripts/install_android_sdk.sh "ndk;${NDK_VERSION}" "cmake;3.22.1"
           # Same trap as the FFmpeg block: the runner exports ANDROID_NDK
           # pointing at a preinstalled NDK, and the script prefers it over
