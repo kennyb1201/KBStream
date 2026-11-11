@@ -19,11 +19,19 @@ import kotlin.random.Random
  */
 
 /**
- * The cap from the spec, and a real bound rather than a taste: every page is a
- * full-resolution backdrop plus a clearlogo, and a pager holding more than ten
- * of them keeps more art resident than the hero can ever show.
+ * How many titles the billboard's pool holds.
+ *
+ * Twenty, not ten: the feed is trending-of-the-day interleaved by rank, so this
+ * is the day's top 10 movies plus its top 10 shows - a wider pool from the same
+ * page-1 trending response, with no extra network. The old cap made the billboard
+ * cycle yesterday's ten all day, which is the "same titles over and over" report.
+ *
+ * Still a real bound rather than a taste: every page is a full-resolution
+ * backdrop plus a clearlogo. The pager composes lazily, so only the pages around
+ * the current one hold art - resident art does not grow with this cap, only the
+ * set the day can show does.
  */
-internal const val BILLBOARD_MAX_PAGES = 10
+internal const val BILLBOARD_MAX_PAGES = 20
 
 /**
  * How many trending pages ONE load may walk: page 1 plus four more.
@@ -139,8 +147,8 @@ internal fun TmdbDiscoverItem.toBillboardPreview(railType: String): MetaPreview 
  * The billboard's pages drawn at RANDOM from every selected source's full pool.
  *
  * The pools are far larger than the pager: a kids profile's six rails hold up to
- * the pinned target each, and taking the first ten in rail order meant the SAME
- * ten on every visit - the rest of every selected row never reached the hero
+ * the pinned target each, and taking the first [cap] in rail order meant the SAME
+ * titles on every visit - the rest of every selected row never reached the hero
  * (field 2026-11-05: "it should cycle through all the titles from the rails
  * selected, randomly"). The draw is a partial Fisher-Yates shuffle, so one visit
  * cannot repeat a title and the next visit is a different set.

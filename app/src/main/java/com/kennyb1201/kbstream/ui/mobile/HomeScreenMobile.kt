@@ -202,6 +202,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.MobileTheme
 import com.kennyb1201.kbstream.ui.theme.InterFamily
+import kotlin.random.Random
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -501,7 +502,7 @@ fun HomeScreenMobile(
         // The phone hero used to be an inert slot: `heroMeta` is fed by the TV
         // screen's focus-following resolver, and a phone has no focus, so
         // nothing ever drove one. A billboard is the driver instead - a pager
-        // of up to ten titles drawn with the SAME hero presentation, fed from
+        // of up to twenty titles drawn with the SAME hero presentation, fed from
         // the rails below or (by default) from TMDB's trending of the day.
         //
         // Its four prefs are DEVICE-LOCAL, so they are deliberately NOT keyed
@@ -2061,7 +2062,7 @@ private fun MobileHero(
 }
 
 /**
- * The phone Home billboard: the hero slot as a pager of up to ten titles.
+ * The phone Home billboard: the hero slot as a pager of up to twenty titles.
  *
  * "Mobile billboard" = the film-strip hero every streaming app opens on. It is
  * the SAME [MobileHero] presentation per page (backdrop, clearlogo or title,
@@ -2109,7 +2110,19 @@ private fun MobileBillboard(
     if (pages.isEmpty()) return
 
     val scope = rememberCoroutineScope()
-    val pagerState = rememberPagerState(pageCount = { pages.size })
+    // A fresh composition opens on a random page.
+    //
+    // The pool itself only changes when the feed's membership does - once a day,
+    // on trending-day - so without this, two Home visits in one morning open on
+    // the same title and swipe through the same sequence. This is the within-day
+    // variety; the cycle ORDER stays the dealt order, so swiping never jumps.
+    // Remembered, so an ordinary recomposition of this same composition does not
+    // move the pager out from under the viewer.
+    val billboardStartPage = remember { Random.nextInt(pages.size) }
+    val pagerState = rememberPagerState(
+        initialPage = billboardStartPage,
+        pageCount = { pages.size }
+    )
     val currentPage = pages.getOrNull(pagerState.currentPage)
 
     // "Remove animations" (system animator duration scale 0): the house helper,

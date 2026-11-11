@@ -123,13 +123,41 @@ class ScreensaverRulesTest {
     }
 
     @Test
-    fun `the idle wait resolves at most the first thirty, in slide order`() {
+    fun `the pool is one candidate per title, not one per rail slot`() {
+        val slides = screensaverSlides(
+            listOf(
+                item("one"),
+                item("one"),
+                item("two"),
+                item("one"),
+                // Same number, different medium: TMDB numbers movies and shows
+                // separately, so these are two titles, not a repeat.
+                item("two", type = "series")
+            )
+        )
+        assertEquals(
+            "a title on three rails is one candidate - repeats spent the warm " +
+                "budget and made the show cycle the same handful of titles",
+            listOf("movie:one", "movie:two", "series:two"),
+            slides.map { "${it.type}:${it.id}" }
+        )
+    }
+
+    @Test
+    fun `the idle wait resolves at most the first thirty of what it is given`() {
         val pool = (1..45).map { item("t$it") }
         assertEquals(30, SCREENSAVER_PRERESOLVE_LIMIT)
         assertEquals(
-            "a prefix, not a sample: the tour starts at the top of Home",
+            "the take-30 is a pure prefix of its INPUT: the caller samples the pool " +
+                "(see warmScreensaverPool), which is what makes successive waits warm " +
+                "different titles",
             (1..30).map { "t$it" },
             screensaverPreresolveItems(pool).map { it.id }
+        )
+        assertEquals(
+            "and a sampled input is walked in the order it was handed over",
+            screensaverPreresolveItems(pool.reversed()).map { it.id },
+            pool.reversed().take(30).map { it.id }
         )
         assertEquals(
             "a short pool is walked whole",

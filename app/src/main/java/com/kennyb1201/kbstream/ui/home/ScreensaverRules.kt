@@ -119,7 +119,15 @@ internal fun MetaPreview.hasScreensaverArt(): Boolean =
  * backdrop has resolved (see [screensaverCleanSlides]).
  */
 internal fun screensaverSlides(items: List<MetaPreview>): List<MetaPreview> =
-    items.filter { it.hasScreensaverArt() }
+    items
+        .filter { it.hasScreensaverArt() }
+        // One candidate per TITLE, not per rail slot. Home draws a title on every
+        // rail it belongs to, so above this a title in three rails was three
+        // candidates - which spent the warm budget on repeats and made the show
+        // cycle the same handful of titles. Same identity shape as the
+        // billboard's page key, so "movie 1399" and "series 1399" stay two
+        // titles while the same title seen twice becomes one.
+        .distinctBy { item -> billboardPageKey(item) }
 
 /**
  * How many pool titles the idle wait resolves before the show arms.
@@ -131,13 +139,17 @@ internal fun screensaverSlides(items: List<MetaPreview>): List<MetaPreview> =
 internal const val SCREENSAVER_PRERESOLVE_LIMIT = 30
 
 /**
- * The items the pre-resolve pass walks: the pool's first
- * [SCREENSAVER_PRERESOLVE_LIMIT], in slide order.
+ * The items the pre-resolve pass walks: [items]' first
+ * [SCREENSAVER_PRERESOLVE_LIMIT], in the order given.
  *
- * A prefix, not a sample: the tour starts at the top of Home, so the titles the
- * viewer is most likely to see first are the ones resolved first. The rest of
- * the pool keeps its order and simply has no clean art yet - and an unresolved
- * title is never shown with its raw art.
+ * Still a prefix OF ITS INPUT, and still pure: the caller samples the pool and
+ * hands this a shuffled list (see `warmScreensaverPool`), so successive idle
+ * waits warm DIFFERENT titles and the resolved set grows across an evening
+ * instead of topping out at the same rail prefix. The bound itself does not
+ * move: this is the per-wait budget of artwork fetches and TMDB detail calls,
+ * and the variety comes from which titles it is spent on, not from spending
+ * more. The rest of the pool keeps its order and simply has no clean art yet -
+ * and an unresolved title is never shown with its raw art.
  */
 internal fun screensaverPreresolveItems(items: List<MetaPreview>): List<MetaPreview> =
     items.take(SCREENSAVER_PRERESOLVE_LIMIT)

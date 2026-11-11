@@ -97,6 +97,28 @@ class MobileBillboardContractTest {
         return text.substring(start, end).replace(Regex("\\s+"), " ")
     }
 
+    @Test
+    fun `a fresh billboard composition opens on a random page`() {
+        val hero = mobileHome()
+            .substringAfter("private fun MobileBillboard(")
+            .substringBefore("One billboard action, as a pill drawn ON the art")
+        assertTrue(
+            "the pool only changes once a day, so the start page is what makes two " +
+                "Home visits in one day open on different titles",
+            hero.contains("val billboardStartPage = remember { Random.nextInt(pages.size) }") &&
+                hero.contains("initialPage = billboardStartPage")
+        )
+        assertTrue(
+            "remembered, so a recomposition of the same composition does not jump the pager",
+            hero.contains("remember {") &&
+                !hero.contains("initialPage = Random.nextInt")
+        )
+        assertTrue(
+            "and the cycle order stays the dealt order - the pager is not reshuffled",
+            !hero.contains("pages.shuffled()")
+        )
+    }
+
     // ── the slot ────────────────────────────────────────────────────────
 
     @Test
@@ -474,15 +496,30 @@ class MobileBillboardContractTest {
         // Per-page atomic publish: one object carries art AND copy.
         assertTrue(vm.contains("_billboardPages.update { pages -> pages.map { page -> if (page.key == key) resolved else page } }"))
         assertTrue(vm.contains("settled = true"))
-        // Seeded in feed order, so the pager's count and order never move.
-        assertTrue(vm.contains("_billboardPages.value = feed.map { item -> BillboardPage("))
+        // Seeded in the DEALT order, so the pager's order is the pool's order and
+        // a settled page replaces its own slot by key.
+        assertTrue(vm.contains("_billboardPages.value = dealt.map { item -> BillboardPage("))
         // The default feed is the day pair, interleaved by rank - fetched by
         // PAGE, because one page is not always a pool (see the walk test).
         assertTrue(vm.contains("tmdbRepository.trendingDay(\"movie\", walked)"))
         assertTrue(vm.contains("tmdbRepository.trendingDay(\"tv\", walked)"))
         assertTrue(vm.contains("billboardInterleaveFeeds("))
-        // A recomposition carrying the same feed resolves nothing new.
-        assertTrue(vm.contains("if (currentKeys == wantedKeys) {"))
+        // A recomposition carrying the same feed resolves nothing new - compared
+        // as a SET, because a changed pool is re-dealt and the guard has to hold
+        // on the same titles whatever order they are in now.
+        assertTrue(
+            "the same-pool guard compares membership, not order",
+            vm.contains(
+                "currentKeys.size == wantedKeys.size && currentKeys.toSet() == wantedKeys.toSet()"
+            ) && vm.contains("if (samePool) {")
+        )
+        // ...and only a CHANGED pool is dealt a fresh order, so a re-entry on the
+        // same day does not re-resolve art and flash the billboard.
+        assertTrue(
+            "a new pool is shuffled, a same-membership one keeps the order on screen",
+            vm.contains("feed.shuffled()") &&
+                vm.contains("currentKeys.mapNotNull { key -> byKey[key] }")
+        )
         // A failed reload never blanks a published feed - but an answer for a
         // DIFFERENT profile does, because the old one is another profile's
         // content (see the kids-ceiling test below).

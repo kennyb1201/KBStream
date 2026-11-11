@@ -113,7 +113,12 @@ class BillboardFeedRulesTest {
         )
 
         assertEquals(BILLBOARD_MAX_PAGES, pages.size)
-        assertEquals(10, BILLBOARD_MAX_PAGES)
+        assertEquals(
+            "20, not 10: the pool is the day's top 10 movies plus its top 10 shows, " +
+                "and a ten-title pool cycled the same titles all day",
+            20,
+            BILLBOARD_MAX_PAGES
+        )
     }
 
     // ── chosen catalogs: concatenated in picker order ────────────────────

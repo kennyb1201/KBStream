@@ -308,14 +308,24 @@ class ScreensaverWiringContractTest {
         assertTrue(
             "the pass is a suspend function over the pool, capped by the rules' bound",
             homeVm.contains("internal suspend fun warmScreensaverPool(items: List<MetaPreview>)") &&
-                squash(homeVm).contains("screensaverPreresolveItems(items).forEach")
+                squash(homeVm).contains("screensaverPreresolveItems(items.shuffled()).forEach")
         )
         assertTrue(
-            "at most thirty titles, in slide order",
+            "the sample is taken here, not in the rules: the take-30 stays the pure " +
+                "function its own tests pin, and nothing in the rules shuffles",
             rules.contains("SCREENSAVER_PRERESOLVE_LIMIT = 30") &&
                 squash(rules).contains(
                     "internal fun screensaverPreresolveItems(items: List<MetaPreview>): List<MetaPreview> = items.take(SCREENSAVER_PRERESOLVE_LIMIT)"
-                )
+                ) &&
+                !rules.contains("shuffled()")
+        )
+        assertTrue(
+            "and the shuffle is at the call site, so successive waits warm different " +
+                "titles and the resolved set grows across an evening",
+            squash(homeVm)
+                .substringAfter("internal suspend fun warmScreensaverPool(")
+                .substringBefore("private suspend fun screensaverDetailOf")
+                .contains("items.shuffled()")
         )
         val warm = squash(homeVm)
             .substringAfter("internal suspend fun warmScreensaverPool(")

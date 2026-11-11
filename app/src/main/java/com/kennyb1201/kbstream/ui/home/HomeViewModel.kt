@@ -1256,7 +1256,15 @@ class HomeViewModel(
         var resolved = 0
         var skipped = 0
 
-        screensaverPreresolveItems(items).forEach { item ->
+        // Sampled, not prefixed. The pool arrives in rail order, so taking its
+        // first thirty every wait warmed the SAME titles every evening - and the
+        // show, which can only draw what warmed, cycled those same titles. A
+        // shuffle here (this is already an impure suspend function; the rules'
+        // take-30 stays the pure function its tests pin) makes successive waits
+        // warm different titles, so the resolved set grows across the evening.
+        // Titles already warm are cache hits inside the loop, so re-sampling
+        // costs nothing for them and the per-wait budget is unchanged.
+        screensaverPreresolveItems(items.shuffled()).forEach { item ->
             val key = "${item.id}:${item.type}"
             if (screensaverCleanBackdrops[key] != null && resolvedHeroGenres[key] != null) {
                 // Already warm (the rails prefetch or the hero got there first):
@@ -1827,14 +1835,36 @@ Log.d(
 
         val currentKeys = _billboardPages.value.map { it.key }
         val wantedKeys = feed.map { billboardPageKey(it) }
-        if (currentKeys == wantedKeys) {
+        // Compared as a SET, not as a list: a changed pool is dealt a fresh
+        // order below, so the same titles arriving again - even in a different
+        // order, or after that shuffle - must still read as "nothing new". As a
+        // list comparison this guard could not survive the re-deal: every Home
+        // entry would re-resolve the art and flash the billboard.
+        val samePool =
+            currentKeys.size == wantedKeys.size && currentKeys.toSet() == wantedKeys.toSet()
+        if (samePool) {
             val stillWorking = billboardResolveJob?.isActive == true
             if (stillWorking || _billboardPages.value.all { it.settled }) return
         }
 
+        // A NEW pool is dealt a fresh order; a same-membership feed keeps the
+        // order already on screen. The feed changes once a day (trending-day), so
+        // a fixed deal would put those titles in the same sequence all day - the
+        // pool is what has to vary, not just the pager's start. Keeping the
+        // existing order in the same-pool branch matters because this branch is
+        // also reached when a page never settled: re-dealing there would move the
+        // pager's order under the viewer, and re-fetching in the feed's order
+        // would undo a shuffle the viewer has already been shown.
+        val dealt = if (samePool) {
+            val byKey = feed.associateBy { item -> billboardPageKey(item) }
+            currentKeys.mapNotNull { key -> byKey[key] }
+        } else {
+            feed.shuffled()
+        }
+
         billboardResolveJob?.cancel()
         billboardResolveJob = null
-        _billboardPages.value = feed.map { item ->
+        _billboardPages.value = dealt.map { item ->
             BillboardPage(
                 key = billboardPageKey(item),
                 preview = item,
@@ -1845,13 +1875,13 @@ Log.d(
                 settled = false
             )
         }
-        if (feed.isEmpty()) return
+        if (dealt.isEmpty()) return
 
         val epoch = billboardResolveEpoch
         billboardResolveJob = viewModelScope.launch {
             try {
                 coroutineScope {
-                    feed.forEach { item ->
+                    dealt.forEach { item ->
                         launch {
                             val key = billboardPageKey(item)
                             val resolved = billboardResolveSemaphore
