@@ -180,6 +180,13 @@ object Diagnostics {
         // logcat-only, so a paste could not say whether a missing show was never
         // evaluated or evaluated and skipped (see [UpcomingDiagTrace]). Absent
         // until Home has evaluated a rail.
+        //
+        // The leg summaries print FIRST and separately: they are one line per
+        // leg (the candidate sets, the buckets, the blob's ages) and the ring
+        // below is library-scale per-show detail, so sharing one eviction
+        // budget pushed every summary out of a two-build refresh's paste. Same
+        // `upcoming: ` prefix for both, so the block still reads as one.
+        UpcomingDiagTrace.summaries().forEach { report.appendLine("upcoming: $it") }
         UpcomingDiagTrace.lines().forEach { report.appendLine("upcoming: $it") }
         // What each pinned Library rail's rows CARRIED as art, per load. A
         // Trakt rail drawn title-only is either a read that shipped no poster
