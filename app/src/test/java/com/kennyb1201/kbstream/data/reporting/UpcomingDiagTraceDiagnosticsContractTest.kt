@@ -167,7 +167,10 @@ class UpcomingDiagTraceDiagnosticsContractTest {
                 "cardsLine",
                 "localCandidatesLine",
                 "localCardsLine",
-                "droppedLine"
+                "droppedLine",
+                // The TVmaze fallback's own line: a rescued show and a dropped one
+                // are the two things a paste has to tell apart here.
+                "fallbackLine"
             )
 
         named.forEach { name ->
@@ -180,14 +183,14 @@ class UpcomingDiagTraceDiagnosticsContractTest {
             )
         }
         assertEquals(
-            "one twin per UPCOMING_DIAG site in Home - nine of them, the same nine " +
-                "as before the spec",
-            9,
+            "one twin per UPCOMING_DIAG site in Home - ten of them: the nine this spec " +
+                "pinned, plus the TVmaze fallback's line",
+            10,
             home.count("UPCOMING_DIAG\"")
         )
         assertEquals(
-            "and nine notes, so no site was left logcat-only",
-            9,
+            "and ten notes, so no site was left logcat-only",
+            10,
             home.count("UpcomingDiagTrace.note(")
         )
     }

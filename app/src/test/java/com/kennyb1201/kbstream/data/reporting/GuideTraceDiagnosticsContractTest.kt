@@ -238,9 +238,10 @@ class GuideTraceDiagnosticsContractTest {
     fun `every GUIDE log site keeps its string and gains the twin`() {
         val logs = grid.count("Log.i(")
         assertEquals(
-            "eleven sites, exactly as many as before the spec - the twins are an " +
-                "additional sink, not a new set of lines",
-            11,
+            "twelve sites: the eleven this spec pinned, plus the sidebar down-out-of-the-" +
+                "last-group line it asked for - the twins are an additional sink, not a " +
+                "new set of lines",
+            12,
             grid.count("\"GUIDE\"")
         )
         assertEquals(
