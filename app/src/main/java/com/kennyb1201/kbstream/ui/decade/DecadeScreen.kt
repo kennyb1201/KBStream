@@ -66,6 +66,7 @@ import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.trailerMenuAction
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
@@ -660,6 +661,21 @@ fun DecadeScreen(
                             onNavigateDetail = onNavigateDetail
                         )
                     },
+                    trailerMenuAction(
+                        context = context,
+                        tmdbId = studioItem.item.id,
+                        type = menuMediaType,
+                        imdbId = resolvedIds[
+                            viewModel.lookupKey(
+                                studioItem.item.id,
+                                menuMediaType
+                            )
+                        ],
+                        // Same dismiss as the scrim and Back: it hands the
+                        // focus back to the rail, so the viewer returns from
+                        // the trailer to the card the menu was opened on.
+                        onDismissFirst = { dismissRailMenu() }
+                    ),
                     PosterContextAction(
                         label = watchedMenuLabel(
                             isWatched = isWatched,

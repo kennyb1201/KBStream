@@ -1,5 +1,7 @@
 package com.kennyb1201.kbstream.ui.components
 
+import android.content.Context
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -26,6 +28,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
@@ -55,6 +60,9 @@ import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.notifications.AirReminderRules
 import com.kennyb1201.kbstream.data.notifications.AirReminderStore
+import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.TrailerPick
+import com.kennyb1201.kbstream.ui.detail.DetailTrailerLaunch
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusNone
@@ -106,6 +114,81 @@ fun watchedMenuDescription(
         "Clear watched status on this device and Simkl"
     else ->
         "Show this title as watched"
+}
+
+/** What a press that cannot play anything answers, on every surface. */
+private const val NO_TRAILER_TOAST = "No trailer for this title"
+
+/**
+ * The scope the trailer row's fetch and resolve run on.
+ *
+ * Deliberately NOT the screen's `rememberCoroutineScope()`: the action contract
+ * is "dismiss the menu first, then run the action", and the call sites dismiss
+ * by clearing a `menuTarget` / `menuItem` state that composes this whole block
+ * conditionally - so the remembered scope is cancelled in the same frame the
+ * press that started the work dismisses it, and the trailer would silently
+ * never resolve. This one outlives any screen, which is what a press that hands
+ * off to the fullscreen player needs.
+ */
+private val trailerMenuScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+/**
+ * The "Play trailer" row for the browse screens' long-press menus.
+ *
+ * One builder for every surface instead of a copy per screen: the fetch, the
+ * pick and the hand-off to the player are the same three steps wherever a title
+ * is long-pressed, and five copies would drift (the same reason the watched
+ * label and description are built here rather than inline).
+ *
+ * The tracker ids come from whichever the caller has - the `tt…` id is optional
+ * because a menu without one still has a trailer to play, and
+ * [DetailTrailerLaunch.play] derives the IMDb id from [tmdbId] + [type] when it
+ * has to. The TMDB id is not optional: it is what the videos call is keyed on,
+ * so a title the caller cannot name on TMDB answers with the same toast a title
+ * with no trailer does, rather than opening Detail the viewer did not ask for.
+ *
+ * The row is ALWAYS shown. Whether a trailer exists is only knowable from the
+ * fetch, and pre-fetching one on every menu open would cost a network call per
+ * long-press for a row most presses never take (rejected in the spec, F1).
+ */
+fun trailerMenuAction(
+    context: Context,
+    tmdbId: Int?,
+    type: String?,
+    imdbId: String?,
+    /** The caller's own dismiss: clears its menu state before the fetch runs. */
+    onDismissFirst: () -> Unit
+): PosterContextAction = PosterContextAction(
+    label = "Play trailer",
+    description = "Watch this title's trailer"
+) {
+    // The contract (see [PosterContextAction]): dismiss, THEN fetch. The menu
+    // is already animating out while the videos call is in flight.
+    onDismissFirst()
+    trailerMenuScope.launch {
+        if (tmdbId == null) {
+            Toast.makeText(context, NO_TRAILER_TOAST, Toast.LENGTH_SHORT).show()
+            return@launch
+        }
+        // Step 1 of three, in the spec's order: fetch the videos, pick the one
+        // to play, hand it over. The repository answers an empty list on any
+        // failure (offline, TMDB error), so an unreachable lookup takes the same
+        // branch as a title with no videos: the toast, no navigation, no retry.
+        val videos = TmdbRepository.getInstance(context).videosFor(tmdbId, type)
+        val video = TrailerPick.best(videos)
+        if (video == null) {
+            Toast.makeText(context, NO_TRAILER_TOAST, Toast.LENGTH_SHORT).show()
+            return@launch
+        }
+        DetailTrailerLaunch.play(
+            context = context,
+            scope = this@launch,
+            video = video,
+            imdbId = imdbId,
+            tmdbId = tmdbId,
+            type = type
+        )
+    }
 }
 
 /**

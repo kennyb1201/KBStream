@@ -64,6 +64,7 @@ import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.trailerMenuAction
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.search.successorIndexAfter
@@ -699,6 +700,10 @@ fun CatalogGridScreen(
         // Same split the rail menu uses: a grid item's id is "tmdb:123" on a
         // TMDB-sourced catalog and "tt12345" on an add-on one.
         val gridIds = LibraryIds.split(target.id)
+        // The trailer row's toast and repositories need one; read here because
+        // the only other LocalContext in this composable is inside the empty
+        // -catalog branch, which is not this path.
+        val context = LocalContext.current
 
         PosterContextMenu(
             title = target.name,
@@ -740,6 +745,17 @@ fun CatalogGridScreen(
                     leftForDetail = true
                     onItemClick(target)
                 },
+                trailerMenuAction(
+                    context = context,
+                    tmdbId = gridIds.tmdbId,
+                    type = target.type,
+                    imdbId = gridIds.imdbId,
+                    // The watched row's dismiss, not a bare state clear: this
+                    // grid is driven by a D-pad, and the tile has to get the
+                    // focus back before the player covers the screen so Back
+                    // lands on the row this menu was opened from.
+                    onDismissFirst = { closeMenu(targetKey) }
+                ),
                 PosterContextAction(
                     label = if (isWatched) {
                         "Mark as Unwatched"

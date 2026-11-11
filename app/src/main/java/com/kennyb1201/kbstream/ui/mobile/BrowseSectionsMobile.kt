@@ -48,6 +48,7 @@ import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
 import com.kennyb1201.kbstream.ui.browse.revealBrowseReturnRail
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.trailerMenuAction
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.imageOverridePosterUrl
 import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
@@ -570,6 +571,16 @@ internal fun SectionsBrowseMobile(
                         BrowseReturnFocus.record(target)
                         onOpenItem(selected)
                     },
+                    // tmdbId is the card's own id; imdbId is whatever the
+                    // screen's resolution pass landed, and the launcher derives
+                    // it from tmdbId + type when it has not.
+                    trailerMenuAction(
+                        context = context,
+                        tmdbId = selected.item.id,
+                        type = mediaType,
+                        imdbId = imdbId,
+                        onDismissFirst = { menu = null }
+                    ),
                     PosterContextAction(
                         label = watchedMenuLabel(
                             isWatched = isWatched,

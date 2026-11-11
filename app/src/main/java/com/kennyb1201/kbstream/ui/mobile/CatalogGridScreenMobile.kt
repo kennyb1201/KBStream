@@ -43,6 +43,7 @@ import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.trailerMenuAction
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
@@ -500,6 +501,9 @@ fun CatalogGridScreenMobile(
                 // A grid item's id is "tmdb:123" on a TMDB-sourced catalog and
                 // "tt12345" on an add-on one.
                 val gridIds = LibraryIds.split(target.id)
+                // For the trailer row; the file's other LocalContext is inside
+                // the empty-state branch, which is not this path.
+                val context = LocalContext.current
 
                 PosterContextMenu(
                     title = target.name,
@@ -538,6 +542,13 @@ fun CatalogGridScreenMobile(
                             leftForDetail = true
                             onItemClick(target)
                         },
+                        trailerMenuAction(
+                            context = context,
+                            tmdbId = gridIds.tmdbId,
+                            type = target.type,
+                            imdbId = gridIds.imdbId,
+                            onDismissFirst = { menuTarget = null }
+                        ),
                         PosterContextAction(
                             label = watchedMenuLabel(
                                 isWatched = isWatched,

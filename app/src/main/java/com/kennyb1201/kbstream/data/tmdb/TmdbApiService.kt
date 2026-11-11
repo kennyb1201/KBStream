@@ -62,6 +62,31 @@ interface TmdbApiService {
         @Query("page") page: Int
     ): TmdbReviews
 
+    /**
+     * A title's videos, and nothing else.
+     *
+     * The browse long-press menu knows a title's TMDB id but not its videos -
+     * those only arrive appended to the Detail fetch above, which for a trailer
+     * lookup would also pull credits, recommendations, reviews, keywords, images
+     * and awards. One press, one light call: this is the endpoint pair that
+     * makes "Play trailer" affordable from a poster menu.
+     *
+     * Same [TmdbVideos] shape the appended `videos` blob parses as, so
+     * `TrailerPick.best` serves both without a second model.
+     */
+    @GET("movie/{id}/videos")
+    suspend fun getMovieVideos(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String
+    ): TmdbVideos
+
+    /** See [getMovieVideos]: the series twin of the same light call. */
+    @GET("tv/{id}/videos")
+    suspend fun getTvVideos(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String
+    ): TmdbVideos
+
     @GET("movie/{id}/external_ids")
     suspend fun getMovieExternalIds(
         @Path("id") id: Int,

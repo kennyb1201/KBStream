@@ -63,6 +63,7 @@ import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
 import com.kennyb1201.kbstream.ui.browse.collectionBrowseScreenKey
 import com.kennyb1201.kbstream.ui.browse.rememberFocusHandBack
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.trailerMenuAction
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -579,6 +580,17 @@ fun CollectionScreen(
                             selected.id.toString()
                         )
                     },
+                    // A part is always a movie, and the IMDb id is the one
+                    // this screen already resolved for the poster's badge.
+                    trailerMenuAction(
+                        context = context,
+                        tmdbId = part.id,
+                        type = "movie",
+                        imdbId = resolvedIds[
+                            viewModel.lookupKey(part.id, "movie")
+                        ],
+                        onDismissFirst = { menuPart = null }
+                    ),
                     PosterContextAction(
                         label = if (isWatched) {
                             "Mark as Unwatched"

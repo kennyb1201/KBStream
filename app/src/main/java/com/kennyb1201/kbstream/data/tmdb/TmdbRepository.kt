@@ -2081,6 +2081,40 @@ class TmdbRepository private constructor(context: Context) :
         return result
     }
 
+    /**
+     * One title's videos, for a caller that only needs to answer "is there a
+     * trailer, and which one".
+     *
+     * Deliberately uncached and deliberately light: this exists for the browse
+     * long-press menu, where one press is one call. The resolve that follows is
+     * cached in [com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher], and
+     * a speculative pre-fetch when the menu opens was rejected - that would cost
+     * a network call per long-press for a row most presses never take.
+     *
+     * The endpoint is chosen by the same normalizer every other TMDB call keys
+     * on, so every series spelling the app has to understand ("tv", "show",
+     * "anime", "anime.series") reaches the tv endpoint and everything else
+     * reaches the movie one - the same split `isSeriesType` makes for the menu
+     * labels, without the data layer importing a UI file.
+     *
+     * Empty on any failure (no key, offline, TMDB error): the caller answers
+     * with its "no trailer" outcome, which is the same thing it does for a title
+     * that genuinely has none.
+     */
+    suspend fun videosFor(tmdbId: Int, type: String?): List<TmdbVideo> {
+        if (apiKey.isBlank()) return emptyList()
+        return runCatchingCancellable {
+            if (normalizeType(type.orEmpty()) == "series") {
+                api.getTvVideos(tmdbId, apiKey).results
+            } else {
+                api.getMovieVideos(tmdbId, apiKey).results
+            }
+        }.getOrElse {
+            Log.w("TmdbRepository", "videos lookup failed for tmdbId=$tmdbId type=$type", it)
+            emptyList()
+        }
+    }
+
     suspend fun getSeasonEpisodes(
         tvId: Int,
         season: Int,

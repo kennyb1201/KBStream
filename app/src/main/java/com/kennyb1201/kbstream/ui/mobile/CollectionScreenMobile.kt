@@ -47,6 +47,7 @@ import com.kennyb1201.kbstream.ui.browse.collectionBrowseScreenKey
 import com.kennyb1201.kbstream.ui.collection.CollectionViewModel
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.trailerMenuAction
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
 import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
@@ -368,6 +369,15 @@ fun CollectionScreenMobile(
                             )
                             onNavigateDetail("movie", part.id.toString())
                         },
+                        // A part is always a movie, and the IMDb id is the one
+                        // this screen already resolved for the poster's badge.
+                        trailerMenuAction(
+                            context = context,
+                            tmdbId = part.id,
+                            type = "movie",
+                            imdbId = resolvedIds[viewModel.lookupKey(part.id, "movie")],
+                            onDismissFirst = { menuPart = null }
+                        ),
                         PosterContextAction(
                             label = if (watched) "Mark as Unwatched" else "Mark as Watched",
                             description = if (watched) {
