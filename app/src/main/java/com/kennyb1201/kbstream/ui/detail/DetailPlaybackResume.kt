@@ -65,6 +65,18 @@ internal object DetailPlaybackResume {
             return cached
         }
 
+        // F1: a parked read leg is not asked. This lookup sits on Detail's
+        // critical path and used to fire a live playback read regardless, so
+        // during a Simkl rate-limit every title opened answered by spending a
+        // call the account had just been told to stop making. The memo it
+        // already has is the answer, and with none the row is simply absent -
+        // both are what the tracker being briefly unavailable means.
+        if (vm.simklRepository.readsAreParked()) {
+            return cached
+                ?.takeIf { cachedSimklPlaybackToken == token }
+                .orEmpty()
+        }
+
         val fresh = runCatchingCancellable { vm.simklRepository.getPlaybackItems() }.getOrNull()
             ?: return emptyList()
 

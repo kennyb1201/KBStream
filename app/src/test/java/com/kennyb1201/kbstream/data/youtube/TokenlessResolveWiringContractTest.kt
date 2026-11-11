@@ -119,7 +119,7 @@ class TokenlessResolveWiringContractTest {
     @Test
     fun `a hold is not a failure the next resolve has to wait out`() {
         val holdAt = launcher.indexOf("val heldTokenless = resolved != null")
-        val holdReturnAt = launcher.indexOf("return@withLock Result.failure(TokenlessHoldException(")
+        val holdReturnAt = launcher.indexOf("return Result.failure(TokenlessHoldException(")
         val failureWriteAt = launcher.indexOf("markFailed(videoId)")
 
         assertTrue("the hold has to be remembered as a shape", holdAt >= 0)
@@ -129,8 +129,11 @@ class TokenlessResolveWiringContractTest {
             holdReturnAt > holdAt && failureWriteAt > holdReturnAt
         )
         assertTrue(
-            "the write is what a real failure does, and it is guarded",
-            flat(launcher).contains("if (recordFailure) { markFailed(videoId) }")
+            "the write is what a real failure does, and it is guarded (and under " +
+                "the bookkeeping lock, see m21)",
+            flat(launcher).contains(
+                "if (recordFailure) { resolveMutex.withLock { markFailed(videoId) } }"
+            )
         )
         assertEquals(
             "no other failure write exists on this path",
@@ -141,7 +144,7 @@ class TokenlessResolveWiringContractTest {
             "and the hold is TYPED: an owner that poisons a spent ladder must not " +
                 "poison a video that merely ran out of mint",
             flat(launcher).contains(
-                "return@withLock Result.failure(TokenlessHoldException(videoId, error))"
+                "return Result.failure(TokenlessHoldException(videoId, error))"
             ) &&
                 flat(home).contains("if (error is TokenlessHoldException) {") &&
                 flat(mobileHome).contains("if (error is TokenlessHoldException) {")

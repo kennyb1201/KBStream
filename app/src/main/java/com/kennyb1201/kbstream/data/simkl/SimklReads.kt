@@ -37,15 +37,34 @@ suspend fun SimklRepository.getPlaybackItemsImpl(
         "SIMKL_CLIENT_ID is missing"
     }
 
-    return api.getPlayback(
-        authorization =
-            trackedAuthHeaderFor(
-                accessToken
-            ),
+    val sessions =
+        api.getPlayback(
+            authorization =
+                trackedAuthHeaderFor(
+                    accessToken
+                ),
 
-        extended =
-            "full"
-    )
+            extended =
+                "full"
+        )
+
+    /*
+     * F1: this is the ONE place a successful session fetch happens, so it is
+     * also where the deletes recorded while the read leg was parked are
+     * replayed - the fetch that finally gets through is the call that carries
+     * the list they need, and no timer or worker has to be added for it. The
+     * answer drops whatever the replay just deleted: a paused session the
+     * server has already been told to close must not reach Continue Watching
+     * for one more build.
+     */
+    val replayed =
+        replayPendingPlaybackDeletes(sessions)
+
+    return if (replayed.isEmpty()) {
+        sessions
+    } else {
+        sessions.filterNot { item -> item.id?.let { it in replayed } == true }
+    }
 }
 
 suspend fun SimklRepository.getWatchingShowsImpl(
@@ -135,6 +154,14 @@ suspend fun SimklRepository.getWatchedCountsImpl(): SimklWatchedCounts? {
     // dropped), and "SERIES WATCHED" over-counts when it includes
     // shows never actually watched. Matches what Simkl's own site
     // reports as watched.
+    // F1: the park gates BOTH legs here. The shows leg force-refreshes the
+    // all-shows cache and the movies leg calls the API directly, so this read
+    // went around the park twice - and on a rate-limited account the connect
+    // screen's counters kept re-firing the two calls that were being limited.
+    // null is "could not ask", which the UI already omits; forceRefresh is a
+    // caller's wish for a coherent pair, not a licence to ignore a 429.
+    if (readsAreParked()) return null
+
     val watchedShowStatuses = setOf("watching", "completed")
     val shows =
         runCatchingCancellable {

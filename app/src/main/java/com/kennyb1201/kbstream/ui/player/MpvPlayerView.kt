@@ -423,9 +423,47 @@ class MpvPlayerView @JvmOverloads constructor(
      */
     private var subtitleSize = SubtitleOverlayStyle.SIZE_NEUTRAL
 
+    /**
+     * Whether playback is paused, as mpv last reported it.
+     *
+     * Volatile: written on mpv's event thread (the `pause` property observer),
+     * reset on main in [startPendingLoad]/[stopPlayback], read on main by
+     * [isPaused] - the pause guard for the Up Next countdown. A stale read let
+     * the countdown tick while paused (auto-advancing past the hold) or hold
+     * while playing.
+     */
+    @Volatile
     private var pauseState = false
+
+    /**
+     * Whether mpv reported a cache stall it has not cleared.
+     *
+     * Volatile: written on mpv's event thread (the `paused-for-cache`
+     * observer), read in that same callback - the only reader. Annotated with the
+     * rest of the m17 set rather than for a second reader.
+     */
+    @Volatile
     private var cacheStall = false
+
+    /**
+     * The last playback position mpv reported, in ms.
+     *
+     * Volatile: written on mpv's event thread (`time-pos` observer), reset on
+     * main in [startPendingLoad]/[stopPlayback], read on main by [positionMs] -
+     * the resume position, the scrub target and the player position provider. A
+     * stale read misplaces a resume or a scrub.
+     */
+    @Volatile
     private var lastPositionMs = 0L
+
+    /**
+     * The last duration mpv reported, in ms.
+     *
+     * Volatile: written on mpv's event thread (`duration` observer), reset on
+     * main in [startPendingLoad]/[stopPlayback], read on main by [durationMs]
+     * and by the file-loaded/ended diagnostics.
+     */
+    @Volatile
     private var lastDurationMs = 0L
 
     /** `mediacodec,mediacodec-copy` while hardware decoding is on, else `no`. */

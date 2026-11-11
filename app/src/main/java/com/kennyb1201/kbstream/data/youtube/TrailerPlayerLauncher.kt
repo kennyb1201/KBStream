@@ -30,11 +30,22 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
     private const val TAG = "TrailerLauncher"
 
     /**
-     * Serializes resolve chains so concurrent callers for the same (or any)
-     * video coalesce behind one network flight: the hero pre-warm and the
-     * post-dwell resolve would otherwise both run the full InnerTube →
-     * NewPipe → Piped chain, and hammering YouTube's anonymous player API
-     * with duplicate calls is exactly what invites its bot-gating.
+     * Serializes the BOOKKEEPING of a resolve, not the resolve itself (m21).
+     *
+     * It used to span the whole chain so concurrent callers "coalesce behind one
+     * network flight", which meant the hero pre-warm queue serialized behind any
+     * single slow resolve: the extractor's 15 s budget plus the mint's 10 s
+     * provider timeout, one trailer at a time. What the lock is actually for is
+     * the four shared maps ([sourceCache], [resolutionFailures],
+     * [identityBlocked], [imdbMounted]): the prune, the refusal checks and every
+     * cache read and write happen inside it, and no network call runs while it
+     * is held.
+     *
+     * Two concurrent resolves for the SAME video may therefore now duplicate
+     * work (both walk the extractor) - accepted on purpose: it is bounded by the
+     * same per-call budgets, and the cache is re-read under the lock after the
+     * IMDb leg, so a resolve that finished first is still served instead of
+     * re-resolved.
      */
     private val resolveMutex = Mutex()
 
@@ -123,8 +134,8 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
     /**
      * Brings both caches back under their caps, oldest first.
      *
-     * Called from inside [resolveMutex], which serializes every resolve, so
-     * there is no concurrent writer to race the eviction.
+     * Called from inside [resolveMutex] (see [refusalFor]), the same lock every
+     * cache write takes, so there is no concurrent writer to race the eviction.
      */
     private fun pruneCaches() {
         // Shared with the TMDB caches (data.memory.evictOldest): same rule, and
@@ -284,6 +295,72 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         System.currentTimeMillis() - cachedAt > CACHE_TTL_MS
 
     /**
+     * The bookkeeping a resolve does before it touches the network: the prune
+     * and the two fast refusals, all of it inside [resolveMutex].
+     *
+     * Kept as one function so the lock's boundary is one readable unit rather
+     * than a span the network legs happen to sit inside (m21). Defined above
+     * [resolvePlayableUrl] so the source still reads that a refused video is
+     * answered before anything is fetched. Null means "go resolve".
+     */
+    private fun refusalFor(videoId: String): Result<PlayableSource>? {
+        // Keep the process-wide caches bounded (see [pruneCaches]). This is the
+        // only place that prunes, and it runs under the same lock as every
+        // cache write.
+        pruneCaches()
+
+        // A video YouTube already refused on a fresh identity stays refused:
+        // skip the watch-page fetch and the whole resolve. The hero re-arms on
+        // every foreground return, so without this a refused trailer burns a
+        // config fetch + full resolve each time it cycles back around.
+        if (identityBlocked.contains(videoId)) {
+            Log.w(TAG, "Skipping resolution for $videoId (refused by YouTube on a fresh identity)")
+            return Result.failure(
+                IllegalStateException("Trailer $videoId is blocked by YouTube for this session")
+            )
+        }
+
+        // Fail fast for videos that just failed to resolve — retrying a
+        // region-blocked video through every resolver on each hero rotation
+        // only adds seconds of network churn for a known-dead result.
+        resolutionFailures[videoId]?.let { failedAt ->
+            if (System.currentTimeMillis() - failedAt < FAILURE_TTL_MS) {
+                Log.w(TAG, "Skipping resolution for $videoId (recently failed)")
+                return Result.failure(
+                    IllegalStateException("Trailer $videoId recently failed to resolve")
+                )
+            }
+            resolutionFailures.remove(videoId)
+        }
+        return null
+    }
+
+    /**
+     * A fresh cached source for [videoId], read under [resolveMutex] - the
+     * answer form of the cache leg, so the read and the stale-entry removal
+     * stay inside the lock's boundary.
+     *
+     * Null means "not cached, or the entry was stale and has been dropped".
+     */
+    private fun freshCachedSource(videoId: String): Result<PlayableSource>? {
+        val cached = sourceCache[videoId] ?: return null
+        if (!cached.isStale) {
+            Log.w(TAG, "Trailer source cache hit for $videoId")
+            // A cache hit replays the snapshot the source was cached with -
+            // this URL was signed by that mint, whatever has been minted since.
+            PoTokenTrace.recordMount(
+                videoId,
+                cached.client,
+                cached.playerToken,
+                cached.pot
+            )
+            return Result.success(cached.source)
+        }
+        sourceCache.remove(videoId)
+        return null
+    }
+
+    /**
      * Resolves a YouTube URL/ID down to a playable stream source
      * without launching any UI.
      *
@@ -339,12 +416,7 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         tmdbId: Int? = null,
         /** `movie` / `series`, for that mapping. */
         type: String? = null
-    ): Result<PlayableSource> = resolveMutex.withLock {
-
-        // Keep the two process-wide caches bounded (see [pruneCaches]). Every
-        // resolve runs under resolveMutex, so this is both the only writer and
-        // the only pruner.
-        pruneCaches()
+    ): Result<PlayableSource> {
 
         val videoId = extractVideoId(trailerUrlOrId)
 
@@ -354,7 +426,7 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
                 "Could not extract YouTube video ID: $trailerUrlOrId"
             )
 
-            return@withLock Result.failure(
+            return Result.failure(
                 IllegalArgumentException(
                     "Could not extract YouTube video ID"
                 )
@@ -366,29 +438,16 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
             "Extracted YouTube video ID: $videoId"
         )
 
-        // A video YouTube already refused on a fresh identity stays refused:
-        // skip the watch-page fetch and the whole resolve. The hero re-arms on
-        // every foreground return, so without this a refused trailer burns a
-        // config fetch + full resolve each time it cycles back around.
-        if (identityBlocked.contains(videoId)) {
-            Log.w(TAG, "Skipping resolution for $videoId (refused by YouTube on a fresh identity)")
-            return@withLock Result.failure(
-                IllegalStateException("Trailer $videoId is blocked by YouTube for this session")
-            )
-        }
-
-        // Fail fast for videos that just failed to resolve — retrying a
-        // region-blocked video through every resolver on each hero rotation
-        // only adds seconds of network churn for a known-dead result.
-        resolutionFailures[videoId]?.let { failedAt ->
-            if (System.currentTimeMillis() - failedAt < FAILURE_TTL_MS) {
-                Log.w(TAG, "Skipping resolution for $videoId (recently failed)")
-                return@withLock Result.failure(
-                    IllegalStateException("Trailer $videoId recently failed to resolve")
-                )
-            }
-            resolutionFailures.remove(videoId)
-        }
+        // The lock is for the BOOKKEEPING only (m21).
+        //
+        // It used to span the whole resolve, so one slow hero (the extractor's
+        // 15 s budget plus the mint's 10 s provider timeout) stalled every
+        // trailer queued behind it. What the lock actually protects is the four
+        // shared maps: pruning, the refusal checks, and the cache reads and
+        // writes. No network call may run while it is held, so each network leg
+        // below takes the lock again around its own map touches.
+        val refused = resolveMutex.withLock { refusalFor(videoId) }
+        if (refused != null) return refused
 
         // IMDb first: a single MP4 that needs no adaptive merge and no signed
         // chunker, which is the whole reason it exists. Tried FIRST on a
@@ -399,8 +458,10 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         val imdb = resolveImdbSource(imdbId, tmdbId, type, excludeClients, videoId)
         if (imdb != null) {
             val source = PlayableSource.Muxed(imdb.url)
-            resolutionFailures.remove(videoId)
-            imdbMounted[videoId] = System.currentTimeMillis()
+            resolveMutex.withLock {
+                resolutionFailures.remove(videoId)
+                imdbMounted[videoId] = System.currentTimeMillis()
+            }
             // Recorded, not mounted as a token pair: nothing here comes from
             // YouTube, and a `fallback=true` snapshot would read as a
             // NewPipe/Piped death (see PoTokenTrace.recordMount).
@@ -411,28 +472,20 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
                     " host=" + originHost(imdb.url)
             )
             logResolved("IMDb " + imdb.kindLabel, source)
-            return@withLock Result.success(source)
+            return Result.success(source)
         }
 
         // Serve from cache if fresh - unless this is an exclusion resolve, whose
         // whole point is a source DIFFERENT from the one the cache holds.
+        //
+        // Read UNDER the lock and AFTER the IMDb wait on purpose: that wait is
+        // the one this resolve spends before the cache is consulted, so a
+        // concurrent resolve that stored its answer meanwhile is seen here
+        // instead of being resolved a second time. This is also the only leg
+        // that consults the cache - the extractor and the mint are never
+        // answered from it.
         if (excludeClients.isEmpty()) {
-            sourceCache[videoId]?.let { cached ->
-                if (!cached.isStale) {
-                    Log.w(TAG, "Trailer source cache hit for $videoId")
-                    // A cache hit replays the snapshot the source was cached
-                    // with - this URL was signed by that mint, whatever has
-                    // been minted since.
-                    PoTokenTrace.recordMount(
-                        videoId,
-                        cached.client,
-                        cached.playerToken,
-                        cached.pot
-                    )
-                    return@withLock Result.success(cached.source)
-                }
-                sourceCache.remove(videoId)
-            }
+            resolveMutex.withLock { freshCachedSource(videoId) }?.let { return it }
         }
 
         // Primary: direct InnerTube player API. This runs from the device's
@@ -444,12 +497,18 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
             excludeClients = excludeClients
         )
         if (resolved != null && !resolved.potlessByColdMint) {
-            sourceCache[videoId] = CachedSource(
-                resolved.source,
-                resolved.client,
-                playerToken = resolved.playerToken,
-                pot = resolved.pot
-            )
+            resolveMutex.withLock {
+                sourceCache[videoId] = CachedSource(
+                    resolved.source,
+                    resolved.client,
+                    playerToken = resolved.playerToken,
+                    pot = resolved.pot
+                )
+            resolutionFailures.remove(videoId)
+                // A YouTube source just replaced the IMDb one: the next death is
+                // that source's, and its class is what the resume excludes.
+                imdbMounted.remove(videoId)
+            }
             // Recorded HERE, at the hand-over, and not at the resolve: a
             // tokenless winner is never mounted (the branch above), and a
             // snapshot it left behind would be quoted as the fallback's own
@@ -460,12 +519,8 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
                 resolved.playerToken,
                 resolved.pot
             )
-            resolutionFailures.remove(videoId)
-            // A YouTube source just replaced the IMDb one: the next death is
-            // that source's, and its class is what the resume excludes.
-            imdbMounted.remove(videoId)
             logResolved("InnerTube", resolved.source)
-            return@withLock Result.success(resolved.source)
+            return Result.success(resolved.source)
         }
         if (resolved != null) {
             // A tokenless winner is not a success, whatever its kind: its URLs
@@ -495,10 +550,14 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         // Fallback: NewPipe (with its internal Piped fallback)
         val fallback = NewPipeManager.getPlayableUrl(videoId)
         fallback.onSuccess { source ->
-            // NewPipe names no InnerTube client, so the entry carries none:
-            // a later death starts its exclusion from the trace's fallback
-            // rather than from a client that never signed anything.
-            sourceCache[videoId] = CachedSource(source, client = null)
+            resolveMutex.withLock {
+                // NewPipe names no InnerTube client, so the entry carries none:
+                // a later death starts its exclusion from the trace's fallback
+                // rather than from a client that never signed anything.
+                sourceCache[videoId] = CachedSource(source, client = null)
+                resolutionFailures.remove(videoId)
+                imdbMounted.remove(videoId)
+            }
             // The fallback names no client and carries no InnerTube tokens, and
             // its death has to read as a fallback death rather than as a
             // tokenless InnerTube mount (a gate regression).
@@ -508,11 +567,9 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
                 playerToken = false,
                 pot = false
             )
-            resolutionFailures.remove(videoId)
-            imdbMounted.remove(videoId)
             logResolved("NewPipe/Piped", source)
         }
-        val error = fallback.exceptionOrNull() ?: return@withLock fallback
+        val error = fallback.exceptionOrNull() ?: return fallback
         if (heldTokenless) {
             // The hold's capture signature: pot=false on the resolve, no mount,
             // no death line - and no failure memory either. Typed, because a
@@ -524,10 +581,10 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
                     "NewPipe/Piped found nothing; the next resolve is free to " +
                     "re-mint"
             )
-            return@withLock Result.failure(TokenlessHoldException(videoId, error))
+            return Result.failure(TokenlessHoldException(videoId, error))
         }
         if (recordFailure) {
-            markFailed(videoId)
+            resolveMutex.withLock { markFailed(videoId) }
         }
         Log.e(
             TAG,

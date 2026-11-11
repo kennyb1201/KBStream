@@ -1785,6 +1785,17 @@ fun AppRoot(
                 debridAddons = DebridAddons.forDevice(context)
             )
         }
+        // Warm the cached-answer memo for the WHOLE candidate set in one request
+        // (m19): the badge pass is fire-and-forget, so an autoplay launched from
+        // Detail or Continue Watching on a fresh process reached this walk with
+        // a cold memo - and the walk then paid one live cached-check per hash
+        // row, serially, out of its own budget. Afterwards every row's own
+        // check in `playableStream` is a memo hit. Best-effort inside (see
+        // TorBoxResolve.prefetchCached), so a failed prefetch degrades to
+        // exactly the per-row behaviour this had, rather than failing the walk;
+        // the prefetch runs BEFORE the budget starts, so its own request is not
+        // charged to the walk.
+        TorBoxResolve.prefetchCached(context, walkCandidates)
         // One TOTAL budget for the walk (spec C20): the per-call timeouts stay
         // as they are on each request, and this bounds their sum, so the worst
         // case is a picker rather than minutes of "Finding sources…".

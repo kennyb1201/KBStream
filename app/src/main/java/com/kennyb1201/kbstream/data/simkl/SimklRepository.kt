@@ -2216,6 +2216,50 @@ class SimklRepository(
      * on a plain failure. @Synchronized so two failing legs cannot race the
      * park's deadline backwards.
      */
+    /**
+     * Playback-session deletes that could not run because the read leg was
+     * parked (F1, 2026-11-11), in the order they were recorded.
+     *
+     * The delete half of a mark-watched needs the OPEN SESSION LIST, and that
+     * list is a read: while Simkl is rate-limiting, a parked delete used to
+     * answer "nothing to delete" and the paused pre-completion session stayed
+     * on the server - so it resurfaced in Continue Watching at its old progress
+     * ("99% watched") even though the episode was completed. There is no next
+     * mark-watched for that title to retry on, which is why the delete is
+     * recorded rather than just skipped.
+     *
+     * In memory on purpose, unlike the Trakt scrobble queue: the park is a
+     * DEADLINE of at most [READ_PARK_MAX_MS] (ten minutes), and the cost of
+     * losing a record to process death is exactly today's behaviour - the
+     * session lingers until that title is marked again - not a new failure.
+     * A Room table and a migration for a ten-minute window would be worse than
+     * the bug. Bounded, because a pathological run of parked marks must not grow
+     * it without limit; the OLDEST entry is dropped first, so the most recent
+     * intent (the title just completed) is the one that survives.
+     */
+    private val pendingPlaybackDeletes = LinkedHashSet<PendingPlaybackDelete>()
+
+    /** Records a delete the parked read leg could not act on. */
+    @Synchronized
+    internal fun notePendingPlaybackDelete(delete: PendingPlaybackDelete) {
+        if (!pendingPlaybackDeletes.add(delete)) return
+        while (pendingPlaybackDeletes.size > MAX_PENDING_PLAYBACK_DELETES) {
+            pendingPlaybackDeletes.remove(pendingPlaybackDeletes.first())
+        }
+    }
+
+    /** A snapshot of what is waiting, for the replay (see [replayPendingPlaybackDeletes]). */
+    @Synchronized
+    internal fun pendingPlaybackDeleteSnapshot(): List<PendingPlaybackDelete> =
+        pendingPlaybackDeletes.toList()
+
+    /** Drops the entries that have been acted on, keeping any that failed. */
+    @Synchronized
+    internal fun forgetPendingPlaybackDeletes(applied: Collection<PendingPlaybackDelete>) {
+        if (applied.isEmpty()) return
+        pendingPlaybackDeletes.removeAll(applied.toSet())
+    }
+
     @Synchronized
     internal fun parkReads(code: Int?, retryAfter: String?) {
         val now = System.currentTimeMillis()
@@ -3548,6 +3592,9 @@ class SimklRepository(
         private const val READ_PARK_MIN_MS = 5_000L
         private const val READ_PARK_MAX_MS = 10L * 60L * 1000L
         private const val READ_FAILURE_BACKOFF_MS = 30_000L
+
+        /** Cap on [pendingPlaybackDeletes]: see the field for why it is bounded. */
+        private const val MAX_PENDING_PLAYBACK_DELETES = 32
 
         private const val CONTINUE_WATCHING_DISK_TTL_MS =
             6L * 60L * 60L * 1000L

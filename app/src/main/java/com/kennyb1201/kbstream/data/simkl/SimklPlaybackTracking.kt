@@ -100,6 +100,155 @@ suspend fun SimklRepository.deletePlaybackSessionImpl(
 }
 
 /**
+ * One playback-session delete the parked read leg could not run (F1).
+ *
+ * Carries everything the delete needs to be repeated later WITHOUT the call
+ * site's arguments - which parent, which episode scope, and (for the watched
+ * sweep) the progress threshold - because the mark-watched that recorded it has
+ * long returned by the time the replay runs. [kind] separates the two deletes:
+ * [Kind.PARENT] is the Continue-Watching card delete (a whole parent, optionally
+ * narrowed to some episodes) and [Kind.WATCHED] is the post-completion sweep,
+ * which also filters by progress.
+ */
+internal data class PendingPlaybackDelete(
+    val parentId: String,
+    val tmdbId: Int? = null,
+    val title: String? = null,
+    val seasonsEpisodes: Set<Pair<Int, Int>>? = null,
+    val season: Int? = null,
+    val episode: Int? = null,
+    val episodes: List<Int>? = null,
+    val minProgress: Float = 95f,
+    val kind: Kind = Kind.WATCHED
+) {
+    enum class Kind { PARENT, WATCHED }
+
+    companion object {
+        fun forParent(
+            parentId: String,
+            tmdbId: Int? = null,
+            title: String? = null,
+            seasonsEpisodes: Set<Pair<Int, Int>>? = null
+        ) = PendingPlaybackDelete(
+            parentId = parentId,
+            tmdbId = tmdbId,
+            title = title,
+            seasonsEpisodes = seasonsEpisodes,
+            kind = Kind.PARENT
+        )
+
+        fun forWatched(
+            parentId: String,
+            tmdbId: Int? = null,
+            season: Int? = null,
+            episode: Int? = null,
+            episodes: List<Int>? = null,
+            minProgress: Float = 95f
+        ) = PendingPlaybackDelete(
+            parentId = parentId,
+            tmdbId = tmdbId,
+            season = season,
+            episode = episode,
+            episodes = episodes,
+            minProgress = minProgress,
+            kind = Kind.WATCHED
+        )
+    }
+}
+
+/**
+ * Replays the deletes recorded while the read leg was parked (F1).
+ *
+ * Called from `getPlaybackItemsImpl` - the one place a SUCCESSFUL session fetch
+ * happens - which makes "the first successful fetch after the park lifts" the
+ * replay trigger without a timer: the fetch that finally gets through is the
+ * same call that carries the list the delete needs. That list is the one just
+ * read, never a pre-park copy, so a session the viewer reopened in the meantime
+ * is judged on its CURRENT progress, and one already gone server-side is simply
+ * absent.
+ *
+ * Returns the ids it deleted, so the caller can drop them from its own answer
+ * (the fetch that replayed them would otherwise hand a just-deleted paused
+ * session to Continue Watching for one more build). An entry whose delete
+ * FAILED is kept for the next fetch; one whose parent no longer parses is
+ * dropped, because it can never be addressed.
+ */
+internal suspend fun SimklRepository.replayPendingPlaybackDeletes(
+    sessions: List<SimklPlaybackItem>
+): Set<Int> {
+    val pending = pendingPlaybackDeleteSnapshot()
+    if (pending.isEmpty()) return emptySet()
+
+    val removed = LinkedHashSet<Int>()
+    val applied = ArrayList<PendingPlaybackDelete>(pending.size)
+
+    for (delete in pending) {
+        val ref = parsePlaybackIds(delete.parentId, delete.tmdbId)
+        if (ref == null) {
+            applied += delete
+            continue
+        }
+
+        var allDeleted = true
+        for (item in sessions) {
+            if (!pendingDeleteMatches(item, ref, delete)) continue
+            val sessionId = item.id
+            if (sessionId == null) {
+                // A session with no id cannot be DELETE'd; it is not one this
+                // replay can act on, and it is not the record's fault.
+                continue
+            }
+            if (deletePlaybackSessionImpl(sessionId)) {
+                removed += sessionId
+            } else {
+                allDeleted = false
+            }
+        }
+        if (allDeleted) applied += delete
+    }
+
+    forgetPendingPlaybackDeletes(applied)
+
+    if (removed.isNotEmpty()) {
+        Log.i(
+            "SIMKL_REPO",
+            "replayed ${pending.size} parked playback delete(s): removed=${removed.size}"
+        )
+    }
+
+    return removed
+}
+
+/** Whether one open session is what [delete] was recorded to remove. */
+private fun pendingDeleteMatches(
+    item: SimklPlaybackItem,
+    ref: SimklPlaybackIdsRef,
+    delete: PendingPlaybackDelete
+): Boolean {
+    if (!playbackItemMatchesParent(item, ref.imdb, ref.tmdb, delete.title)) return false
+
+    return when (delete.kind) {
+        PendingPlaybackDelete.Kind.PARENT ->
+            playbackSessionMatchesEpisodeScope(item, delete.seasonsEpisodes)
+
+        PendingPlaybackDelete.Kind.WATCHED -> {
+            val scope = when {
+                delete.episodes != null && delete.season != null ->
+                    item.episode?.season == delete.season &&
+                        item.episode?.episode?.let { it in delete.episodes } == true
+
+                delete.season != null && delete.episode != null ->
+                    item.episode?.season == delete.season &&
+                        item.episode?.episode == delete.episode
+
+                else -> true
+            }
+            scope && (item.progress ?: 0f) >= delete.minProgress
+        }
+    }
+}
+
+/**
  * Deletes every open Simkl playback session whose show/movie matches the
  * given parent, regardless of which deduped card surfaced it. A paused
  * title is usually backed by BOTH a local resume row and a Simkl paused
@@ -138,6 +287,26 @@ suspend fun SimklRepository.deletePlaybackSessionsForParentImpl(
             parentId
         )
             ?: return 0
+
+    // F1: the session list this delete needs is a READ, so a parked read leg
+    // must not be asked for it. Answering 0 alone would silently drop the
+    // delete, so it is recorded for the first successful fetch after the park
+    // lifts (see [replayPendingPlaybackDeletes]).
+    if (readsAreParked()) {
+        notePendingPlaybackDelete(
+            PendingPlaybackDelete.forParent(
+                parentId = parentId,
+                tmdbId = ref.tmdb,
+                title = title,
+                seasonsEpisodes = seasonsEpisodes
+            )
+        )
+        Log.i(
+            "SIMKL_REPO",
+            "deletePlaybackSessionsForParent parked: queued parent=$parentId"
+        )
+        return 0
+    }
 
     return try {
 
@@ -231,6 +400,29 @@ suspend fun SimklRepository.deleteOpenPlaybackSessionsForWatchedImpl(
 
     val episodeSet =
         episodes?.toSet()
+
+    // F1: the delete's own list read is what the park gates - the write legs
+    // already park, and the deletes went around them. Recorded, not dropped:
+    // this runs right after a title was completed, and there is no next
+    // mark-watched for that title to retry on.
+    if (readsAreParked()) {
+        notePendingPlaybackDelete(
+            PendingPlaybackDelete.forWatched(
+                parentId = parentId,
+                tmdbId = ref.tmdb,
+                season = season,
+                episode = episode,
+                episodes = episodes,
+                minProgress = minProgress
+            )
+        )
+        Log.i(
+            "SIMKL_REPO",
+            "deleteOpenPlaybackSessionsForWatched parked: queued " +
+                "parent=$parentId s=$season e=$episode"
+        )
+        return 0
+    }
 
     return try {
         val matchingSessions =

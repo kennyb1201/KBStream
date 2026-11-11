@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.trakt
 
 import android.content.Context
+import android.util.Log
 import com.kennyb1201.kbstream.data.library.LibraryListRename
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.kennyb1201.kbstream.data.publiclists.PublicListCard
@@ -14,8 +15,10 @@ import com.kennyb1201.kbstream.data.reporting.NetworkTraceInterceptor
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
@@ -195,6 +198,15 @@ enum class TraktDisconnectOutcome {
 }
 
 class TraktRepository private constructor(private val context: Context?) {
+
+    /**
+     * This profile's queued stop scrobbles (F2). Profile-scoped by its own
+     * prefs file, because a stop belongs to the session it was scrobbled
+     * through and two profiles sharing a device can watch the same title.
+     */
+    private val pendingScrobbles: TraktPendingScrobbles by lazy {
+        TraktPendingScrobbles(context)
+    }
 
     companion object {
         private const val PREFS_TAG = "TraktRepository"
@@ -564,36 +576,181 @@ class TraktRepository private constructor(private val context: Context?) {
     ): Boolean {
         if (!TraktConfig.isConfigured || parentId.isBlank()) return false
         val token = validAccessToken() ?: return false
-        if (!guard.tryAcquire()) return false
 
         val ids = idsFor(parentId, tmdbId)
         if (ids.imdb == null && ids.tmdb == null) return false
         val percent = TraktScrobbleRules.progressPercent(progress)
-        val body = if (TraktScrobbleRules.isMovie(parentType)) {
-            TraktScrobbleRequest(
-                movie = TraktMediaEntry(ids = ids),
-                progress = percent
-            )
-        } else {
-            val showSeason = season ?: return false
-            val showEpisode = episode ?: return false
-            TraktScrobbleRequest(
-                show = TraktMediaEntry(ids = ids),
-                episode = TraktEpisodeNumber(showSeason, showEpisode),
-                progress = percent
-            )
+        val body = scrobbleBody(parentType, ids, season, episode, percent) ?: return false
+
+        // The entry a failure would queue, built before the call so the queued
+        // copy is the body that was actually attempted (F2).
+        val failed = PendingScrobble(
+            action = action,
+            parentId = parentId,
+            parentType = parentType,
+            season = season,
+            episode = episode,
+            progress = percent,
+            tmdbId = tmdbId,
+            attemptedAtMs = System.currentTimeMillis()
+        )
+
+        if (!guard.tryAcquire()) {
+            // A spent budget is a failed write, not a missing one: the play
+            // still happened, so its stop is queued like any other refusal.
+            queueFailedStop(failed)
+            return false
         }
 
         val response = runCatchingCancellable {
             api.scrobble(action = action, authorization = "Bearer $token", body = body)
-        }.getOrNull() ?: return false
+        }.getOrNull()
+        if (response == null) {
+            // Transport failure - the airplane-mode case.
+            queueFailedStop(failed)
+            return false
+        }
         noteRetryAfter(response)
-        if (!response.isSuccessful) return false
+        if (!response.isSuccessful) {
+            if (TraktScrobbleQueueRules.isRetryable(response.code())) queueFailedStop(failed)
+            return false
+        }
         // A stop at Trakt's own threshold records the title as watched, so the
         // snapshot the badges read is now stale. A start/pause changes nothing
         // in the watched history and is not worth a refetch.
         if (action == "stop") invalidateWatchedSnapshot()
+        // This call just proved the guard is not blocked and the network is up,
+        // which is exactly the next window a queued stop was waiting for.
+        flushPendingScrobbles()
         return true
+    }
+
+    /**
+     * The request body for one scrobble, or null when the arguments cannot make
+     * one (a series without its season/episode).
+     *
+     * Shared by [scrobble] and [flushPendingScrobbles] so a replayed stop is
+     * built by the same code as a live one - a queued entry must not be able to
+     * drift into a differently shaped request.
+     */
+    private fun scrobbleBody(
+        parentType: String,
+        ids: TraktIds,
+        season: Int?,
+        episode: Int?,
+        percent: Int
+    ): TraktScrobbleRequest? {
+        if (TraktScrobbleRules.isMovie(parentType)) {
+            return TraktScrobbleRequest(
+                movie = TraktMediaEntry(ids = ids),
+                progress = percent
+            )
+        }
+        val showSeason = season ?: return null
+        val showEpisode = episode ?: return null
+        return TraktScrobbleRequest(
+            show = TraktMediaEntry(ids = ids),
+            episode = TraktEpisodeNumber(showSeason, showEpisode),
+            progress = percent
+        )
+    }
+
+    /**
+     * Queues a STOP that did not reach Trakt (F2).
+     *
+     * Only a stop is durable: a start/pause failure costs nothing, because the
+     * play continues and the next event retries it - the shape Simkl's scrobble
+     * leg already relies on. A stop is the LAST event of a play, so a lost one
+     * is a play Trakt never records, with no later event to save it.
+     *
+     * The write is uncancellable and failure-proof: the player's own scope can
+     * end the moment the play does, and a tracker's queue must never be able to
+     * change what playback does or throw into it. A store that cannot write is
+     * logged, not propagated - the failure it represents is the one we already
+     * had.
+     */
+    private suspend fun queueFailedStop(entry: PendingScrobble) {
+        if (!TraktScrobbleQueueRules.isStop(entry.action)) return
+        withContext(NonCancellable) {
+            runCatching { pendingScrobbles.record(entry) }
+                .onFailure { Log.w(PREFS_TAG, "could not queue stop scrobble: ${it.message}") }
+        }
+    }
+
+    /**
+     * Retries the queued stop scrobbles, and returns how many Trakt accepted.
+     *
+     * The trigger is "the next Trakt window this device gets" - deliberately not
+     * a timer or a worker (F2): a queued stop is retried from the successful
+     * call that proves the guard is unblocked and the network is up, and
+     * [watchedSnapshot] runs that check on every Home/Library build, so a device
+     * that comes back from airplane mode flushes on the first screen that asks
+     * Trakt anything. Entries are dropped after
+     * [TraktScrobbleQueueRules.MAX_AGE_MS] - never retried forever - and a 429
+     * on a replay keeps its entry (the guard has just re-parked) instead of
+     * discarding the play.
+     */
+    internal suspend fun flushPendingScrobbles(): Int {
+        if (!TraktConfig.isConfigured) return 0
+        val pending = runCatching { pendingScrobbles.read() }.getOrNull().orEmpty()
+        if (pending.isEmpty()) return 0
+
+        val now = System.currentTimeMillis()
+        var delivered = 0
+
+        for (entry in pending) {
+            if (TraktScrobbleQueueRules.isExpired(entry, now)) {
+                Log.i(PREFS_TAG, "dropping stale scrobble: ${entry.playKey}")
+                pendingScrobbles.remove(entry.playKey)
+                continue
+            }
+            // Still parked: every later entry would be refused the same way.
+            if (guard.isBlocked()) return delivered
+
+            val token = validAccessToken() ?: return delivered
+            val ids = idsFor(entry.parentId, entry.tmdbId)
+            val body = scrobbleBody(
+                parentType = entry.parentType,
+                ids = ids,
+                season = entry.season,
+                episode = entry.episode,
+                percent = entry.progress
+            )
+            if ((ids.imdb == null && ids.tmdb == null) || body == null) {
+                // Unaddressable now: nothing can ever make this replay work.
+                pendingScrobbles.remove(entry.playKey)
+                continue
+            }
+            if (!guard.tryAcquire()) return delivered
+
+            val response = runCatchingCancellable {
+                api.scrobble(
+                    action = entry.action,
+                    authorization = "Bearer $token",
+                    body = body
+                )
+            }.getOrNull()
+            if (response == null) continue
+            noteRetryAfter(response)
+
+            when {
+                response.isSuccessful -> {
+                    pendingScrobbles.remove(entry.playKey)
+                    invalidateWatchedSnapshot()
+                    delivered++
+                }
+                // The guard is parked again by noteRetryAfter above; the entry
+                // stays for the window after that one.
+                response.code() == 429 -> return delivered
+                // Trakt is down or the transport blinked: keep it.
+                TraktScrobbleQueueRules.isRetryable(response.code()) -> continue
+                // Trakt answered "no" to this body: replaying cannot help.
+                else -> pendingScrobbles.remove(entry.playKey)
+            }
+        }
+
+        if (delivered > 0) Log.i(PREFS_TAG, "replayed $delivered queued scrobble(s)")
+        return delivered
     }
 
     /**
@@ -786,6 +943,17 @@ class TraktRepository private constructor(private val context: Context?) {
     suspend fun watchedSnapshot(forceRefresh: Boolean = false): TraktWatchedSnapshot {
         if (!TraktConfig.isConfigured) return TraktWatchedSnapshot()
         val token = validAccessToken() ?: return TraktWatchedSnapshot()
+
+        /*
+         * The next allowed window for anything queued when Trakt was
+         * unreachable (F2). Every screen that shows badges asks this, so a
+         * device back from airplane mode flushes its missed stops on the first
+         * Home/Library build - and the read below then already reflects them,
+         * because a delivered stop invalidates the memo before it is filled.
+         * A no-op when the queue is empty (one prefs read), and it returns early
+         * while the rate guard is still parked.
+         */
+        flushPendingScrobbles()
 
         cachedSnapshot?.let { cached ->
             if (!forceRefresh &&

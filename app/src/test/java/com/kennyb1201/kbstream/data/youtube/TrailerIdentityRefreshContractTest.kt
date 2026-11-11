@@ -169,7 +169,7 @@ class TrailerIdentityRefreshContractTest {
         )
         assertTrue(
             "and it must skip the whole chain",
-            source.substring(blockedAt, fetchAt).contains("return@withLock Result.failure(")
+            source.substring(blockedAt, fetchAt).contains("return Result.failure(")
         )
     }
 
