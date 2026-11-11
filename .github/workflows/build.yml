@@ -417,16 +417,27 @@ jobs:
           # blocking a release on a package mirror that has nothing to do with
           # it. The gate itself is unchanged: no libass, no release.
           #
-          # The install is also skipped entirely when the cached dependency
-          # prefixes are already complete. Those packages are needed by the
-          # autotools/meson stages that build FreeType, HarfBuzz, fontconfig,
-          # fribidi, expat and libass - and scripts/build_libass.sh skips every
-          # one of those stages on a cache hit, linking the JNI bridge with CMake
-          # and the NDK alone (see its build_prefix_complete gate). The cache key
-          # covers this script and the JNI sources, so a hit means those stages
-          # would not run. Blocking the release on apt there bought nothing.
+          # The install is also skipped when the cached dependency prefixes are
+          # already complete AND the tools the script still needs are on PATH.
+          # Those packages are needed by the autotools/meson stages that build
+          # FreeType, HarfBuzz, fontconfig, fribidi, expat and libass - and
+          # scripts/build_libass.sh skips every one of those stages on a cache
+          # hit, linking the JNI bridge with CMake and the NDK alone (see its
+          # build_prefix_complete gate). The cache key covers this script and the
+          # JNI sources, so a hit means those stages would not run.
+          #
+          # But a cache hit does not skip the script's PREFLIGHT, which dies on
+          # the first missing tool (the field: "error: meson is not on PATH" at
+          # the top of the build, with the prefixes fully restored). A runner
+          # image without meson/ninja therefore failed the release for a reason
+          # the install below exists to fix, so the skip asks for the tools it
+          # would otherwise have installed.
           deps_cached() {
-            local abi lib
+            local abi lib tool
+            for tool in pkg-config meson ninja autoconf autoreconf libtoolize \
+              gettextize gperf autopoint; do
+              command -v "$tool" >/dev/null || return 1
+            done
             for abi in arm64-v8a armeabi-v7a; do
               for lib in libass libharfbuzz libfreetype libfribidi libfontconfig libexpat; do
                 [[ -f "build/libass-ext/prefix/${abi}/lib/${lib}.a" ]] || return 1
