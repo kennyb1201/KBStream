@@ -880,8 +880,33 @@ internal fun GuideGridView(
         }
         Key.DirectionDown -> {
             val next = groups.getOrNull(index + 1)
-            if (next != null) sidebarRequesters[next]?.let { runCatching { it.requestFocus() } }
-            true
+            if (next != null) {
+                sidebarRequesters[next]?.let { runCatching { it.requestFocus() } }
+                true
+            } else if (rows.isEmpty()) {
+                // F1: the m14 rule the RIGHT arm follows, for the same reason -
+                // with an empty guide there is no grid to enter, and this used
+                // to swallow the press anyway: a dead Down on the only
+                // focusable surface on screen. Not consuming it lets the press
+                // fall through to whatever else can take it (Back included).
+                false
+            } else {
+                // F1: DOWN on the LAST group row enters the grid on the row the
+                // viewer was on - the same call RIGHT makes, not a second entry
+                // path. Before this, the arm returned `true` here too and asked
+                // for a group that does not exist: the press was consumed by a
+                // request for nothing, so focus stayed on the last group with no
+                // way down and no trace line saying why.
+                val rowIndex = focusedRow.coerceIn(0, rows.lastIndex)
+                // F2: the move is visible in a paste. `enterGrid` logs its own
+                // `grid handoff sidebar->channel`, which says a handoff happened
+                // but not what pressed it; this line says it was a DOWN.
+                val guideLine = "grid sidebar-down last-row enterGrid row=$rowIndex"
+                Log.i("GUIDE", guideLine)
+                GuideTrace.note(guideLine)
+                enterGrid(rowIndex)
+                true
+            }
         }
         Key.DirectionRight -> {
             // Into the grid on the row the viewer was on, and the sidebar
