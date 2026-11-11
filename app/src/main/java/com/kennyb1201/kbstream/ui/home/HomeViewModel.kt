@@ -5906,7 +5906,32 @@ Log.d(
 
         for (item in items) {
             val air = item.nextEpisodeAir
-            if (air == null) {
+            val parentId = item.parentId?.takeIf { it.isNotBlank() } ?: continue
+            val parentType = item.parentType?.takeIf { it.isNotBlank() } ?: continue
+
+            val sourceDates = sourceDatesByParent[parentId].orEmpty()
+            // F1: TVmaze may SUPPLY the next episode when TMDB has none to
+            // name. TMDB lags on shows it has not added the episode to yet
+            // (Universal Basic Guys S3: the listing held 6, the declared count
+            // was 6, next_episode_to_air was null - while the next two episodes
+            // had dates) and the rail used to drop the show for that silence,
+            // because the correction below could only ever override a date
+            // TMDB already had. [AirDateCorrection.nextAiring] is the same
+            // picker the stale-date branch below already uses: the earliest
+            // episode dated today or later, or null when the source has nothing
+            // ahead either - which is still the drop, exactly as before.
+            //
+            // Fired HERE, at the one place the air date is read, so all three
+            // legs that feed this builder get it. Deliberately not in
+            // repairCaughtUpAirDates: that leg derives from TMDB's detail and
+            // season list (both stale for this show) and its contract is that
+            // it never invents an episode.
+            val fallback = if (air == null) {
+                AirDateCorrection.nextAiring(sourceDates, today)
+            } else {
+                null
+            }
+            if (air == null && fallback == null) {
                 // The drop that used to be silent, and the reason three logcat
                 // dumps of a broken rail contained no UPCOMING_DIAG line about
                 // it: by the time an item reaches here the repair has already
@@ -5923,14 +5948,28 @@ Log.d(
                 }
                 continue
             }
-            var season = air.seasonNumber ?: continue
-            var episode = air.episodeNumber ?: continue
-            val parentId = item.parentId?.takeIf { it.isNotBlank() } ?: continue
-            val parentType = item.parentType?.takeIf { it.isNotBlank() } ?: continue
+            if (fallback != null && UPCOMING_DIAGNOSTICS) {
+                // F3: the fallback fired, and for which episode - the drop line
+                // above stays for the still-undated case, so a paste can tell a
+                // show the source rescued from one it could not date at all.
+                val fallbackLine =
+                    "fallback air TVmaze for '$parentId' " +
+                        "S${fallback.season}E${fallback.episode} ${fallback.airDate}"
 
-            val sourceDates = sourceDatesByParent[parentId].orEmpty()
+                Log.d("UPCOMING_DIAG", fallbackLine)
+                UpcomingDiagTrace.note(fallbackLine)
+            }
+            var season = air?.seasonNumber ?: fallback?.season ?: continue
+            var episode = air?.episodeNumber ?: fallback?.episode ?: continue
+
+            // F1: the same correction as before, with one difference that is
+            // now load-bearing. The primary is TMDB's date only when TMDB named
+            // the episode; for a fallback item there is no primary, which
+            // correctAirDate already answers with the secondary unchanged. The
+            // secondary is the source's date for the episode in hand, which for
+            // a fallback is the very entry nextAiring picked.
             var airDateText = AirDateCorrection.correctAirDate(
-                primary = air.airDate,
+                primary = air?.airDate,
                 secondary = sourceDates[
                     AirDateCorrection.episodeKey(season, episode)
                 ],
@@ -5982,10 +6021,13 @@ Log.d(
                     // The card may now name an episode later than TMDB's
                     // next_episode_to_air (see the replacement above), so
                     // TMDB's own title only applies while the episode is still
-                    // the one it pointed at.
-                    episodeTitle = air.name
+                    // the one it pointed at - and only when TMDB pointed at one
+                    // at all: a fallback row has no TMDB episode to name, and
+                    // the TVmaze date carries no title, so the card falls back
+                    // to the season-detail lookup or the plain S·E line.
+                    episodeTitle = air?.name
                         ?.takeIf {
-                            it.isNotBlank() && episode == air.episodeNumber
+                            it.isNotBlank() && episode == air?.episodeNumber
                         }
                         ?: fallbackUpcomingEpisodeTitle(
                             tmdbId = item.tmdbId,
@@ -6046,7 +6088,12 @@ Log.d(
         val targets = LinkedHashMap<String, String>()
 
         for (item in items) {
-            if (item.nextEpisodeAir == null) continue
+            // F2: a null-air item is a TARGET, not a skip. It cannot be
+            // corrected (there is nothing to correct), but it is exactly the
+            // case this map exists to rescue: buildUpcomingSchedule asks it for
+            // the show's next source date when TMDB has none. Skipping these
+            // was what made the fallback unreachable - the machinery was there,
+            // the set it ran on never included the items that needed it.
             val parentId =
                 item.parentId?.takeIf { it.isNotBlank() } ?: continue
             if (targets.containsKey(parentId)) continue
