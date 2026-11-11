@@ -407,10 +407,44 @@ jobs:
           # this cross-compile red: its autogen.sh tests for both and reports
           # the miss on STDOUT, which scripts/build_libass.sh used to send to
           # /dev/null, so the failure arrived as a bare exit code 1.
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq \
-            autoconf automake libtool pkg-config gettext meson ninja-build \
-            gperf autopoint
+          #
+          # The install is retried, and from the second attempt it also points
+          # apt at the upstream archive. The runner's own mirror
+          # (azure.archive.ubuntu.com, reached through
+          # mirror+file:/etc/apt/apt-mirrors.txt) has answered "Temporary
+          # failure resolving" for hours at a stretch, and when it does this
+          # step dies on exit code 100 before a single line of the build runs -
+          # blocking a release on a package mirror that has nothing to do with
+          # it. The gate itself is unchanged: no libass, no release.
+          install_build_deps() {
+            sudo apt-get update -qq || true
+            sudo apt-get install -y -qq \
+              autoconf automake libtool pkg-config gettext meson ninja-build \
+              gperf autopoint
+          }
+
+          use_upstream_archive() {
+            echo "::warning::apt could not reach the runner's mirror; retrying against archive.ubuntu.com"
+            sudo sed -i \
+              -e 's|https\?://[a-z.]*archive\.ubuntu\.com|http://archive.ubuntu.com|g' \
+              -e 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu|g' \
+              /etc/apt/apt-mirrors.txt /etc/apt/sources.list \
+              /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources \
+              2>/dev/null || true
+          }
+
+          attempts=0
+          until install_build_deps; do
+            attempts=$((attempts + 1))
+            if [[ "$attempts" -ge 4 ]]; then
+              echo "::error::could not install the libass build dependencies after ${attempts} attempts"
+              exit 1
+            fi
+            if [[ "$attempts" -eq 2 ]]; then
+              use_upstream_archive
+            fi
+            sleep 15
+          done
           bash scripts/install_android_sdk.sh "ndk;${NDK_VERSION}" "cmake;3.22.1"
           # Same trap as the FFmpeg block: the runner exports ANDROID_NDK
           # pointing at a preinstalled NDK, and the script prefers it over
