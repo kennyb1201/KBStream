@@ -205,8 +205,11 @@ class LibraryDeepDiveContractTest {
                 showFor.contains("detail.firstAirDate")
         )
         assertTrue(
-            "and drops the show, so its episodes never reach a day",
-            showFor.contains(") {\n            return null\n        }")
+            "and drops the show, so its episodes never reach a day. The drop is " +
+                "an ANSWERED null, not a failure: a hidden show has nothing to " +
+                "say, so it must stay resolved instead of retrying every month " +
+                "build (see the parity contract's F3)",
+            showFor.contains(") {\n            return Result.success(null)\n        }")
         )
         assertTrue(
             "asked before the season payloads are requested",
