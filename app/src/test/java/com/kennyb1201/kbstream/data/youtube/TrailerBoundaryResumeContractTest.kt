@@ -181,11 +181,23 @@ class TrailerBoundaryResumeContractTest {
     fun `an exclusion resolve never answers from the cache`() {
         val flatLauncher = flat(launcher)
 
+        // The read is the locked bookkeeping unit of its own (m21: the lock no
+        // longer spans the network legs), so the gate is pinned on the call
+        // rather than on the old inline block.
         assertTrue(
             "the cached entry may be exactly the class being excluded",
             flatLauncher.contains(
-                "if (excludeClients.isEmpty()) { sourceCache[videoId]?.let { cached ->"
+                "if (excludeClients.isEmpty()) { resolveMutex.withLock { " +
+                    "freshCachedSource(videoId) }?.let { return it } }"
             )
+        )
+        assertTrue(
+            "and a stale entry is still dropped inside that same locked read",
+            flat(launcher).contains("sourceCache.remove(videoId)") &&
+                flat(launcher).contains(
+                    "private fun freshCachedSource(videoId: String): Result<PlayableSource>? { " +
+                        "val cached = sourceCache[videoId] ?: return null"
+                )
         )
         assertTrue(
             "and the resolve is handed the exclusion",
