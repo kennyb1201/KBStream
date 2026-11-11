@@ -1261,10 +1261,23 @@ fun DetailScreenMobile(
                     )
             // Logged, not swallowed: a trailer that never mounts used to leave no
             // trace on this page at all, while the fullscreen owners log the same
-            // failure (see DetailTrailerLaunch). Silent on screen, findable in a
-            // capture.
+            // failure (see DetailTrailerLaunch). Still logged in every case, so a
+            // capture can find what the viewer only saw fail - and now also
+            // reported on screen when the viewer asked for it.
             resolved.onFailure { error ->
                 Log.w(TAG, "Detail hero trailer key=$key failed to resolve", error)
+                // An explicit press (the TRAILER button, or a retry) is the
+                // viewer asking, so this surface's channel answers it - a
+                // toast, because the phone has no feedback banner. Autoplay
+                // stays silent: it promised nothing, which is the behaviour
+                // this line's comment used to describe for every case.
+                if (asked) {
+                    Toast.makeText(
+                        context,
+                        "Couldn't play trailer",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
             }
             val source = resolved.getOrNull()
             if (source != null) {
@@ -2380,7 +2393,19 @@ fun DetailScreenMobile(
                                                         video,
                                                         imdbId = trailerImdbId,
                                                         tmdbId = tmdbDetail?.id,
-                                                        type = normalizedType
+                                                        type = normalizedType,
+                                                        // The phone's channel (see
+                                                        // pressTaste): a trailer that
+                                                        // cannot resolve says so
+                                                        // rather than looking like a
+                                                        // dead tile.
+                                                        onFailure = {
+                                                            Toast.makeText(
+                                                                context,
+                                                                "Couldn't play trailer",
+                                                                Toast.LENGTH_SHORT
+                                                            ).show()
+                                                        }
                                                     )
                                                 else ->
                                                     selectedBackdrop = card.fullImageUrl

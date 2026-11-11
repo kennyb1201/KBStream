@@ -3895,7 +3895,18 @@ fun DetailScreen(
             video,
             imdbId = detailImdbId,
             tmdbId = tmdbDetail?.id,
-            type = normalizedType
+            type = normalizedType,
+            // One funnel for the header button and the media-row cards: a
+            // playable video whose resolve dies says so in the screen's own
+            // channel, the way a title that cannot be resolved already does.
+            // The UNAVAILABLE badge only covers videos the player cannot open
+            // at all (see MediaThumbCard) - this is the one it promised to play.
+            onFailure = {
+                feedback.show(
+                    text = "Couldn't play trailer",
+                    isError = true
+                )
+            }
         )
     }
 
@@ -4680,6 +4691,10 @@ fun DetailScreen(
                 tmdbDetail,
                 episodes,
                 episodesLoading,
+                // A failed load changes no other key: the list stays empty and
+                // loading flips false once, so without this a CW deep link
+                // parked in the wait below for good and the player never opened.
+                episodeError,
                 resumeInfo
             ) {
                 if (
@@ -4699,14 +4714,25 @@ fun DetailScreen(
                 // the season's first file, so parking on "empty" is the second
                 // way "Play Manually" did nothing while the button beside it
                 // played: on a show whose listing had failed, no key was ever
-                // going to change again. The deep link keeps waiting for the
-                // list itself: it has to know the season's episode count before
-                // it names a target.
+                // going to change again.
+                //
+                // The deep link waits for the list itself only while the load is
+                // IN FLIGHT or the season loaded EMPTY - an empty season has
+                // nothing to play, and parking on it is unchanged. A FAILED list
+                // is neither: it says nothing about the season, and parking on it
+                // was the third silent dead end (the deep link never opened the
+                // player and no key was ever going to change again). A failure
+                // therefore proceeds on the deep link's own season/episode - the
+                // same target the Play button builds. Without the list that pair
+                // is not list-validated; if it is stale, `playTargetFor` falls
+                // back to the season's first file, which is a degraded-but-
+                // playing outcome and beats stalling with nothing said.
                 val waitingForEpisodes =
                     if (manualPick || startOver) {
                         episodesLoading
                     } else {
-                        episodesLoading || episodes.isEmpty()
+                        episodesLoading ||
+                            (episodes.isEmpty() && episodeError == null)
                     }
                 if (
                     normalizedType == "series" &&
@@ -5954,7 +5980,17 @@ fun DetailScreen(
                                         EpisodesStatusMessage(
                                             icon = "⚠️",
                                             message =
-                                                "Couldn't load episodes: $episodeError"
+                                                "Couldn't load episodes: $episodeError",
+                                            // The reload a season change makes: the page
+                                            // re-asks for the season it is already on
+                                            // (see the season effect above). The phone
+                                            // has had TRY AGAIN on this state all along
+                                            // (DetailScreenMobile); on TV the only
+                                            // recovery was switching seasons, which a
+                                            // single-season show cannot do.
+                                            onRetry = effectiveSeason?.let { season ->
+                                                { viewModel.loadEpisodesForSeason(season) }
+                                            }
                                         )
                                     }
                                 }
@@ -9287,7 +9323,13 @@ private fun KeywordChip(
 @Composable
 private fun EpisodesStatusMessage(
     icon: String,
-    message: String
+    message: String,
+    // A failed load is the one state in this list that has somewhere to go,
+    // and it is the only caller that passes one: KBStatusMessage's RETRY is
+    // the affordance the title-load error on this same screen already uses,
+    // and without it a dead season load was a page you had to back out of.
+    // Loading / unreleased / empty are not faults, so they offer nothing.
+    onRetry: (() -> Unit)? = null
 ) {
     // The app's one status card, inline in the episodes list. The old
     // hand-rolled chip row was the last browse-style status outside
@@ -9296,6 +9338,7 @@ private fun EpisodesStatusMessage(
         loading = icon == "⏳",
         icon = icon,
         message = message,
+        onRetry = onRetry,
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = 24.dp, end = 24.dp, bottom = 12.dp)

@@ -317,8 +317,12 @@ class TrailerImdbWiringContractTest {
                 "a TMDB-keyed page",
             flat(detailTv).contains(
                 "DetailTrailerLaunch.play( context, scope, video, imdbId = detailImdbId, " +
-                    "tmdbId = tmdbDetail?.id, type = normalizedType )"
-            )
+                    "tmdbId = tmdbDetail?.id, type = normalizedType,"
+            ) &&
+                flat(detailTv).contains(
+                    "onFailure = { feedback.show( text = \"Couldn't play trailer\", " +
+                        "isError = true ) }"
+                )
         )
         assertTrue(
             "which forwards both to the one resolve",
@@ -348,8 +352,12 @@ class TrailerImdbWiringContractTest {
             "the media row's fullscreen launch goes through the shared one too",
             flat(detailPhone).contains(
                 "DetailTrailerLaunch.play( context, scope, video, imdbId = trailerImdbId, " +
-                    "tmdbId = tmdbDetail?.id, type = normalizedType )"
-            )
+                    "tmdbId = tmdbDetail?.id, type = normalizedType,"
+            ) &&
+                flat(detailPhone).contains(
+                    "onFailure = { Toast.makeText( context, \"Couldn't play trailer\", " +
+                        "Toast.LENGTH_SHORT ).show() }"
+                )
         )
     }
 

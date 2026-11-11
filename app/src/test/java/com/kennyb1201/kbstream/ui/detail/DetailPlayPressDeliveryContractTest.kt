@@ -133,8 +133,14 @@ class DetailPlayPressDeliveryContractTest {
             )
         )
         assertTrue(
-            "and the deep link keeps both halves of the wait",
-            body.contains("} else {\nepisodesLoading || episodes.isEmpty()\n}")
+            "and the deep link keeps waiting while the load is in flight or the season " +
+                "loaded empty - a failed list is neither, so the deep link proceeds on its " +
+                "own pair instead of parking for good (see " +
+                "DetailSilentDeadEndsContractTest)",
+            body.contains(
+                "} else {\nepisodesLoading ||\n" +
+                    "(episodes.isEmpty() && episodeError == null)\n}"
+            )
         )
         assertTrue(
             "the qualified wait is what the guard reads",

@@ -329,8 +329,12 @@ class DetailScreenMobileContractTest {
                 "card opens the viewer",
             mobile.contains(
                 "DetailTrailerLaunch.play( context, scope, video, imdbId = trailerImdbId, " +
-                    "tmdbId = tmdbDetail?.id, type = normalizedType )"
+                    "tmdbId = tmdbDetail?.id, type = normalizedType,"
             ) &&
+                mobile.contains(
+                    "onFailure = { Toast.makeText( context, \"Couldn't play trailer\", " +
+                        "Toast.LENGTH_SHORT ).show() }"
+                ) &&
                 mobile.contains("selectedBackdrop = card.fullImageUrl") &&
                 mobile.contains("ImageViewerDialog(")
         )

@@ -102,9 +102,14 @@ object DetailTrailerLaunch {
 
     /**
      * Resolves and plays [video], or does nothing when there is no key to
-     * resolve. A resolve failure is logged and dropped: the press was a
-     * request to watch a trailer, and a dead tap with no screen change is the
-     * same outcome whether or not the log line exists.
+     * resolve.
+     *
+     * A resolve failure is logged AND reported through [onFailure], because the
+     * press asked to watch this trailer: a dead tap with no screen change reads
+     * as a broken remote, not as a video that would not open. Each surface has
+     * its own channel for that (TV's feedback banner, the phone's toast), so the
+     * launcher only reports and the caller decides - a caller with nothing to
+     * say leaves the log as the only trace, exactly as before.
      */
     fun play(
         context: Context,
@@ -122,7 +127,13 @@ object DetailTrailerLaunch {
         /** The title on TMDB, when the screen has no `tt…` id to pass. */
         tmdbId: Int? = null,
         /** `movie` / `series`, for the TMDB-to-IMDb mapping. */
-        type: String? = null
+        type: String? = null,
+        /**
+         * What the caller's surface says when the resolve fails - the TV's
+         * feedback banner, the phone's toast. Default null so a caller with no
+         * channel (or no wish to report) keeps the old silence.
+         */
+        onFailure: ((Throwable) -> Unit)? = null
     ) {
         val key = video?.key?.takeIf { it.isNotBlank() } ?: return
 
@@ -135,6 +146,7 @@ object DetailTrailerLaunch {
                     type = type
                 ).getOrElse { error ->
                     Log.e(TAG, "Failed to resolve playable trailer URL", error)
+                    onFailure?.invoke(error)
                     return@launch
                 }
 
