@@ -588,9 +588,12 @@ class DetailFocusChainWiringContractTest {
         assertTrue(
             "the season chips' DOWN takes the same fall-through: the episode " +
                 "cards under the chip are what that press means, and a listing " +
-                "that is still arriving is not an answer",
+                "that is still arriving is not an answer. The landing it asks for " +
+                "is card-only (focusEpisodeCard) - the chip itself is where the " +
+                "press came from, and a chip that answers \"already focused\" is " +
+                "how DOWN died after a season change",
             detail.contains(
-                "if (!focusSeasonOrEpisode()) { fallThroughIfMidPage( DetailRow.EPISODES, " +
+                "if (!focusEpisodeCard()) { fallThroughIfMidPage( DetailRow.EPISODES, " +
                     "DetailFocusDirection.DOWN, presence ) }"
             )
         )

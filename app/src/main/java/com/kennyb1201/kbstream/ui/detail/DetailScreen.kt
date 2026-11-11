@@ -2356,6 +2356,46 @@ fun DetailScreen(
         }
     }
 
+    // F2: a MANUAL season change re-opens the episode row at its target.
+    //
+    // The row's scroll position is not recreated when the season changes - one
+    // shared [episodesRowState], and while its items are re-keyed per season the
+    // OFFSET survives - so a viewer who changed seasons from the chips kept the
+    // old season's position. The new season's target card was then off screen
+    // and uncomposed, its requester had never been filed, and the chip's DOWN had
+    // nothing to land on (see [focusEpisodeCard], which now also scrolls the row
+    // itself - this effect is the source-side half, so the row is already open at
+    // the target before the press arrives).
+    //
+    // SCROLL ONLY, deliberately: focus stays on the chip the viewer is on. The
+    // swap path (edge LEFT/RIGHT -> [armSeasonSwapSink] and its landing effect)
+    // is the only path that moves focus across a season change. And the
+    // `!userManuallyChangedSeason` gate on the auto-scroll effect ABOVE stays
+    // where it is - that effect exists to pull a fresh page to the resume
+    // episode, and its gate is the scroll-yank fix (a late episode delivery
+    // dragging the rail back after the D-pad had already left it). This one runs
+    // only for a change the viewer made from the chips, which is why it needs no
+    // such gate.
+    LaunchedEffect(
+        type,
+        effectiveSeason,
+        episodesLoading,
+        episodes,
+        targetEpisodeIndex,
+        userManuallyChangedSeason
+    ) {
+        if (
+            normalizedType == "series" &&
+            effectiveSeason != null &&
+            userManuallyChangedSeason &&
+            !episodesLoading &&
+            episodes.isNotEmpty() &&
+            targetEpisodeIndex >= 0
+        ) {
+            episodesRowState.scrollToItem(targetEpisodeIndex)
+        }
+    }
+
     /** Index of [season] in the chip row, or -1 when the row has no such chip. */
     fun seasonChipIndex(season: Int?): Int = seasons.indexOf(season)
 
@@ -2598,6 +2638,99 @@ fun DetailScreen(
         }
 
         return false
+    }
+
+    /**
+     * The season chips' DOWN landing: an EPISODE CARD, or nothing.
+     *
+     * The reported trap (Kenny, 2026-11-11): UP to the chips, change seasons,
+     * DOWN does nothing - with the new season's episodes visible on screen.
+     * [focusSeasonOrEpisode] aims at the page's target episode and asks for that
+     * card's requester BEFORE it scrolls, and the episode row keeps its old
+     * season's scroll position across a change (one shared [episodesRowState];
+     * the items are re-keyed, the offset is not - see the manual-change effect
+     * below for the source-side half of this fix). So the new season's target
+     * card was off screen, uncomposed, and had never filed a requester: the
+     * episode branch was skipped, the function fell back to the season chip the
+     * press came from - which answers true, because that chip is already
+     * focused - and the handler's [fallThroughIfMidPage] therefore never ran.
+     * The press was eaten, and every repeat ate it again: the row never
+     * scrolled, so the card never composed, so the requester never appeared.
+     *
+     * Hence the order here: the scroll FIRST, because it is index-based and needs
+     * no requester - that is what breaks the loop - and only then the lookup and
+     * the ask. [landFocusOn] delivers it, with the two-consecutive-acceptances
+     * verdict, so a card that accepts and is disposed a frame later (the season
+     * swap's own shape) cannot pass for a landing.
+     *
+     * The season chip is NEVER a landing on this path. Answering false is the
+     * caller's cue to fall through to the default search, which can only find
+     * nodes BELOW the chip - an episode card - so a DOWN this cannot place still
+     * gets an honest attempt behind it. [focusSeasonOrEpisode] is deliberately
+     * left alone: the GENRE->EPISODES handoff legitimately lands on the chip when
+     * the page has no target episode.
+     */
+    suspend fun focusEpisodeCard(): Boolean {
+        // The same bounded wait [focusSeasonOrEpisode] makes: a null season here
+        // is "not yet", not "nothing to land on".
+        var season = currentSeason.value
+        var waitedForSeason = 0
+        while (season == null && waitedForSeason < RETURN_FOCUS_STEPS) {
+            delay(RETURN_FOCUS_DELAY_MS)
+            season = currentSeason.value
+            waitedForSeason += 1
+        }
+
+        val episodeNum = targetEpisodeNumber
+        val targetIndex = targetEpisodeIndex
+
+        // F3 branch (a): there is nothing to aim at - the season list, the
+        // episode list or its target has not landed. Still not a dead press: the
+        // caller falls through to the search, and the next DOWN after the load
+        // finds the card.
+        if (season == null || episodeNum == null || targetIndex < 0) {
+            val missLine = "episode-card focus missed: branch=loading season=$season" +
+                " episode=$episodeNum index=$targetIndex" +
+                " loading=$episodesLoading episodes=${episodes.size}"
+            Log.w(TAG, missLine)
+            DetailTrace.note(missLine)
+            return false
+        }
+
+        // The scroll [focusSeasonOrEpisode] only does once it already has the
+        // requester - moved before the lookup, which is the whole fix. The wait
+        // is its own 90ms: the row is lazy, and the ask below has nothing to
+        // land on until the card it just scrolled to has composed.
+        runCatching { episodesRowState.scrollToItem(targetIndex) }
+        delay(90)
+
+        val requester = episodeFocusRequesters[season to episodeNum]
+        if (requester == null) {
+            // F3 branch (b): scrolled, and the card still is not there. Named
+            // "loading" when the (new) season's episodes are still arriving,
+            // since that is the ephemeral version of this - the next DOWN after
+            // they land has a card.
+            val missLine = "episode-card focus missed: branch=" +
+                (if (episodesLoading) "loading" else "no-requester") +
+                " season=$season episode=$episodeNum index=$targetIndex" +
+                " loading=$episodesLoading episodes=${episodes.size}" +
+                " visible=${episodesRowState.layoutInfo.visibleItemsInfo.size}"
+            Log.w(TAG, missLine)
+            DetailTrace.note(missLine)
+            return false
+        }
+
+        val landed = landFocusOn(requester)
+        if (!landed) {
+            // F3 branch (c): the card exists and answered, but never took (or
+            // never kept) the focus.
+            val missLine = "episode-card focus missed: branch=exhausted season=$season" +
+                " episode=$episodeNum index=$targetIndex" +
+                " loading=$episodesLoading"
+            Log.w(TAG, missLine)
+            DetailTrace.note(missLine)
+        }
+        return landed
     }
 
     /**
@@ -3474,7 +3607,14 @@ fun DetailScreen(
                     // chain move - mid-page it falls through to the default
                     // search instead of being consumed here (the reported "a
                     // season chip that did nothing at all").
-                    if (!focusSeasonOrEpisode()) {
+                    //
+                    // [focusEpisodeCard], not [focusSeasonOrEpisode]: the chip's
+                    // DOWN can only mean a card, so a chip that answers "already
+                    // focused" must not be able to count as this press landing
+                    // - which is exactly how DOWN died after a season change
+                    // (the row still showed the old season's offset, so the card
+                    // had no requester and the ask fell back to the chip).
+                    if (!focusEpisodeCard()) {
                         fallThroughIfMidPage(
                             DetailRow.EPISODES,
                             DetailFocusDirection.DOWN,

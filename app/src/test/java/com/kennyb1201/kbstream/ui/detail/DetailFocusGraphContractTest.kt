@@ -96,9 +96,12 @@ class DetailFocusGraphContractTest {
         assertTrue(
             "DOWN is the episode cards directly under the chips, NOT the chain's " +
                 "DOWN out of EPISODES - that row is the season chips and the " +
-                "cards at once, so its DOWN is the cast rail",
+                "cards at once, so its DOWN is the cast rail - and it asks for a " +
+                "CARD only: after a season change the chip is already focused, so " +
+                "a landing that can answer with the chip is a press that reports " +
+                "success and moves nothing",
             seasonHandler.contains("startFocusMove {") &&
-                seasonHandler.contains("if (!focusSeasonOrEpisode())")
+                seasonHandler.contains("if (!focusEpisodeCard())")
         )
         assertTrue(
             "and when those cards are still arriving the press is not swallowed: " +
