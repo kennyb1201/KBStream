@@ -211,8 +211,10 @@ class SettingsScreenMobileContractTest {
                 mobile.contains("TAP AGAIN TO CONFIRM")
         )
         assertTrue(
-            "diagnostics are built and copied by the same helpers",
-            mobile.contains("Diagnostics") && mobile.contains("copyToClipboard(context, report)")
+            "diagnostics go through the one press path both pages share, so the " +
+                "status cannot claim a copy the clipboard refused",
+            mobile.contains("com.kennyb1201.kbstream.data.reporting.Diagnostics") &&
+                mobile.contains(".press(context)")
         )
         assertTrue(
             "the relative-time formatter is imported from the TV page, not re-derived",

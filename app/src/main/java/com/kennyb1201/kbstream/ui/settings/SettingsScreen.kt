@@ -5146,10 +5146,12 @@ private fun SyncHealthSection(modifier: Modifier = Modifier) {
             onClick = {
                 diagnosticsScope.launch {
                     runCatchingCancellable {
-                        val report = com.kennyb1201.kbstream.data.reporting.Diagnostics.build(context)
-                        com.kennyb1201.kbstream.data.reporting.Diagnostics
-                            .copyToClipboard(context, report)
-                        diagnosticsStatus = "copied \u00b7 also logged as DIAGNOSTICS"
+                        // One press, one path (spec 2026-11-12): build, write the
+                        // file, copy, and a status that says which of those
+                        // actually happened. It used to say "copied" whether or
+                        // not the clipboard took the report.
+                        diagnosticsStatus = com.kennyb1201.kbstream.data.reporting.Diagnostics
+                            .press(context)
                     }.onFailure {
                         diagnosticsStatus = "failed: ${it.message}"
                     }
@@ -5171,8 +5173,9 @@ private fun SyncHealthSection(modifier: Modifier = Modifier) {
                 Text(
                     text = diagnosticsStatus
                         ?: "Build, device, account, sync health, pending uploads " +
-                        "and this session's caught errors — copied to the clipboard " +
-                        "and written to logcat (tag DIAGNOSTICS).",
+                        "and this session's caught errors — copied to the clipboard, " +
+                        "written to logcat (tag DIAGNOSTICS), and saved to a file in " +
+                        "this app's diagnostics folder.",
                     color = KBTextLo,
                     style = MaterialTheme.typography.bodySmall
                 )

@@ -4102,11 +4102,10 @@ private fun SyncPaneMobile() {
             onClick = {
                 scope.launch {
                     runCatchingCancellable {
-                        val report = com.kennyb1201.kbstream.data.reporting.Diagnostics
-                            .build(context)
-                        com.kennyb1201.kbstream.data.reporting.Diagnostics
-                            .copyToClipboard(context, report)
-                        diagnosticsStatus = "copied \u00b7 also logged as DIAGNOSTICS"
+                        // The same one press path as the TV page, so neither can
+                        // report a copy the clipboard refused.
+                        diagnosticsStatus = com.kennyb1201.kbstream.data.reporting.Diagnostics
+                            .press(context)
                     }.onFailure {
                         diagnosticsStatus = "failed: ${it.message}"
                     }
@@ -4116,8 +4115,9 @@ private fun SyncPaneMobile() {
         SettingsCaptionMobile(
             diagnosticsStatus
                 ?: "Build, device, account, sync health, pending uploads and this " +
-                "session's caught errors — copied to the clipboard and written to " +
-                "logcat (tag DIAGNOSTICS)."
+                "session's caught errors — copied to the clipboard, written to " +
+                "logcat (tag DIAGNOSTICS), and saved to a file in this app's " +
+                "diagnostics folder."
         )
 
         Spacer(modifier = Modifier.height(12.dp))

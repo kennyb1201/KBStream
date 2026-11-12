@@ -26,6 +26,7 @@ import com.kennyb1201.kbstream.data.sports.SportsTier1Trace
 import com.kennyb1201.kbstream.data.tmdb.HeroArtTrace
 import com.kennyb1201.kbstream.data.trakt.TraktPollTrace
 import com.kennyb1201.kbstream.data.youtube.PoTokenTrace
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.kennyb1201.kbstream.data.runCatchingCancellable
@@ -63,12 +64,36 @@ object Diagnostics {
 
 
 
-    suspend fun build(context: Context): String {
+    /**
+     * One report, with the moment it was generated.
+     *
+     * [generatedAt] is the SAME instant the `generated:` line was formatted
+     * from, not a second clock read: the status row prints its time of day, and
+     * the whole point of printing it (spec 2026-11-12) is that the row and the
+     * pasted text can never disagree about how fresh the report is.
+     */
+    data class Report(val text: String, val generatedAt: Long)
+
+    /**
+     * What the clipboard actually did.
+     *
+     * It used to return `Unit` and swallow the failure into a log line, so the
+     * Settings row said "copied" whether or not anything reached the clipboard -
+     * which is how a TCL kept pasting an hour-old report while the screen said
+     * the copy succeeded.
+     */
+    sealed interface CopyResult {
+        data object Copied : CopyResult
+        data class Failed(val reason: String) : CopyResult
+    }
+
+    suspend fun build(context: Context): Report {
         val app = context.applicationContext
         val report = StringBuilder()
+        val generatedAt = System.currentTimeMillis()
 
         report.appendLine("KBStream diagnostics")
-        report.appendLine("generated: ${DateFormats.now(DateFormats.DATE_TIME_SECONDS)}")
+        report.appendLine("generated: ${DateFormats.time(generatedAt, DateFormats.DATE_TIME_SECONDS)}")
         // The build's own facts. There is exactly one MPV library (the
         // fortunasxp/mpv-android-libdovi AAR fetched into app/libs/ - see
         // app/build.gradle.kts), and the player names it on its own log line
@@ -251,15 +276,61 @@ object Diagnostics {
 
         val text = report.toString()
         // Mirror to logcat in chunks (a single log line is capped at ~4KB).
+        // Unchanged by the copy spec: logcat is written on every press whatever
+        // the clipboard does.
         text.trimEnd().chunked(LOGCAT_CHUNK).forEach { Log.i(LOGCAT_TAG, it) }
-        return text
+        return Report(text, generatedAt)
     }
 
-    fun copyToClipboard(context: Context, report: String) {
+    /**
+     * Copies [report] and says whether it worked, instead of pretending it did.
+     *
+     * The warning stays exactly where it was - logcat is still how the failure
+     * gets investigated - but the outcome now travels back to the caller, so the
+     * row can tell the truth.
+     */
+    fun copyToClipboard(context: Context, report: String): CopyResult =
         runCatching {
             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             clipboard.setPrimaryClip(ClipData.newPlainText("KBStream diagnostics", report))
-        }.onFailure { Log.w(LOGCAT_TAG, "clipboard copy failed: ${it.message}") }
+        }.fold(
+            onSuccess = { CopyResult.Copied },
+            onFailure = { error ->
+                Log.w(LOGCAT_TAG, "clipboard copy failed: ${error.message}")
+                CopyResult.Failed(error.message ?: error.javaClass.simpleName)
+            }
+        )
+
+    /**
+     * Writes the report to the app's own files dir (no permission, survives a
+     * force-stop) and returns the file to name. Null when the write failed.
+     */
+    fun saveReport(context: Context, report: Report): File? =
+        DiagnosticsCapture.save(
+            dir = File(context.filesDir, DiagnosticsCapture.DIR_NAME),
+            text = report.text,
+            at = report.generatedAt
+        )
+
+    /**
+     * One press of COPY DIAGNOSTICS: build, save, copy, and the line to show.
+     *
+     * Both Settings pages go through here so neither can drift back to a status
+     * that claims a copy it did not make. A `build()` failure still throws, and
+     * the caller's existing `failed: <reason>` path handles it.
+     */
+    suspend fun press(context: Context): String {
+        val report = build(context)
+        // Always, not only on failure: the file is the copy that cannot go
+        // stale behind a clipboard that quietly stopped updating.
+        val file = saveReport(context, report)
+        // Named, not `build`: that is the report builder's own name.
+        val buildLabel = BuildConfig.VERSION_NAME
+        return when (val outcome = copyToClipboard(context, report.text)) {
+            is CopyResult.Copied -> DiagnosticsCapture.copiedStatus(report.generatedAt, buildLabel)
+            is CopyResult.Failed ->
+                DiagnosticsCapture.failedStatus(outcome.reason, report.generatedAt, buildLabel, file)
+        }
     }
 
     private fun deviceLine(context: Context): String {
