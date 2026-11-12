@@ -52,17 +52,46 @@
             android:layout_weight="1"
             android:orientation="vertical">
 
-            <TextView
-                android:id="@+id/picker_item_label"
+            <!-- The label and, when the row has one, its date (spec 2026-11-12).
+                 A row rather than one string: appended to the label, a long
+                 episode title would ellipsize the DATE off the end, and the date
+                 is the part that must stay visible. The label takes what is
+                 left and cuts first; the date keeps its own measured width. -->
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:focusable="true"
-                android:focusableInTouchMode="true"
-                android:fontFamily="@font/inter_medium"
-                android:textColor="@color/kb_text_hi"
-                android:textSize="14sp"
-                android:maxLines="5"
-                android:ellipsize="end" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/picker_item_label"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:fontFamily="@font/inter_medium"
+                    android:textColor="@color/kb_text_hi"
+                    android:textSize="14sp"
+                    android:maxLines="5"
+                    android:ellipsize="end" />
+
+                <!-- The episode's air date, already formatted by the builder.
+                     GONE on every row that has none, so a track or source row
+                     keeps exactly the row it always had. -->
+                <TextView
+                    android:id="@+id/picker_item_date"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:fontFamily="@font/inter_regular"
+                    android:maxLines="1"
+                    android:ellipsize="none"
+                    android:textColor="@color/kb_text_lo"
+                    android:textSize="12sp"
+                    android:visibility="gone" />
+
+            </LinearLayout>
 
             <!-- The episode overview, small and capped: the picker is a panel,
                  not a second Detail page - one more line than the two it had

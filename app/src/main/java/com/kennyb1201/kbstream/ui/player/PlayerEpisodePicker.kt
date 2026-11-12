@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
+import com.kennyb1201.kbstream.ui.detail.formatEpisodeAirDate
 import com.kennyb1201.kbstream.ui.detail.isEpisodeUnavailable
 
 /**
@@ -115,6 +116,14 @@ internal object PlayerEpisodePicker {
                 thumbnail = episode.thumbnail,
                 fallbackImageUrl = fallbackImageUrl,
                 description = episode.overview,
+                // The air date on the label line, through Detail's own formatter
+                // (spec 2026-11-12): the picker already reads this field for the
+                // UNAVAILABLE check, so an unaired episode shows the future date
+                // right beside the badge that says it is not playable yet. Blank
+                // or absent means no date and no separator.
+                date = episode.airDate
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { raw -> formatEpisodeAirDate(raw) },
                 // The crowd's rating, the same number the episode cards show -
                 // not the viewer's own (per-episode user ratings are a separate
                 // commission on both trackers). Null on an episode TMDB has no

@@ -21,7 +21,10 @@ import com.kennyb1201.kbstream.R
  * strip is one word wide, not the still-plus-overview shape of an episode row.
  *
  * The selected chip takes the accent, the way a selected row's label does; a
- * focused chip brightens so the D-pad's position is never in doubt.
+ * focused chip ALWAYS wears a 2dp ring - the accent on an unselected chip, and
+ * kb_text_hi on the selected one, where an accent ring would vanish into the
+ * fill - so the D-pad's position is never in doubt, including on the season the
+ * list is already showing.
  */
 class SeasonStripAdapter(
     private val items: List<PickerItem>
@@ -74,7 +77,22 @@ class SeasonStripAdapter(
                     else -> ContextCompat.getColor(context, R.color.kb_surface)
                 }
             )
-            if (focused && !selected) setStroke((1 * density).toInt(), accent)
+            // FOCUS IS A RING, ALWAYS (spec 2026-11-12). The old rule stroked
+            // only when the chip was focused AND not selected, so the most
+            // common landing - scrolling up onto the season already loaded -
+            // drew exactly the same chip focused or not, and 1dp at a sofa's
+            // distance read as nothing. 2dp is the episode rows' own weight
+            // (picker_item_bg's state_focused).
+            //
+            // The colour has to read on both fills: the accent ring on the
+            // surface-raised chip, and kb_text_hi on the accent-filled selected
+            // chip, where an accent ring would be invisible.
+            if (focused) {
+                setStroke(
+                    (2 * density).toInt(),
+                    if (selected) ContextCompat.getColor(context, R.color.kb_text_hi) else accent
+                )
+            }
         }
     }
 }

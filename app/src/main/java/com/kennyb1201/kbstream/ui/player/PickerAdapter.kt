@@ -34,6 +34,16 @@ data class PickerItem(
     /** The episode overview, drawn small under the title and capped at two lines. */
     val description: String? = null,
     /**
+     * The episode's air date, already formatted for display (spec 2026-11-12).
+     *
+     * A field of its own rather than text appended to [label], because the date
+     * must survive a long title: the row gives the label the remaining width and
+     * lets it ellipsize, while the date keeps its own measured space. Null on
+     * every non-episode row, and on an episode with no air date - the row then
+     * draws no date at all, never a dangling separator.
+     */
+    val date: String? = null,
+    /**
      * The episode's TMDB vote average - the crowd's rating, the same number the
      * episode cards print. Null on every non-episode row and on an episode TMDB
      * has no vote average for; the row then draws no chip.
@@ -63,6 +73,7 @@ class PickerAdapter(
         val badges: LinearLayout = view.findViewById(R.id.picker_item_badges)
         val thumb: ImageView = view.findViewById(R.id.picker_item_thumb)
         val description: TextView = view.findViewById(R.id.picker_item_desc)
+        val date: TextView = view.findViewById(R.id.picker_item_date)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
@@ -100,7 +111,29 @@ class PickerAdapter(
         bindNowPlayingChip(holder.badges, item.nowPlaying)
         bindUnavailableChip(holder.badges, item.unavailable)
         bindStill(holder, item)
+        bindDate(holder.date, item.date)
         bindDescription(holder.description, item.description)
+    }
+
+    /**
+     * Binds the air date beside the label, or hides the slot.
+     *
+     * Its own view, not part of the label's text: appended to the label, a long
+     * episode title would ellipsize the DATE off the end - the one thing the row
+     * must keep (S2). Beside it, the label takes what is left and cuts first.
+     */
+    private fun bindDate(date: TextView, value: String?) {
+        val text = value?.trim().orEmpty()
+        if (text.isEmpty()) {
+            date.visibility = View.GONE
+            date.text = null
+            return
+        }
+        // The separator travels WITH the date, not with the title: a label line
+        // is `S2E07 · Title · Nov 15, 2026`, and the dot has to survive whatever
+        // the title does. In the label's own text, a long title would take it.
+        date.text = "\u00b7 $text"
+        date.visibility = View.VISIBLE
     }
 
     /**
