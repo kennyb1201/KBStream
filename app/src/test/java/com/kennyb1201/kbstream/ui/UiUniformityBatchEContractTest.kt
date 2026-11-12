@@ -136,6 +136,9 @@ class UiUniformityBatchEContractTest {
                 "@id/chrome_seekbar",
                 listOf(
                     "chrome_btn_play_pause", "chrome_btn_next", "chrome_btn_source",
+                    // The episode picker's entry (spec 2026-11-11): a series-only
+                    // button in this same row, so it names the bar too.
+                    "chrome_btn_episodes",
                     "chrome_btn_audio", "chrome_btn_subtitle", "chrome_btn_speed",
                     "chrome_btn_aspect", "chrome_btn_player_switch",
                     "chrome_btn_player_external", "chrome_btn_info", "chrome_btn_settings"
