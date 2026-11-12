@@ -122,9 +122,19 @@ class SpotlightHomeContractTest {
             prefs.contains("getString(KEY_HOME_LAYOUT, \"modern\")")
         )
         val sync = source(SYNC)
+        // The 2026-11-12 spec narrowed the exclusion: the layout selection, its
+        // dwell and the billboard settings now sync TV to TV (and only from a
+        // TV, only to a TV), while the screen GEOMETRY family stays local.
         assertTrue(
-            "and it never travels with the account: layout prefs are per device",
-            sync.contains("`home_layout` and `home_card_expand_ms` join that family")
+            "the layout and its dwell are TV-scoped sync keys now, not local ones",
+            sync.contains("internal val TV_SCOPED_SYNC_KEYS = setOf(") &&
+                sync.contains("\"home_layout\",") &&
+                sync.contains("\"home_card_expand_ms\"")
+        )
+        assertTrue(
+            "and the three geometry keys are still the local family",
+            sync.contains("`poster_size`, `home_landscape_cards` and `landscape_posters`") &&
+                sync.contains("never appears here")
         )
     }
 

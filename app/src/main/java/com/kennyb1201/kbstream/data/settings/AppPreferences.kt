@@ -23,6 +23,14 @@ object AppPreferences {
 
     private const val PREFS_NAME = "kbstream_player_prefs"
 
+    /**
+     * The DEVICE store's file name, un-namespaced on purpose: [prefs] is a
+     * profile's file (`<id>.<PREFS_NAME>`), and the six keys [DEVICE_SCOPED_KEYS]
+     * lists must outlive a profile switch.
+     */
+    private const val DEVICE_PREFS_NAME = "kbstream_device_prefs"
+    private const val DEVICE_PREFS_SEEDED_KEY = "device_prefs_seeded"
+
     // Keys
     private const val KEY_DEFAULT_BUFFER_MODE = "default_buffer_mode"       // 0=balanced, 1=low-latency, 2=auto
     private const val KEY_DEFAULT_SUBTITLE_SIZE = "default_subtitle_size"   // 0=small, 1=normal, 2=large
@@ -223,6 +231,105 @@ object AppPreferences {
             com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, PREFS_NAME),
             Context.MODE_PRIVATE
         )
+
+    /**
+     * The DEVICE-LEVEL store: the prefs that are the same on every profile of
+     * this box, rather than a profile's own.
+     *
+     * Exactly one family lives here (spec 2026-11-12): the TV Home layout
+     * selection, the card dwell that goes with it, and the billboard settings
+     * that go with it - the six keys that sync TV to TV. They cannot be
+     * per-profile: [prefs] is the ACTIVE PROFILE's file, so storing them there
+     * meant a profile switch changed which layout the box drew. Everything
+     * else stays in [prefs] exactly as it was.
+     */
+    private fun devicePrefs(context: Context): SharedPreferences =
+        context.getSharedPreferences(DEVICE_PREFS_NAME, Context.MODE_PRIVATE)
+
+    /**
+     * The keys [devicePrefs] owns. The sync layer reads and writes exactly this
+     * set through [deviceScopedValue] / [adoptDeviceScopedValue], and every one
+     * of them is also in
+     * [com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.SYNCED_PREF_KEYS].
+     */
+    internal val DEVICE_SCOPED_KEYS: Set<String> = setOf(
+        KEY_HOME_LAYOUT,
+        KEY_HOME_CARD_EXPAND_MS,
+        KEY_BILLBOARD_ENABLED,
+        KEY_BILLBOARD_FEEDS,
+        KEY_BILLBOARD_CYCLE_MS,
+        KEY_BILLBOARD_TRAILER_MODE
+    )
+
+    /**
+     * One-time seed of [devicePrefs] from the active profile's store.
+     *
+     * These six keys used to live in [prefs] (every reader went through it), so
+     * the first read after the move would otherwise answer a default and forget
+     * the layout the viewer picked. Whatever the profile store still holds is
+     * copied across once; the flag is device-level, so a profile that never had
+     * a value cannot re-seed over one that does.
+     */
+    private fun seedDevicePrefs(context: Context) {
+        val device = devicePrefs(context)
+        if (device.getBoolean(DEVICE_PREFS_SEEDED_KEY, false)) return
+        val profile: Map<String, Any?> = runCatching {
+            @Suppress("UNCHECKED_CAST")
+            (prefs(context).all as Map<String, Any?>)
+        }.getOrDefault(emptyMap())
+        val editor = device.edit().putBoolean(DEVICE_PREFS_SEEDED_KEY, true)
+        DEVICE_SCOPED_KEYS.forEach { key ->
+            if (device.contains(key)) return@forEach
+            when (val value = profile[key]) {
+                is Boolean -> editor.putBoolean(key, value)
+                is Int -> editor.putInt(key, value)
+                is Long -> editor.putLong(key, value)
+                is Float -> editor.putFloat(key, value)
+                is String -> editor.putString(key, value)
+            }
+        }
+        editor.apply()
+    }
+
+    /**
+     * A device-scoped key's stored value, or null when this box never set it.
+     *
+     * The null is load-bearing for sync (F4): an unset key is not published, so
+     * a TV that never chose a layout cannot overwrite the other TV's choice
+     * with a default.
+     */
+    internal fun deviceScopedValue(context: Context, key: String): Any? {
+        if (key !in DEVICE_SCOPED_KEYS) return null
+        seedDevicePrefs(context)
+        return devicePrefs(context).all[key]
+    }
+
+    /**
+     * Adopts a value that arrived from another TV.
+     *
+     * Only a television calls this (the sync apply gates on [FormFactor.isTv]),
+     * and it writes the DEVICE store rather than a profile's file, which is what
+     * makes the value the same on every profile of the box.
+     */
+    internal fun adoptDeviceScopedValue(context: Context, key: String, value: Any) {
+        if (key !in DEVICE_SCOPED_KEYS) return
+        val editor = devicePrefs(context).edit()
+        when {
+            // Stored as an Int (BillboardTrailerMode.storageValue) but carried as
+            // a JSON number, which the applier parses to a Long - writing a Long
+            // here would make the Int reader throw on the next read.
+            key == KEY_BILLBOARD_TRAILER_MODE -> {
+                val mode = (value as? Number)?.toInt() ?: return
+                editor.putInt(key, mode)
+            }
+            value is Boolean -> editor.putBoolean(key, value)
+            value is Long -> editor.putLong(key, value)
+            value is String -> editor.putString(key, value)
+            else -> return
+        }
+        editor.apply()
+        notifyDisplayPrefChanged()
+    }
 
     /**
      * [prefs] for ONE NAMED profile, for the sync layer's owning-profile apply
@@ -1598,14 +1705,15 @@ object AppPreferences {
         HERO_TRAILER_DELAY_OPTIONS_MS.minByOrNull { option -> abs(option - raw) }
             ?: DEFAULT_HERO_TRAILER_DELAY_MS
 
-    // ── Home billboard (phone hero) ───────────────────────────────────
+    // ── Home billboard (the phone's hero and the TV's Spotlight hero) ────
     //
-    // The cycling hero at the top of the phone's Home: which feed it shows,
-    // how long each page holds, and whether a page offers a trailer. All four
-    // prefs are DEVICE-LOCAL (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS): the
-    // television has no billboard, so a phone's answers are not a statement
-    // about the account, and a synced value would do nothing on the TV while
-    // letting one phone rearrange another's Home.
+    // The cycling hero at the top of Home on both surfaces: which feed it
+    // shows, how long each page holds, and whether a page offers a trailer -
+    // plus the on/off switch. All four are DEVICE-LEVEL (see [devicePrefs]) and
+    // sync TV to TV only (spec 2026-11-12): the television's Spotlight hero is
+    // the same billboard the phone draws, so one TV's answers are the other
+    // TV's, while a phone neither publishes nor adopts them (see
+    // [com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.TV_SCOPED_SYNC_KEYS]).
 
     /** The feed key that means "TMDB trending of the day", the default. */
     const val BILLBOARD_TRENDING_DAY_FEED = "trending_day"
@@ -1623,12 +1731,14 @@ object AppPreferences {
     /** The hold an install starts on. */
     const val DEFAULT_BILLBOARD_CYCLE_MS = 6_000L
 
-    fun getHomeBillboardEnabled(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_BILLBOARD_ENABLED, true)
+    fun getHomeBillboardEnabled(context: Context): Boolean {
+        seedDevicePrefs(context)
+        return devicePrefs(context).getBoolean(KEY_BILLBOARD_ENABLED, true)
+    }
 
     fun setHomeBillboardEnabled(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(KEY_BILLBOARD_ENABLED, enabled).apply()
-        notifyDisplayPrefChanged()
+        devicePrefs(context).edit().putBoolean(KEY_BILLBOARD_ENABLED, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     /**
@@ -1639,41 +1749,49 @@ object AppPreferences {
      * [DEFAULT_BILLBOARD_FEEDS], because an empty feed is a state the picker
      * cannot represent and Home answers it by hiding the billboard entirely.
      */
-    fun getHomeBillboardFeeds(context: Context): List<String> =
-        billboardFeedsFromStored(prefs(context).getString(KEY_BILLBOARD_FEEDS, null))
+    fun getHomeBillboardFeeds(context: Context): List<String> {
+        seedDevicePrefs(context)
+        return billboardFeedsFromStored(
+            devicePrefs(context).getString(KEY_BILLBOARD_FEEDS, null)
+        )
+    }
 
     fun setHomeBillboardFeeds(context: Context, feeds: List<String>) {
-        prefs(context).edit()
+        devicePrefs(context).edit()
             .putString(KEY_BILLBOARD_FEEDS, encodeBillboardFeeds(feeds))
             .apply()
-        notifyDisplayPrefChanged()
+        syncDisplayPrefsBlob(context)
     }
 
-    fun getHomeBillboardCycleMs(context: Context): Long =
-        billboardCycleFromStored(
-            prefs(context).getLong(KEY_BILLBOARD_CYCLE_MS, DEFAULT_BILLBOARD_CYCLE_MS)
+    fun getHomeBillboardCycleMs(context: Context): Long {
+        seedDevicePrefs(context)
+        return billboardCycleFromStored(
+            devicePrefs(context).getLong(KEY_BILLBOARD_CYCLE_MS, DEFAULT_BILLBOARD_CYCLE_MS)
         )
+    }
 
     fun setHomeBillboardCycleMs(context: Context, ms: Long) {
-        prefs(context).edit()
+        devicePrefs(context).edit()
             .putLong(KEY_BILLBOARD_CYCLE_MS, billboardCycleFromStored(ms))
             .apply()
-        notifyDisplayPrefChanged()
+        syncDisplayPrefsBlob(context)
     }
 
-    fun getHomeBillboardTrailerMode(context: Context): BillboardTrailerMode =
-        BillboardTrailerMode.fromStorage(
-            prefs(context).getInt(
+    fun getHomeBillboardTrailerMode(context: Context): BillboardTrailerMode {
+        seedDevicePrefs(context)
+        return BillboardTrailerMode.fromStorage(
+            devicePrefs(context).getInt(
                 KEY_BILLBOARD_TRAILER_MODE,
                 BillboardTrailerMode.OFF.storageValue
             )
         )
+    }
 
     fun setHomeBillboardTrailerMode(context: Context, mode: BillboardTrailerMode) {
-        prefs(context).edit()
+        devicePrefs(context).edit()
             .putInt(KEY_BILLBOARD_TRAILER_MODE, mode.storageValue)
             .apply()
-        notifyDisplayPrefChanged()
+        syncDisplayPrefsBlob(context)
     }
 
     /**
@@ -1912,24 +2030,28 @@ object AppPreferences {
         notifyDisplayPrefChanged()
     }
 
-    // ── TV Home layout (device-local) ──────────────────────────────────────
+    // ── TV Home layout (device-level, synced TV to TV) ─────────────────────
     //
     // The TV Home's presentation: `modern` is the hero-that-follows-focus it
     // has always been, `spotlight` is the cycling billboard hero plus the
     // expanding rail card. Both are read only on a TV - the phone never offers
     // the choice and its Home is the same code either way.
     //
-    // DEVICE-LOCAL on purpose, and part of the layout family this file already
-    // keeps out of the account (`poster_size`, `home_landscape_cards`,
-    // `landscape_posters`): a phone has no rail focus to expand a card from, so
-    // these are statements about this screen - see
-    // [com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.SYNCED_PREF_KEYS].
-    fun getHomeLayout(context: Context): String =
-        prefs(context).getString(KEY_HOME_LAYOUT, "modern") ?: "modern"
+    // DEVICE-LEVEL, not per-profile (spec 2026-11-12): the layout, its dwell and
+    // the billboard settings that go with it are one box's arrangement, so they
+    // live in [devicePrefs] and are the same on every profile. They DO sync, but
+    // only TV to TV and only from a TV - see
+    // [com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.TV_SCOPED_SYNC_KEYS].
+    // The screen GEOMETRY family (`poster_size`, `home_landscape_cards`,
+    // `landscape_posters`) is still device-local and never travels.
+    fun getHomeLayout(context: Context): String {
+        seedDevicePrefs(context)
+        return devicePrefs(context).getString(KEY_HOME_LAYOUT, "modern") ?: "modern"
+    }
 
     fun setHomeLayout(context: Context, layout: String) {
-        prefs(context).edit().putString(KEY_HOME_LAYOUT, layout).apply()
-        notifyDisplayPrefChanged()
+        devicePrefs(context).edit().putString(KEY_HOME_LAYOUT, layout).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     /**
@@ -1941,12 +2063,14 @@ object AppPreferences {
      * that a settled card opens promptly, and inside the six-second trailer
      * delay so the trailer can still follow it.
      */
-    fun getHomeCardExpandMs(context: Context): Long =
-        prefs(context).getLong(KEY_HOME_CARD_EXPAND_MS, 2_000L)
+    fun getHomeCardExpandMs(context: Context): Long {
+        seedDevicePrefs(context)
+        return devicePrefs(context).getLong(KEY_HOME_CARD_EXPAND_MS, 2_000L)
+    }
 
     fun setHomeCardExpandMs(context: Context, ms: Long) {
-        prefs(context).edit().putLong(KEY_HOME_CARD_EXPAND_MS, ms).apply()
-        notifyDisplayPrefChanged()
+        devicePrefs(context).edit().putLong(KEY_HOME_CARD_EXPAND_MS, ms).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── Poster captions (all screens except Home rails) ───────────────

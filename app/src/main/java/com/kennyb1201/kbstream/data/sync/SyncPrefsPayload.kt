@@ -250,19 +250,17 @@ object PrefsPayloadBuilder {
         // phone's. It is device-local exactly like the three keys below.
         //
         // `poster_size`, `home_landscape_cards` and `landscape_posters` are
-        // deliberately NOT here (decision, 2026-10-20): the useful tile size
-        // and card shape depend on the screen — a 65" TV and a 6.7" phone want
-        // different answers — so they are screen geometry, not identity.
-        //
-        // `home_layout` and `home_card_expand_ms` join that family for the same
-        // reason (2026-11-11): the TV Home's layout and its card expand delay
-        // are statements about a screen with rail focus, which a phone does not
-        // have, so neither may follow the account onto one. Each
-        // device keeps the value it already has stored locally, and changing
-        // one only affects that device. This set gates BOTH directions (the
-        // builder only publishes listed keys, [applyDisplayPrefs] skips any
-        // key not in it), so a blob from an older build that still carries
-        // them applies nothing for them — no migration needed.
+        // deliberately NOT here (decision, 2026-10-20, unchanged): the useful
+        // tile size and card shape depend on the screen — a 65" TV and a 6.7"
+        // phone want different answers — so they are screen geometry, not
+        // identity. That family is now the ONLY local layout family; see
+        // [TV_SCOPED_SYNC_KEYS] below for the six keys that left it.
+        "home_layout",                     // see [TV_SCOPED_SYNC_KEYS]: TV to TV,
+        "home_billboard_enabled",           //   device-level, never to a phone
+        "home_billboard_feeds",
+        "home_billboard_cycle_ms",
+        "home_billboard_trailer_mode",
+        "home_card_expand_ms",
         "poster_caption_title",
         "poster_caption_year",
         "poster_caption_rating",
@@ -421,16 +419,35 @@ object PrefsPayloadBuilder {
         // time, a phone that only ever uses one profile does not - so picking
         // one answer on the TV must not remove the picker from the phone.
         "show_profile_picker",
-        // The phone Home billboard: its four prefs describe ONE phone's top
-        // hero - which feed it cycles, how long a page holds, whether it plays
-        // trailers. A television has no billboard at all, so a synced value
-        // would be inert there and would let one phone rearrange another's
-        // Home from across the account. Device-local, like the screen geometry
-        // prefs beside them.
+    )
+
+    /**
+     * The six keys that sync TV to TV, and only TV to TV (spec 2026-11-12).
+     *
+     * The Home layout selection, the card dwell that goes with it, and the
+     * billboard settings that go with it (the on/off switch, the catalog
+     * selection, the hold, the trailer mode). One television's arrangement is
+     * the other television's - and NOT a phone's, in either direction:
+     *
+     *  - only a TV PUBLISHES them ([buildDisplayPrefs] reads them from the
+     *    device store on a TV and omits them everywhere else), so a phone's
+     *    billboard settings can never travel up and rearrange a TV;
+     *  - only a TV ADOPTS them ([applyDisplayPrefs] drops them on a phone), so
+     *    a TV's arrangement never lands on a phone at all;
+     *  - on a TV they are applied DEVICE-WIDE, to the device store (see
+     *    AppPreferences.DEVICE_SCOPED_KEYS), never to a profile's file - they
+     *    are the same on every profile of that box.
+     *
+     * The screen-geometry family (`poster_size`, `home_landscape_cards`,
+     * `landscape_posters`) stays device-local and never appears here.
+     */
+    internal val TV_SCOPED_SYNC_KEYS = setOf(
+        "home_layout",
         "home_billboard_enabled",
         "home_billboard_feeds",
         "home_billboard_cycle_ms",
-        "home_billboard_trailer_mode"
+        "home_billboard_trailer_mode",
+        "home_card_expand_ms"
     )
 
     const val KEY_DISPLAY_PREFS = "display_prefs"
@@ -943,10 +960,31 @@ object PrefsPayloadBuilder {
         val prefs = scopedPrefs(context, DISPLAY_PREFS_STORE)
         val all = prefs.all
 
+        // The six TV-scoped keys are DEVICE-level and a phone never publishes
+        // them (spec 2026-11-12) - so they are read from their own store, and
+        // only on a television. On a phone the map is empty and the six are
+        // simply absent from the blob, which is what makes its billboard
+        // settings unable to travel.
+        val deviceValues: Map<String, Any> =
+            if (com.kennyb1201.kbstream.FormFactor.isTv) {
+                TV_SCOPED_SYNC_KEYS.mapNotNull { key ->
+                    com.kennyb1201.kbstream.data.settings.AppPreferences
+                        .deviceScopedValue(context, key)
+                        ?.let { value -> key to value }
+                }.toMap()
+            } else {
+                emptyMap()
+            }
+        // A TV-scoped key is read from the DEVICE store even if this profile's
+        // file still holds a pre-migration copy: the device value is the one
+        // every reader uses.
+        fun stored(key: String): Any? =
+            if (key in TV_SCOPED_SYNC_KEYS) deviceValues[key] else all[key]
+
         val current =
             LinkedHashMap<String, String>()
         SYNCED_PREF_KEYS.forEach { key ->
-            blobValue(key, all[key])?.let { current[key] = it }
+            blobValue(key, stored(key))?.let { current[key] = it }
         }
 
         val now =
@@ -979,7 +1017,7 @@ object PrefsPayloadBuilder {
                 DisplayPrefsRules.blobUpdatedAt(timestamps, now)
             )
             SYNCED_PREF_KEYS.forEach { key ->
-                val value = all[key] ?: return@forEach
+                val value = stored(key) ?: return@forEach
                 // The sports sets may still be stored as legacy StringSets
                 // (written by an older build, never re-saved since). The blob
                 // carries JSON primitives only, so normalize to the
@@ -2280,6 +2318,31 @@ object PrefsPayloadApplier {
                 if (remoteTimestamps.isNotEmpty()) remoteTimestamps[key] else fallbackTs
             if (editsAt == null) return@forEach
             if (!DisplayPrefsRules.remoteWins(editsAt, localTimestamps[key] ?: 0L)) {
+                return@forEach
+            }
+
+            // The six TV-scoped keys (spec 2026-11-12) are adopted differently
+            // from every other key, for two reasons that cannot be folded into
+            // the profile write below: they belong to the DEVICE, not to the
+            // profile this blob is for, and a PHONE never adopts them at all. A
+            // phone must come out of a TV's sync with its own layout and
+            // billboard exactly as they were, so the gate is here - on the
+            // receiving device, since the payload carries no device class.
+            if (key in PrefsPayloadBuilder.TV_SCOPED_SYNC_KEYS) {
+                if (!com.kennyb1201.kbstream.FormFactor.isTv) return@forEach
+                val adopted: Any? =
+                    when {
+                        primitive.isString -> content
+                        content == "true" || content == "false" -> content == "true"
+                        else -> content.toLongOrNull()
+                    }
+                if (adopted != null) {
+                    com.kennyb1201.kbstream.data.settings.AppPreferences
+                        .adoptDeviceScopedValue(context, key, adopted)
+                    applied[key] = content
+                    appliedAt[key] = editsAt
+                    snapshot[key] = content
+                }
                 return@forEach
             }
 
