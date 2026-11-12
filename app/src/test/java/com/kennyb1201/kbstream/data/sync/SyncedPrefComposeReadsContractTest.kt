@@ -61,7 +61,8 @@ class SyncedPrefComposeReadsContractTest {
         val bare = mutableSetOf<String>()
         sourceFiles().forEach { file ->
             val src = file.readText()
-            governed.forEach { getter ->
+                            governed.forEach { getter ->
+                if (getter in ENTRY_SEEDED_GETTERS) return@forEach
                 Regex("AppPreferences\\.$getter\\(").findAll(src).forEach { read ->
                     val rememberKeys = rememberKeysBefore(src, read.range.first) ?: return@forEach
                     if (rememberKeys.lowercase().contains("revision")) return@forEach
@@ -92,6 +93,32 @@ class SyncedPrefComposeReadsContractTest {
         // viewer mid-mix. The applied accent beside it IS keyed (selectedIndex),
         // and the theme mirrors repaint on their own.
         "SettingsScreen.kt:getCustomAccent"
+    )
+
+    /**
+     * The one synced FAMILY that is deliberately seeded on entry rather than
+     * keyed on the revision: the six TV-scoped layout/billboard keys (spec
+     * 2026-11-12).
+     *
+     * They DO sync now - TV to TV, through the display blob - but the spec's
+     * refresh path is "the next Home entry", and that is a product decision,
+     * not an oversight: a revision key here would re-flow the whole Home layout
+     * (and flip the billboard on or off) under a viewer who is mid-scroll the
+     * moment another TV's write lands. Home re-reads all six when it enters -
+     * `remember(activeProfileId)` for the layout and its dwell, per-entry
+     * remembers for the billboard - so the value does arrive, one visit later.
+     *
+     * By getter, not by file:getter pair, because the reason is the family's and
+     * the same six are read from Home, Spotlight and both of the billboard's
+     * settings surfaces. Every other synced key stays under the rule.
+     */
+    private val ENTRY_SEEDED_GETTERS = setOf(
+        "getHomeLayout",
+        "getHomeCardExpandMs",
+        "getHomeBillboardEnabled",
+        "getHomeBillboardFeeds",
+        "getHomeBillboardCycleMs",
+        "getHomeBillboardTrailerMode"
     )
 
     // ── The teeth: device-local prefs stay device-local ─────────────────────
