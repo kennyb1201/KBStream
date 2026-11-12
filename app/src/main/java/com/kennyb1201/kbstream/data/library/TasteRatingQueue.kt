@@ -180,9 +180,25 @@ object TasteRatingQueue {
      */
     private val lastGood = ConcurrentHashMap<String, Store>()
 
-    /** The newest failure per tracker, for COPY DIAGNOSTICS. */
+    /**
+     * The newest failure per tracker, for COPY DIAGNOSTICS.
+     *
+     * [message] is the terminal status ("gave up after 5 attempts"), [cause] the
+     * underlying error the last attempt actually hit - an HTTP code, a timeout,
+     * no network. The cause is kept HERE, not on the entry, because the entry is
+     * deleted at exactly the moment the status is recorded: `lastError` died
+     * with it, so the paste could say a leg gave up and never why.
+     *
+     * Blank means unknown (a failure recorded before the cause existed, or a
+     * leg-level failure whose message already IS the error). Defaults, so a
+     * stored blob written before this field parses unchanged.
+     */
     @Serializable
-    data class LegFailure(val at: Long = 0L, val message: String = "")
+    data class LegFailure(
+        val at: Long = 0L,
+        val message: String = "",
+        val cause: String = ""
+    )
 
     @Serializable
     internal data class Store(
@@ -305,7 +321,8 @@ object TasteRatingQueue {
         context: Context,
         entry: TasteRatingQueueEntry,
         atMs: Long,
-        message: String
+        message: String,
+        cause: String = ""
     ) {
         val app = context.applicationContext
         val current = readOrNull(app) ?: return
@@ -313,7 +330,8 @@ object TasteRatingQueue {
             app,
             current.copy(
                 pending = current.pending.filterNot { it.sameTargetAs(entry) },
-                failures = current.failures + (entry.tracker to LegFailure(atMs, message))
+                failures = current.failures +
+                    (entry.tracker to LegFailure(atMs, message, cause))
             )
         )
     }

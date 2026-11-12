@@ -201,7 +201,15 @@ object TasteRatingSubmission {
                         app,
                         entry,
                         now,
-                        "gave up after ${entry.attempts} attempts"
+                        "gave up after ${entry.attempts} attempts",
+                        // The CAUSE, captured before the drop: `dropEntry`
+                        // deletes the entry, and `lastError` is the only place
+                        // the attempt's real error (HTTP code, timeout, no
+                        // network) ever existed. Without this the paste could
+                        // only say THAT the leg gave up, never why - and both
+                        // legs failing on the same second is a shared cause
+                        // nobody could name (spec 2026-11-12).
+                        cause = entry.lastError.orEmpty()
                     )
                     continue
                 }
@@ -489,6 +497,29 @@ object TasteRatingSubmission {
     private fun activeProfileId(): String = ProfileManager.activeProfile.value?.id ?: ""
 
     /**
+     * A stored cause, made safe for one paste line.
+     *
+     * Error messages arrive from three different HTTP stacks and can carry a
+     * newline, a stack of whitespace, or a whole response body; the paste is
+     * line-oriented, so a newline would silently split the taste line in two.
+     * Collapsed to single spaces and capped at [CAUSE_LIMIT] characters - the
+     * FULL error still reaches the drain's log line, which is where a long one
+     * is meant to be read. Empty in, empty out: no "(cause: )" ever.
+     */
+    internal fun failureCause(cause: String, limit: Int = CAUSE_LIMIT): String {
+        val flat = cause.replace(Regex("\\s+"), " ").trim()
+        // The literal word, not the concept: `lastError.toString()` on a null
+        // error is the string "null", and printing that as a cause would be
+        // worse than printing nothing.
+        if (flat.isEmpty() || flat.equals("null", ignoreCase = true)) return ""
+        if (flat.length <= limit) return flat
+        return flat.take(limit - 1).trimEnd() + "\u2026"
+    }
+
+    /** About one paste line's worth of room, after the status and timestamp. */
+    internal const val CAUSE_LIMIT = 80
+
+    /**
      * The COPY DIAGNOSTICS lines: what is queued per tracker and the last
      * submission failure each one hit.
      *
@@ -520,6 +551,13 @@ object TasteRatingSubmission {
                             DateFormats.time(failure.at, DateFormats.DATE_TIME_SECONDS)
                         )
                     }
+                    // The underlying error, after the terminal status it
+                    // explains: "gave up after 5 attempts" says THAT the leg
+                    // stopped, `(cause: HTTP 401)` says why. Omitted entirely
+                    // when no cause was stored, so a failure recorded before
+                    // this existed still reads exactly as it did.
+                    val cause = failureCause(failure.cause)
+                    if (cause.isNotEmpty()) append(" (cause: ").append(cause).append(")")
                 }
             }
         }
