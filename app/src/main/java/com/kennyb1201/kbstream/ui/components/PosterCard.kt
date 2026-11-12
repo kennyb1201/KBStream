@@ -18,7 +18,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -151,7 +153,17 @@ fun PosterCard(
      * still carries the title to a screen reader.
      */
     showFallbackText: Boolean = true,
-    overlayContent: (@Composable BoxScope.() -> Unit)? = null 
+    /**
+     * The card's own release/air date, when the rail carries one.
+     *
+     * Spotlight's expanded card offers no PLAY for a date still in the future
+     * (Detail's UNAVAILABLE rule). A catalog preview carries it in
+     * `releaseInfo` - a year for a film, a full date for an upcoming episode -
+     * so the rails hand it over and the panel decides; a card that is not on a
+     * Home rail never passes one and reports nothing.
+     */
+    airDate: String? = null,
+    overlayContent: (@Composable BoxScope.() -> Unit)? = null
 ) {
     val context = LocalContext.current
     var hasError by remember(posterUrl) { mutableStateOf(false) }
@@ -187,26 +199,45 @@ fun PosterCard(
     var spotlightBounds by remember {
         mutableStateOf(androidx.compose.ui.geometry.Rect.Zero)
     }
+    // The card's own node, so the panel's pills can send UP back to it - the
+    // only way out of the row that does not collapse the panel by accident.
+    val spotlightCardRequester = remember { androidx.compose.ui.focus.FocusRequester() }
     val spotlightModifier =
         if (spotlightFocus == null) {
             Modifier
         } else {
             Modifier
+                // Attached for the card's whole life in Spotlight, not only
+                // while focused: the panel's pill row sends UP back to this node
+                // at a moment the card is blurred.
+                .focusRequester(spotlightCardRequester)
                 .onGloballyPositioned { coordinates ->
                     spotlightBounds = coordinates.boundsInRoot()
                     if (spotlightFocused) spotlightFocus.updateBounds(spotlightBounds)
                 }
                 .onFocusChanged { state ->
                     spotlightFocused = state.isFocused
+                    if (state.isFocused) spotlightFocus.cardRequester = spotlightCardRequester
                     spotlightFocus.onCardFocus(state.isFocused) {
                         com.kennyb1201.kbstream.ui.home.SpotlightCardSnapshot(
                             title = contentDescription,
                             stillUrl = posterUrl,
                             isWatched = isWatched,
                             isPartiallyWatched = isPartiallyWatched,
+                            airDate = airDate,
                             bounds = spotlightBounds
                         )
                     }
+                }
+                // DOWN enters the panel's pills while it is up, BEFORE the rail
+                // below: without this the panel's actions were unreachable (the
+                // nearer next-rail card won the focus search) or a trap (on the
+                // last rail, DOWN landed on PLAY and the card's blur collapsed
+                // the panel out from under it).
+                .onPreviewKeyEvent { event ->
+                    event.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
+                        event.key == androidx.compose.ui.input.key.Key.DirectionDown &&
+                        spotlightFocus.onDownFromCard()
                 }
         }
 

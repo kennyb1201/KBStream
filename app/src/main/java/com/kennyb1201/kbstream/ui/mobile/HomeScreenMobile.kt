@@ -2144,6 +2144,26 @@ internal fun MobileBillboard(
      * D-pad has no starting point.
      */
     firstPillFocusRequester: FocusRequester? = null,
+    /**
+     * True while ANOTHER surface owns the pooled player (Spotlight's expanded
+     * card).
+     *
+     * The billboard then stops whatever it is playing through its own stop path
+     * (the page-change / ON_PAUSE one), so its surface renders the still instead
+     * of a video with no player behind it, and it starts nothing new until the
+     * flag lifts. That handoff is a deliberate CUT, not a death: nothing is
+     * recorded and no source is poisoned.
+     */
+    trailerSuppressed: Boolean = false,
+    /**
+     * Reports whether THIS surface currently has a trailer playing.
+     *
+     * The Home holds the screensaver off while any surface plays (see its
+     * `heroTrailerPlaying`), and the billboard is one of those surfaces: without
+     * this the flag stayed false in Spotlight and the screensaver armed over a
+     * playing trailer.
+     */
+    onTrailerPlayingChange: (Boolean) -> Unit = {},
     onPlay: (BillboardPage) -> Unit,
     onDetails: (BillboardPage) -> Unit
 ) {
@@ -2229,6 +2249,9 @@ internal fun MobileBillboard(
     }
 
     fun startTrailer(index: Int) {
+        // Another surface owns the player: nothing starts here (see the flag's
+        // doc - the viewer's mode comes back when the card collapses).
+        if (trailerSuppressed) return
         val page = pages.getOrNull(index) ?: return
         val key = page.trailerKey?.takeIf { it.isNotBlank() } ?: return
         val ownerKey = page.key
@@ -2500,6 +2523,22 @@ internal fun MobileBillboard(
     LaunchedEffect(pagerState.currentPage) {
         stopTrailer()
     }
+    // ...and never over another surface that has taken the pooled player. The
+    // mode flip alone is not a stop: an in-flight trailer kept its source and
+    // its mounted surface, so the card's player re-pointed underneath it and
+    // the hero showed black with its cycle frozen. This is the stop.
+    LaunchedEffect(trailerSuppressed) {
+        if (trailerSuppressed) stopTrailer()
+    }
+    // The Home's screensaver hold reads this, and it falls on dispose: a trailer
+    // that ended, died or was cut must not leave the flag stuck true.
+    val trailerPlayingNow = playback != null
+    LaunchedEffect(trailerPlayingNow) {
+        onTrailerPlayingChange(trailerPlayingNow)
+    }
+    DisposableEffect(Unit) {
+        onDispose { onTrailerPlayingChange(false) }
+    }
     LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) {
         backgrounded = true
         stopTrailer()
@@ -2527,11 +2566,13 @@ internal fun MobileBillboard(
         playback,
         playbackPageKey,
         backgrounded,
+        trailerSuppressed,
         currentPage?.settled,
         currentPage?.trailerKey
     ) {
         if (trailerMode != BillboardTrailerMode.AUTO) return@LaunchedEffect
         if (!trailerAutoplay) return@LaunchedEffect
+        if (trailerSuppressed) return@LaunchedEffect
         if (backgrounded || pagerState.isScrollInProgress) return@LaunchedEffect
         if (playbackPageKey != null) return@LaunchedEffect
         val page = pages.getOrNull(pagerState.currentPage) ?: return@LaunchedEffect
@@ -2553,6 +2594,7 @@ internal fun MobileBillboard(
     // half-finished pager animation. A finger on the pager is the pause, and its
     // release is the re-arm whether it landed on a new page or on this one.
     val autoTrailerArmed = trailerMode == BillboardTrailerMode.AUTO &&
+        !trailerSuppressed &&
         currentPage?.settled == true &&
         !currentPage?.trailerKey.isNullOrBlank()
     LaunchedEffect(
@@ -2562,7 +2604,11 @@ internal fun MobileBillboard(
         playbackPageKey,
         backgrounded,
         pages.size,
-        autoTrailerArmed
+        autoTrailerArmed,
+        // Lifting the suppression re-arms the hold, so the billboard's cycle
+        // restarts when the expanded card collapses instead of staying frozen
+        // on the page it stopped (the landing intent, now the behaviour).
+        trailerSuppressed
     ) {
         if (cycleMs <= 0L || pages.size <= 1) return@LaunchedEffect
         if (backgrounded || playbackPageKey != null || playback != null) {

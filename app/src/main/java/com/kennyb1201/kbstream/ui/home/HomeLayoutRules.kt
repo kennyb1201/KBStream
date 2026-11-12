@@ -77,8 +77,18 @@ internal object HomeExpandDelay {
  */
 internal object SpotlightTrailerRule {
 
-    /** How long the trailer waits after the CARD expands (the hero's own delay). */
-    const val EXPANDED_CARD_DELAY_MS = 6_000L
+    /**
+     * How long the trailer waits after the CARD expands.
+     *
+     * It is the VIEWER'S hero-trailer delay, handed in from the pref
+     * (`getHeroTrailerDelayMs`, options 0/2/4/6/8s): the card and the billboard
+     * are one trailer surface rule, so a viewer who changes the hero's delay
+     * must not find the card still waiting six seconds. Still counted from the
+     * EXPANSION, never from focus - the expand delay and the trailer delay do
+     * not stack into one timer.
+     */
+    fun expandedCardDelayMs(heroTrailerDelayMs: Long): Long =
+        heroTrailerDelayMs.coerceAtLeast(0L)
 
     /**
      * The hero billboard's trailer mode while a card is expanded: OFF, whatever
@@ -94,7 +104,7 @@ internal object SpotlightTrailerRule {
     /**
      * Whether the expanded card plays its trailer on its own once it is up.
      *
-     * AUTO does (after [EXPANDED_CARD_DELAY_MS] from the expansion, never from
+     * AUTO does (after [expandedCardDelayMs] from the expansion, never from
      * focus - the two delays never stack into one timer); MANUAL offers the
      * button instead; OFF offers nothing, exactly as on the hero.
      */
@@ -111,4 +121,81 @@ internal object SpotlightTrailerRule {
     @Suppress("UNUSED_PARAMETER")
     fun showsTrailerButton(mode: BillboardTrailerMode, heroTrailerAutoplay: Boolean): Boolean =
         mode == BillboardTrailerMode.MANUAL
+
+    /**
+     * Whether the expanded card draws its TRAILER pill.
+     *
+     * Only when the title HAS a trailer: the mode says what a trailer would do,
+     * not whether there is one, and MANUAL on a title with no key offered a pill
+     * whose press silently did nothing (a fresh press could not even retry -
+     * the resolve returns on a blank key). A failed resolve keeps the pill: it is
+     * the retry affordance, and the panel's request counter is what makes that
+     * press fire again.
+     */
+    fun showsTrailerPill(
+        mode: BillboardTrailerMode,
+        heroTrailerAutoplay: Boolean,
+        trailerKey: String?
+    ): Boolean = !trailerKey.isNullOrBlank() && showsTrailerButton(mode, heroTrailerAutoplay)
+
+    /**
+     * Whether an exact press of the pill may start a trailer at all (see
+     * [showsTrailerPill]) - kept as a name for the press path, so the rule is
+     * read in one place.
+     */
+    fun trailerPressStarts(trailerKey: String?): Boolean = !trailerKey.isNullOrBlank()
+}
+
+/**
+ * Where the expanded card's panel is drawn, in pixels, inside [viewport].
+ *
+ * The panel grows from the card and must fit the television: it starts at the
+ * card's top-left, FLIPS to grow upward when growing down would run past the
+ * bottom edge, and clamps horizontally to the viewport. This is arithmetic on
+ * the same coordinates the rail measured the card in (`boundsInRoot`), so the
+ * panel and the rail agree about where the edge is - there is no second
+ * screen-size estimate to drift.
+ *
+ * A still-too-big panel is capped rather than allowed to overhang: the pills
+ * row at its bottom is the part a viewer presses, so the whole panel is what has
+ * to be on screen.
+ */
+internal data class SpotlightPanelBox(
+    val left: Int,
+    val top: Int,
+    val width: Int,
+    val height: Int
+)
+
+internal fun spotlightPanelBox(
+    cardLeftPx: Float,
+    cardTopPx: Float,
+    cardRightPx: Float,
+    cardBottomPx: Float,
+    growth: Float,
+    viewportWidthPx: Int,
+    viewportHeightPx: Int,
+    marginPx: Float
+): SpotlightPanelBox {
+    val margin = marginPx.coerceAtLeast(0f)
+    val usableWidth = (viewportWidthPx - 2f * margin).coerceAtLeast(0f)
+    val usableHeight = (viewportHeightPx - 2f * margin).coerceAtLeast(0f)
+    val cardWidth = (cardRightPx - cardLeftPx).coerceAtLeast(0f)
+    val cardHeight = (cardBottomPx - cardTopPx).coerceAtLeast(0f)
+    val width = (cardWidth * growth).coerceAtMost(usableWidth)
+    val height = (cardHeight * growth).coerceAtMost(usableHeight)
+    val left = cardLeftPx.coerceIn(margin, (margin + usableWidth - width).coerceAtLeast(margin))
+    val below = cardTopPx
+    val above = cardBottomPx - height
+    val top = if (below + height <= margin + usableHeight) {
+        below.coerceAtLeast(margin)
+    } else {
+        above.coerceAtLeast(margin)
+    }
+    return SpotlightPanelBox(
+        left = left.toInt(),
+        top = top.toInt(),
+        width = width.toInt(),
+        height = height.toInt()
+    )
 }

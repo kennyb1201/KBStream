@@ -2895,6 +2895,12 @@ private fun UpcomingEpisodeCard(
         posterUrl = upcoming.backdrop ?: upcoming.poster,
         contentDescription = upcoming.title,
         isWatched = false,
+        // An Upcoming card is an UNAIRED episode by construction, and the panel
+        // must not offer PLAY for it (Detail's UNAVAILABLE rule).
+        airDate = java.time.Instant.ofEpochMilli(upcoming.airDateEpochMs)
+            .atZone(java.time.ZoneId.systemDefault())
+            .toLocalDate()
+            .toString(),
         onClick = onClick,
         onLongClick = onLongClick,
         modifier = Modifier
@@ -3534,6 +3540,7 @@ private fun LibraryListHomeRail(
                                 fallbackTitle = meta.name,
                                 contentDescription = meta.name,
                                 isWatched = isWatched(meta),
+                                airDate = meta.releaseInfo,
                                 isPartiallyWatched = isPartiallyWatched(meta),
                                 onClick = { onOpen(meta) },
                                 modifier = cardModifier
@@ -3548,6 +3555,7 @@ private fun LibraryListHomeRail(
                                 onPosterError = { carriedArtFailed = true },
                                 contentDescription = meta.name,
                                 isWatched = isWatched(meta),
+                                airDate = meta.releaseInfo,
                                 isPartiallyWatched = isPartiallyWatched(meta),
                                 onClick = { onOpen(meta) },
                                 modifier = cardModifier
@@ -3703,6 +3711,7 @@ private fun BuiltinTopPicksRail(
                                 fallbackTitle = meta.name,
                                 contentDescription = meta.name,
                                 isWatched = isWatched(meta),
+                                airDate = meta.releaseInfo,
                                 isPartiallyWatched = isPartiallyWatched(meta),
                                 onClick = { onOpen(meta) },
                                 onLongClick = { onLongPress(meta, requester) },
@@ -3713,6 +3722,7 @@ private fun BuiltinTopPicksRail(
                                 posterUrl = meta.poster,
                                 contentDescription = meta.name,
                                 isWatched = isWatched(meta),
+                                airDate = meta.releaseInfo,
                                 isPartiallyWatched = isPartiallyWatched(meta),
                                 onClick = { onOpen(meta) },
                                 onLongClick = { onLongPress(meta, requester) },
@@ -5631,6 +5641,18 @@ fun HomeScreen(
     var heroTrailerPlaying by remember {
         mutableStateOf(false)
     }
+    // Spotlight's two surfaces report separately (the billboard's trailer and the
+    // expanded card's), and the gate below is the OR: ONE holding is enough. The
+    // billboard's flag is the pool's own playing state and falls on dispose; the
+    // card's falls when its player goes, ends or is cut.
+    var spotlightBillboardTrailerPlaying by remember {
+        mutableStateOf(false)
+    }
+    var spotlightPanelTrailerPlaying by remember {
+        mutableStateOf(false)
+    }
+    val anyTrailerPlaying =
+        heroTrailerPlaying || spotlightBillboardTrailerPlaying || spotlightPanelTrailerPlaying
 
     // What Home could show right now, for the arm decision and for the idle
     // wait's resolve pass. CANDIDATES, not slides: each one still needs the
@@ -5694,7 +5716,7 @@ fun HomeScreen(
             upcomingMenu == null &&
             posterMenu == null &&
             browseShortcutMenu == null &&
-            !heroTrailerPlaying
+            !anyTrailerPlaying
 
     // The falling edge of the trailer is activity that produced no key press:
     // the wait restarts from the moment the picture returns to its backdrop
@@ -5710,14 +5732,14 @@ fun HomeScreen(
         mutableStateOf(false)
     }
     SideEffect {
-        if (screensaverTrailerWasPlaying != heroTrailerPlaying) {
+        if (screensaverTrailerWasPlaying != anyTrailerPlaying) {
             screensaverLastKeyAt = screensaverIdleClockAfterTrailer(
                 wasPlaying = screensaverTrailerWasPlaying,
-                playing = heroTrailerPlaying,
+                playing = anyTrailerPlaying,
                 nowMs = SystemClock.uptimeMillis(),
                 lastKeyAtMs = screensaverLastKeyAt
             )
-            screensaverTrailerWasPlaying = heroTrailerPlaying
+            screensaverTrailerWasPlaying = anyTrailerPlaying
         }
     }
 
@@ -6463,7 +6485,10 @@ fun HomeScreen(
                     trailerAutoplay = spotlightTrailerAutoplay,
                     cardExpanded = spotlightCardExpanded,
                     onPlay = onItemClick,
-                    onDetails = onItemClick
+                    onDetails = onItemClick,
+                    onTrailerPlayingChange = { playing ->
+                        spotlightBillboardTrailerPlaying = playing
+                    }
                 )
             } else HomeHeroHost(
                 focusedItem = focusedItemState,
@@ -7105,6 +7130,7 @@ fun HomeScreen(
                                                             fallbackTitle = meta.name,
                                                             contentDescription = meta.name,
                                                             isWatched = watched,
+                                                            airDate = meta.releaseInfo,
                                                             isPartiallyWatched = watchedPartially,
                                                             // A pinned "Top ... Today" row
                                                             // numbers its cards; no other
@@ -7139,6 +7165,7 @@ fun HomeScreen(
                                                             ),
                                                             contentDescription = meta.name,
                                                             isWatched = watched,
+                                                            airDate = meta.releaseInfo,
                                                             isPartiallyWatched = watchedPartially,
                                                             onClick = {
                                                                 selectHero(meta)
@@ -7588,11 +7615,23 @@ fun HomeScreen(
                 expandDelayMs = spotlightExpandMs,
                 meta = heroMetaState.value,
                 trailerKey = heroTrailerKeyState.value,
+                // The card's trailer resolves with the title's own ids, so the
+                // ladder's IMDb leg can fire on a YouTube death (F5).
+                imdbId = com.kennyb1201.kbstream.data.imdb.ImdbTrailerData
+                    .imdbIdOf(focusedItemState.value?.id),
+                tmdbId = heroTmdbDetailState.value?.id,
                 trailerMode = spotlightTrailerPrefMode,
                 trailerMuted = spotlightTrailerMuted,
                 heroTrailerAutoplay = spotlightTrailerAutoplay,
+                trailerDelayMs = spotlightTrailerDelayMs,
+                // A long-press menu is the viewer's explicit request: no panel
+                // opens over it, and one already up collapses first (F6).
+                menuOpen = posterMenu != null || browseShortcutMenu != null,
                 onPlay = onItemClick,
                 onDetails = onItemClick,
+                onTrailerPlayingChange = { playing ->
+                    spotlightPanelTrailerPlaying = playing
+                },
                 onExpandedChange = { spotlightCardExpanded = it }
             )
         }

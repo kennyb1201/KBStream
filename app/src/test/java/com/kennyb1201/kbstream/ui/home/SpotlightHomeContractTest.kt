@@ -200,14 +200,15 @@ class SpotlightHomeContractTest {
         assertTrue(
             "and is positioned from the focused card's bounds - an overlay, so " +
                 "the rail's other cards never move",
-            preview.contains("internal fun spotlightPanelOffset(bounds: Rect): IntOffset")
+            preview.contains("spotlightPanelBox(") &&
+                preview.contains("cardLeftPx = snapshot.bounds.left")
         )
 
         val section = source(SPOTLIGHT_HOME)
         assertTrue(
             "the host draws it over the screen rather than inside the rail",
             section.contains("Box(modifier = modifier.fillMaxSize().zIndex(SPOTLIGHT_PANEL_Z))") &&
-                section.contains("spotlightPanelOffset(panel.bounds)")
+                section.contains("SpotlightPreviewPanel(")
         )
 
         val home = source(HOME)
@@ -243,8 +244,8 @@ class SpotlightHomeContractTest {
         )
         assertTrue(
             "and the two pill actions the billboard offers",
-            preview.contains("SpotlightPill(label = \"PLAY\"") &&
-                preview.contains("SpotlightPill(label = \"DETAILS\"")
+            preview.contains("label = \"PLAY\"") &&
+                preview.contains("label = \"DETAILS\"")
         )
         assertTrue(
             "the meta line is the hero's own shape: year, runtime, rating, genre",
@@ -266,7 +267,7 @@ class SpotlightHomeContractTest {
         val host = source(SPOTLIGHT_HOME)
         assertTrue(
             "and the host collapses on that null",
-            host.contains("if (snapshot == null || !HomeExpandDelay.expands(expandDelayMs)) {") &&
+            host.contains("if (snapshot == null || menuOpen") &&
                 host.contains("expanded = null")
         )
         assertTrue(
@@ -291,27 +292,30 @@ class SpotlightHomeContractTest {
         )
 
         val preview = source(SPOTLIGHT_PREVIEW)
+        val trailer = source(SPOTLIGHT_PANEL_TRAILER)
         assertTrue(
             "the card reuses the hero's player composable, not a new one",
-            preview.contains("HeroInlineTrailerPlayer(")
+            trailer.contains("HeroInlineTrailerPlayer(")
         )
         assertTrue(
             "and the hero's resolve ladder, so there is no second resolve path",
-            preview.contains("TrailerPlayerLauncher.resolvePlayableUrl(")
+            trailer.contains("TrailerPlayerLauncher.resolvePlayableUrl(")
         )
         assertTrue(
-            "AUTO waits its six seconds from the EXPANSION, never from focus",
-            preview.contains("delay(SpotlightTrailerRule.EXPANDED_CARD_DELAY_MS)")
+            "AUTO waits its delay from the EXPANSION, never from focus, and the " +
+                "delay is the viewer's own (fix spec F7)",
+            trailer.contains("delay(delayMs.coerceAtLeast(0L))") &&
+                source(SPOTLIGHT_HOME).contains("SpotlightTrailerRule.expandedCardDelayMs(")
         )
         assertTrue(
             "MANUAL offers the button instead",
-            preview.contains("SpotlightTrailerRule.showsTrailerButton(") &&
-                preview.contains("SpotlightPill(label = \"TRAILER\"")
+            preview.contains("SpotlightTrailerRule.showsTrailerPill(") &&
+                preview.contains("label = \"TRAILER\"")
         )
         assertTrue(
             "OFF offers neither - the same rule answers for the button",
-            preview.contains("SpotlightTrailerRule.autoplaysInCard(") &&
-                preview.contains("SpotlightTrailerRule.showsTrailerButton(")
+            trailer.contains("SpotlightTrailerRule.autoplaysInCard(") &&
+                preview.contains("SpotlightTrailerRule.showsTrailerPill(")
         )
 
         // The rule itself, as arithmetic: AUTO plays, MANUAL buttons, OFF neither.
@@ -488,6 +492,8 @@ class SpotlightHomeContractTest {
         const val HOME = "com/kennyb1201/kbstream/ui/home/HomeScreen.kt"
         const val SPOTLIGHT_HOME = "com/kennyb1201/kbstream/ui/home/SpotlightHome.kt"
         const val SPOTLIGHT_PREVIEW = "com/kennyb1201/kbstream/ui/home/SpotlightPreview.kt"
+        const val SPOTLIGHT_PANEL_TRAILER =
+            "com/kennyb1201/kbstream/ui/home/SpotlightPanelTrailer.kt"
         const val MOBILE = "com/kennyb1201/kbstream/ui/mobile/HomeScreenMobile.kt"
         const val PHONE_MANAGER = "com/kennyb1201/kbstream/ui/mobile/HomeManagerDialogMobile.kt"
         const val PHONE_SETTINGS = "com/kennyb1201/kbstream/ui/mobile/SettingsScreenMobile.kt"

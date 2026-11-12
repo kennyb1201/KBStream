@@ -2,12 +2,13 @@ package com.kennyb1201.kbstream.ui.home
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -60,6 +61,8 @@ internal fun SpotlightHeroSection(
     cardExpanded: Boolean,
     onPlay: (MetaPreview) -> Unit,
     onDetails: (MetaPreview) -> Unit,
+    /** Reports whether THIS surface is playing a trailer (the screensaver hold). */
+    onTrailerPlayingChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -134,6 +137,12 @@ internal fun SpotlightHeroSection(
         trailerDelayMs = trailerDelayMs,
         trailerMuted = trailerMuted,
         trailerAutoplay = trailerAutoplay,
+        // The single-surface rule, enforced rather than assumed: while a card is
+        // expanded the billboard STOPS its own trailer through its own stop path
+        // (a deliberate cut, not a death) and renders its still - the mode flip
+        // below only keeps it from starting a new one.
+        trailerSuppressed = cardExpanded,
+        onTrailerPlayingChange = onTrailerPlayingChange,
         // Play is the billboard's own press: it asks the Detail page to press its
         // own Play (see BillboardPlaySelection), exactly as the phone does.
         onPlay = { page ->
@@ -163,19 +172,28 @@ internal fun SpotlightPreviewHost(
     expandDelayMs: Long,
     meta: Meta?,
     trailerKey: String?,
+    imdbId: String?,
+    tmdbId: Int?,
     trailerMode: BillboardTrailerMode,
     trailerMuted: Boolean,
     heroTrailerAutoplay: Boolean,
+    /** The viewer's hero-trailer delay; the card waits the same one (F7). */
+    trailerDelayMs: Long,
+    /** A long-press menu (or any modal) is open: the panel must not open over it. */
+    menuOpen: Boolean,
     onPlay: (MetaPreview) -> Unit,
     onDetails: (MetaPreview) -> Unit,
+    onTrailerPlayingChange: (Boolean) -> Unit,
     onExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf<SpotlightCardSnapshot?>(null) }
     val snapshot = tracker.snapshot
 
-    LaunchedEffect(snapshot, expandDelayMs) {
-        if (snapshot == null || !HomeExpandDelay.expands(expandDelayMs)) {
+    LaunchedEffect(snapshot, expandDelayMs, menuOpen) {
+        // The menu is the viewer's explicit request, so it wins: no panel opens
+        // over it, and one already up collapses when it appears.
+        if (snapshot == null || menuOpen || !HomeExpandDelay.expands(expandDelayMs)) {
             expanded = null
             onExpandedChange(false)
             return@LaunchedEffect
@@ -195,6 +213,10 @@ internal fun SpotlightPreviewHost(
         }
     }
 
+    // The panel is the card's own focus neighbourhood while it is up (see
+    // SpotlightCardFocus): DOWN from the card enters its pills, and their focus
+    // keeps it open.
+    SideEffect { tracker.panelExpanded = expanded != null }
     val panel = expanded ?: return
     val preview = meta?.let { detail ->
         MetaPreview(
@@ -208,13 +230,23 @@ internal fun SpotlightPreviewHost(
     }
 
     Box(modifier = modifier.fillMaxSize().zIndex(SPOTLIGHT_PANEL_Z)) {
+        // The overlay's own size is the viewport the panel clamps to: it is the
+        // same coordinate space the card's bounds were measured in, so there is
+        // no second screen-size estimate to disagree with the rail (F4).
+        var viewport by remember { mutableStateOf(IntSize.Zero) }
+        Box(modifier = Modifier.fillMaxSize().onSizeChanged { viewport = it })
         SpotlightPreviewPanel(
             snapshot = panel,
             meta = meta,
             trailerKey = trailerKey,
+            imdbId = imdbId,
+            tmdbId = tmdbId,
             trailerMode = trailerMode,
             trailerMuted = trailerMuted,
             heroTrailerAutoplay = heroTrailerAutoplay,
+            trailerDelayMs = SpotlightTrailerRule.expandedCardDelayMs(trailerDelayMs),
+            viewport = viewport,
+            tracker = tracker,
             onPlay = {
                 // The card's Play is the billboard's: ask Detail to press its own
                 // Play for this title, the one path that resolves a stream.
@@ -228,7 +260,7 @@ internal fun SpotlightPreviewHost(
                 val target = preview
                 if (target != null) onDetails(target)
             },
-            modifier = Modifier.offset { spotlightPanelOffset(panel.bounds) }
+            onTrailerPlayingChange = onTrailerPlayingChange
         )
     }
 }
