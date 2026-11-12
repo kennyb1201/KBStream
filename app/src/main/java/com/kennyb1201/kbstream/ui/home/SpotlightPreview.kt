@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -23,6 +24,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -41,12 +44,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
 import com.kennyb1201.kbstream.ui.detail.isEpisodeUnavailable
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
+import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -66,6 +71,16 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
  */
 internal data class SpotlightCardSnapshot(
     val title: String?,
+    /**
+     * The card's own Detail identity (audit A4).
+     *
+     * The panel's PLAY and DETAILS act on THIS, not on the resolved hero meta:
+     * the enrichment is debounced and can fail, and a pill that needs it was a
+     * silent dead press until it landed. Null only for a card that was handed no
+     * id (nothing on a Home rail is).
+     */
+    val id: String? = null,
+    val type: String? = null,
     val stillUrl: String?,
     val isWatched: Boolean,
     val isPartiallyWatched: Boolean,
@@ -98,6 +113,20 @@ internal class SpotlightCardFocus {
     var snapshot by mutableStateOf<SpotlightCardSnapshot?>(null)
         private set
 
+    /**
+     * Bumped every time a card TAKES focus - the dwell's key (F6b).
+     *
+     * The panel's effect keys on this rather than on [snapshot], because
+     * [updateBounds] copies the snapshot whenever the card's bounds change (a
+     * scroll, the hero landing, a feed re-resolve). Keyed on the object, every
+     * one of those copies RESTARTED the two-second delay: a card under a settling
+     * list never reached its dwell at all - the field report's "no card expands".
+     * A bounds change now only moves the panel; a focus change to a different
+     * (or the same, re-entered) card still arms a fresh dwell.
+     */
+    var focusToken by mutableIntStateOf(0)
+        private set
+
     /** True while the panel is up; the card's DOWN is a handoff only then. */
     var panelExpanded by mutableStateOf(false)
 
@@ -127,6 +156,7 @@ internal class SpotlightCardFocus {
     fun onCardFocus(focused: Boolean, card: () -> SpotlightCardSnapshot) {
         if (focused) {
             handingOff = false
+            focusToken++
             snapshot = card()
         } else {
             // A blur while the panel owns the viewer is the handoff, not leaving.
@@ -205,6 +235,11 @@ internal fun SpotlightPreviewPanel(
     /** The overlay's own size, in the same pixels `boundsInRoot` reports. */
     viewport: IntSize,
     tracker: SpotlightCardFocus?,
+    /** The hero meta has not landed yet, and has not failed: show placeholders. */
+    metaLoading: Boolean = false,
+    /** The hero meta resolve FAILED: say so and offer the retry (audit A4). */
+    metaFailed: Boolean = false,
+    onRetryMeta: () -> Unit = {},
     onPlay: () -> Unit,
     onDetails: () -> Unit,
     onTrailerPlayingChange: (Boolean) -> Unit,
@@ -263,6 +298,31 @@ internal fun SpotlightPreviewPanel(
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Box(modifier = Modifier.fillMaxWidth().height((height.value * 0.46f))) {
+            // A title with no still, no backdrop and no poster used to leave this
+            // half of the panel an empty KBVoid box (audit a5). The tile's own
+            // fallback says what the title is, so the panel uses the same
+            // words: the app has no generic empty-art image (ic_cast_placeholder
+            // is the cast silhouette, not a title), and the card's fallback has
+            // always been text.
+            val stillNow = snapshot.stillUrl ?: meta?.background ?: meta?.poster
+            if (stillNow.isNullOrBlank()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(KBSurface),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = snapshot.title.orEmpty(),
+                        color = KBTextLo,
+                        style = androidx.tv.material3.MaterialTheme.typography.titleSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 12.dp)
+                    )
+                }
+            }
             SpotlightPanelTrailer(
                 trailerKey = trailerKey,
                 imdbId = imdbId,
@@ -284,6 +344,16 @@ internal fun SpotlightPreviewPanel(
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
                 )
+            } else if (snapshot.isPartiallyWatched) {
+                // The card's own started-not-finished mark, mirrored here (audit
+                // a3): a half-watched title looked untouched in the panel while
+                // its card carried the eye.
+                Icon(
+                    imageVector = Icons.Filled.Visibility,
+                    contentDescription = "Started, not finished",
+                    tint = KBAccent,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
+                )
             }
         }
         Text(
@@ -293,17 +363,30 @@ internal fun SpotlightPreviewPanel(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+        // Silence while the meta resolves was the other half of audit A4: the
+        // panel opened blank rather than saying it was still working. Each line
+        // has a placeholder, and a failed resolve says so (the RETRY pill beside
+        // the actions is the way out).
         Text(
-            text = spotlightMetaLine(meta),
+            text = when {
+                metaFailed -> "DETAILS UNAVAILABLE"
+                metaLoading -> "LOADING DETAILS…"
+                else -> spotlightMetaLine(meta)
+            },
             color = KBTextLo,
             style = androidx.tv.material3.MaterialTheme.typography.labelSmall,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
         val overview = meta?.description?.trim().orEmpty()
-        if (overview.isNotEmpty()) {
+        val overviewLine = when {
+            metaFailed -> "Could not fetch this title's details: press RETRY."
+            metaLoading -> "Fetching the synopsis…"
+            else -> overview
+        }
+        if (overviewLine.isNotEmpty()) {
             Text(
-                text = overview,
+                text = overviewLine,
                 color = KBTextLo,
                 style = androidx.tv.material3.MaterialTheme.typography.labelSmall,
                 maxLines = 2,
@@ -318,6 +401,8 @@ internal fun SpotlightPreviewPanel(
                 heroTrailerAutoplay,
                 trailerKey
             ),
+            showRetry = metaFailed,
+            onRetry = onRetryMeta,
             pillsFocus = pillsFocus,
             tracker = tracker,
             onPlay = onPlay,
@@ -343,6 +428,9 @@ internal fun SpotlightPreviewPanel(
 private fun SpotlightPillRow(
     unaired: Boolean,
     showTrailer: Boolean,
+    /** The meta resolve failed: the panel offers its own retry (audit A4). */
+    showRetry: Boolean = false,
+    onRetry: () -> Unit = {},
     pillsFocus: FocusRequester,
     tracker: SpotlightCardFocus?,
     onPlay: () -> Unit,
@@ -382,6 +470,11 @@ private fun SpotlightPillRow(
         SpotlightPill(label = "DETAILS", onClick = onDetails)
         if (showTrailer) {
             SpotlightPill(label = "TRAILER", onClick = onTrailer)
+        }
+        if (showRetry) {
+            // The panel's own retry: moving focus away and back was the only way
+            // to re-trigger the resolve before this.
+            SpotlightPill(label = "RETRY", onClick = onRetry)
         }
     }
 }

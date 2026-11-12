@@ -9,7 +9,6 @@ import com.kennyb1201.kbstream.data.imdb.ImdbTrailerResolver
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.evictOldest
 import com.kennyb1201.kbstream.data.runCatchingCancellable
-import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -636,7 +635,10 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         if (IMDB_CLIENT in excludeClients) return null
         if (videoId != null && imdbMounted.containsKey(normalizeId(videoId))) return null
         val context = AppContextHolder.appContext ?: return null
-        if (!AppPreferences.getImdbTrailerEnabled(context)) return null
+        // IMDb first, always: its MP4 is a single progressive file with no
+        // adaptive merge and no signed chunker to die against mid-play, and the
+        // ladder falls back to YouTube when IMDb has nothing. There is no switch
+        // - OFF only ever made trailers worse, so the default became the rule.
         val id = imdbIdFor(context, imdbId, tmdbId, type) ?: return null
         return ImdbTrailerResolver.resolve(id, allowPage = false)
     }
@@ -678,7 +680,9 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         type: String? = null
     ) {
         val context = AppContextHolder.appContext ?: return
-        if (!AppPreferences.getImdbTrailerEnabled(context)) return
+        // The pre-resolve is unconditional too (see resolveImdbSource): the
+        // cache is only worth warming when the play will ask for it, and now it
+        // always asks.
         val id = imdbIdFor(context, imdbId, tmdbId, type) ?: return
         ImdbTrailerResolver.prefetch(id)
     }

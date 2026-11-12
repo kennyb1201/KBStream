@@ -1122,6 +1122,21 @@ class HomeViewModel(
     val heroMeta: StateFlow<Meta?> =
         _heroMeta.asStateFlow()
 
+    /**
+     * The last hero resolve FAILED (audit A4).
+     *
+     * "No meta yet" and "no meta ever" were the same null before this, so the
+     * Spotlight panel could only show silence - and its retry lives in the panel,
+     * where moving focus away and back used to be the only way to re-trigger the
+     * resolve. Reset when a resolve starts and on success; true only after the
+     * catch below.
+     */
+    private val _heroMetaFailed =
+        MutableStateFlow(false)
+
+    val heroMetaFailed: StateFlow<Boolean> =
+        _heroMetaFailed.asStateFlow()
+
     private val _heroBackdropUrl =
         MutableStateFlow<String?>(null)
 
@@ -1366,6 +1381,9 @@ class HomeViewModel(
         baseUrl: String? = null
     ) {
         heroResolveJob?.cancel()
+        // A new resolve clears the previous failure: the panel goes back to its
+        // loading placeholders rather than keeping the RETRY pill up.
+        _heroMetaFailed.value = false
 
         if (item == null) {
             _heroMeta.value = null
@@ -1742,6 +1760,7 @@ Log.d(
                 _heroLogoUrl.value = null
                 _heroTrailerKey.value = null
                 _heroTmdbDetail.value = null
+                _heroMetaFailed.value = true
                 // A failed resolve never settles: without this the previous
                 // item's marker would still name the item the hero is showing,
                 // and its copy would animate as though the art had arrived.

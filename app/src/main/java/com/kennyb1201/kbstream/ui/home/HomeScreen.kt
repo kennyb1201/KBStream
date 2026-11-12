@@ -36,6 +36,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import kotlin.math.abs
+import kotlin.math.max
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
@@ -2894,6 +2895,9 @@ private fun UpcomingEpisodeCard(
     PosterCard(
         posterUrl = upcoming.backdrop ?: upcoming.poster,
         contentDescription = upcoming.title,
+        // The panel's pills act on the SHOW the episode belongs to (audit A4).
+        spotlightId = upcoming.parentId,
+        spotlightType = upcoming.parentType,
         isWatched = false,
         // An Upcoming card is an UNAIRED episode by construction, and the panel
         // must not offer PLAY for it (Detail's UNAVAILABLE rule).
@@ -3553,6 +3557,8 @@ private fun LibraryListHomeRail(
                                 ),
                                 onPosterError = { carriedArtFailed = true },
                                 contentDescription = meta.name,
+                                spotlightId = meta.id,
+                                spotlightType = meta.type,
                                 isWatched = isWatched(meta),
                                 airDate = meta.releaseInfo,
                                 isPartiallyWatched = isPartiallyWatched(meta),
@@ -3719,6 +3725,8 @@ private fun BuiltinTopPicksRail(
                             PosterCard(
                                 posterUrl = meta.poster,
                                 contentDescription = meta.name,
+                                spotlightId = meta.id,
+                                spotlightType = meta.type,
                                 isWatched = isWatched(meta),
                                 airDate = meta.releaseInfo,
                                 isPartiallyWatched = isPartiallyWatched(meta),
@@ -4580,6 +4588,11 @@ private fun CompactUpNextCard(
             item.episodeThumbnail ?: item.backdrop ?: item.poster ?: ""
         },
         contentDescription = item.title,
+        // A continue-watching card is a SHOW (or a film): its parent is what
+        // Detail opens, and what the panel's PLAY and DETAILS must act on
+        // (audit A4). A film's item carries no parent, so its own id is it.
+        spotlightId = item.parentId ?: item.id,
+        spotlightType = item.parentType ?: if (item.season != null) "series" else "movie",
         isWatched = false,
         onClick = onClick,
         onLongClick = onLongClick,
@@ -4921,9 +4934,34 @@ fun HomeScreen(
     // hidden rows below are untouched by it, and switching back to Modern
     // restores the focus-following hero exactly as it was.
     val spotlightActive = homeLayout == HomeLayout.SPOTLIGHT
+    // Read once per Home composition, and re-read after Settings by
+    // construction (F6c trace): this app switches screens in a `when (screen)`
+    // (MainActivity), not a nav host that keeps the previous destination
+    // composed - leaving Home for Settings/Detail disposes this composition, so
+    // the remember below re-runs on the way back and the new delay applies. The
+    // field report's "none expand at 2s" was the dwell restarting on bounds
+    // changes (see SpotlightCardFocus.focusToken), not a stale read.
     val spotlightExpandMs by remember(activeProfileId) {
         mutableLongStateOf(HomeExpandDelay.normalize(AppPreferences.getHomeCardExpandMs(context)))
     }
+    // The hero is the rails list's FIRST ITEM in Spotlight (F1), so the 52% cap
+    // is now the ITEM's height: resolved once, and handed to the billboard and to
+    // the placeholder that holds its space before the first page settles (F3).
+    val spotlightHeroItemHeight =
+        spotlightHeroHeight(LocalConfiguration.current.screenHeightDp)
+    // F2's latch: the Play pill takes focus on the FIRST entry only. The hero
+    // leaves composition as it scrolls away, and asking for the pill again on the
+    // way back would steal focus from the card the viewer is on - so the request
+    // is a one-shot for the life of this composition, and it stands down once the
+    // viewer presses anything themselves.
+    var spotlightEntryFocusClaimed by remember { mutableStateOf(false) }
+    // F4's return path: UP from the first rail is the hero's own press. The hero
+    // is a list item, so while it is off screen it is not composed and a plain
+    // focus search finds nothing above the rail - the list has to bring the item
+    // back first. One requester for the Play pill, shared with the first-entry
+    // ask, and the scope the scroll runs in.
+    val spotlightHeroPillRequester = remember { FocusRequester() }
+    val spotlightHeroScope = rememberCoroutineScope()
     // The focused card's report, and whether its preview is up. Both are
     // Spotlight-only; Modern pays nothing (the tracker is never provided).
     val spotlightTracker = remember { SpotlightCardFocus() }
@@ -5075,6 +5113,10 @@ fun HomeScreen(
     // reads, so a hero art/trailer update recomposes the hero instead of this
     // whole screen (rails LazyColumn and overlays included).
     val heroMetaState = viewModel.heroMeta.collectAsStateWithLifecycle()
+    // The panel's loading / failure line (audit A4): "not landed yet" and
+    // "resolve failed" are different states now, and the second one is what puts
+    // the RETRY pill up.
+    val heroMetaFailedState = viewModel.heroMetaFailed.collectAsStateWithLifecycle()
     val heroTmdbDetailState = viewModel.heroTmdbDetail.collectAsStateWithLifecycle()
     val heroBackdropUrlState = viewModel.heroBackdropUrl.collectAsStateWithLifecycle()
     val heroLogoUrlState = viewModel.heroLogoUrl.collectAsStateWithLifecycle()
@@ -5869,8 +5911,29 @@ fun HomeScreen(
                 // distance (no bounce mid-flight). See [RailLanding] and
                 // [railLandingTarget].
                 val revealTarget = containerSize - railSize - revealBandPx
+                // The landing line is DYNAMIC now that the hero is a list item
+                // (F5). On entry the list rests at its start and the hero is on
+                // screen, so the focused rail belongs directly UNDER it: the
+                // hero's own bottom edge is the floor, and the hero stays where
+                // it is instead of being scrolled away by the first landing.
+                // Once the viewer has moved (or the list is scrolled at all), the
+                // inset is the panel's top - the fixed header floor this spec
+                // always used. Read live: one spec serves both moments.
+                val heroFloorPx = if (
+                    spotlightActive &&
+                    isFreshEntry &&
+                    !viewerMovedFocusSinceEntry &&
+                    !railListState.canScrollBackward
+                ) {
+                    railListState.layoutInfo.visibleItemsInfo
+                        .firstOrNull { item -> item.key == SPOTLIGHT_HERO_ITEM_KEY }
+                        ?.let { item -> (item.offset + item.size).toFloat() }
+                        ?: 0f
+                } else {
+                    0f
+                }
                 val targetLeadingEdge = railLandingTarget(
-                    floorPx = headerFloorPx,
+                    floorPx = max(headerFloorPx, heroFloorPx),
                     revealTargetPx = revealTarget,
                     aboveClearancePx = sectionGapPx
                 )
@@ -6348,10 +6411,28 @@ fun HomeScreen(
     // The top-bar hook for the rail drawn at [entryIndex] - null for every rail
     // but the first one in the merged order (see the note above).
     fun topRailUpHook(entryIndex: Int): ((FocusRequester) -> Unit)? =
-        if (com.kennyb1201.kbstream.ui.kb.isTopRailEntry(entryIndex)) {
-            { requester: FocusRequester -> openTopBar(requester) }
-        } else {
-            null
+        when {
+            !com.kennyb1201.kbstream.ui.kb.isTopRailEntry(entryIndex) -> null
+            // Spotlight carve-out (F4): the hero is a LIST ITEM above the first
+            // rail, so Up from that rail has a real target - the billboard's
+            // pills - and the press must not open the top bar instead. It scrolls
+            // the hero item back and lands on the Play pill. Not a bare focus
+            // search: while the hero is scrolled away it is not composed at all,
+            // so the search would run before there is anything to find. The press
+            // is consumed either way, so no stale search moves focus into the top
+            // bar. HOLD-Up still opens the bar through the list's own hold hook,
+            // which a short press never trips: the bar stays reachable from every
+            // rail by hold, and from the pills by DOWN -> rail -> hold.
+            spotlightActive -> {
+                { _: FocusRequester ->
+                    spotlightHeroScope.launch {
+                        runCatching { railListState.animateScrollToItem(0) }
+                        awaitFrame()
+                        runCatching { spotlightHeroPillRequester.requestFocus() }
+                    }
+                }
+            }
+            else -> { requester: FocusRequester -> openTopBar(requester) }
         }
 
     /**
@@ -6474,20 +6555,11 @@ fun HomeScreen(
                         viewModel.resolveHeroMeta(focused)
                     }
                 }
-                SpotlightHeroSection(
-                    viewModel = viewModel,
-                    rails = rails,
-                    trailerMode = spotlightTrailerPrefMode,
-                    trailerDelayMs = spotlightTrailerDelayMs,
-                    trailerMuted = spotlightTrailerMuted,
-                    trailerAutoplay = spotlightTrailerAutoplay,
-                    cardExpanded = spotlightCardExpanded,
-                    onPlay = onItemClick,
-                    onDetails = onItemClick,
-                    onTrailerPlayingChange = { playing ->
-                        spotlightBillboardTrailerPlaying = playing
-                    }
-                )
+                // The hero itself is NOT here any more (F1): it is the rails
+                // list's first item, so it scrolls out of view as the viewer goes
+                // down the rails instead of sitting fixed above them. What stays
+                // in the Column is the one thing that is about focus rather than
+                // layout - the hero META resolve for the focused card.
             } else HomeHeroHost(
                 focusedItem = focusedItemState,
                 focusedFolder = focusedFolderState,
@@ -6573,6 +6645,47 @@ fun HomeScreen(
                             RailSectionGap
                         )
                 ) {
+                    // Spotlight's hero is the list's first item (F1): it scrolls
+                    // out of view like any other row and the rails move up into
+                    // its place. The box always reserves the hero's height, so
+                    // the rails do not jump when the first page lands - a slow
+                    // feed leaves black where the billboard will be, never a
+                    // 52% shift under the viewer's focus (F3).
+                    if (spotlightActive) {
+                        item(
+                            key = SPOTLIGHT_HERO_ITEM_KEY,
+                            contentType = "spotlight_hero"
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(spotlightHeroItemHeight)
+                                    .background(Color.Black)
+                            ) {
+                                SpotlightHeroSection(
+                                    viewModel = viewModel,
+                                    rails = rails,
+                                    trailerMode = spotlightTrailerPrefMode,
+                                    trailerDelayMs = spotlightTrailerDelayMs,
+                                    trailerMuted = spotlightTrailerMuted,
+                                    trailerAutoplay = spotlightTrailerAutoplay,
+                                    heroHeight = spotlightHeroItemHeight,
+                                    pillFocusRequester = spotlightHeroPillRequester,
+                                    claimEntryFocus = !spotlightEntryFocusClaimed &&
+                                        !viewerMovedFocusSinceEntry &&
+                                        isFreshEntry,
+                                    onEntryFocusClaimed = { spotlightEntryFocusClaimed = true },
+                                    cardExpanded = spotlightCardExpanded,
+                                    onPlay = onItemClick,
+                                    onDetails = onItemClick,
+                                    onTrailerPlayingChange = { playing ->
+                                        spotlightBillboardTrailerPlaying = playing
+                                    }
+                                )
+                            }
+                        }
+                    }
+
                     item(key = "hero_spacer", contentType = "spacer") {
                         // Opaque spacer that prevents CW progress bar
                         // from peeking below the hero gradient.
@@ -7161,6 +7274,8 @@ fun HomeScreen(
                                                                 fallbackUrl = meta.poster
                                                             ),
                                                             contentDescription = meta.name,
+                                                            spotlightId = meta.id,
+                                                            spotlightType = meta.type,
                                                             isWatched = watched,
                                                             airDate = meta.releaseInfo,
                                                             isPartiallyWatched = watchedPartially,
@@ -7611,6 +7726,11 @@ fun HomeScreen(
                 tracker = spotlightTracker,
                 expandDelayMs = spotlightExpandMs,
                 meta = heroMetaState.value,
+                metaLoading = heroMetaState.value == null && !heroMetaFailedState.value,
+                metaFailed = heroMetaFailedState.value,
+                // The panel's own retry: re-run the resolve for the card that
+                // owns it, without moving focus away.
+                onRetryMeta = { viewModel.resolveHeroMeta(focusedItemState.value) },
                 trailerKey = heroTrailerKeyState.value,
                 // The card's trailer resolves with the title's own ids, so the
                 // ladder's IMDb leg can fire on a YouTube death (F5).

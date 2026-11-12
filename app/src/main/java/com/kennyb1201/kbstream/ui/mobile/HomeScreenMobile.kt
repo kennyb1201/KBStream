@@ -2615,6 +2615,12 @@ internal fun MobileBillboard(
             return@LaunchedEffect
         }
         if (autoTrailerArmed) return@LaunchedEffect
+        // An expanded card holds the hero still (audit a1): suppression already
+        // stopped NEW trailers, but nothing paused the cycle, so the still swept
+        // on behind the panel and the viewer collapsed back onto a page the hero
+        // had moved to on its own. Keyed on trailerSuppressed above, so lifting
+        // it re-enters here and restarts the delay (the landing intent).
+        if (trailerSuppressed) return@LaunchedEffect
         snapshotFlow { pagerState.settledPage to pagerState.isScrollInProgress }
             .collectLatest { (page, scrolling) ->
                 if (scrolling) return@collectLatest
@@ -2636,7 +2642,10 @@ internal fun MobileBillboard(
         pagerState.isScrollInProgress ||
         playbackPageKey != null ||
         playback != null ||
-        autoTrailerArmed
+        autoTrailerArmed ||
+        // The Ken Burns sweep is the other half of the hold (audit a1): the
+        // still must not keep moving under an expanded card either.
+        trailerSuppressed
     // The page this Animatable belongs to. It is what distinguishes a page
     // CHANGE (snap back to the start) from a pause (hold where it is): the
     // effect below is keyed on both, so the difference has to be data.
@@ -2789,7 +2798,14 @@ internal fun MobileBillboard(
                     onClick = { onDetails(page) }
                 )
             }
-            if (pages.size > 1) {
+            // TV has no segments (audit a4): each one was a plain `.clickable`
+            // with a 24 dp target and no focus handling, so on the TV the bar was
+            // a control the D-pad could not reach. Making it focusable would put
+            // a second focus stop between the hero's pills and the rails; the
+            // hero's TV paging is the cycle plus the pills, so the segments are
+            // touch-only and are not drawn on TV at all. What must not remain is
+            // a visible control the D-pad cannot reach.
+            if (pages.size > 1 && heroHeight == null) {
                 // The segmented progress bar (spec 2.6), in the dots' place and
                 // with the dots' job intact: one segment per page, every segment
                 // tappable to its page, each naming the title it jumps to.

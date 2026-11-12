@@ -271,6 +271,28 @@ internal fun normalizeBillboardFeeds(feeds: List<String>): List<String> =
 internal fun billboardFeedLabel(title: String): String =
     if (title.length <= 24) title else title.take(23).trimEnd() + "\u2026"
 
+/**
+ * The catalogs row's one-line summary (TV Settings).
+ *
+ * The control is a single row now instead of a chip grid that grew a row for
+ * every rail the chooser listed, so the row has to say what the selection IS
+ * without being opened: the labels themselves when there are one or two, and
+ * "first, second, +N more" beyond that - the count is what tells the viewer the
+ * list is longer than the row. An empty selection is the default selection
+ * (see [normalizeBillboardFeeds]), so it names the default rather than "none",
+ * which would describe a state the billboard never runs in.
+ */
+internal fun billboardFeedsSummary(selectedLabels: List<String>, defaultLabel: String): String {
+    val labels = selectedLabels.filter { it.isNotBlank() }
+    if (labels.isEmpty()) return defaultLabel
+    if (labels.size <= BILLBOARD_SUMMARY_LABELS) return labels.joinToString(", ")
+    val shown = labels.take(BILLBOARD_SUMMARY_LABELS).joinToString(", ")
+    return "$shown, +${labels.size - BILLBOARD_SUMMARY_LABELS} more"
+}
+
+/** How many labels the summary row prints before it counts the rest. */
+internal const val BILLBOARD_SUMMARY_LABELS = 2
+
 internal fun billboardChosenFeed(
     keys: List<String>,
     sources: Map<String, List<MetaPreview>>,

@@ -573,9 +573,6 @@ fun SettingsScreen(
     var audioOutput by remember(profileRowKey) {
         mutableIntStateOf(AppPreferences.getAudioOutput(context))
     }
-    var imdbTrailers by remember(syncedRevision) {
-        mutableStateOf(AppPreferences.getImdbTrailerEnabled(context))
-    }
     var heroTrailerAutoplay by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getHeroTrailerAutoplay(context))
     }
@@ -3241,25 +3238,11 @@ fun SettingsScreen(
 
                 // Renamed with that move (settings reorg §8.3): the clock left,
                 // so the header names what is actually in the section.
+                // No source row (spec 2026-11-12): every trailer resolves IMDb's
+                // own MP4 first and falls back to YouTube, unconditionally. The
+                // toggle only ever made trailers worse with no upside, so the
+                // behaviour is the rule and there is nothing here to turn off.
                 SettingsSectionHeader("Hero Trailers")
-
-                // The source leg, not just the hero's: every trailer this app
-                // resolves asks IMDb first when this is on. It sits at the top
-                // of the section because it decides what a trailer IS before
-                // the rows below decide when one plays.
-                ToggleRow(
-                    label = "IMDb Trailers",
-                    description = "Play IMDb's own trailer (a single MP4, up to 1080p) when it has one, " +
-                        "and fall back to YouTube when it does not. Applies to every trailer — hero, " +
-                        "Detail and the media rail — not just this screen's.",
-                    checked = imdbTrailers,
-                    onToggle = {
-                        imdbTrailers = it
-                        AppPreferences.setImdbTrailerEnabled(context, it)
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
 
                 ToggleRow(
                     label = "Hero Trailer Autoplay",
@@ -5881,39 +5864,75 @@ private fun BillboardSettingsSection() {
         }
     }
 
-    Text(
-        text = "Billboard catalogs",
-        color = KBTextHi,
-        style = MaterialTheme.typography.bodySmall,
+    // ONE row, not a grid (spec 2026-11-12).
+    //
+    // The chooser now lists every rail the Home can draw, so a chip per catalog
+    // ran to many rows and made Settings long enough to be a scroll of chips
+    // between two unrelated settings. The row says what the selection is and
+    // opens the multi-select dialog, where the same options live - the list is
+    // as long as the catalogs are, but inside a bounded panel.
+    var catalogsOpen by remember { mutableStateOf(false) }
+    val defaultCatalogLabel = catalogOptions
+        .firstOrNull { (key, _) -> key == AppPreferences.BILLBOARD_TRENDING_DAY_FEED }
+        ?.second
+        ?: "Trending today"
+    // Ordered by the options, not by the stored list, so the summary reads in
+    // the same order the dialog lists.
+    val summary = if (catalogOptions.isEmpty()) {
+        "Reading your Home rails…"
+    } else {
+        com.kennyb1201.kbstream.ui.home.billboardFeedsSummary(
+            selectedLabels = catalogOptions.filter { (key, _) -> key in feeds }
+                .map { (_, label) -> label },
+            defaultLabel = defaultCatalogLabel
+        )
+    }
+    KBCard(
+        onClick = { catalogsOpen = true },
         modifier = Modifier
+            .fillMaxWidth()
+            // The search entry points at the row that replaced the chips.
             .searchAnchor(SettingsSearchIndex.entryForLabel("Billboard catalogs"))
-            .padding(bottom = 4.dp)
-    )
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Billboard catalogs",
+                color = KBTextHi,
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                text = summary,
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                modifier = Modifier.padding(start = 16.dp)
+            )
+        }
+    }
     Text(
         text = "Which catalogs feed the Spotlight hero. Pick several to merge them.",
         color = KBTextLo,
         style = MaterialTheme.typography.labelSmall,
-        modifier = Modifier.padding(bottom = 6.dp)
+        modifier = Modifier.padding(top = 4.dp, bottom = 6.dp)
     )
-    if (catalogOptions.isEmpty()) {
-        Text(
-            text = "Reading your Home rails…",
-            color = KBTextLo,
-            style = MaterialTheme.typography.labelSmall
+    if (catalogsOpen) {
+        BillboardCatalogsDialog(
+            options = catalogOptions,
+            selected = feeds,
+            // Done writes through the same normalizer the chips did; dismiss
+            // (BACK, or a tap outside) is Cancel and writes nothing.
+            onConfirm = { picked ->
+                writeFeeds(picked)
+                catalogsOpen = false
+            },
+            onDismiss = { catalogsOpen = false }
         )
-    } else {
-        catalogOptions.chunked(3).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                row.forEach { (key, label) ->
-                    KBCard(onClick = {
-                        writeFeeds(if (key in feeds) feeds - key else feeds + key)
-                    }) {
-                        PillChip(label, key in feeds)
-                    }
-                }
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-        }
     }
 
     Spacer(modifier = Modifier.height(8.dp))
@@ -5967,6 +5986,78 @@ private fun BillboardSettingsSection() {
                     com.kennyb1201.kbstream.ui.home.billboardTrailerModeLabel(mode),
                     trailerMode == mode
                 )
+            }
+        }
+    }
+}
+
+/**
+ * The multi-select catalogs dialog (spec 2026-11-12).
+ *
+ * Same options, labels, order and exclusions as the chip grid it replaced -
+ * [billboardFeedOptions] - and the same write path: DONE hands the checked keys
+ * back to the section, which normalizes them through [normalizeBillboardFeeds]
+ * (so Continue Watching/Upcoming can never be written, and unchecking every
+ * catalog restores the default rather than leaving the hero empty).
+ *
+ * It follows the pane's existing dialog pattern, the one the external-player
+ * pickers use: androidx.compose.ui.window.Dialog + KBDialogPanel + KBCard rows
+ * with PillChips, DONE in the footer. The dialog holds a DRAFT, so BACK or any
+ * other dismiss is Cancel and writes nothing - Done is the only commit - and
+ * the list is bounded because the panel is: a full catalog list on a box with
+ * many add-ons would otherwise push DONE off the screen.
+ */
+@Composable
+private fun BillboardCatalogsDialog(
+    options: List<Pair<String, String>>,
+    selected: List<String>,
+    onConfirm: (List<String>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var draft by remember { mutableStateOf(selected) }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        KBDialogPanel(title = "Billboard catalogs", width = 640.dp) {
+            Text(
+                text = "Which catalogs feed the Spotlight hero. Pick several to merge them; " +
+                    "unchecking every catalog restores the default.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall
+            )
+            if (options.isEmpty()) {
+                Text(
+                    text = "Reading your Home rails…",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(top = 16.dp)
+                )
+            } else {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .padding(top = 16.dp)
+                        .fillMaxWidth()
+                        // Bounded, because the panel is and DONE has to stay
+                        // reachable however many catalogs are installed.
+                        .height(320.dp)
+                ) {
+                    items(options, key = { (key, _) -> key }) { (key, label) ->
+                        KBCard(
+                            onClick = {
+                                draft = if (key in draft) draft - key else draft + key
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            PillChip(label, selected = key in draft)
+                        }
+                    }
+                }
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(top = 8.dp)
+            ) {
+                KBButton(label = "CANCEL", onClick = onDismiss)
+                KBButton(label = "DONE", onClick = { onConfirm(draft) })
             }
         }
     }

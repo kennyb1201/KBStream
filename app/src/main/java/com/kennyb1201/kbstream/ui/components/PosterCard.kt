@@ -166,6 +166,16 @@ fun PosterCard(
      * Home rail never passes one and reports nothing.
      */
     airDate: String? = null,
+    /**
+     * The title's own Detail identity, for Spotlight's panel pills (audit A4).
+     *
+     * The panel used to gate PLAY and DETAILS on the resolved hero meta, which is
+     * debounced and can fail - so on a slow or dead network both pills were
+     * silent dead presses. The card already knows which title it IS, so it hands
+     * that over and the pills act on the identity rather than on the enrichment.
+     */
+    spotlightId: String? = null,
+    spotlightType: String? = null,
     overlayContent: (@Composable BoxScope.() -> Unit)? = null
 ) {
     val context = LocalContext.current
@@ -224,6 +234,8 @@ fun PosterCard(
                     spotlightFocus.onCardFocus(state.isFocused) {
                         com.kennyb1201.kbstream.ui.home.SpotlightCardSnapshot(
                             title = contentDescription,
+                            id = spotlightId,
+                            type = spotlightType,
                             stillUrl = posterUrl,
                             isWatched = isWatched,
                             isPartiallyWatched = isPartiallyWatched,

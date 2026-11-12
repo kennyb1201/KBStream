@@ -98,7 +98,6 @@ object AppPreferences {
     private const val KEY_DEFAULT_ASPECT_RATIO = "default_aspect_ratio"     // 0=fit, 1=zoom, 2=fill
     private const val KEY_PREFERRED_AUDIO_LANG = "preferred_audio_language"   // BCP-47 tag or "" for auto
     private const val KEY_PREFERRED_SUBTITLE_LANG = "preferred_subtitle_language" // BCP-47 tag or "" for auto
-    private const val KEY_IMDB_TRAILERS = "imdb_trailers"
     private const val KEY_HERO_TRAILER_AUTOPLAY = "hero_trailer_autoplay"
     private const val KEY_HERO_TRAILER_MUTED = "hero_trailer_muted"
     private const val KEY_HERO_TRAILER_DELAY_MS = "hero_trailer_delay_ms"
@@ -1528,24 +1527,6 @@ object AppPreferences {
 
     fun setYouTubePoTokenEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_YOUTUBE_PO_TOKEN_ENABLED, enabled).apply()
-    }
-
-    // ── IMDb trailers (every surface that resolves a trailer) ─────────
-    /**
-     * Whether a trailer is tried from IMDb's own MP4 before YouTube.
-     *
-     * ON by default: this is a reliability switch, not a taste one. The whole
-     * point is that a single progressive MP4 has no adaptive merge and no signed
-     * chunker to die against mid-play, and a viewer who has never opened
-     * Settings should still get that. Off keeps the YouTube path alone, exactly
-     * as it was.
-     */
-    fun getImdbTrailerEnabled(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_IMDB_TRAILERS, true)
-
-    fun setImdbTrailerEnabled(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(KEY_IMDB_TRAILERS, enabled).apply()
-        syncDisplayPrefsBlob(context)
     }
 
     // ── Hero trailer autoplay (Home hero) ─────────────────────────────

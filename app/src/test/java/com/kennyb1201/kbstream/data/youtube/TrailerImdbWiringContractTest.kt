@@ -170,8 +170,9 @@ class TrailerImdbWiringContractTest {
             )
         )
         assertTrue(
-            "the viewer's switch",
-            body.contains("if (!AppPreferences.getImdbTrailerEnabled(context)) return null")
+            "there is no switch (spec 2026-11-12): IMDb is always the first leg, " +
+                "so no toggle can turn it off",
+            !body.contains("getImdbTrailerEnabled")
         )
         assertTrue(
             "and there must be an id to look up - the caller's own, else TMDB's " +
@@ -290,15 +291,17 @@ class TrailerImdbWiringContractTest {
     }
 
     @Test
-    fun `the setting is on by default and syncs`() {
+    fun `the source is not a setting any more`() {
         assertTrue(
-            "Kenny commissioned this for reliability, so a fresh install gets it",
-            prefs.contains("prefs(context).getBoolean(KEY_IMDB_TRAILERS, true)")
+            "the pref is gone, not defaulted: a hidden kill-switch is the toggle " +
+                "by another name (spec 2026-11-12)",
+            !prefs.contains("KEY_IMDB_TRAILERS") &&
+                !prefs.contains("getImdbTrailerEnabled")
         )
         assertTrue(
-            "and both settings screens offer it",
-            settingsTv.contains("AppPreferences.setImdbTrailerEnabled(context, it)") &&
-                settingsPhone.contains("AppPreferences.setImdbTrailerEnabled(context, it)")
+            "and neither settings screen offers a row for it",
+            !settingsTv.contains("IMDb Trailers") &&
+                !settingsPhone.contains("IMDb Trailers")
         )
     }
 

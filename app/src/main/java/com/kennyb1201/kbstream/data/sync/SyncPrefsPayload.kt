@@ -236,9 +236,6 @@ object PrefsPayloadBuilder {
         "hero_trailer_autoplay",
         "hero_trailer_muted",
         "hero_trailer_delay_ms",            // hero trailer dwell: a viewing preference
-        // Which trailer source is tried first (IMDb's own MP4, else YouTube):
-        // the same title should be tried the same way on every device.
-        "imdb_trailers",
         // What "continue watching" means to this account: every device should
         // agree which tracker's resume point wins (all still scrobble).
         "resume_authority",

@@ -139,8 +139,11 @@ class SpotlightHomeContractTest {
             spotlightBranch.isNotEmpty()
         )
         assertTrue(
-            "and draw the billboard section",
-            spotlightBranch.contains("SpotlightHeroSection(")
+            "and draw the billboard section - as the rails list's first item since " +
+                "the scroll-away spec (see SpotlightScrollHeroContractTest), which is " +
+                "still Spotlight's hero and nothing else's",
+            home.contains("if (spotlightActive) {") &&
+                home.contains("SpotlightHeroSection(")
         )
         assertTrue(
             "while Modern keeps the hero host untouched, in the same if's else",
@@ -266,8 +269,9 @@ class SpotlightHomeContractTest {
         )
         val host = source(SPOTLIGHT_HOME)
         assertTrue(
-            "and the host collapses on that null",
-            host.contains("if (snapshot == null || menuOpen") &&
+            "and the host collapses on that null (see hasSnapshot: the dwell is " +
+                "keyed on the card, the collapse on there being no card)",
+            host.contains("if (!hasSnapshot || menuOpen") &&
                 host.contains("expanded = null")
         )
         assertTrue(

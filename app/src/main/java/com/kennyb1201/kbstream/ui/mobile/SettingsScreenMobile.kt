@@ -2729,9 +2729,6 @@ private fun InterfacePaneMobile() {
     var pureBlack by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getPureBlackSurface(context))
     }
-    var imdbTrailers by remember(syncedRevision) {
-        mutableStateOf(AppPreferences.getImdbTrailerEnabled(context))
-    }
     var heroAutoplay by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getHeroTrailerAutoplay(context))
     }
@@ -2890,21 +2887,10 @@ private fun InterfacePaneMobile() {
 
         // Renamed from "Hero & Clock" (settings reorg §8.3): the clock left, so
         // the header names what is actually in the section.
+        // No source row (spec 2026-11-12): every trailer resolves IMDb's own MP4
+        // first and falls back to YouTube, unconditionally - there is no switch
+        // on this surface either.
         SettingsSectionMobile("Hero Trailers")
-        // The source leg of every trailer, not only the hero's: IMDb's own MP4
-        // first, YouTube when IMDb has nothing suitable.
-        SettingsToggleMobile(
-            // The TV row's own spelling: the search index is keyed by label, and
-            // a phone viewer looking for "imdb" must find this row too.
-            label = "IMDb Trailers",
-            description = "Play IMDb's trailer when it has one, and fall back to YouTube when " +
-                "it doesn't. Applies to every trailer.",
-            checked = imdbTrailers,
-            onChange = {
-                imdbTrailers = it
-                AppPreferences.setImdbTrailerEnabled(context, it)
-            }
-        )
         SettingsToggleMobile(
             label = "Hero trailer autoplay",
             description = "Play a trailer in the Home hero after a pause.",
