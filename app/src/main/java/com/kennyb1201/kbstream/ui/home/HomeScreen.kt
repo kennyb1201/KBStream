@@ -3540,7 +3540,6 @@ private fun LibraryListHomeRail(
                                 fallbackTitle = meta.name,
                                 contentDescription = meta.name,
                                 isWatched = isWatched(meta),
-                                airDate = meta.releaseInfo,
                                 isPartiallyWatched = isPartiallyWatched(meta),
                                 onClick = { onOpen(meta) },
                                 modifier = cardModifier
@@ -3711,7 +3710,6 @@ private fun BuiltinTopPicksRail(
                                 fallbackTitle = meta.name,
                                 contentDescription = meta.name,
                                 isWatched = isWatched(meta),
-                                airDate = meta.releaseInfo,
                                 isPartiallyWatched = isPartiallyWatched(meta),
                                 onClick = { onOpen(meta) },
                                 onLongClick = { onLongPress(meta, requester) },
@@ -7130,7 +7128,6 @@ fun HomeScreen(
                                                             fallbackTitle = meta.name,
                                                             contentDescription = meta.name,
                                                             isWatched = watched,
-                                                            airDate = meta.releaseInfo,
                                                             isPartiallyWatched = watchedPartially,
                                                             // A pinned "Top ... Today" row
                                                             // numbers its cards; no other

@@ -7,6 +7,7 @@ import android.Manifest
 import android.content.ActivityNotFoundException
 import android.net.Uri
 import android.os.Build
+import android.content.Context
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -5819,7 +5820,7 @@ private fun billboardFeedOptions(context: Context): List<Pair<String, String>> {
             addonTitles.keys
         )
         .distinct()
-        .filter(::com.kennyb1201.kbstream.ui.home.billboardFeedOffered)
+        .filter { key -> com.kennyb1201.kbstream.ui.home.billboardFeedOffered(key) }
         .filterNot { key -> key.startsWith("list:") }
 
     return keys.map { key ->
