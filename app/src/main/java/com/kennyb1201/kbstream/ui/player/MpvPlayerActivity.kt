@@ -321,6 +321,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private var pickerTitle: TextView? = null
     private var pickerList: RecyclerView? = null
 
+    /** The episode picker's pinned season strip (see [bindEpisodeSeasonStrip]). */
+    private var pickerSeasons: RecyclerView? = null
+
     // --- INFO: the main player's readout screen, on this engine -------------
     //
     // The same panel the main player's INFO button raises, with the same ids and
@@ -1949,6 +1952,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         pickerContainer = findViewById(R.id.mpv_picker_container)
         pickerTitle = findViewById(R.id.mpv_picker_title)
         pickerList = findViewById(R.id.mpv_picker_list)
+        pickerSeasons = findViewById(R.id.mpv_picker_seasons)
         // The INFO panel: the same views the main player's panel has, plus its
         // own SUBTITLE row (see the layout). Its background is the shared
         // infoPanelDrawable - the XML fill is only the pre-theme fallback, and
@@ -1979,6 +1983,26 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // empty box under it, which is what "the lists are empty on the MPV
         // player" was: the rows were handed to the adapter and never placed.
         pickerList?.layoutManager = LinearLayoutManager(this)
+        // The season strip above the episode list (spec 2026-11-12): one chip per
+        // season, LEFT/RIGHT across them, DOWN into the list. A RecyclerView
+        // again, and horizontal - the chips are built by the same shared
+        // builder the rows are, so this engine and the main player's strip
+        // cannot drift.
+        pickerSeasons?.layoutManager = LinearLayoutManager(this, RecyclerView.HORIZONTAL, false)
+        pickerSeasons?.isFocusable = true
+        pickerSeasons?.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+        pickerSeasons?.nextFocusDownId = R.id.mpv_picker_list
+        pickerSeasons?.addOnChildAttachStateChangeListener(
+            object : RecyclerView.OnChildAttachStateChangeListener {
+                override fun onChildViewAttachedToWindow(view: View) {
+                    if (chromeThemeMoved(this@MpvPlayerActivity)) {
+                        refillPlayerChrome(view)
+                    }
+                }
+
+                override fun onChildViewDetachedFromWindow(view: View) = Unit
+            }
+        )
         // Picker rows are inflated on demand, long after the chrome above was
         // themed, so each one is retinted as it attaches (a recycled row keeps
         // whatever background it was themed with).
@@ -2880,6 +2904,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             pickerContainer,
             24f * resources.displayMetrics.density
         )
+        // Sources / audio / subtitles / speed are not episodes: the season strip
+        // belongs to the episode picker alone (F1), so those panels keep the box
+        // they always had.
+        pickerSeasons?.visibility = View.GONE
         pickerList?.adapter = PickerAdapter(items)
         pickerLastFocus = null
         pickerList?.post {
@@ -3122,7 +3150,6 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
     /** The current rows, built by the shared builder both engines call. */
     private fun episodePickerItems(): List<PickerItem> = PlayerEpisodePicker.rows(
-        seasons = episodePickerSeasons,
         selectedSeason = episodePickerSeason,
         listedSeason = episodePickerListedSeason,
         episodes = episodePickerEpisodes,
@@ -3131,15 +3158,33 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         playingEpisode = episode,
         loading = episodePickerLoading,
         fallbackImageUrl = itemPoster?.takeIf { it.isNotBlank() } ?: backdropUrl,
-        onSeason = { picked -> selectEpisodeSeason(picked) },
         onPick = { picked -> pickEpisode(picked) }
     )
+
+    /**
+     * Fills the pinned season strip above the list (F1).
+     *
+     * The chips come from the shared builder, so the season a chip names is the
+     * season [selectEpisodeSeason] loads - and the previous season's rows stay on
+     * screen while that load runs, exactly as before.
+     */
+    private fun bindEpisodeSeasonStrip() {
+        pickerSeasons?.adapter = SeasonStripAdapter(
+            PlayerEpisodePicker.seasonStrip(
+                seasons = episodePickerSeasons,
+                selectedSeason = episodePickerSeason,
+                onSeason = { picked -> selectEpisodeSeason(picked) }
+            )
+        )
+        pickerSeasons?.visibility = View.VISIBLE
+    }
 
     /** Re-paints the open episode panel, parked on the playing episode. */
     private fun bindEpisodePicker() {
         if (!pickerOpen) return
         val items = episodePickerItems()
         pickerTitle?.text = "EPISODES"
+        bindEpisodeSeasonStrip()
         pickerList?.adapter = PickerAdapter(items)
         pickerLastFocus = null
         val currentAt = episodeCurrentRowIndex()
@@ -3153,7 +3198,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         val playing = episode ?: return -1
         if (season != listed) return -1
         val at = episodePickerEpisodes.indexOfFirst { it.episodeNumber == playing }
-        return if (at >= 0) episodePickerSeasons.size + at else -1
+        // No offset: the season rows left the list (F1), so the playing episode's
+        // row IS its index in this season.
+        return at
     }
 
     /**

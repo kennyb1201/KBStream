@@ -873,6 +873,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private lateinit var infoAudio: TextView
     private lateinit var infoSubtitles: TextView
     private lateinit var pickerList: RecyclerView
+
+    /** The episode picker's pinned season strip (see [bindEpisodeSeasonStrip]). */
+    private lateinit var pickerSeasons: RecyclerView
     private lateinit var btnSubSmall: TextView
     private lateinit var btnSubNormal: TextView
     private lateinit var btnSubLarge: TextView
@@ -4706,6 +4709,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         settingsCodec = findViewById(R.id.settings_codec)
         settingsSpeedAspect = findViewById(R.id.settings_speed_aspect)
         pickerList = findViewById(R.id.picker_list)
+        pickerSeasons = findViewById(R.id.picker_seasons)
         btnSubSmall = findViewById(R.id.btn_sub_small)
         btnSubNormal = findViewById(R.id.btn_sub_normal)
         btnSubLarge = findViewById(R.id.btn_sub_large)
@@ -4738,6 +4742,26 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         pickerList.isFocusable = true
         pickerList.isFocusableInTouchMode = true
         pickerList.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+        // The season strip above the episode list (spec 2026-11-12): one chip per
+        // season, LEFT/RIGHT across them, DOWN into the list. The chips come
+        // from the same shared builder the rows do, so the two engines draw the
+        // same strip.
+        pickerSeasons.layoutManager = LinearLayoutManager(this, RecyclerView.HORIZONTAL, false)
+        pickerSeasons.isFocusable = true
+        pickerSeasons.isFocusableInTouchMode = true
+        pickerSeasons.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+        pickerSeasons.nextFocusDownId = R.id.picker_list
+        pickerSeasons.addOnChildAttachStateChangeListener(
+            object : androidx.recyclerview.widget.RecyclerView.OnChildAttachStateChangeListener {
+                override fun onChildViewAttachedToWindow(view: View) {
+                    if (chromeThemeMoved(this@NativePlayerActivity)) {
+                        refillPlayerChrome(view)
+                    }
+                }
+
+                override fun onChildViewDetachedFromWindow(view: View) = Unit
+            }
+        )
         // Picker rows are inflated on demand, long after the chrome above was
         // themed, so each one is retinted as it attaches (a recycled row keeps
         // whatever background it was themed with).
@@ -11780,6 +11804,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             pickerContainer,
             24f * resources.displayMetrics.density
         )
+        // Sources / audio / subtitles / speed are not episodes: the season strip
+        // belongs to the episode picker alone (F1), so those panels keep the box
+        // they always had.
+        pickerSeasons.visibility = View.GONE
         pickerList.adapter = PickerAdapter(items)
         pickerLastFocus = null
         pickerList.post {
@@ -12056,7 +12084,6 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
     /** The current rows, built by the shared builder both engines call. */
     private fun episodePickerItems(): List<PickerItem> = PlayerEpisodePicker.rows(
-        seasons = episodePickerSeasons,
         selectedSeason = episodePickerSeason,
         listedSeason = episodePickerListedSeason,
         episodes = episodePickerEpisodes,
@@ -12065,9 +12092,26 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         playingEpisode = episode,
         loading = episodePickerLoading,
         fallbackImageUrl = itemPoster?.takeIf { it.isNotBlank() } ?: backdropUrl,
-        onSeason = { picked -> selectEpisodeSeason(picked) },
         onPick = { picked -> pickEpisode(picked) }
     )
+
+    /**
+     * Fills the pinned season strip above the list (F1).
+     *
+     * The chips come from the shared builder, so the season a chip names is the
+     * season [selectEpisodeSeason] loads - and the previous season's rows stay on
+     * screen while that load runs, exactly as before.
+     */
+    private fun bindEpisodeSeasonStrip() {
+        pickerSeasons.adapter = SeasonStripAdapter(
+            PlayerEpisodePicker.seasonStrip(
+                seasons = episodePickerSeasons,
+                selectedSeason = episodePickerSeason,
+                onSeason = { picked -> selectEpisodeSeason(picked) }
+            )
+        )
+        pickerSeasons.visibility = View.VISIBLE
+    }
 
     /**
      * Re-paints the open episode panel, and parks it on the playing episode.
@@ -12080,6 +12124,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         if (!isPickerShowing) return
         val items = episodePickerItems()
         pickerTitle.text = "EPISODES"
+        bindEpisodeSeasonStrip()
         pickerList.adapter = PickerAdapter(items)
         pickerLastFocus = null
         val currentAt = episodeCurrentRowIndex()
@@ -12093,7 +12138,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         val playing = episode ?: return -1
         if (season != listed) return -1
         val at = episodePickerEpisodes.indexOfFirst { it.episodeNumber == playing }
-        return if (at >= 0) episodePickerSeasons.size + at else -1
+        // No offset: the season rows left the list (F1), so the playing episode's
+        // row IS its index in this season.
+        return at
     }
 
     // --- Channel guide overlay (live only) ---

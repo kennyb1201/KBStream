@@ -21,9 +21,15 @@ import com.kennyb1201.kbstream.ui.detail.isEpisodeUnavailable
  *    its title and answers a press with nothing, rather than dropping out of
  *    the list or starting an episode nobody has;
  *  - the playing episode is the selected row, so the panel opens on the
- *    episode the viewer is watching and the activity can scroll to it.
+ *    episode the viewer is watching and the activity can scroll to it, and it
+ *    also carries the NOW PLAYING chip - the accent label alone was not
+ *    readable at a glance next to the watched check.
  *
- * The description is capped by the row layout (two lines, ellipsis), not here:
+ * The seasons are NOT rows in that list any more (spec 2026-11-12): they are a
+ * strip pinned above it (see [seasonStrip]), so switching season never means
+ * scrolling past the season rows and the list is episodes only.
+ *
+ * The description is capped by the row layout (three lines, ellipsis), not here:
  * the full overview is handed over and the panel decides how much of it fits.
  */
 internal object PlayerEpisodePicker {
@@ -37,7 +43,29 @@ internal object PlayerEpisodePicker {
     fun seasonLabel(season: Int): String = "Season $season"
 
     /**
-     * The panel's rows for one season.
+     * The season strip's chips, pinned above the episode list.
+     *
+     * The same seasons the panel was handed, in the same order, as [PickerItem]s
+     * - so both engines draw the strip from one builder and the chip a viewer
+     * presses is the season the list will load. The selected season takes the
+     * same selected treatment the episode rows do (the accent), and pressing
+     * another chip goes through the panel's own [onSeason], which keeps the old
+     * rows up while the new list loads.
+     */
+    fun seasonStrip(
+        seasons: List<Int>,
+        selectedSeason: Int?,
+        onSeason: (Int) -> Unit
+    ): List<PickerItem> = seasons.map { season ->
+        PickerItem(
+            label = seasonLabel(season),
+            isSelected = season == selectedSeason,
+            onClick = { if (season != selectedSeason) onSeason(season) }
+        )
+    }
+
+    /**
+     * The panel's episode rows for one season.
      *
      * [selectedSeason] is the season chip the viewer is on; [listedSeason] is
      * the season [episodes] actually belongs to. They differ for exactly one
@@ -53,7 +81,6 @@ internal object PlayerEpisodePicker {
      * screen: the panel never flashes empty.
      */
     fun rows(
-        seasons: List<Int>,
         selectedSeason: Int?,
         listedSeason: Int?,
         episodes: List<ResolvedEpisode>,
@@ -62,16 +89,8 @@ internal object PlayerEpisodePicker {
         playingEpisode: Int?,
         loading: Boolean,
         fallbackImageUrl: String?,
-        onSeason: (Int) -> Unit,
         onPick: (ResolvedEpisode) -> Unit
     ): List<PickerItem> {
-        val seasonRows = seasons.map { season ->
-            PickerItem(
-                label = seasonLabel(season),
-                isSelected = season == selectedSeason,
-                onClick = { if (season != selectedSeason) onSeason(season) }
-            )
-        }
         val episodeRows = episodes.map { episode ->
             val unavailable = isEpisodeUnavailable(episode.airDate)
             val isCurrent = listedSeason != null &&
@@ -86,12 +105,21 @@ internal object PlayerEpisodePicker {
                     }
                 },
                 isSelected = isCurrent,
+                // The marker beside the accent label: what is PLAYING now is a
+                // chip of its own, so it reads apart from the watched check and
+                // from whichever row merely has focus.
+                nowPlaying = isCurrent,
                 // Read by the row layout: the still (with the title's art as
                 // its fallback), the overview under the title, the checkmark
                 // for an episode the history already calls watched.
                 thumbnail = episode.thumbnail,
                 fallbackImageUrl = fallbackImageUrl,
                 description = episode.overview,
+                // The crowd's rating, the same number the episode cards show -
+                // not the viewer's own (per-episode user ratings are a separate
+                // commission on both trackers). Null on an episode TMDB has no
+                // vote average for, and the row then draws no chip at all.
+                rating = episode.voteAverage,
                 watched = watched.contains(episode.episodeNumber),
                 unavailable = unavailable,
                 // An unaired episode still draws; a press on it does nothing.
@@ -103,6 +131,7 @@ internal object PlayerEpisodePicker {
         } else {
             emptyList()
         }
-        return seasonRows + episodeRows + loadingRow
+        // No season rows (F1): the strip above the list owns them.
+        return episodeRows + loadingRow
     }
 }

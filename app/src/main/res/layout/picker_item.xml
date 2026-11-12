@@ -31,12 +31,16 @@
         android:paddingHorizontal="14dp"
         android:paddingVertical="10dp">
 
-        <!-- The episode still. GONE for every row that is not an episode, so
-             the track and source pickers keep the row they always had. -->
+        <!-- The episode still, landscape 16:9 (spec 2026-11-12) like Detail's
+             episode cards and the TMDB stills themselves - the old 56x84
+             portrait crop of a landscape image showed a letterboxed slice of it.
+             160x90 also makes the row taller than the old 84dp thumb did.
+             GONE for every row that is not an episode, so the track and source
+             pickers keep the row they always had. -->
         <ImageView
             android:id="@+id/picker_item_thumb"
-            android:layout_width="56dp"
-            android:layout_height="84dp"
+            android:layout_width="160dp"
+            android:layout_height="90dp"
             android:layout_marginEnd="12dp"
             android:contentDescription="@null"
             android:scaleType="centerCrop"
@@ -61,15 +65,16 @@
                 android:ellipsize="end" />
 
             <!-- The episode overview, small and capped: the picker is a panel,
-                 not a second Detail page. GONE when the episode has none, so it
-                 never leaves a blank slot. -->
+                 not a second Detail page - one more line than the two it had
+                 (spec 2026-11-12), and no further. GONE when the episode has
+                 none, so it never leaves a blank slot. -->
             <TextView
                 android:id="@+id/picker_item_desc"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:ellipsize="end"
                 android:fontFamily="@font/inter_regular"
-                android:maxLines="2"
+                android:maxLines="3"
                 android:paddingTop="2dp"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="12sp"

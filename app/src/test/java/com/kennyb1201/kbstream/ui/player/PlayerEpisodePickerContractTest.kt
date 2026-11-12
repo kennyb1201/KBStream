@@ -143,11 +143,14 @@ class PlayerEpisodePickerContractTest {
             rows.contains("description = episode.overview")
         )
         assertTrue(
-            "F2: capped at two lines with an ellipsis - a panel, not a second Detail page",
+            // Three lines, not two: the 2026-11-12 layout spec raises the cap by
+            // one now that the panel is wider - still a panel, not a second
+            // Detail page, which is what the cap is for.
+            "F2: capped at three lines with an ellipsis - a panel, not a second Detail page",
             rowXml.contains("android:id=\"@+id/picker_item_desc\"") &&
                 rowXml.substringAfter("picker_item_desc")
                     .substringBefore("</TextView>")
-                    .contains("android:maxLines=\"2\"") &&
+                    .contains("android:maxLines=\"3\"") &&
                 rowXml.substringAfter("picker_item_desc")
                     .substringBefore("</TextView>")
                     .contains("android:ellipsize=\"end\"")

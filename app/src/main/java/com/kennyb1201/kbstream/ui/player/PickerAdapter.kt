@@ -6,6 +6,7 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.compose.ui.graphics.toArgb
 import androidx.core.content.ContextCompat
 import androidx.core.content.res.ResourcesCompat
 import androidx.recyclerview.widget.RecyclerView
@@ -32,10 +33,24 @@ data class PickerItem(
     val fallbackImageUrl: String? = null,
     /** The episode overview, drawn small under the title and capped at two lines. */
     val description: String? = null,
+    /**
+     * The episode's TMDB vote average - the crowd's rating, the same number the
+     * episode cards print. Null on every non-episode row and on an episode TMDB
+     * has no vote average for; the row then draws no chip.
+     */
+    val rating: Double? = null,
     /** The history already calls this episode watched: the row carries a check. */
     val watched: Boolean = false,
     /** An unaired episode: the UNAVAILABLE chip, and a press does nothing. */
     val unavailable: Boolean = false,
+    /**
+     * The episode on screen right now: the NOW PLAYING chip (spec 2026-11-12).
+     *
+     * The row also keeps the accent label - the chip is the at-a-glance mark a
+     * viewer scanning the list needs, so the playing episode reads apart from
+     * the watched check and from whichever row merely has focus.
+     */
+    val nowPlaying: Boolean = false,
     val onClick: () -> Unit
 )
 
@@ -75,6 +90,14 @@ class PickerAdapter(
         // UNAVAILABLE chip Detail's cards wear. Bodies of both kinds never mix:
         // no other row is ever unavailable.
         bindBadgeRow(holder.badges, item.badges)
+        // One fixed order for the three chips (F5): rating, then NOW PLAYING,
+        // then UNAVAILABLE. Rating first because it is the number a viewer scans
+        // a season for; NOW PLAYING next to the label it belongs to; UNAVAILABLE
+        // last as the row's verdict. Each appends with the same gap, so any
+        // combination of the three reads as one row of chips and never wraps
+        // onto the title.
+        bindRatingChip(holder.badges, item.rating)
+        bindNowPlayingChip(holder.badges, item.nowPlaying)
         bindUnavailableChip(holder.badges, item.unavailable)
         bindStill(holder, item)
         bindDescription(holder.description, item.description)
@@ -130,7 +153,62 @@ class PickerAdapter(
             }.getOrNull()
         }
         row.visibility = View.VISIBLE
-        row.addView(chip)
+        // With a gap, because it is no longer always the row's first chip (F5
+        // puts the rating and NOW PLAYING before it); flush only when alone.
+        row.addView(
+            chip,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                if (row.childCount > 0) marginStart = (BADGE_CHIP_GAP_DP * density).toInt()
+            }
+        )
+    }
+
+    /**
+     * The NOW PLAYING chip: a filled accent plate, the one chip that is not a
+     * neutral tag.
+     *
+     * It has to read at a glance against the two things it could be confused
+     * with - the watched check, which prefixes the label, and the accent label
+     * of the selected row - so it is a solid accent chip with void text rather
+     * than outline or dim text, and it says the words, not a glyph.
+     */
+    private fun bindNowPlayingChip(row: LinearLayout, nowPlaying: Boolean) {
+        if (!nowPlaying) return
+        val context = row.context
+        val density = context.resources.displayMetrics.density
+        val chip = TextView(context).apply {
+            text = NOW_PLAYING_LABEL
+            textSize = 11f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_void))
+            typeface = runCatching {
+                ResourcesCompat.getFont(context, R.font.inter_medium)
+            }.getOrNull()
+            letterSpacing = 1f / 11f
+            setPadding(
+                (8 * density).toInt(),
+                (3 * density).toInt(),
+                (8 * density).toInt(),
+                (3 * density).toInt()
+            )
+            background = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                cornerRadius = 10 * density
+                setColor(ContextCompat.getColor(context, R.color.kb_accent))
+            }
+        }
+        row.visibility = View.VISIBLE
+        row.addView(
+            chip,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                if (row.childCount > 0) marginStart = (BADGE_CHIP_GAP_DP * density).toInt()
+            }
+        )
     }
 
     override fun getItemCount() = items.size
@@ -145,6 +223,88 @@ class PickerAdapter(
         /** Detail's own word for an episode that has not aired yet. */
         internal const val UNAVAILABLE_LABEL = "UNAVAILABLE"
 
+        /** The playing episode's own mark, beside the accent label. */
+        internal const val NOW_PLAYING_LABEL = "NOW PLAYING"
+
+        /** The plate's wording, unchanged from the episode cards (spec 2026-11-12). */
+        internal const val RATING_PLATE_LABEL = "IMDb"
+
+        /**
+         * The View twin of Compose's EpisodeRatingChip (KBEpisodeTouch.kt:317).
+         *
+         * Same yellow IMDb plate, same plate shape, same one-decimal score and
+         * the same colours - read from the SAME constants (KBImdbTint,
+         * KBShapeChip's 10dp, KBTextHi) rather than re-typed here, because the
+         * two surfaces showing one episode must not end up disagreeing about its
+         * number. The plate's wording is the cards' wording too: the value is
+         * TMDB's vote average and the plate says IMDb today, which is the
+         * existing card convention, not something this row invents.
+         *
+         * Null draws nothing at all - an episode without a vote average leaves
+         * the row exactly as it was, with no gap for a chip that is not there.
+         */
+        fun bindRatingChip(row: LinearLayout, rating: Double?) {
+            if (rating == null) return
+            val context = row.context
+            val density = context.resources.displayMetrics.density
+            val plate = TextView(context).apply {
+                text = RATING_PLATE_LABEL
+                textSize = RATING_PLATE_SIZE_SP
+                setTextColor(android.graphics.Color.BLACK)
+                typeface = runCatching {
+                    ResourcesCompat.getFont(context, R.font.inter_medium)
+                }.getOrNull()
+                letterSpacing = RATING_PLATE_TRACKING_EM
+                setPadding(
+                    (3 * density).toInt(),
+                    (1 * density).toInt(),
+                    (3 * density).toInt(),
+                    (1 * density).toInt()
+                )
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                    cornerRadius = RATING_PLATE_CORNER_DP * density
+                    setColor(com.kennyb1201.kbstream.ui.components.KBImdbTint.toArgb())
+                }
+            }
+            val score = TextView(context).apply {
+                // The card's own format call, so the two can never round or
+                // localise one episode's number differently.
+                text = "%.1f".format(rating)
+                textSize = RATING_SCORE_SIZE_SP
+                setTextColor(com.kennyb1201.kbstream.ui.theme.KBTextHi.toArgb())
+                typeface = runCatching {
+                    ResourcesCompat.getFont(context, R.font.inter_regular)
+                }.getOrNull()
+            }
+            val chip = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+            }
+            chip.addView(plate)
+            chip.addView(
+                score,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    marginStart = (RATING_SCORE_GAP_DP * density).toInt()
+                }
+            )
+            row.visibility = View.VISIBLE
+            row.addView(
+                chip,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    // The same gap the badge chips leave, so the rating reads as
+                    // one of the row's chips and not as part of the last badge.
+                    if (row.childCount > 0) marginStart = (BADGE_CHIP_GAP_DP * density).toInt()
+                }
+            )
+        }
+
         private const val BADGE_IMAGE_HEIGHT_DP = 16
         private const val BADGE_CHIP_HEIGHT_DP = 22
         private const val BADGE_CHIP_GAP_DP = 4
@@ -153,6 +313,16 @@ class PickerAdapter(
 
         /** 1sp of tracking at an 11sp label — TextView tracks in em, Compose in sp. */
         private const val BADGE_LABEL_TRACKING_EM = 1f / BADGE_LABEL_SIZE_SP
+
+        // labelSmall (11sp Medium, 0.5sp tracking) and bodySmall (12sp) of the
+        // app's typography, and KBShapeChip's 10dp, restated as View values.
+        private const val RATING_PLATE_SIZE_SP = 11f
+        private const val RATING_SCORE_SIZE_SP = 12f
+        private const val RATING_PLATE_TRACKING_EM = 0.5f / RATING_PLATE_SIZE_SP
+        private const val RATING_PLATE_CORNER_DP = 10
+
+        /** EpisodeRatingChip's Arrangement.spacedBy(6.dp) between plate and score. */
+        private const val RATING_SCORE_GAP_DP = 6
 
         /**
          * Puts the badge row above or below the file name.

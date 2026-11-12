@@ -444,7 +444,7 @@
          selection mark cannot drift between the engines. -->
     <LinearLayout
         android:id="@+id/mpv_picker_container"
-        android:layout_width="320dp"
+        android:layout_width="420dp"
         android:layout_height="match_parent"
         android:layout_gravity="end"
         android:layout_margin="24dp"
@@ -460,6 +460,17 @@
             android:fontFamily="@font/inter_medium"
             android:textColor="@color/kb_accent"
             android:textSize="16sp" />
+
+        <!-- The season strip, the same box the main player's picker has (spec
+             2026-11-12): pinned above the episode list, GONE for every picker
+             that has no seasons. -->
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/mpv_picker_seasons"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:clipToPadding="false"
+            android:visibility="gone" />
 
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/mpv_picker_list"

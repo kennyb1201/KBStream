@@ -286,10 +286,15 @@
         android:focusable="true"
         android:visibility="gone" />
 
-    <!-- Picker dialog (side panel, hidden by default) -->
+    <!-- Picker dialog (side panel, hidden by default).
+         420dp, not 320dp (spec 2026-11-12): an episode row is a 16:9 still
+         plus three lines of overview, and at 320dp the text column was too
+         narrow to read. 420dp is the channel guide panel's width below, and on
+         any TV or phone width it still leaves the video visible: this is a side
+         panel over what is playing, never a second screen. -->
     <LinearLayout
         android:id="@+id/picker_container"
-        android:layout_width="320dp"
+        android:layout_width="420dp"
         android:layout_height="match_parent"
         android:layout_gravity="end"
         android:background="@drawable/panel_bg"
@@ -305,6 +310,19 @@
             android:fontFamily="@font/inter_medium"
             android:textColor="@color/kb_accent"
             android:textSize="16sp" />
+
+        <!-- The season strip: pinned above the episode list, so switching
+             season is one LEFT/RIGHT press instead of scrolling past every
+             season row (spec 2026-11-12). GONE for every picker that has no
+             seasons - sources, audio, subtitles, speed - so those panels are
+             exactly what they were. -->
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/picker_seasons"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:clipToPadding="false"
+            android:visibility="gone" />
 
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/picker_list"

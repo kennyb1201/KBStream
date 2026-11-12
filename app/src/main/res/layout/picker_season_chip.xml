@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One chip of the episode picker's season strip (spec 2026-11-12).
+
+     A chip, not a row: the strip is pinned above the episode list and holds one
+     chip per season, so it has to stay one line tall however many seasons the
+     show has. SeasonStripAdapter owns the colours (accent when selected, dim
+     when not, brighter while focused), the same way PickerAdapter owns the
+     episode rows'. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:layout_marginEnd="8dp"
+    android:addStatesFromChildren="true"
+    android:orientation="horizontal">
+
+    <TextView
+        android:id="@+id/picker_season_chip"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:fontFamily="@font/inter_medium"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="8dp"
+        android:textColor="@color/kb_text_hi"
+        android:textSize="13sp" />
+
+</LinearLayout>
