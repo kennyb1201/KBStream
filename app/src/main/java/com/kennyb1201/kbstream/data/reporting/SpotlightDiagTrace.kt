@@ -50,7 +50,7 @@ internal object SpotlightDiagTrace {
     private const val SPOTLIGHT = "spotlight: "
 
     /** Summary slots in print order, so two pastes of one state read alike. */
-    private val BILLBOARD_ORDER = listOf("feed", "pages", "resolve", "clear")
+    private val BILLBOARD_ORDER = listOf("gate", "feed", "pages", "resolve", "clear")
     private val SPOTLIGHT_ORDER = listOf("tracker", "dwell", "panel")
 
     private val lock = Any()
@@ -89,11 +89,32 @@ internal object SpotlightDiagTrace {
     private var dwellDelayMs = 0L
     private var dwellMenuOpen = false
     private var dwellClaimEntryFocus = false
+    private var dwellToken = 0
+    private var dwellCard: String? = null
+    private var dwellCancel: String? = null
 
     /** True once the dwell effect has spoken, so a claim cannot print delay=0. */
     private var dwellSeen = false
 
     // ── Billboard ─────────────────────────────────────────────────────────
+
+    /**
+     * The RENDER GATE's inputs, ahead of the pool's own lines.
+     *
+     * This is the line that answers "the pool is settled, where is the hero":
+     * the hero is drawn only under the Spotlight layout, inside a section that
+     * also requires the billboard to be on. When either is false the pool can
+     * still read settled from an earlier visit - it lives in the ViewModel - so
+     * every other billboard line reads healthy while the screen has no hero at
+     * all. Written from the Home, which is composed even when the hero is not.
+     */
+    fun billboardGate(enabled: Boolean, layout: String, spotlightActive: Boolean) {
+        putBillboard(
+            "gate",
+            "gate billboardEnabled=${yesNo(enabled)} layout=$layout " +
+                "spotlightActive=${yesNo(spotlightActive)}"
+        )
+    }
 
     /** The feed the screen asked for, and what it merged from (F2, F4). */
     fun billboardFeed(keys: List<String>, trendingDaySize: Int, merged: Int) {
@@ -185,14 +206,37 @@ internal object SpotlightDiagTrace {
         note(SPOTLIGHT + "blur (last snapshot kept)")
     }
 
-    /** The dwell effect's inputs on its last run, live values (F3). */
-    fun spotlightDwell(expandDelayMs: Long, menuOpen: Boolean) {
+    /**
+     * The dwell effect's inputs on its last run, and the card it armed on.
+     *
+     * [token] is recorded but is deliberately NOT one of the effect's keys (see
+     * [spotlightDwellCancelled]): a re-entrant focus on the card already held
+     * used to bump it and restart the two seconds.
+     */
+    fun spotlightDwell(expandDelayMs: Long, menuOpen: Boolean, token: Int, card: String?) {
         synchronized(lock) {
             dwellDelayMs = expandDelayMs
             dwellMenuOpen = menuOpen
+            dwellToken = token
+            dwellCard = card
             dwellSeen = true
         }
         putSpotlight("dwell", dwellLine())
+    }
+
+    /**
+     * A dwell was abandoned before its delay completed, and by which input.
+     *
+     * The field report this answers (spec 2026-11-12): five cards each took
+     * focus once, the delay was 2 s, no menu was open - and the panel never
+     * opened, which means the effect was RESTARTED, and the paste could not say
+     * by what. [from] -> [to] is the transition, so a flicker reads as
+     * `hasSnapshot (series:tt…→none)` and a churn as `focusToken (5→6)`.
+     */
+    fun spotlightDwellCancelled(key: String, from: String, to: String) {
+        synchronized(lock) { dwellCancel = "$key ($from\u2192$to)" }
+        putSpotlight("dwell", dwellLine())
+        note(SPOTLIGHT + "dwell cancelled key=$key ($from\u2192$to)")
     }
 
     /**
@@ -268,6 +312,9 @@ internal object SpotlightDiagTrace {
             dwellDelayMs = 0L
             dwellMenuOpen = false
             dwellClaimEntryFocus = false
+            dwellToken = 0
+            dwellCard = null
+            dwellCancel = null
             dwellSeen = false
         }
     }
@@ -278,8 +325,11 @@ internal object SpotlightDiagTrace {
 
     private fun dwellLine(): String {
         val last = lastClaim?.let { if (it) "taken" else "not-taken" } ?: "none"
+        val armed = dwellCard?.let { "card=$it" } ?: "card=none"
         return "dwell delay=${dwellDelayMs}ms menuOpen=${yesNo(dwellMenuOpen)} " +
-            "claimEntryFocus=${yesNo(dwellClaimEntryFocus)} lastClaim=$last"
+            "claimEntryFocus=${yesNo(dwellClaimEntryFocus)} lastClaim=$last " +
+            "token=$dwellToken $armed" +
+            (dwellCancel?.let { " lastCancel=$it" } ?: "")
     }
 
     private fun resolveLine(): String {

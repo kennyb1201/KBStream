@@ -128,6 +128,19 @@ internal class SpotlightCardFocus {
     var focusToken by mutableIntStateOf(0)
         private set
 
+    /**
+     * True while a rail card holds focus.
+     *
+     * Separate from [snapshot] since the 2026-11-12 dwell spec: the snapshot is
+     * the card the viewer last held - kept across a blur, because a
+     * recomposition can blur and re-focus the same card inside a frame - while
+     * this is the honest "is anything focused" bit the Home's debounce reads. A
+     * blur that clears the snapshot outright is what cancelled a two-second
+     * dwell mid-hold and left the panel unopened.
+     */
+    var cardFocused by mutableStateOf(false)
+        private set
+
     /** True while the panel is up; the card's DOWN is a handoff only then. */
     var panelExpanded by mutableStateOf(false)
 
@@ -160,10 +173,11 @@ internal class SpotlightCardFocus {
             focusToken++
             val next = card()
             snapshot = next
+            cardFocused = true
             // The paste is taken from Settings, so by then this card has
-            // blurred and the live snapshot is null - the trace keeps THIS one
-            // as its last (spec 2026-11-12, F5), which is what answers "did
-            // the tracker ever get a snapshot for the card I held".
+            // blurred - the trace keeps THIS one as its last (spec 2026-11-12,
+            // F5), which is what answers "did the tracker ever get a snapshot
+            // for the card I held".
             SpotlightDiagTrace.spotlightFocused(
                 token = focusToken,
                 key = next.id?.let { id -> "${next.type.orEmpty()}:$id" },
@@ -173,7 +187,12 @@ internal class SpotlightCardFocus {
             // A blur while the panel owns the viewer is the handoff, not leaving.
             if (handingOff || pillsFocused) return
             if (snapshot != null) SpotlightDiagTrace.spotlightBlurred()
-            snapshot = null
+            // The SNAPSHOT IS KEPT (2026-11-12): focus has left, the card has
+            // not gone anywhere. The Home debounces this bit and decides, after
+            // SPOTLIGHT_BLUR_GRACE_MS with no card taking focus back, that the
+            // dwell really is over. Clearing it here is what made a one-frame
+            // blur look like the viewer leaving.
+            cardFocused = false
         }
     }
 

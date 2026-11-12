@@ -29,6 +29,36 @@ class SpotlightDiagContractTest {
         assertEquals(emptyList<String>(), SpotlightDiagTrace.lines())
     }
 
+    // ── F2 (render-path spec): the gate inputs ───────────────────────────
+
+    @Test
+    fun `the billboard summary names the render gate ahead of the pool`() {
+        SpotlightDiagTrace.billboardGate(enabled = true, layout = "spotlight", spotlightActive = true)
+        SpotlightDiagTrace.billboardFeed(listOf("trending_day"), trendingDaySize = 20, merged = 20)
+        SpotlightDiagTrace.billboardDealt(pages = 20, pool = 20, epoch = 1)
+
+        val lines = SpotlightDiagTrace.summaries()
+        val gate = lines.first()
+        assertEquals(
+            "the gate is the first billboard line, because it explains every other one",
+            true,
+            gate.startsWith("billboard: gate ")
+        )
+        assertTrue(gate, gate.contains("billboardEnabled=yes"))
+        assertTrue(gate, gate.contains("layout=spotlight"))
+        assertTrue(gate, gate.contains("spotlightActive=yes"))
+
+        // The failure this exists for: a settled pool with the layout gate shut.
+        SpotlightDiagTrace.billboardGate(enabled = true, layout = "modern", spotlightActive = false)
+        val shut = SpotlightDiagTrace.summaries().first()
+        assertTrue(shut, shut.contains("layout=modern"))
+        assertTrue(shut, shut.contains("spotlightActive=no"))
+        assertTrue(
+            "and the pool still reads settled beside it - which is the whole point",
+            SpotlightDiagTrace.summaries().any { it.contains("dealt=20 settled=0") }
+        )
+    }
+
     // ── S1: empty feed vs never settled ──────────────────────────────────
 
     @Test
@@ -80,7 +110,12 @@ class SpotlightDiagContractTest {
 
     @Test
     fun `the spotlight summary still names the held card after it blurred`() {
-        SpotlightDiagTrace.spotlightDwell(expandDelayMs = 2_000L, menuOpen = false)
+        SpotlightDiagTrace.spotlightDwell(
+            expandDelayMs = 2_000L,
+            menuOpen = false,
+            token = 7,
+            card = "movie:550"
+        )
         SpotlightDiagTrace.spotlightClaimGate(claimEntryFocus = true)
         SpotlightDiagTrace.spotlightFocused(token = 7, key = "movie:550", title = "Fight Club")
         SpotlightDiagTrace.spotlightClaim(false)
@@ -103,8 +138,37 @@ class SpotlightDiagContractTest {
     }
 
     @Test
+    fun `a cancelled dwell names the input that cancelled it`() {
+        SpotlightDiagTrace.spotlightDwell(2_000L, menuOpen = false, token = 5, card = "series:tt1")
+        SpotlightDiagTrace.spotlightDwellCancelled(
+            "hasSnapshot",
+            from = "series:tt1",
+            to = "none"
+        )
+
+        val dwell = SpotlightDiagTrace.summaries().first { it.contains("dwell ") }
+        assertTrue("the card it armed on: $dwell", dwell.contains("card=series:tt1"))
+        assertTrue("the token is context, not a key: $dwell", dwell.contains("token=5"))
+        assertTrue(
+            "and the cancellation survives in the summary, with its transition: $dwell",
+            dwell.contains("lastCancel=hasSnapshot (series:tt1\u2192none)")
+        )
+        assertTrue(
+            "the ring carries it too, so the sequence is readable",
+            SpotlightDiagTrace.lines().any {
+                it == "spotlight: dwell cancelled key=hasSnapshot (series:tt1\u2192none)"
+            }
+        )
+    }
+
+    @Test
     fun `the claim latch is one line, not a second one`() {
-        SpotlightDiagTrace.spotlightDwell(expandDelayMs = 2_000L, menuOpen = false)
+        SpotlightDiagTrace.spotlightDwell(
+            expandDelayMs = 2_000L,
+            menuOpen = false,
+            token = 7,
+            card = "movie:550"
+        )
         SpotlightDiagTrace.spotlightClaimGate(false)
         val dwell = SpotlightDiagTrace.summaries().filter { it.contains("dwell ") }
         assertEquals("the latch updates the dwell line in place", 1, dwell.size)
@@ -144,7 +208,7 @@ class SpotlightDiagContractTest {
         )
         assertTrue(
             "the summary kinds are fixed, so two pastes read alike",
-            SpotlightDiagTrace.summaries().size <= 7
+            SpotlightDiagTrace.summaries().size <= 8
         )
     }
 

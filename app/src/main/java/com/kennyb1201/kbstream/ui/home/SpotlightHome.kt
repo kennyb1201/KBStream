@@ -97,10 +97,11 @@ internal fun SpotlightHeroSection(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    // These three billboard prefs are DEVICE-LOCAL (EXCLUDED_PREF_KEYS), so they
-    // are remembered with no revision key - the other TV's answer must not move
-    // this one's. Coming back from Settings re-enters this composable, which is
-    // how a change made here is picked up.
+    // These three billboard prefs are DEVICE-LEVEL and sync TV to TV (spec
+    // 2026-11-12), but their reads are seeded on entry rather than keyed on the
+    // sync revision: applying a synced value lands on the NEXT Home entry, so a
+    // layout or billboard change never re-flows under a viewer mid-scroll. This
+    // section is recomposed on every entry, which is where they are re-read.
     val billboardEnabled = remember { AppPreferences.getHomeBillboardEnabled(context) }
     val billboardFeeds = remember { AppPreferences.getHomeBillboardFeeds(context) }
     val billboardCycleMs = remember { AppPreferences.getHomeBillboardCycleMs(context) }
@@ -236,28 +237,64 @@ internal fun SpotlightPreviewHost(
 ) {
     var expanded by remember { mutableStateOf<SpotlightCardSnapshot?>(null) }
     val snapshot = tracker.snapshot
-    val hasSnapshot = snapshot != null
+    // The identity the dwell keys on: the card while it HOLDS focus, nothing
+    // while focus is away (debounced below, so a flicker is not a departure).
+    val cardId = if (tracker.cardFocused) snapshot?.cardIdentity() else null
 
-    // Keyed on the CARD, not on the snapshot object (F6b): updateBounds copies
-    // the snapshot whenever the card's bounds move - a scroll, the hero landing,
-    // a feed re-resolve - and keyed on the object every copy restarted the dwell,
-    // so a card under a settling list never expanded at all. The focus token
-    // changes only when a card takes focus; hasSnapshot still closes the panel
-    // when focus leaves.
-    LaunchedEffect(tracker.focusToken, hasSnapshot, expandDelayMs, menuOpen) {
-        // The three inputs are the dwell's whole fate on a card that never
-        // expands; the paste needs their live values, not a guess (F3).
-        SpotlightDiagTrace.spotlightDwell(expandDelayMs, menuOpen)
+    // ── The card the viewer is HELD on, debounced (spec 2026-11-12) ──────
+    //
+    // The dwell used to key on `hasSnapshot`, which is `tracker.snapshot != null`
+    // - and the tracker nulls that snapshot on EVERY blur, including a blur a
+    // recomposition causes and the same card takes straight back. Keyed on it,
+    // one such flicker cancelled the two seconds mid-hold and the panel never
+    // opened: exactly the field report (five cards, each focused once, 2000 ms, 
+    // no menu, no expand).
+    //
+    // So the dwell keys on an IDENTITY that only changes when the viewer really
+    // moves: a card taking focus is immediate, and a card losing focus is only
+    // believed after a grace. A flicker shorter than [SPOTLIGHT_BLUR_GRACE_MS]
+    // lands back on the same identity and cancels nothing.
+    var heldCard by remember { mutableStateOf(cardId) }
+    LaunchedEffect(cardId) {
+        if (cardId != null) {
+            heldCard = cardId
+            return@LaunchedEffect
+        }
+        // Nothing is focused: give the card a frame of grace to take it back.
+        delay(SPOTLIGHT_BLUR_GRACE_MS)
+        heldCard = null
+    }
+
+    // What the in-flight delay was armed on, so a cancellation can NAME the
+    // input that did it (F1). Plain holder: the effect is the only writer.
+    val dwellRun = remember { DwellRun() }
+    LaunchedEffect(heldCard, expandDelayMs, menuOpen) {
+        val now = DwellInputs(heldCard, expandDelayMs, menuOpen)
+        // A delay that was armed and never completed was cancelled by the input
+        // that changed under it. Reported BEFORE this run re-arms.
+        if (dwellRun.armed) {
+            dwellRun.inputs.changedTo(now)?.let { (key, from, to) ->
+                SpotlightDiagTrace.spotlightDwellCancelled(key, from, to)
+            }
+        }
+        dwellRun.armed = false
+        dwellRun.inputs = now
+        SpotlightDiagTrace.spotlightDwell(
+            expandDelayMs = expandDelayMs,
+            menuOpen = menuOpen,
+            token = tracker.focusToken,
+            card = heldCard
+        )
         // The menu is the viewer's explicit request, so it wins: no panel opens
         // over it, and one already up collapses when it appears.
-        if (!hasSnapshot || menuOpen || !HomeExpandDelay.expands(expandDelayMs)) {
+        if (heldCard == null || menuOpen || !HomeExpandDelay.expands(expandDelayMs)) {
             // Which guard fired, recorded only when there was something to
             // collapse - otherwise every frame of a focusless Home would say so.
             if (expanded != null) {
                 SpotlightDiagTrace.spotlightCollapsed(
                     when {
                         menuOpen -> "menuOpen"
-                        !hasSnapshot -> "!hasSnapshot"
+                        heldCard == null -> "!hasSnapshot"
                         else -> "!expands"
                     }
                 )
@@ -268,10 +305,19 @@ internal fun SpotlightPreviewHost(
         }
         // The card must HOLD focus for the whole delay; a move cancels this run
         // and the next card starts its own clock.
+        // Read fresh: the tracker keeps this across a blur now, so it is the
+        // card the viewer is on, not a value that a flicker can empty.
+        val armedOn = tracker.snapshot ?: return@LaunchedEffect
+        dwellRun.inputs = now
+        dwellRun.armed = true
         delay(expandDelayMs)
-        expanded = tracker.snapshot
-        if (expanded != null) SpotlightDiagTrace.spotlightExpanded(expanded?.title)
-        onExpandedChange(expanded != null)
+        dwellRun.armed = false
+        // The snapshot captured when the dwell ARMED, not whatever the tracker
+        // holds now (F3): the panel a held card earned must not be lost to a
+        // live snapshot that flickered during the last frame of the wait.
+        expanded = armedOn
+        SpotlightDiagTrace.spotlightExpanded(armedOn.title)
+        onExpandedChange(true)
     }
     // A scroll under a still-focused card moves the panel with it. Applied after
     // composition, so the write schedules a frame instead of mutating inside one.
@@ -353,6 +399,56 @@ internal fun SpotlightPreviewHost(
 
 /** Above the rails and their menus, below the screensaver. */
 private const val SPOTLIGHT_PANEL_Z = 4f
+
+/**
+ * How long a blurred card may take focus back before the dwell believes it left.
+ *
+ * A recomposition can blur and re-focus the held card inside a frame or two;
+ * treating that as a departure is what cancelled the two-second dwell on the
+ * field TV. Long enough to cover such a flicker, short enough that a real move
+ * (which is immediate - the next card's identity lands at once) or a real exit
+ * (to the top bar, a menu, another screen) still closes the panel promptly.
+ */
+private const val SPOTLIGHT_BLUR_GRACE_MS = 250L
+
+/**
+ * The four inputs the dwell effect keys on, and their last armed values.
+ *
+ * A cancellation compares the run that was in flight against the one replacing
+ * it and names the FIRST input that differs, in the spec's own vocabulary -
+ * `hasSnapshot (series:tt…→none)` for a blur, `expandDelayMs (2000ms→0ms)` for
+ * a settings change, `menuOpen (no→yes)` for the menu.
+ */
+private data class DwellInputs(
+    val card: String?,
+    val delayMs: Long,
+    val menuOpen: Boolean
+) {
+    /** The first input that changed, as (key, from, to), or null when none did. */
+    fun changedTo(next: DwellInputs): Triple<String, String, String>? = when {
+        card != next.card ->
+            Triple("hasSnapshot", card ?: "none", next.card ?: "none")
+        delayMs != next.delayMs ->
+            Triple("expandDelayMs", "${delayMs}ms", "${next.delayMs}ms")
+        menuOpen != next.menuOpen ->
+            Triple("menuOpen", if (menuOpen) "yes" else "no", if (next.menuOpen) "yes" else "no")
+        else -> null
+    }
+}
+
+/** Whether the dwell's delay is currently armed and what it was armed on. */
+private class DwellRun {
+    var armed = false
+    var inputs = DwellInputs(null, 0L, false)
+}
+
+/** The card's identity across snapshot copies: type:id, or the title alone. */
+private fun SpotlightCardSnapshot.cardIdentity(): String =
+    when {
+        !id.isNullOrBlank() -> "${type.orEmpty()}:$id"
+        !title.isNullOrBlank() -> title.orEmpty()
+        else -> "?"
+    }
 
 /**
  * The hero's key in the rails LazyColumn (F1).

@@ -29,7 +29,17 @@ object AppPreferences {
      * lists must outlive a profile switch.
      */
     private const val DEVICE_PREFS_NAME = "kbstream_device_prefs"
-    private const val DEVICE_PREFS_SEEDED_KEY = "device_prefs_seeded"
+
+    /**
+     * The per-key "this box has already answered" flag, `device_decided_<key>`.
+     *
+     * Per KEY, not one flag for the family (spec 2026-11-12, render-path B1): the
+     * old `device_prefs_seeded` marked all six decided at once, which is how a
+     * single early read could decide them from a store that held none of them.
+     * The old flag is deliberately not read anywhere, so a box the 0.9.245 seed
+     * poisoned recovers on its next read.
+     */
+    private const val DEVICE_DECIDED_PREFIX = "device_decided_"
 
     // Keys
     private const val KEY_DEFAULT_BUFFER_MODE = "default_buffer_mode"       // 0=balanced, 1=low-latency, 2=auto
@@ -262,33 +272,48 @@ object AppPreferences {
     )
 
     /**
-     * One-time seed of [devicePrefs] from the active profile's store.
+     * The device-level value of [key], inheriting this box's own choice the first
+     * time it is read with a real profile present.
      *
-     * These six keys used to live in [prefs] (every reader went through it), so
-     * the first read after the move would otherwise answer a default and forget
-     * the layout the viewer picked. Whatever the profile store still holds is
-     * copied across once; the flag is device-level, so a profile that never had
-     * a value cannot re-seed over one that does.
+     * Why per key, and why the profile guard - the field bug this replaces
+     * (spec 2026-11-12, render-path B1): this used to be ONE one-shot seed that
+     * copied all six out of `prefs(context)` and then set a flag. `prefs()` is
+     * the ACTIVE PROFILE's file, and `ProfileManager.activeProfileId` is null
+     * until the stored profiles are restored - during which `prefs()` silently
+     * resolves to the LEGACY global file, which holds none of the six. A read in
+     * that window, from any surface, copied NOTHING and marked the box seeded
+     * forever: `getHomeLayout` then answered "modern" for good, and a TV whose
+     * layout was Spotlight came up on Modern with no billboard hero at all - a
+     * 20/20 settled pool and a missing hero in the same paste, exactly.
+     *
+     * So: inherit one key at a time, only once a profile exists, never over a
+     * value already in the device store (a choice made here, or adopted from the
+     * other TV), and mark the key decided even when the profile had no value -
+     * from then on this box's answer is its default, not a re-read.
      */
-    private fun seedDevicePrefs(context: Context) {
+    private fun deviceValue(context: Context, key: String): Any? {
         val device = devicePrefs(context)
-        if (device.getBoolean(DEVICE_PREFS_SEEDED_KEY, false)) return
-        val profile: Map<String, Any?> = runCatching {
-            @Suppress("UNCHECKED_CAST")
-            (prefs(context).all as Map<String, Any?>)
-        }.getOrDefault(emptyMap())
-        val editor = device.edit().putBoolean(DEVICE_PREFS_SEEDED_KEY, true)
-        DEVICE_SCOPED_KEYS.forEach { key ->
-            if (device.contains(key)) return@forEach
-            when (val value = profile[key]) {
-                is Boolean -> editor.putBoolean(key, value)
-                is Int -> editor.putInt(key, value)
-                is Long -> editor.putLong(key, value)
-                is Float -> editor.putFloat(key, value)
-                is String -> editor.putString(key, value)
+        device.all[key]?.let { return it }
+        val decided = DEVICE_DECIDED_PREFIX + key
+        if (device.getBoolean(decided, false)) return null
+        // No active profile: the profile store is the legacy global file, so
+        // there is nothing to inherit and nothing to decide.
+        val profileId = runCatching {
+            com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfileId(context)
+        }.getOrNull()
+        if (profileId.isNullOrBlank()) return null
+        val inherited = runCatching { prefs(context).all[key] }.getOrNull()
+        device.edit().apply {
+            when (inherited) {
+                is Boolean -> putBoolean(key, inherited)
+                is Int -> putInt(key, inherited)
+                is Long -> putLong(key, inherited)
+                is Float -> putFloat(key, inherited)
+                is String -> putString(key, inherited)
             }
-        }
-        editor.apply()
+            putBoolean(decided, true)
+        }.apply()
+        return inherited
     }
 
     /**
@@ -300,8 +325,7 @@ object AppPreferences {
      */
     internal fun deviceScopedValue(context: Context, key: String): Any? {
         if (key !in DEVICE_SCOPED_KEYS) return null
-        seedDevicePrefs(context)
-        return devicePrefs(context).all[key]
+        return deviceValue(context, key)
     }
 
     /**
@@ -1731,10 +1755,8 @@ object AppPreferences {
     /** The hold an install starts on. */
     const val DEFAULT_BILLBOARD_CYCLE_MS = 6_000L
 
-    fun getHomeBillboardEnabled(context: Context): Boolean {
-        seedDevicePrefs(context)
-        return devicePrefs(context).getBoolean(KEY_BILLBOARD_ENABLED, true)
-    }
+    fun getHomeBillboardEnabled(context: Context): Boolean =
+        deviceValue(context, KEY_BILLBOARD_ENABLED) as? Boolean ?: true
 
     fun setHomeBillboardEnabled(context: Context, enabled: Boolean) {
         devicePrefs(context).edit().putBoolean(KEY_BILLBOARD_ENABLED, enabled).apply()
@@ -1749,12 +1771,8 @@ object AppPreferences {
      * [DEFAULT_BILLBOARD_FEEDS], because an empty feed is a state the picker
      * cannot represent and Home answers it by hiding the billboard entirely.
      */
-    fun getHomeBillboardFeeds(context: Context): List<String> {
-        seedDevicePrefs(context)
-        return billboardFeedsFromStored(
-            devicePrefs(context).getString(KEY_BILLBOARD_FEEDS, null)
-        )
-    }
+    fun getHomeBillboardFeeds(context: Context): List<String> =
+        billboardFeedsFromStored(deviceValue(context, KEY_BILLBOARD_FEEDS) as? String)
 
     fun setHomeBillboardFeeds(context: Context, feeds: List<String>) {
         devicePrefs(context).edit()
@@ -1763,12 +1781,11 @@ object AppPreferences {
         syncDisplayPrefsBlob(context)
     }
 
-    fun getHomeBillboardCycleMs(context: Context): Long {
-        seedDevicePrefs(context)
-        return billboardCycleFromStored(
-            devicePrefs(context).getLong(KEY_BILLBOARD_CYCLE_MS, DEFAULT_BILLBOARD_CYCLE_MS)
+    fun getHomeBillboardCycleMs(context: Context): Long =
+        billboardCycleFromStored(
+            deviceValue(context, KEY_BILLBOARD_CYCLE_MS) as? Long
+                ?: DEFAULT_BILLBOARD_CYCLE_MS
         )
-    }
 
     fun setHomeBillboardCycleMs(context: Context, ms: Long) {
         devicePrefs(context).edit()
@@ -1777,15 +1794,11 @@ object AppPreferences {
         syncDisplayPrefsBlob(context)
     }
 
-    fun getHomeBillboardTrailerMode(context: Context): BillboardTrailerMode {
-        seedDevicePrefs(context)
-        return BillboardTrailerMode.fromStorage(
-            devicePrefs(context).getInt(
-                KEY_BILLBOARD_TRAILER_MODE,
-                BillboardTrailerMode.OFF.storageValue
-            )
+    fun getHomeBillboardTrailerMode(context: Context): BillboardTrailerMode =
+        BillboardTrailerMode.fromStorage(
+            (deviceValue(context, KEY_BILLBOARD_TRAILER_MODE) as? Number)?.toInt()
+                ?: BillboardTrailerMode.OFF.storageValue
         )
-    }
 
     fun setHomeBillboardTrailerMode(context: Context, mode: BillboardTrailerMode) {
         devicePrefs(context).edit()
@@ -2045,8 +2058,8 @@ object AppPreferences {
     // The screen GEOMETRY family (`poster_size`, `home_landscape_cards`,
     // `landscape_posters`) is still device-local and never travels.
     fun getHomeLayout(context: Context): String {
-        seedDevicePrefs(context)
-        return devicePrefs(context).getString(KEY_HOME_LAYOUT, "modern") ?: "modern"
+        val stored = deviceValue(context, KEY_HOME_LAYOUT) as? String
+        return stored?.takeIf { it.isNotBlank() } ?: "modern"
     }
 
     fun setHomeLayout(context: Context, layout: String) {
@@ -2063,10 +2076,8 @@ object AppPreferences {
      * that a settled card opens promptly, and inside the six-second trailer
      * delay so the trailer can still follow it.
      */
-    fun getHomeCardExpandMs(context: Context): Long {
-        seedDevicePrefs(context)
-        return devicePrefs(context).getLong(KEY_HOME_CARD_EXPAND_MS, 2_000L)
-    }
+    fun getHomeCardExpandMs(context: Context): Long =
+        deviceValue(context, KEY_HOME_CARD_EXPAND_MS) as? Long ?: 2_000L
 
     fun setHomeCardExpandMs(context: Context, ms: Long) {
         devicePrefs(context).edit().putLong(KEY_HOME_CARD_EXPAND_MS, ms).apply()

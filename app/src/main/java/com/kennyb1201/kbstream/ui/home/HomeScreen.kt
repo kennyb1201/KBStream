@@ -152,6 +152,7 @@ import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.data.library.key
 import com.kennyb1201.kbstream.data.library.libraryRailTypeSuffix
 import com.kennyb1201.kbstream.data.reporting.CwFilterTrace
+import com.kennyb1201.kbstream.data.reporting.SpotlightDiagTrace
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
 import com.kennyb1201.kbstream.ui.browse.FocusLandingVerdict
 import com.kennyb1201.kbstream.ui.browse.rememberFocusHandBack
@@ -4942,6 +4943,24 @@ fun HomeScreen(
     // hidden rows below are untouched by it, and switching back to Modern
     // restores the focus-following hero exactly as it was.
     val spotlightActive = homeLayout == HomeLayout.SPOTLIGHT
+    // The RENDER GATE's inputs, in the paste (spec 2026-11-12, F2).
+    //
+    // A settled pool and no hero is either this layout gate or the hero
+    // section's own billboardEnabled, and neither was visible in COPY
+    // DIAGNOSTICS: the field paste showed `pages dealt=20 settled=20` beside a
+    // Home with no billboard and could not say which input was false.
+    // Reported from HERE rather than from the hero, because the hero is exactly
+    // what is missing when the layout is what went wrong.
+    val billboardEnabledForDiag by remember(activeProfileId) {
+        mutableStateOf(AppPreferences.getHomeBillboardEnabled(context))
+    }
+    LaunchedEffect(spotlightActive, homeLayout, billboardEnabledForDiag) {
+        SpotlightDiagTrace.billboardGate(
+            enabled = billboardEnabledForDiag,
+            layout = homeLayout.stored,
+            spotlightActive = spotlightActive
+        )
+    }
     // Read once per Home composition, and re-read after Settings by
     // construction (F6c trace): this app switches screens in a `when (screen)`
     // (MainActivity), not a nav host that keeps the previous destination

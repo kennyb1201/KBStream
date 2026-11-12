@@ -118,8 +118,14 @@ class SpotlightHomeContractTest {
 
         val prefs = source(PREFS)
         assertTrue(
+            // Repointed by the 2026-11-12 render-path spec: the read now goes
+            // through the per-key device inheritance (deviceValue) instead of a
+            // raw getString, because a one-shot seed could decide "modern" from
+            // an empty legacy store and permanently hide the hero. The DEFAULT
+            // is what this pins, and it is unchanged.
             "the pref's default is modern at the storage layer too",
-            prefs.contains("getString(KEY_HOME_LAYOUT, \"modern\")")
+            prefs.contains("deviceValue(context, KEY_HOME_LAYOUT) as? String") &&
+                prefs.contains("takeIf { it.isNotBlank() } ?: \"modern\"")
         )
         val sync = source(SYNC)
         // The 2026-11-12 spec narrowed the exclusion: the layout selection, its
@@ -273,15 +279,18 @@ class SpotlightHomeContractTest {
     fun `focus leaving the card collapses it and stops its trailer`() {
         val preview = source(SPOTLIGHT_PREVIEW)
         val tracker = between(preview, "internal class SpotlightCardFocus", "staticCompositionLocalOf")
+        // Repointed by the 2026-11-12 dwell spec: the blur no longer ERASES the
+        // card. Erasing it on every blur is what let a one-frame flicker cancel
+        // a two-second dwell (and why the panel never opened), so the honest
+        // focus bit is separate and the Home debounces it before collapsing.
         assertTrue(
-            "no card focused is represented as nothing to preview",
-            tracker.contains("snapshot = null")
+            "no card HOLDING focus is represented by the focus bit",
+            tracker.contains("cardFocused = false")
         )
         val host = source(SPOTLIGHT_HOME)
         assertTrue(
-            "and the host collapses on that null (see hasSnapshot: the dwell is " +
-                "keyed on the card, the collapse on there being no card)",
-            host.contains("if (!hasSnapshot || menuOpen") &&
+            "and the host collapses only when there is no HELD card, after its grace",
+            host.contains("if (heldCard == null || menuOpen") &&
                 host.contains("expanded = null")
         )
         assertTrue(
@@ -414,8 +423,10 @@ class SpotlightHomeContractTest {
 
         val prefs = source(PREFS)
         assertTrue(
+            // Same repoint as the layout's default: the read is deviceValue now,
+            // the default is still the two-second step.
             "stored default is the two-second step",
-            prefs.contains("getLong(KEY_HOME_CARD_EXPAND_MS, 2_000L)")
+            prefs.contains("deviceValue(context, KEY_HOME_CARD_EXPAND_MS) as? Long ?: 2_000L")
         )
         val settings = source(SETTINGS)
         assertTrue(

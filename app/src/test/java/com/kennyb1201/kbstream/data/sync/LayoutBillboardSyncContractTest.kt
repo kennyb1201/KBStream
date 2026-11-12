@@ -122,7 +122,9 @@ class LayoutBillboardSyncContractTest {
             val body = prefs.substringAfter("$getter(").substringBefore("fun ")
             assertTrue(
                 "$getter reads the device store, so a profile switch cannot change it",
-                body.contains("devicePrefs(context)")
+                // Through deviceValue (spec 2026-11-12, render-path B1): the
+                // per-key inheritance point, not the raw SharedPreferences read.
+                body.contains("deviceValue(context, ")
             )
         }
         assertTrue(
@@ -130,8 +132,15 @@ class LayoutBillboardSyncContractTest {
             prefs.contains("private const val DEVICE_PREFS_NAME = \"kbstream_device_prefs\"")
         )
         assertTrue(
-            "and the move seeds from the profile store once, so no TV forgets its layout",
-            prefs.contains("private fun seedDevicePrefs(context: Context)")
+            "and the move inherits from the profile store once, so no TV forgets its layout",
+            prefs.contains("private fun deviceValue(context: Context, key: String): Any?")
+        )
+        assertTrue(
+            "but only once a profile exists: before that the profile store is the legacy " +
+                "global file and holds none of the six, so seeding from it would decide the " +
+                "box's layout from an empty store (spec 2026-11-12, render-path B1)",
+            prefs.contains("if (profileId.isNullOrBlank()) return null") &&
+                prefs.contains("ProfileManager.activeProfileId(context)")
         )
     }
 

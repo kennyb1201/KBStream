@@ -653,8 +653,10 @@ class MobileBillboardContractTest {
         assertTrue(p.contains("private const val KEY_BILLBOARD_FEEDS = \"home_billboard_feeds\""))
         assertTrue(p.contains("private const val KEY_BILLBOARD_CYCLE_MS = \"home_billboard_cycle_ms\""))
         assertTrue(p.contains("private const val KEY_BILLBOARD_TRAILER_MODE = \"home_billboard_trailer_mode\""))
-        assertTrue(p.contains("getBoolean(KEY_BILLBOARD_ENABLED, true)"))
-        assertTrue(p.contains("getLong(KEY_BILLBOARD_CYCLE_MS, DEFAULT_BILLBOARD_CYCLE_MS)"))
+        assertTrue(p.contains("deviceValue(context, KEY_BILLBOARD_ENABLED) as? Boolean ?: true"))
+        assertTrue(
+            p.contains("deviceValue(context, KEY_BILLBOARD_CYCLE_MS) as? Long")
+        )
         assertTrue(p.contains("const val BILLBOARD_TRENDING_DAY_FEED = \"trending_day\""))
         assertTrue(p.contains("val BILLBOARD_CYCLE_OPTIONS_MS = listOf(0L, 3_000L, 6_000L, 10_000L, 15_000L)"))
         // Every setter publishes the display blob now (spec 2026-11-12): the four

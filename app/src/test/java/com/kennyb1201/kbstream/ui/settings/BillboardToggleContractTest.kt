@@ -129,7 +129,8 @@ class BillboardToggleContractTest {
             .substringBefore("fun setHomeBillboardEnabled(")
         assertTrue(
             "read from the DEVICE store (not a profile's file), defaulting ON",
-            getter.contains("devicePrefs(context)") && getter.contains("true")
+            getter.contains("deviceValue(context, KEY_BILLBOARD_ENABLED)") &&
+                getter.contains("?: true")
         )
         val setter = prefs.substringAfter("fun setHomeBillboardEnabled(")
             .substringBefore("}")
