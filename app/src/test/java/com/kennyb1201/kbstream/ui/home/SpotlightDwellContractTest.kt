@@ -122,16 +122,30 @@ class SpotlightDwellContractTest {
             host.contains("Triple(\"hasSnapshot\", card ?: \"none\", next.card ?: \"none\")")
         )
         assertTrue(
+            "and an open panel is only ended by a menu, a disabled expand, or a move",
+            dwellEffect.contains("if (collapseGuard != \"cardChanged\") return@LaunchedEffect") &&
+                dwellEffect.contains("if (heldCard == null) return@LaunchedEffect")
+        )
+        assertTrue(
             "the wait is the delay, after which the panel opens and nothing earlier",
             dwellEffect.contains("delay(expandDelayMs)") &&
                 dwellEffect.indexOf("delay(expandDelayMs)") <
                 dwellEffect.indexOf("expanded = armedOn")
         )
+        // Repointed by the 2026-11-12 collapse spec: `!hasSnapshot` is NOT a
+        // collapse reason any more - that blur fired a few hundred ms after a
+        // panel opened and took the panel with it. A different card does collapse
+        // the old one, which is what keeps a panel from getting stuck.
         assertTrue(
-            "the collapse guards are unchanged and still named",
+            "the collapse guards are the viewer's own actions, plus a real move",
             dwellEffect.contains("\"menuOpen\"") &&
-                dwellEffect.contains("\"!hasSnapshot\"") &&
-                dwellEffect.contains("\"!expands\"")
+                dwellEffect.contains("\"!expands\"") &&
+                dwellEffect.contains("\"cardChanged\"")
+        )
+        assertFalse(
+            "a blur must not be a collapse guard: the card cannot re-earn focus it " +
+                "lost to nothing, so the panel has to outlive the blur",
+            dwellEffect.contains("\"!hasSnapshot\"")
         )
         assertTrue(
             "BACK still collapses and hands focus back (S3)",

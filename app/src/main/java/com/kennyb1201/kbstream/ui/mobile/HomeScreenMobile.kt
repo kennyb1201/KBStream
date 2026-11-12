@@ -2528,7 +2528,14 @@ internal fun MobileBillboard(
     // its mounted surface, so the card's player re-pointed underneath it and
     // the hero showed black with its cycle frozen. This is the stop.
     LaunchedEffect(trailerSuppressed) {
-        if (trailerSuppressed) stopTrailer()
+        // Only a trailer that is ACTUALLY playing needs the deliberate cut. This
+        // used to release the pooled player on every suppression - including the
+        // Spotlight card's expand, where the hero was showing a still - and that
+        // release tears down a video surface under the focused rail card. On a
+        // television a surface detach is window-level churn, and the field
+        // collapse of a panel ~0.5 s after it opened is the shape of focus lost
+        // to nothing (spec 2026-11-12).
+        if (trailerSuppressed && (playback != null || playbackPageKey != null)) stopTrailer()
     }
     // A TV Home's idle-overlay hold reads this, and it falls on dispose: a
     // trailer that ended, died or was cut must not leave the flag stuck true.

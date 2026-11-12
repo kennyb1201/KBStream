@@ -288,10 +288,14 @@ class SpotlightHomeContractTest {
             tracker.contains("cardFocused = false")
         )
         val host = source(SPOTLIGHT_HOME)
+        // Repointed again by the 2026-11-12 collapse spec: a blur does not
+        // collapse an OPEN panel. It fired ~0.5 s after the panel appeared and
+        // took it with it, and the card never re-earned the focus it lost.
         assertTrue(
-            "and the host collapses only when there is no HELD card, after its grace",
-            host.contains("if (heldCard == null || menuOpen") &&
-                host.contains("expanded = null")
+            "and the host collapses only on a menu, a disabled expand, or a real move",
+            host.contains("menuOpen -> \"menuOpen\"") &&
+                host.contains("\"cardChanged\"") &&
+                host.contains("if (heldCard == null) return@LaunchedEffect")
         )
         assertTrue(
             "the panel (and its trailer) only exist while expanded",

@@ -285,24 +285,33 @@ internal fun SpotlightPreviewHost(
             token = tracker.focusToken,
             card = heldCard
         )
-        // The menu is the viewer's explicit request, so it wins: no panel opens
-        // over it, and one already up collapses when it appears.
-        if (heldCard == null || menuOpen || !HomeExpandDelay.expands(expandDelayMs)) {
-            // Which guard fired, recorded only when there was something to
-            // collapse - otherwise every frame of a focusless Home would say so.
-            if (expanded != null) {
-                SpotlightDiagTrace.spotlightCollapsed(
-                    when {
-                        menuOpen -> "menuOpen"
-                        heldCard == null -> "!hasSnapshot"
-                        else -> "!expands"
-                    }
-                )
-            }
+        // ── An open panel is the source of truth (F3, spec 2026-11-12) ──
+        //
+        // The field build opened the panel and lost it ~0.5 s later, because
+        // the panel's lifetime was still tied to the live snapshot: the card
+        // blurred (focus lost to NOTHING - it never came back), the snapshot
+        // cleared, and the guard above collapsed what the viewer had just
+        // earned. Once expanded, only three things end it: the viewer opens a
+        // menu, turns expansion off, or moves focus to ANOTHER card (which
+        // starts that card's own dwell). A blur is not one of them - the card
+        // keeps the panel until a real move, or BACK.
+        val live = expanded
+        val collapseGuard = when {
+            menuOpen -> "menuOpen"
+            !HomeExpandDelay.expands(expandDelayMs) -> "!expands"
+            live != null && heldCard != null && heldCard != live.cardIdentity() ->
+                "cardChanged"
+            else -> null
+        }
+        if (collapseGuard != null) {
+            if (live != null) SpotlightDiagTrace.spotlightCollapsed(collapseGuard)
             expanded = null
             onExpandedChange(false)
-            return@LaunchedEffect
+            if (collapseGuard != "cardChanged") return@LaunchedEffect
         }
+        // Focus is nowhere (a blur), or belongs to the card already up: nothing
+        // to arm, and nothing to collapse.
+        if (heldCard == null) return@LaunchedEffect
         // The card must HOLD focus for the whole delay; a move cancels this run
         // and the next card starts its own clock.
         // Read fresh: the tracker keeps this across a blur now, so it is the

@@ -138,6 +138,28 @@ class SpotlightDiagContractTest {
     }
 
     @Test
+    fun `a blur after an expand says how long after it came`() {
+        SpotlightDiagTrace.spotlightFocused(1, "movie:1", "Heat")
+        SpotlightDiagTrace.spotlightBlurred()
+        assertEquals(
+            "with no panel up there is no expand to date it against",
+            "spotlight: blur (last snapshot kept)",
+            SpotlightDiagTrace.lines().last()
+        )
+
+        SpotlightDiagTrace.reset()
+        SpotlightDiagTrace.spotlightFocused(1, "movie:1", "Heat")
+        SpotlightDiagTrace.spotlightExpanded("Heat")
+        SpotlightDiagTrace.spotlightBlurred()
+        val line = SpotlightDiagTrace.lines().last()
+        assertTrue(
+            "the number the collapse report is about: $line",
+            Regex("""spotlight: blur \(last snapshot kept\) \+\d+ms after expand""")
+                .matches(line)
+        )
+    }
+
+    @Test
     fun `a cancelled dwell names the input that cancelled it`() {
         SpotlightDiagTrace.spotlightDwell(2_000L, menuOpen = false, token = 5, card = "series:tt1")
         SpotlightDiagTrace.spotlightDwellCancelled(
@@ -285,7 +307,7 @@ class SpotlightDiagContractTest {
         )
         assertTrue(host.contains("SpotlightDiagTrace.spotlightClaim(taken)"))
         assertTrue(host.contains("SpotlightDiagTrace.spotlightExpanded("))
-        listOf("\"menuOpen\"", "\"!hasSnapshot\"", "\"!expands\"").forEach { guard ->
+        listOf("\"menuOpen\"", "\"cardChanged\"", "\"!expands\"").forEach { guard ->
             assertTrue("the guard is named: $guard", host.contains(guard))
         }
     }

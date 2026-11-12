@@ -93,6 +93,12 @@ internal object SpotlightDiagTrace {
     private var dwellCard: String? = null
     private var dwellCancel: String? = null
 
+    /** When the panel last expanded, so a following blur can be dated against it. */
+    private var expandedAtMs = 0L
+
+    /** The clock, in one place: the trace is time-agnostic everywhere else. */
+    private fun clock(): Long = System.currentTimeMillis()
+
     /** True once the dwell effect has spoken, so a claim cannot print delay=0. */
     private var dwellSeen = false
 
@@ -199,11 +205,25 @@ internal object SpotlightDiagTrace {
         note(SPOTLIGHT + "focus card=${label(key, title)} token=$token")
     }
 
-    /** Focus left. The last snapshot is KEPT - see the field doc (F5). */
+    /**
+     * Focus left. The last snapshot is KEPT - see the field doc (F5).
+     *
+     * When a panel is up, the line also says how long after the expand the blur
+     * came. That is the number the 2026-11-12 collapse report is about: a card
+     * that blurs a few hundred milliseconds after its own panel opened, with no
+     * card taking focus back, loses focus to nothing and never re-earns it -
+     * which the paste can now show rather than infer.
+     */
     fun spotlightBlurred() {
-        synchronized(lock) { held = false }
+        val sinceExpand = synchronized(lock) {
+            held = false
+            if (expandedAtMs <= 0L) null else (clock() - expandedAtMs).coerceAtLeast(0L)
+        }
         putSpotlight("tracker", trackerLine())
-        note(SPOTLIGHT + "blur (last snapshot kept)")
+        note(
+            SPOTLIGHT + "blur (last snapshot kept)" +
+                (sinceExpand?.let { " +${it}ms after expand" } ?: "")
+        )
     }
 
     /**
@@ -266,6 +286,7 @@ internal object SpotlightDiagTrace {
 
     /** The panel expanded for the held card. */
     fun spotlightExpanded(title: String?) {
+        synchronized(lock) { expandedAtMs = clock() }
         val card: String
         synchronized(lock) {
             lastExpanded = true
@@ -315,6 +336,7 @@ internal object SpotlightDiagTrace {
             dwellToken = 0
             dwellCard = null
             dwellCancel = null
+            expandedAtMs = 0L
             dwellSeen = false
         }
     }

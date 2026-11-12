@@ -60,7 +60,14 @@ class SpotlightFixesContractTest {
             "the mode flip alone is not a stop: the billboard must stop what is " +
                 "already playing when another surface takes the player",
             billboard.contains("LaunchedEffect(trailerSuppressed) {") &&
-                billboard.contains("if (trailerSuppressed) stopTrailer()")
+                // Repointed by the 2026-11-12 collapse spec: the stop is now
+                // conditional on something actually playing. Releasing the pooled
+                // player - and its surface - for a page showing a still is
+                // needless window-level churn under the focused rail card.
+                billboard.contains(
+                    "if (trailerSuppressed && (playback != null || playbackPageKey != null)) " +
+                        "stopTrailer()"
+                )
         )
         assertTrue(
             "and start nothing while the card owns the player",
@@ -313,7 +320,8 @@ class SpotlightFixesContractTest {
         assertTrue(
             "the dwell is cancelled by an open menu, and keyed on the held CARD",
             host.contains("LaunchedEffect(heldCard, expandDelayMs, menuOpen)") &&
-                host.contains("if (heldCard == null || menuOpen || !HomeExpandDelay.expands(expandDelayMs))")
+                host.contains("menuOpen -> \"menuOpen\"") &&
+                host.contains("\"!expands\"")
         )
         val home = source(HOME)
         assertTrue(
