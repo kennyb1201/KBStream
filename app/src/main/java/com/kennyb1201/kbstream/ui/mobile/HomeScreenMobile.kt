@@ -2158,10 +2158,10 @@ internal fun MobileBillboard(
     /**
      * Reports whether THIS surface currently has a trailer playing.
      *
-     * The Home holds the screensaver off while any surface plays (see its
-     * `heroTrailerPlaying`), and the billboard is one of those surfaces: without
-     * this the flag stayed false in Spotlight and the screensaver armed over a
-     * playing trailer.
+     * The TV Home holds its idle overlay off while any surface plays, and the
+     * billboard is one of those surfaces: without this the flag stayed false in
+     * Spotlight and the overlay armed over a playing trailer. (The phone passes
+     * nothing; it has no such overlay.)
      */
     onTrailerPlayingChange: (Boolean) -> Unit = {},
     onPlay: (BillboardPage) -> Unit,
@@ -2530,8 +2530,8 @@ internal fun MobileBillboard(
     LaunchedEffect(trailerSuppressed) {
         if (trailerSuppressed) stopTrailer()
     }
-    // The Home's screensaver hold reads this, and it falls on dispose: a trailer
-    // that ended, died or was cut must not leave the flag stuck true.
+    // A TV Home's idle-overlay hold reads this, and it falls on dispose: a
+    // trailer that ended, died or was cut must not leave the flag stuck true.
     val trailerPlayingNow = playback != null
     LaunchedEffect(trailerPlayingNow) {
         onTrailerPlayingChange(trailerPlayingNow)

@@ -273,7 +273,11 @@ class MobileBillboardContractTest {
         assertTrue(action.contains("val contentColor = if (accent) KBVoid else KBTextHi"))
         assertTrue(action.contains("if (accent) KBAccent else KBTextHi.copy(alpha = 0.16f)"))
         assertTrue(
-            action.contains("if (accent) Color.Transparent else KBTextHi.copy(alpha = 0.30f)")
+            "the secondaries keep their hairline, and the ring is what makes " +
+                "focus visible on them",
+            action.contains("accent -> Color.Transparent") &&
+                action.contains("else -> KBTextHi.copy(alpha = 0.30f)") &&
+                action.contains("focused -> KBAccent")
         )
         assertTrue(action.contains(".clip(CircleShape)"))
         assertTrue(action.contains(".height(42.dp)"))
@@ -682,7 +686,13 @@ class MobileBillboardContractTest {
         assertTrue(dialog.contains("BILLBOARD_DEFAULT_FEED_LABEL"))
         assertTrue(dialog.contains(".filter { row -> row.config != null || row.isBuiltinRail }"))
         // Deselecting everything restores the default feed.
-        assertTrue(dialog.contains("val normalized = next.ifEmpty { AppPreferences.DEFAULT_BILLBOARD_FEEDS }"))
+        // Deselecting everything restores the default feed, through the shared
+        // rule both pickers write with.
+        assertTrue(
+            dialog.contains(
+                "val normalized = com.kennyb1201.kbstream.ui.home.normalizeBillboardFeeds(next)"
+            )
+        )
         assertTrue(dialog.contains("AppPreferences.setHomeBillboardFeeds(context, normalized)"))
         // The hold and the trailer mode, each written where the screen reads it.
         assertTrue(dialog.contains("AppPreferences.BILLBOARD_CYCLE_OPTIONS_MS.forEach"))

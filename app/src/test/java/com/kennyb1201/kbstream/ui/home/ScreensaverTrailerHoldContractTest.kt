@@ -111,7 +111,7 @@ class ScreensaverTrailerHoldContractTest {
         )
         assertTrue(
             "the gate reads it",
-            gateBlock().contains("browseShortcutMenu == null && !heroTrailerPlaying")
+            gateBlock().contains("browseShortcutMenu == null && !anyTrailerPlaying")
         )
     }
 
@@ -122,12 +122,12 @@ class ScreensaverTrailerHoldContractTest {
             "the reset goes through the rule, with the previous state: $block",
             block.contains("screensaverLastKeyAt = screensaverIdleClockAfterTrailer(") &&
                 block.contains("wasPlaying = screensaverTrailerWasPlaying,") &&
-                block.contains("playing = heroTrailerPlaying,")
+                block.contains("playing = anyTrailerPlaying,")
         )
         assertTrue(
             "it runs once per edge, guarded by the previous state: $block",
-            block.contains("SideEffect { if (screensaverTrailerWasPlaying != heroTrailerPlaying) {") &&
-                block.contains("screensaverTrailerWasPlaying = heroTrailerPlaying }")
+            block.contains("SideEffect { if (screensaverTrailerWasPlaying != anyTrailerPlaying) {") &&
+                block.contains("screensaverTrailerWasPlaying = anyTrailerPlaying }")
         )
         assertFalse(
             "and never on every recomposition: an unguarded write would drift the deadline",

@@ -69,7 +69,7 @@ class SpotlightFixContractTest {
         val mobile = source(MOBILE)
         val hero = mobile.substring(
             mobile.indexOf("private fun MobileHero("),
-            mobile.indexOf("private fun MobileBillboard(")
+            mobile.indexOf("fun MobileBillboard(")
         )
         assertTrue(
             "the hero honours a handed-down height...",
@@ -235,8 +235,7 @@ class SpotlightFixContractTest {
         val settings = source(SETTINGS)
         assertTrue(
             "and so does the TV's",
-            settings.contains("billboardFeedOffered)") ||
-                settings.contains("filter(::com.kennyb1201.kbstream.ui.home.billboardFeedOffered)")
+            settings.contains("billboardFeedOffered(key)")
         )
     }
 

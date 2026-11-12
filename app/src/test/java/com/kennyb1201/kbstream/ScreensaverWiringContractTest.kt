@@ -181,15 +181,21 @@ class ScreensaverWiringContractTest {
                             upcomingMenu == null &&
                             posterMenu == null &&
                             browseShortcutMenu == null &&
-                            !heroTrailerPlaying
+                            !anyTrailerPlaying
                     """
                 )
             )
         )
         assertTrue(
-            "and a PLAYING hero trailer gates it too: watching one produces no key " +
+            "and a PLAYING trailer gates it too: watching one produces no key " +
                 "presses, so the overlay used to arm over the trailer and stop it",
-            squash(home).contains("!heroTrailerPlaying")
+            squash(home).contains("!anyTrailerPlaying")
+        )
+        assertTrue(
+            "the gate's flag is every surface's: the Modern hero, the Spotlight " +
+                "billboard and the expanded card",
+            squash(home).contains("heroTrailerPlaying || spotlightBillboardTrailerPlaying ||") &&
+                squash(home).contains("spotlightPanelTrailerPlaying")
         )
         assertTrue(
             "returning to Home (from Settings included) has to pick up a changed pref",
