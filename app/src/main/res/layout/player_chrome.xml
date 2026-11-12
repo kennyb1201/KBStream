@@ -315,9 +315,16 @@
                 </LinearLayout>
             </LinearLayout>
 
-            <!-- Control bar: the 11 shared buttons, in the same order and with the
+            <!-- Control bar: the 12 shared buttons, in the same order and with the
                  same split both engines use - play/pause and next on the left,
-                 everything that configures the session on the right. -->
+                 everything that configures the session on the right.
+
+                 The order inside the right group is the episode family first,
+                 then the things you change about THIS stream, then the track
+                 pickers (subtitles ahead of audio), then the session settings
+                 (spec 2026-11-12): picking an episode mid-play is the common
+                 action, Source is the "this stream is wrong" one, and subtitles
+                 are the more-touched of the two tracks. -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -371,25 +378,14 @@
                     android:layout_height="0dp"
                     android:layout_weight="1" />
 
-                <!-- Source: pick a different stream for this title. -->
-                <ImageView
-                    android:id="@+id/chrome_btn_source"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:layout_marginEnd="8dp"
-                    android:background="@drawable/mpv_control_bg"
-                    android:contentDescription="Change source"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true"
-                    android:nextFocusUp="@id/chrome_seekbar"
-                    android:padding="8dp"
-                    android:scaleType="fitCenter"
-                    android:src="@drawable/ic_player_sources" />
-
                 <!-- Episodes: the show's season/episode list. GONE unless the
                      session is a series - a movie has no seasons and a live
                      channel has no episodes, so the button would open an empty
-                     panel on both (see PlayerChrome.setEpisodesAvailable). -->
+                     panel on both (see PlayerChrome.setEpisodesAvailable).
+
+                     FIRST in the right-hand group: it and Next episode are one
+                     family (episode navigation), and it is the mid-play action
+                     taken far more often than changing source. -->
                 <ImageView
                     android:id="@+id/chrome_btn_episodes"
                     android:layout_width="40dp"
@@ -405,6 +401,38 @@
                     android:src="@drawable/ic_player_episodes"
                     android:visibility="gone" />
 
+                <!-- Source: pick a different stream for this title. -->
+                <ImageView
+                    android:id="@+id/chrome_btn_source"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/mpv_control_bg"
+                    android:contentDescription="Change source"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/chrome_seekbar"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_sources" />
+
+                <!-- Subtitles: ahead of the audio track, because it is the more
+                     touched of the two here (auto-pick, SDH, sidecars,
+                     wrong-show subs). -->
+                <ImageView
+                    android:id="@+id/chrome_btn_subtitle"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/mpv_control_bg"
+                    android:contentDescription="Subtitles"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/chrome_seekbar"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_subtitle" />
+
                 <!-- Audio track -->
                 <ImageView
                     android:id="@+id/chrome_btn_audio"
@@ -419,21 +447,6 @@
                     android:padding="8dp"
                     android:scaleType="fitCenter"
                     android:src="@drawable/ic_player_audio" />
-
-                <!-- Subtitles -->
-                <ImageView
-                    android:id="@+id/chrome_btn_subtitle"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:layout_marginEnd="8dp"
-                    android:background="@drawable/mpv_control_bg"
-                    android:contentDescription="Subtitles"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true"
-                    android:nextFocusUp="@id/chrome_seekbar"
-                    android:padding="8dp"
-                    android:scaleType="fitCenter"
-                    android:src="@drawable/ic_player_subtitle" />
 
                 <!-- Speed: a rate is its own state, so it stays a word. -->
                 <TextView
