@@ -118,6 +118,7 @@ import com.kennyb1201.kbstream.data.player.PlayerTrackMemory
 import com.kennyb1201.kbstream.data.player.SubtitleBitmapProofs
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
+import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
@@ -3828,6 +3829,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         parentType = intent.getStringExtra("parent_type").orEmpty()
         sessionProfileId = PlaybackHistoryWriter.sessionProfileId(this, intent)
         isLiveChannel = parentType == "channel"
+        // Episodes is a series-only entry (spec: in-player season + episode
+        // picker). The chrome is bound before the intent is read, so this is
+        // where its button learns the type: a movie has no seasons and a live
+        // channel has no episodes, so neither shows a button that could only
+        // open an empty panel.
+        chrome?.setEpisodesAvailable(!isLiveChannel && parentType.equals("series", ignoreCase = true))
         // m20: the live program block and channel bar only exist on a channel
         // session now. Still here rather than in bindViews() because that runs
         // before the type is known, and still BEFORE setupListeners() (which
@@ -11746,6 +11753,19 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
 
         pickerMode = mode
+        openPickerPanel(items)
+    }
+
+    /**
+     * Raises the picker with [items] already built, and hands it the D-pad.
+     *
+     * Split out of [showPicker] for the episode picker (spec: in-player season +
+     * episode picker), which fills the same panel from a different source and
+     * must keep the ordering this function has always kept: the rows exist
+     * BEFORE anything becomes visible, so a released player never leaves a
+     * dimmed, empty panel with nothing but Back out of it.
+     */
+    private fun openPickerPanel(items: List<PickerItem>) {
         isPickerShowing = true
         dismissSettingsPanel()
         // Scrim and panel arrive together, and the panel rises into place from
@@ -11909,6 +11929,171 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         KbViewMotion.slideFadeOut(pickerContainer)
         if (!showSettingsPanel) KbViewMotion.fadeOut(scrim)
         restoreControlsFocus()
+    }
+
+    // --- Episode picker (series only) --------------------------------------
+    //
+    // The one panel in the bar that is about the SHOW rather than about the
+    // file. It reuses the picker's container, list and focus handling - that is
+    // the "mirror showPicker's panel, not a new panel shape" rule - and its data
+    // comes from PlayerEpisodes, shared with the MPV engine.
+
+    /** The season chip the viewer is on. */
+    private var episodePickerSeason: Int? = null
+
+    /** The season [episodePickerEpisodes] belongs to (see PlayerEpisodePicker.rows). */
+    private var episodePickerListedSeason: Int? = null
+
+    private var episodePickerSeasons: List<Int> = emptyList()
+    private var episodePickerEpisodes: List<ResolvedEpisode> = emptyList()
+    private var episodePickerWatched: Set<Int> = emptySet()
+    private var episodePickerLoading = false
+
+    /** Dropped results: a season switch supersedes the fetch it interrupts. */
+    private var episodePickerRequest = 0
+
+    /**
+     * Opens the season/episode list, on the season playing now.
+     *
+     * The panel goes up in the same frame as the press with a loading row - the
+     * rows exist before anything is visible, and the loading row is a row, so
+     * this can never raise the empty panel [showPicker] warns about. The seasons
+     * and the season's episodes are then fetched behind it; a season already
+     * visited answers from the season cache PlayerEpisodes reads.
+     */
+    private fun showEpisodePicker() {
+        if (isLiveChannel || !parentType.equals("series", ignoreCase = true)) return
+        if (parentId.isBlank()) return
+        if (isPickerShowing) dismissPicker()
+        episodePickerSeason = episodePickerSeason ?: season
+        episodePickerLoading = true
+        pickerTitle.text = "EPISODES"
+        openPickerPanel(episodePickerItems())
+        requestEpisodeSeasons()
+    }
+
+    /**
+     * Fetches the show's seasons when this session has not seen them yet, then
+     * the season the panel is on. A title TMDB lists no seasons for answers the
+     * season playing now, so a sparse entry still browses the season it is in.
+     */
+    private fun requestEpisodeSeasons() {
+        if (episodePickerSeasons.isNotEmpty()) {
+            loadEpisodeSeason(episodePickerSeason)
+            return
+        }
+        val request = ++episodePickerRequest
+        lifecycleScope.launch {
+            val seasons = PlayerEpisodes.seasons(this@NativePlayerActivity, parentId, parentType, season)
+            if (request != episodePickerRequest || !isPickerShowing) return@launch
+            if (seasons.isEmpty()) {
+                episodePickerLoading = false
+                dismissPicker()
+                Toast.makeText(this@NativePlayerActivity, "No episodes to browse for this title", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            episodePickerSeasons = seasons
+            val target = episodePickerSeason?.takeIf { it in seasons }
+                ?: season?.takeIf { it in seasons }
+                ?: seasons.first()
+            episodePickerSeason = target
+            loadEpisodeSeason(target)
+        }
+    }
+
+    /** Loads one season's episodes and watched marks, keeping the old rows up meanwhile. */
+    private fun loadEpisodeSeason(target: Int?) {
+        val wanted = target ?: return
+        episodePickerSeason = wanted
+        episodePickerLoading = true
+        bindEpisodePicker()
+        val request = ++episodePickerRequest
+        lifecycleScope.launch {
+            val episodes = PlayerEpisodes.season(this@NativePlayerActivity, parentId, parentType, wanted)
+            val watched = PlayerEpisodes.watchedEpisodes(this@NativePlayerActivity, parentId, wanted)
+            if (request != episodePickerRequest || !isPickerShowing) return@launch
+            episodePickerEpisodes = episodes
+            episodePickerListedSeason = wanted
+            episodePickerWatched = watched
+            episodePickerLoading = false
+            bindEpisodePicker()
+        }
+    }
+
+    /** A season chip: switch the list, leaving the previous rows up until it lands. */
+    private fun selectEpisodeSeason(target: Int) {
+        if (target == episodePickerSeason && !episodePickerLoading) return
+        loadEpisodeSeason(target)
+    }
+
+    /**
+     * Plays [episode] through the very launch an Up Next advance uses.
+     *
+     * The pair passed on is the episode's OWN (season, episode), never the file's
+     * number and never a position in the list: the picker must speak the same
+     * numbering Detail does, or a show with a non-trivial scheme gets its
+     * numbering remembered wrongly (see EpisodeScheme). The countdown is disarmed
+     * first - it is a Handler tick, and a stale one behind the new episode would
+     * chain another launch - then the panel closes and the handoff runs, which is
+     * what gives the pick resume, scrobbling and the watched write for free.
+     */
+    private fun pickEpisode(episode: ResolvedEpisode) {
+        val targetSeason = episodePickerSeason ?: return
+        nextUpCountdownHeld = false
+        nextUpCountdownRemaining = 0
+        nextUpHandoffArmed = false
+        nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
+        episodePickerRequest++ // nothing in flight may re-render over the handoff
+        dismissPicker()
+        launchNextEpisode(
+            targetSeason,
+            episode.episodeNumber,
+            episodeName = episode.name,
+            runtimeMinutes = episode.runtimeMinutes,
+            episodeOverview = episode.overview
+        )
+    }
+
+    /** The current rows, built by the shared builder both engines call. */
+    private fun episodePickerItems(): List<PickerItem> = PlayerEpisodePicker.rows(
+        seasons = episodePickerSeasons,
+        selectedSeason = episodePickerSeason,
+        listedSeason = episodePickerListedSeason,
+        episodes = episodePickerEpisodes,
+        watched = episodePickerWatched,
+        playingSeason = season,
+        playingEpisode = episode,
+        loading = episodePickerLoading,
+        fallbackImageUrl = itemPoster?.takeIf { it.isNotBlank() } ?: backdropUrl,
+        onSeason = { picked -> selectEpisodeSeason(picked) },
+        onPick = { picked -> pickEpisode(picked) }
+    )
+
+    /**
+     * Re-paints the open episode panel, and parks it on the playing episode.
+     *
+     * The scroll is the point of the rebind: the panel opens with the current
+     * episode selected, so it has to be the row the viewer can see rather than
+     * somewhere below the fold of a nine-episode season.
+     */
+    private fun bindEpisodePicker() {
+        if (!isPickerShowing) return
+        val items = episodePickerItems()
+        pickerTitle.text = "EPISODES"
+        pickerList.adapter = PickerAdapter(items)
+        pickerLastFocus = null
+        val currentAt = episodeCurrentRowIndex()
+        if (currentAt >= 0) pickerList.scrollToPosition(currentAt)
+        if (pickerList.findFocus() == null) pickerList.post { parkPickerFocus() }
+    }
+
+    /** The row index of the playing episode in the current list, or -1. */
+    private fun episodeCurrentRowIndex(): Int {
+        val listed = episodePickerListedSeason ?: return -1
+        val playing = episode ?: return -1
+        if (season != listed) return -1
+        val at = episodePickerEpisodes.indexOfFirst { it.episodeNumber == playing }
+        return if (at >= 0) episodePickerSeasons.size + at else -1
     }
 
     // --- Channel guide overlay (live only) ---
@@ -15828,6 +16013,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     override fun onChromeNext() = advanceToNextEpisode()
 
     override fun onChromeOpenSourcePicker() = showPicker(PickerMode.SOURCE)
+
+    override fun onChromeOpenEpisodes() = showEpisodePicker()
 
     override fun onChromeOpenAudioPicker() = showPicker(PickerMode.AUDIO)
 

@@ -386,6 +386,25 @@
                     android:scaleType="fitCenter"
                     android:src="@drawable/ic_player_sources" />
 
+                <!-- Episodes: the show's season/episode list. GONE unless the
+                     session is a series - a movie has no seasons and a live
+                     channel has no episodes, so the button would open an empty
+                     panel on both (see PlayerChrome.setEpisodesAvailable). -->
+                <ImageView
+                    android:id="@+id/chrome_btn_episodes"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/mpv_control_bg"
+                    android:contentDescription="Episodes"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/chrome_seekbar"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_episodes"
+                    android:visibility="gone" />
+
                 <!-- Audio track -->
                 <ImageView
                     android:id="@+id/chrome_btn_audio"

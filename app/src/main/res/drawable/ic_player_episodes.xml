@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Episodes: a grid of chapters, i.e. "browse this show's episodes". Chosen
+     over the bar-list shape because ic_player_sources is already a list (with a
+     play mark), and two list glyphs one button apart read as the same button.
+     Carries kb_text_hi (#FFF3EFE4) baked in, the way every player glyph here
+     does: no layout tints these ImageViews. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M3,4h8.2v7.2H3z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M12.8,4H21v7.2h-8.2z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M3,12.8h8.2V20H3z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M12.8,12.8H21V20h-8.2z" />
+</vector>

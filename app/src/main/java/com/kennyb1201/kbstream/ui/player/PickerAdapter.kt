@@ -19,6 +19,23 @@ data class PickerItem(
     val label: String,
     val isSelected: Boolean = false,
     val badges: List<StreamBadge> = emptyList(),
+    /**
+     * The episode still, for the episode picker's rows. Null on every other
+     * row, where the thumbnail slot stays GONE.
+     */
+    val thumbnail: String? = null,
+    /**
+     * Art to fall back to when [thumbnail] is absent or dead - the title's own
+     * poster, the same fallback `EpisodeCard` loads. Null leaves the still
+     * empty rather than guessing at one.
+     */
+    val fallbackImageUrl: String? = null,
+    /** The episode overview, drawn small under the title and capped at two lines. */
+    val description: String? = null,
+    /** The history already calls this episode watched: the row carries a check. */
+    val watched: Boolean = false,
+    /** An unaired episode: the UNAVAILABLE chip, and a press does nothing. */
+    val unavailable: Boolean = false,
     val onClick: () -> Unit
 )
 
@@ -29,6 +46,8 @@ class PickerAdapter(
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val label: TextView = view.findViewById(R.id.picker_item_label)
         val badges: LinearLayout = view.findViewById(R.id.picker_item_badges)
+        val thumb: ImageView = view.findViewById(R.id.picker_item_thumb)
+        val description: TextView = view.findViewById(R.id.picker_item_desc)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
@@ -39,7 +58,9 @@ class PickerAdapter(
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val item = items[position]
-        holder.label.text = item.label
+        // The watched mark rides the label: one row, one line, and the check
+        // reads before the episode's own name rather than after it.
+        holder.label.text = if (item.watched) "\u2713 ${item.label}" else item.label
         holder.label.setTextColor(
             if (item.isSelected) themeAccentColor(holder.itemView.context)
             else ContextCompat.getColor(holder.itemView.context, R.color.kb_text_hi)
@@ -49,7 +70,67 @@ class PickerAdapter(
             holder,
             AppPreferences.getBadgesAboveFile(holder.itemView.context)
         )
+        // The chips row carries the picker's own badges (a source's quality
+        // chips) and, for an episode the episode list marks unavailable, the
+        // UNAVAILABLE chip Detail's cards wear. Bodies of both kinds never mix:
+        // no other row is ever unavailable.
         bindBadgeRow(holder.badges, item.badges)
+        bindUnavailableChip(holder.badges, item.unavailable)
+        bindStill(holder, item)
+        bindDescription(holder.description, item.description)
+    }
+
+    /**
+     * Loads the episode still, or hides the slot.
+     *
+     * The fallback is the title's own art, exactly the rule `EpisodeCard`
+     * keeps, and a still that fails to load drops the slot rather than leaving
+     * a broken box on the row: a row with no thumbnail still draws its title
+     * and description.
+     */
+    private fun bindStill(holder: ViewHolder, item: PickerItem) {
+        val url = item.thumbnail?.takeIf { it.isNotBlank() }
+            ?: item.fallbackImageUrl?.takeIf { it.isNotBlank() }
+        holder.thumb.visibility = View.GONE
+        if (url == null) return
+        holder.thumb.visibility = View.VISIBLE
+        holder.thumb.load(url) {
+            listener(onError = { _, _ -> holder.thumb.visibility = View.GONE })
+        }
+    }
+
+    /** Draws the overview, or leaves the slot out entirely when there is none. */
+    private fun bindDescription(view: TextView, description: String?) {
+        val text = description?.trim().orEmpty()
+        view.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
+        view.text = text
+    }
+
+    /**
+     * The UNAVAILABLE chip, drawn into the same row the source chips use.
+     *
+     * A plain chip rather than a [StreamBadge]: the episode list's unavailable
+     * state is the app's own word about an unaired episode, not a provider's
+     * tag with its own colours and art.
+     */
+    private fun bindUnavailableChip(row: LinearLayout, unavailable: Boolean) {
+        if (!unavailable) return
+        val context = row.context
+        val density = context.resources.displayMetrics.density
+        val chip = TextView(context).apply {
+            text = UNAVAILABLE_LABEL
+            textSize = 11f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_lo))
+            typeface = runCatching {
+                ResourcesCompat.getFont(context, R.font.inter_medium)
+            }.getOrNull()
+            setPadding((8 * density).toInt(), (3 * density).toInt(), (8 * density).toInt(), (3 * density).toInt())
+            background = runCatching {
+                ContextCompat.getDrawable(context, R.drawable.pill_chip_bg)
+            }.getOrNull()
+        }
+        row.visibility = View.VISIBLE
+        row.addView(chip)
     }
 
     override fun getItemCount() = items.size
@@ -61,6 +142,9 @@ class PickerAdapter(
          * Medium label). The player strip and the streams picker show the same
          * badges one screen apart, so both rows have to measure the same.
          */
+        /** Detail's own word for an episode that has not aired yet. */
+        internal const val UNAVAILABLE_LABEL = "UNAVAILABLE"
+
         private const val BADGE_IMAGE_HEIGHT_DP = 16
         private const val BADGE_CHIP_HEIGHT_DP = 22
         private const val BADGE_CHIP_GAP_DP = 4

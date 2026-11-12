@@ -99,14 +99,22 @@ class PickerFocusContractTest {
 
     @Test
     fun `both engines open the picker through that park`() {
-        val exoOpen = functionBody(NATIVE, "private fun showPicker(mode: PickerMode) {")
+        // The raise itself lives in openPickerPanel now (the in-player episode
+        // picker fills the same panel), so both modes go through one place: the
+        // picker's own modes still hand it their built rows, and that one open
+        // posts the park.
+        val exoShow = functionBody(NATIVE, "private fun showPicker(mode: PickerMode) {")
+        val exoOpen = functionBody(NATIVE, "private fun openPickerPanel(items: List<PickerItem>) {")
+        assertTrue("the exo picker opens through the shared raise", exoShow.contains("openPickerPanel(items)"))
         assertTrue(
             "the exo picker's posted focus is the park",
             exoOpen.contains("pickerList.post {") && exoOpen.contains("parkPickerFocus()")
         )
-        val mpvOpen = functionBody(MPV, "private fun showPicker(mode: PickerMode) {")
+        val mpvShow = functionBody(MPV, "private fun showPicker(mode: PickerMode) {")
+        val mpvOpen = functionBody(MPV, "private fun openPickerPanel(items: List<PickerItem>) {")
+        assertTrue("and so does mpv's", mpvShow.contains("openPickerPanel(items)"))
         assertTrue(
-            "and so is mpv's",
+            "and its posted focus is that same park",
             mpvOpen.contains("if (!pickerOpen) return@post") &&
                 mpvOpen.contains("parkPickerFocus()")
         )
@@ -189,7 +197,7 @@ class PickerFocusContractTest {
         // open starts from the top rather than from the last panel's row.
         assertTrue(
             "the exo picker opens from the top",
-            functionBody(NATIVE, "private fun showPicker(mode: PickerMode) {")
+            functionBody(NATIVE, "private fun openPickerPanel(items: List<PickerItem>) {")
                 .contains("pickerLastFocus = null")
         )
         assertTrue(
@@ -199,7 +207,7 @@ class PickerFocusContractTest {
         )
         assertTrue(
             "mpv clears it at both ends too",
-            functionBody(MPV, "private fun showPicker(mode: PickerMode) {")
+            functionBody(MPV, "private fun openPickerPanel(items: List<PickerItem>) {")
                 .contains("pickerLastFocus = null") &&
                 functionBody(MPV, "private fun dismissPicker() {")
                     .contains("pickerLastFocus = null")

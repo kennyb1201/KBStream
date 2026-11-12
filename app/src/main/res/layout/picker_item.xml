@@ -11,7 +11,8 @@
          chips read as a header over the source they describe. PickerAdapter
          re-applies the order (and the spacing that goes with it) on every bind,
          so the "Badges above the file name" setting can move it under the name
-         without a second layout. -->
+         without a second layout. The episode picker draws its UNAVAILABLE chip
+         through the same row. -->
     <LinearLayout
         android:id="@+id/picker_item_badges"
         android:layout_width="match_parent"
@@ -22,18 +23,60 @@
         android:paddingTop="10dp"
         android:visibility="gone" />
 
-    <TextView
-        android:id="@+id/picker_item_label"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:focusable="true"
-        android:focusableInTouchMode="true"
-        android:fontFamily="@font/inter_medium"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
         android:paddingHorizontal="14dp"
-        android:paddingVertical="12dp"
-        android:textColor="@color/kb_text_hi"
-        android:textSize="14sp"
-        android:maxLines="5"
-        android:ellipsize="end" />
+        android:paddingVertical="10dp">
+
+        <!-- The episode still. GONE for every row that is not an episode, so
+             the track and source pickers keep the row they always had. -->
+        <ImageView
+            android:id="@+id/picker_item_thumb"
+            android:layout_width="56dp"
+            android:layout_height="84dp"
+            android:layout_marginEnd="12dp"
+            android:contentDescription="@null"
+            android:scaleType="centerCrop"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/picker_item_label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:fontFamily="@font/inter_medium"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="14sp"
+                android:maxLines="5"
+                android:ellipsize="end" />
+
+            <!-- The episode overview, small and capped: the picker is a panel,
+                 not a second Detail page. GONE when the episode has none, so it
+                 never leaves a blank slot. -->
+            <TextView
+                android:id="@+id/picker_item_desc"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:fontFamily="@font/inter_regular"
+                android:maxLines="2"
+                android:paddingTop="2dp"
+                android:textColor="@color/kb_text_lo"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
+        </LinearLayout>
+
+    </LinearLayout>
 
 </LinearLayout>

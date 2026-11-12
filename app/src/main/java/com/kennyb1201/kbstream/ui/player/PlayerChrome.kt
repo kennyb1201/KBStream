@@ -85,6 +85,13 @@ interface PlayerChromeHost {
 
     // Pickers & panels
     fun onChromeOpenSourcePicker()
+
+    /**
+     * The Episodes button. Only ever called for a series, because the button is
+     * hidden everywhere else (see [PlayerChrome.setEpisodesAvailable]) - the
+     * default keeps a test double compiling.
+     */
+    fun onChromeOpenEpisodes() {}
     fun onChromeOpenAudioPicker()
     fun onChromeOpenSubtitlePicker()
     fun onChromeOpenSpeedPicker()
@@ -190,6 +197,7 @@ class PlayerChrome(
     private val playPauseButton: ImageView? = root.findViewById(R.id.chrome_btn_play_pause)
     private val nextButton: ImageView? = root.findViewById(R.id.chrome_btn_next)
     private val sourceButton: View? = root.findViewById(R.id.chrome_btn_source)
+    private val episodesButton: View? = root.findViewById(R.id.chrome_btn_episodes)
     private val audioButton: View? = root.findViewById(R.id.chrome_btn_audio)
     private val subtitleButton: View? = root.findViewById(R.id.chrome_btn_subtitle)
     private val speedButton: TextView? = root.findViewById(R.id.chrome_btn_speed)
@@ -504,6 +512,10 @@ class PlayerChrome(
             host.onChromeOpenSourcePicker()
             keepVisible()
         }
+        episodesButton?.setOnClickListener {
+            host.onChromeOpenEpisodes()
+            keepVisible()
+        }
         audioButton?.setOnClickListener {
             host.onChromeOpenAudioPicker()
             keepVisible()
@@ -602,6 +614,7 @@ class PlayerChrome(
         playPauseButton,
         nextButton,
         sourceButton,
+        episodesButton,
         audioButton,
         subtitleButton,
         speedButton,
@@ -626,6 +639,20 @@ class PlayerChrome(
         if (scrubbable && seekBar?.requestFocus() == true) return
         if (host.chromeFocusPrimary()) return
         playPauseButton?.requestFocus()
+    }
+
+    /**
+     * Shows or hides the Episodes button.
+     *
+     * A series gets it; a movie has no seasons and a live channel has no
+     * episodes at all, so both keep the button out of the bar rather than
+     * offering a panel that could only say "nothing here". The bar's focus
+     * walk skips a GONE control on its own, so hiding it needs nothing else.
+     */
+    fun setEpisodesAvailable(available: Boolean) {
+        val button = episodesButton ?: return
+        val target = if (available) View.VISIBLE else View.GONE
+        if (button.visibility != target) button.visibility = target
     }
 
     /** Restarts the auto-hide countdown. */

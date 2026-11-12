@@ -62,6 +62,7 @@ import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
+import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.domain.streamengine.AutoplayBitrate
@@ -1921,10 +1922,17 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // The auto-hide timeout is [PlayerChrome.AUTO_HIDE_MS]'s own default:
         // this engine used to pass eight seconds where the main player used six,
         // which left the bar up over the picture for two seconds longer on one
-        // engine than the other for no reason a viewer could see.
-        chrome = PlayerChrome(
+        // engine than the other for no reason a viewer could see.        chrome = PlayerChrome(
             findViewById(R.id.chrome_layer),
             this
+        )
+        // Episodes is a series-only entry (spec: in-player season + episode
+        // picker): a movie has no seasons and a channel has no episodes, so
+        // neither shows a button that could only open an empty panel. Safe here
+        // because [readIntent] runs before bindViews - this engine's type is
+        // known by the time its chrome is built.
+        chrome?.setEpisodesAvailable(
+            parentType != "channel" && parentType.equals("series", ignoreCase = true)
         )
         // The shared bar, kept only for this engine's own key handling.
         seekBar = findViewById(R.id.chrome_seekbar)
@@ -2838,6 +2846,17 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             return
         }
 
+        openPickerPanel(items)
+    }
+
+    /**
+     * Raises the picker with [items] already built, and hands it the D-pad.
+     *
+     * Split out of [showPicker] for the episode picker (spec: in-player season +
+     * episode picker), which fills the same panel from a different source. The
+     * ordering is unchanged: the rows exist before the panel is up.
+     */
+    private fun openPickerPanel(items: List<PickerItem>) {
         // A side panel is up from here on, so `settingsOpen` carries that fact
         // (it is what the auto-hide and key rules already read - see the field)
         // and `pickerOpen` says the picker is the one showing, since the
@@ -2991,6 +3010,149 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         } else {
             showControls()
         }
+        episodePickerRequest++ // nothing in flight may re-render a closed panel
+    }
+
+    // --- Episode picker (series only) --------------------------------------
+    //
+    // The main player's panel on this engine: same container, same list, same
+    // focus handling, and the same shared data and row builder (see
+    // PlayerEpisodes / PlayerEpisodePicker), so the two engines cannot list a
+    // show differently.
+
+    /** The season chip the viewer is on. */
+    private var episodePickerSeason: Int? = null
+
+    /** The season [episodePickerEpisodes] belongs to (see PlayerEpisodePicker.rows). */
+    private var episodePickerListedSeason: Int? = null
+
+    private var episodePickerSeasons: List<Int> = emptyList()
+    private var episodePickerEpisodes: List<ResolvedEpisode> = emptyList()
+    private var episodePickerWatched: Set<Int> = emptySet()
+    private var episodePickerLoading = false
+
+    /** Dropped results: a season switch supersedes the fetch it interrupts. */
+    private var episodePickerRequest = 0
+
+    /**
+     * Opens the season/episode list, on the season playing now, with a loading
+     * row so the panel is never empty while the list is fetched.
+     */
+    private fun showEpisodePicker() {
+        if (parentType == "channel" || !parentType.equals("series", ignoreCase = true)) return
+        if (parentId.isBlank()) return
+        if (pickerOpen) dismissPicker()
+        episodePickerSeason = episodePickerSeason ?: season
+        episodePickerLoading = true
+        pickerTitle?.text = "EPISODES"
+        openPickerPanel(episodePickerItems())
+        requestEpisodeSeasons()
+    }
+
+    /** Fetches the show's seasons when this session has not seen them yet. */
+    private fun requestEpisodeSeasons() {
+        if (episodePickerSeasons.isNotEmpty()) {
+            loadEpisodeSeason(episodePickerSeason)
+            return
+        }
+        val request = ++episodePickerRequest
+        lifecycleScope.launch {
+            val seasons = PlayerEpisodes.seasons(this@MpvPlayerActivity, parentId, parentType, season)
+            if (request != episodePickerRequest || !pickerOpen) return@launch
+            if (seasons.isEmpty()) {
+                episodePickerLoading = false
+                dismissPicker()
+                showToast("No episodes to browse for this title")
+                return@launch
+            }
+            episodePickerSeasons = seasons
+            val target = episodePickerSeason?.takeIf { it in seasons }
+                ?: season?.takeIf { it in seasons }
+                ?: seasons.first()
+            episodePickerSeason = target
+            loadEpisodeSeason(target)
+        }
+    }
+
+    /** Loads one season's episodes and watched marks, keeping the old rows up meanwhile. */
+    private fun loadEpisodeSeason(target: Int?) {
+        val wanted = target ?: return
+        episodePickerSeason = wanted
+        episodePickerLoading = true
+        bindEpisodePicker()
+        val request = ++episodePickerRequest
+        lifecycleScope.launch {
+            val episodes = PlayerEpisodes.season(this@MpvPlayerActivity, parentId, parentType, wanted)
+            val watched = PlayerEpisodes.watchedEpisodes(this@MpvPlayerActivity, parentId, wanted)
+            if (request != episodePickerRequest || !pickerOpen) return@launch
+            episodePickerEpisodes = episodes
+            episodePickerListedSeason = wanted
+            episodePickerWatched = watched
+            episodePickerLoading = false
+            bindEpisodePicker()
+        }
+    }
+
+    /** A season chip: switch the list, leaving the previous rows up until it lands. */
+    private fun selectEpisodeSeason(target: Int) {
+        if (target == episodePickerSeason && !episodePickerLoading) return
+        loadEpisodeSeason(target)
+    }
+
+    /**
+     * Plays [episode] through the handoff an Up Next advance uses, with the
+     * episode's OWN (season, episode) pair - the picker must speak Detail's
+     * numbering, or a split show's scheme gets remembered wrongly. The countdown
+     * is disarmed first so no stale tick chains another launch behind it.
+     */
+    private fun pickEpisode(episode: ResolvedEpisode) {
+        val targetSeason = episodePickerSeason ?: return
+        nextUpCountdownHeld = false
+        nextUpCountdownRemaining = 0
+        nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
+        episodePickerRequest++
+        dismissPicker()
+        launchNextEpisode(
+            targetSeason,
+            episode.episodeNumber,
+            episodeOverview = episode.overview
+        )
+    }
+
+    /** The current rows, built by the shared builder both engines call. */
+    private fun episodePickerItems(): List<PickerItem> = PlayerEpisodePicker.rows(
+        seasons = episodePickerSeasons,
+        selectedSeason = episodePickerSeason,
+        listedSeason = episodePickerListedSeason,
+        episodes = episodePickerEpisodes,
+        watched = episodePickerWatched,
+        playingSeason = season,
+        playingEpisode = episode,
+        loading = episodePickerLoading,
+        fallbackImageUrl = itemPoster?.takeIf { it.isNotBlank() } ?: backdropUrl,
+        onSeason = { picked -> selectEpisodeSeason(picked) },
+        onPick = { picked -> pickEpisode(picked) }
+    )
+
+    /** Re-paints the open episode panel, parked on the playing episode. */
+    private fun bindEpisodePicker() {
+        if (!pickerOpen) return
+        val items = episodePickerItems()
+        pickerTitle?.text = "EPISODES"
+        pickerList?.adapter = PickerAdapter(items)
+        pickerLastFocus = null
+        val currentAt = episodeCurrentRowIndex()
+        if (currentAt >= 0) pickerList?.scrollToPosition(currentAt)
+        if (pickerList?.findFocus() == null) pickerList?.post { parkPickerFocus() }
+    }
+
+    /** The row index of the playing episode in the current list, or -1. */
+    private fun episodeCurrentRowIndex(): Int {
+        val listed = episodePickerListedSeason ?: return -1
+        val playing = episode ?: return -1
+        if (season != listed) return -1
+        val at = episodePickerEpisodes.indexOfFirst { it.episodeNumber == playing }
+        return if (at >= 0) episodePickerSeasons.size + at else -1
     }
 
     /**
@@ -7685,6 +7847,8 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     }
 
     override fun onChromeOpenSourcePicker() = showPicker(PickerMode.SOURCE)
+
+    override fun onChromeOpenEpisodes() = showEpisodePicker()
 
     override fun onChromeOpenAudioPicker() = showPicker(PickerMode.AUDIO)
 
