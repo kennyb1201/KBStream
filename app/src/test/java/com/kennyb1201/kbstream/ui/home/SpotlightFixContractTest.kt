@@ -58,8 +58,10 @@ class SpotlightFixContractTest {
         )
         assertTrue(
             "and it is the VIEWPORT height that is fractioned - the fix has to " +
-                "hold at every TV density",
-            section.contains("LocalConfiguration.current.screenHeightDp * SPOTLIGHT_HERO_FRACTION")
+                "hold at every TV density. One helper now does the multiplication, " +
+                "because the hero is a LIST ITEM as well as the hero: the item's " +
+                "reserved height and the billboard's height are one number.",
+            section.contains("(screenHeightDp * SPOTLIGHT_HERO_FRACTION).dp")
         )
         assertTrue(
             "the section hands that height to the billboard",
@@ -137,9 +139,13 @@ class SpotlightFixContractTest {
     @Test
     fun `Spotlight parks focus on the hero's Play pill on entry`() {
         val section = source(SPOTLIGHT_HOME)
+        // The requester is the HOME's now (spec: scroll-away hero): the hero is a
+        // list item, so it is not composed while scrolled away and a requester
+        // remembered inside it would be gone exactly when UP needs it.
         assertTrue(
-            "a requester is held for the pill",
-            section.contains("val firstPillFocus = remember { FocusRequester() }")
+            "a requester is held for the pill, handed in by the Home",
+            section.contains("pillFocusRequester: FocusRequester,") &&
+                section.contains("val firstPillFocus = pillFocusRequester")
         )
         assertTrue(
             "and asked for once the hero has rows and a frame",

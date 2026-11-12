@@ -307,9 +307,11 @@ class SpotlightFixesContractTest {
     fun `the panel never opens over an open menu`() {
         val host = source(SPOTLIGHT_HOME)
         assertTrue(
-            "the dwell is cancelled by an open menu",
-            host.contains("LaunchedEffect(snapshot, expandDelayMs, menuOpen)") &&
-                host.contains("if (snapshot == null || menuOpen ||")
+            "the dwell is cancelled by an open menu. It is keyed on the CARD now, " +
+                "not on the snapshot object (spec: scroll-away hero, F6b) - a " +
+                "bounds-only copy of the snapshot must not restart the two seconds.",
+            host.contains("LaunchedEffect(tracker.focusToken, hasSnapshot, expandDelayMs, menuOpen)") &&
+                host.contains("if (!hasSnapshot || menuOpen || !HomeExpandDelay.expands(expandDelayMs))")
         )
         val home = source(HOME)
         assertTrue(
