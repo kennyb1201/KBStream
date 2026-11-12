@@ -36,7 +36,6 @@ import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
-import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -166,14 +165,15 @@ internal fun SpotlightPreviewPanel(
         if (!trailerRequested || trailerKey.isNullOrBlank() || trailer != null) {
             return@LaunchedEffect
         }
-        trailer = runCatchingCancellable {
-            TrailerPlayerLauncher.resolvePlayableUrl(
-                trailerUrlOrId = trailerKey,
-                imdbId = null,
-                tmdbId = null,
-                type = meta?.type
-            )
-        }.getOrNull()
+        // The launcher already answers with a Result (and rethrows its own
+        // cancellation), so this is the resolve's own outcome - a null on any
+        // refusal, which leaves the still showing.
+        trailer = TrailerPlayerLauncher.resolvePlayableUrl(
+            trailerKey,
+            imdbId = null,
+            tmdbId = null,
+            type = meta?.type
+        ).getOrNull()
     }
 
     Column(

@@ -5811,7 +5811,7 @@ private fun BillboardSettingsSection() {
     val catalogOptions = remember(feeds) {
         val builtins = listOf(
             AppPreferences.BILLBOARD_TRENDING_DAY_FEED to
-                AppPreferences.BILLBOARD_DEFAULT_FEED_LABEL,
+                com.kennyb1201.kbstream.ui.home.BILLBOARD_DEFAULT_FEED_LABEL,
             com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU
                 to "Top Picks",
             com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING
