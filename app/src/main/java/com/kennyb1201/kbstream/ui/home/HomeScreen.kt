@@ -6647,12 +6647,14 @@ fun HomeScreen(
                             // viewer can check against the screen, not a px
                             // count that depends on the box's density.
                             heroHeightDp = hero?.let {
-                                (it.size.height / density.density).toInt()
+                                (it.size / density.density).toInt()
                             },
                             viewportHeightDp =
                                 (info.viewportSize.height / density.density).toInt(),
-                            firstIndex = info.firstVisibleItemIndex,
-                            firstOffset = info.firstVisibleItemScrollOffset,
+                            // The list's own position lives on the STATE, not on
+                            // the layout info snapshot.
+                            firstIndex = railListState.firstVisibleItemIndex,
+                            firstOffset = railListState.firstVisibleItemScrollOffset,
                             itemCount = info.totalItemsCount
                         )
                     }

@@ -53,13 +53,13 @@ class SpotlightHeroRenderContractTest {
         )
         assertTrue(
             "and reports the measured height against the viewport, in dp",
-            block.contains("(it.size.height / density.density).toInt()") &&
+            block.contains("(it.size / density.density).toInt()") &&
                 block.contains("(info.viewportSize.height / density.density).toInt()")
         )
         assertTrue(
             "plus where the list rests, which is what separates 'absent' from 'scrolled'",
-            block.contains("firstIndex = info.firstVisibleItemIndex") &&
-                block.contains("firstOffset = info.firstVisibleItemScrollOffset") &&
+            block.contains("firstIndex = railListState.firstVisibleItemIndex") &&
+                block.contains("firstOffset = railListState.firstVisibleItemScrollOffset") &&
                 block.contains("itemCount = info.totalItemsCount")
         )
     }
