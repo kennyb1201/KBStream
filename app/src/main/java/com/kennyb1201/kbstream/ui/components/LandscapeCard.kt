@@ -19,8 +19,15 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -83,7 +90,16 @@ fun LandscapeCard(
      * The card's own behaviour is unchanged by it: it still draws its title in
      * place of the failed still.
      */
-    onBackdropError: ((Throwable?) -> Unit)? = null
+    onBackdropError: ((Throwable?) -> Unit)? = null,
+    /**
+     * The title's own Detail identity, for Spotlight's panel pills - the same
+     * contract [PosterCard] carries, so a landscape rail's card expands into the
+     * same panel.
+     */
+    spotlightId: String? = null,
+    spotlightType: String? = null,
+    /** The row's air date, when the card is an episode's (the panel's meta line). */
+    airDate: String? = null
 ) {
     val context = LocalContext.current
     var hasError by remember(backdropUrl) { mutableStateOf(false) }
@@ -125,10 +141,63 @@ fun LandscapeCard(
     // lands in a single frame, because these requests do not crossfade.
     val showTitle = !showLogo || !logoPainted
 
+    // Spotlight's card preview (spec 2026-11-12, F6a2).
+    //
+    // This was the LIVE cause of "no cards expand with 2s set": with Landscape
+    // Posters (or Home Landscape Cards) on, every Home rail draws THIS card
+    // instead of PosterCard - and until it reported, no card on Home could set a
+    // snapshot, so the dwell never started on any rail at all. It now reports
+    // exactly as PosterCard does, and hands over its backdrop as the panel's
+    // still, because that is the art it actually draws.
+    //
+    // Null on Modern and on every surface that is not a Home rail: the card then
+    // reports nothing and behaves exactly as it always has.
+    val spotlightFocus = com.kennyb1201.kbstream.ui.home.LocalSpotlightCardFocus.current
+    var spotlightFocused by remember { mutableStateOf(false) }
+    var spotlightBounds by remember {
+        mutableStateOf(androidx.compose.ui.geometry.Rect.Zero)
+    }
+    // The card's own node, so the panel's pills can send UP back to it.
+    val spotlightCardRequester = remember { androidx.compose.ui.focus.FocusRequester() }
+    val spotlightModifier =
+        if (spotlightFocus == null) {
+            Modifier
+        } else {
+            Modifier
+                .focusRequester(spotlightCardRequester)
+                .onGloballyPositioned { coordinates ->
+                    spotlightBounds = coordinates.boundsInRoot()
+                    if (spotlightFocused) spotlightFocus.updateBounds(spotlightBounds)
+                }
+                .onFocusChanged { state ->
+                    spotlightFocused = state.isFocused
+                    if (state.isFocused) spotlightFocus.cardRequester = spotlightCardRequester
+                    spotlightFocus.onCardFocus(state.isFocused) {
+                        com.kennyb1201.kbstream.ui.home.SpotlightCardSnapshot(
+                            title = contentDescription ?: fallbackTitle,
+                            id = spotlightId,
+                            type = spotlightType,
+                            stillUrl = backdropUrl,
+                            isWatched = isWatched,
+                            isPartiallyWatched = isPartiallyWatched,
+                            airDate = airDate,
+                            bounds = spotlightBounds
+                        )
+                    }
+                }
+                // DOWN enters the panel's pills while it is up, before the rail
+                // below can take the press.
+                .onPreviewKeyEvent { event ->
+                    event.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
+                        event.key == androidx.compose.ui.input.key.Key.DirectionDown &&
+                        spotlightFocus.onDownFromCard()
+                }
+        }
+
     KBCard(
         onClick = onClick,
         onLongClick = onLongClick,
-        modifier = modifier.onFocusChanged { focused = it.hasFocus },
+        modifier = modifier.then(spotlightModifier).onFocusChanged { focused = it.hasFocus },
         shape = posterEdgeShape()
     ) {
         BoxWithConstraints(

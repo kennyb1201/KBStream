@@ -222,6 +222,34 @@ class SpotlightScrollHeroContractTest {
         )
     }
 
+    @Test
+    fun `the landscape card reports too - with it on, no rail could expand`() {
+        // F6(a2), the LIVE cause of the 240 field report: with Landscape Posters
+        // (or Home Landscape Cards) on, every Home rail draws LandscapeCard
+        // instead of PosterCard - and that card reported nothing, so no card on
+        // Home could set a snapshot and the dwell never started on any rail.
+        val landscape = flat(source(LANDSCAPE_CARD))
+        assertTrue(
+            "the landscape card reads the Spotlight tracker",
+            landscape.contains("LocalSpotlightCardFocus.current")
+        )
+        assertTrue(
+            "reports its focus, its bounds and its own node",
+            landscape.contains("onCardFocus(state.isFocused)") &&
+                landscape.contains("spotlightFocus.updateBounds(spotlightBounds)") &&
+                landscape.contains("spotlightFocus.cardRequester = spotlightCardRequester")
+        )
+        assertTrue(
+            "and hands the panel the art it actually draws - its backdrop",
+            landscape.contains("stillUrl = backdropUrl")
+        )
+        assertTrue(
+            "the rail passes the card's own identity with it",
+            home().contains("spotlightId = meta.id") &&
+                home().contains("spotlightType = meta.type")
+        )
+    }
+
     // ── (g) the dwell watches the card, not the snapshot object ────────────
 
     @Test
@@ -309,6 +337,7 @@ class SpotlightScrollHeroContractTest {
         const val SECTION = "com/kennyb1201/kbstream/ui/home/SpotlightHome.kt"
         const val PREVIEW = "com/kennyb1201/kbstream/ui/home/SpotlightPreview.kt"
         const val POSTER_CARD = "com/kennyb1201/kbstream/ui/components/PosterCard.kt"
+        const val LANDSCAPE_CARD = "com/kennyb1201/kbstream/ui/components/LandscapeCard.kt"
         const val MOBILE = "com/kennyb1201/kbstream/ui/mobile/HomeScreenMobile.kt"
         const val MAIN = "com/kennyb1201/kbstream/MainActivity.kt"
     }

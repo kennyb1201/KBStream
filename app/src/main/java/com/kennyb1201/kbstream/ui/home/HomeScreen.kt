@@ -3543,6 +3543,11 @@ private fun LibraryListHomeRail(
                                 onBackdropError = { carriedArtFailed = true },
                                 fallbackTitle = meta.name,
                                 contentDescription = meta.name,
+                                // The card's Detail identity, so the panel's
+                                // pills act on it (F6a2 + audit A4).
+                                spotlightId = meta.id,
+                                spotlightType = meta.type,
+                                airDate = meta.releaseInfo,
                                 isWatched = isWatched(meta),
                                 isPartiallyWatched = isPartiallyWatched(meta),
                                 onClick = { onOpen(meta) },
@@ -3715,6 +3720,9 @@ private fun BuiltinTopPicksRail(
                                 logoUrl = blendedArt?.second,
                                 fallbackTitle = meta.name,
                                 contentDescription = meta.name,
+                                spotlightId = meta.id,
+                                spotlightType = meta.type,
+                                airDate = meta.releaseInfo,
                                 isWatched = isWatched(meta),
                                 isPartiallyWatched = isPartiallyWatched(meta),
                                 onClick = { onOpen(meta) },
@@ -7240,6 +7248,11 @@ fun HomeScreen(
                                                             logoUrl = art?.second,
                                                             fallbackTitle = meta.name,
                                                             contentDescription = meta.name,
+                                                            // The panel's pills act on the
+                                                            // card's own identity (F6a2).
+                                                            spotlightId = meta.id,
+                                                            spotlightType = meta.type,
+                                                            airDate = meta.releaseInfo,
                                                             isWatched = watched,
                                                             isPartiallyWatched = watchedPartially,
                                                             // A pinned "Top ... Today" row
