@@ -267,9 +267,12 @@ class SpotlightScrollHeroContractTest {
                 between(p, "fun updateBounds(bounds: Rect)", "fun onCardFocus")
                     .let { body -> !body.contains("focusToken") }
         )
+        // Repointed by the 2026-11-12 dwell spec: the key is the card's
+        // IDENTITY (debounced), not the focus token - a re-entrant focus on the
+        // card already held bumped the token and restarted the two seconds.
         assertTrue(
-            "the host's effect is keyed on the token and the presence of a card",
-            section().contains("LaunchedEffect(tracker.focusToken, hasSnapshot, expandDelayMs, menuOpen)")
+            "the host's effect is keyed on the held card, not on the live snapshot",
+            section().contains("LaunchedEffect(heldCard, expandDelayMs, menuOpen)")
         )
         assertFalse(
             "and not on the snapshot object, which is what restarted it",
