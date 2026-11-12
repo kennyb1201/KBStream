@@ -278,7 +278,7 @@ object AppPreferences {
      * Why per key, and why the profile guard - the field bug this replaces
      * (spec 2026-11-12, render-path B1): this used to be ONE one-shot seed that
      * copied all six out of `prefs(context)` and then set a flag. `prefs()` is
-     * the ACTIVE PROFILE's file, and `ProfileManager.activeProfileId` is null
+     * the ACTIVE PROFILE's file, and `ProfileStorage.activeProfileId` is null
      * until the stored profiles are restored - during which `prefs()` silently
      * resolves to the LEGACY global file, which holds none of the six. A read in
      * that window, from any surface, copied NOTHING and marked the box seeded
@@ -299,7 +299,7 @@ object AppPreferences {
         // No active profile: the profile store is the legacy global file, so
         // there is nothing to inherit and nothing to decide.
         val profileId = runCatching {
-            com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfileId(context)
+            com.kennyb1201.kbstream.data.sync.ProfileStorage.activeProfileId(context)
         }.getOrNull()
         if (profileId.isNullOrBlank()) return null
         val inherited = runCatching { prefs(context).all[key] }.getOrNull()

@@ -140,7 +140,7 @@ class LayoutBillboardSyncContractTest {
                 "global file and holds none of the six, so seeding from it would decide the " +
                 "box's layout from an empty store (spec 2026-11-12, render-path B1)",
             prefs.contains("if (profileId.isNullOrBlank()) return null") &&
-                prefs.contains("ProfileManager.activeProfileId(context)")
+                prefs.contains("ProfileStorage.activeProfileId(context)")
         )
     }
 

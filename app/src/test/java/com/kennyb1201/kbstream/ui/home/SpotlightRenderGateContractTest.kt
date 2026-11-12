@@ -53,7 +53,7 @@ class SpotlightRenderGateContractTest {
         assertTrue(
             "and the migration refuses to run, or mark, before a profile exists: " +
                 "prefs() is the legacy global file until then and holds none of the six",
-            prefs.contains("ProfileManager.activeProfileId(context)") &&
+            prefs.contains("ProfileStorage.activeProfileId(context)") &&
                 prefs.contains("if (profileId.isNullOrBlank()) return null")
         )
         assertTrue(
