@@ -130,8 +130,11 @@ class SpotlightScrollHeroContractTest {
         )
         assertTrue(
             "and the billboard still draws nothing until a page has settled - the " +
-                "box, not the component, is what reserves the space",
-            section().contains("if (!billboardEnabled || pages.none { page -> page.settled }) return")
+                "box, not the component, is what reserves the space. (The gate now " +
+                "reports which condition returned, spec 2026-11-12 follow-up F1; the " +
+                "early return itself is unchanged.)",
+            section().contains("if (!billboardEnabled || pages.none { page -> page.settled }) {") &&
+                section().contains("SpotlightDiagTrace.billboardRenderHero(")
         )
         assertTrue(
             "one height for the item, the placeholder and the billboard",
@@ -176,16 +179,22 @@ class SpotlightScrollHeroContractTest {
         val h = home()
         val spec = between(h, "val railRowsBringIntoViewSpec", "val railCardsBringIntoViewSpec")
         assertTrue("the spec exists", spec.isNotEmpty())
+        // Repointed by the 2026-11-12 render follow-up (B5): the floor was
+        // read from the hero's laid-out item, and on the first landing that item
+        // can be missing from visibleItemsInfo - the `?: 0f` then handed the
+        // landing to the header floor and scrolled the whole hero off the top.
+        // The floor is the hero's own height now, whenever the list is at its
+        // start - which includes the fresh-entry case the old gate described,
+        // and also a landing after a restore that left the list at the top.
         assertTrue(
-            "it reads the hero item's bottom edge from the live list",
-            spec.contains("item.key == SPOTLIGHT_HERO_ITEM_KEY") &&
-                spec.contains("item.offset + item.size")
+            "the hero's own height is the floor while the list is at its start",
+            spec.contains("spotlightHeroItemHeight.toPx()") &&
+                spec.contains("!railListState.canScrollBackward")
         )
         assertTrue(
-            "on entry only: a fresh entry nobody has pressed in, at the list's start",
-            spec.contains("isFreshEntry") &&
-                spec.contains("!viewerMovedFocusSinceEntry") &&
-                spec.contains("!railListState.canScrollBackward")
+            "and it is not read from a laid-out item that may not exist yet",
+            !spec.contains("item.offset + item.size") &&
+                !spec.contains("firstOrNull { item -> item.key == SPOTLIGHT_HERO_ITEM_KEY }")
         )
         assertTrue(
             "and the hero's bottom is a FLOOR, not a replacement for the header floor",

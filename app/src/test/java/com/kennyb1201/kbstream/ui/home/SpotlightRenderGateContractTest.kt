@@ -90,7 +90,7 @@ class SpotlightRenderGateContractTest {
             "the section's gate is current state: pages are collected, not remembered",
             section.contains("val pages by viewModel.billboardPages.collectAsStateWithLifecycle()") &&
                 section.contains(
-                    "if (!billboardEnabled || pages.none { page -> page.settled }) return"
+                    "if (!billboardEnabled || pages.none { page -> page.settled }) {"
                 )
         )
         assertTrue(
@@ -113,8 +113,12 @@ class SpotlightRenderGateContractTest {
                 home.contains("spotlightActive = spotlightActive")
         )
         assertTrue(
+            // The render line sits between them since the 2026-11-12 follow-up
+            // (it is the same question one step further along: what did the
+            // render do with this gate's answer), and the gate is still FIRST.
             "and the trace carries them as the first billboard line",
-            source(TRACE).contains("private val BILLBOARD_ORDER = listOf(\"gate\", \"feed\"")
+            source(TRACE).contains("listOf(\"gate\", \"render\", \"feed\", \"pages\"") ||
+                source(TRACE).contains("listOf(\"gate\", \"render\", \"feed\"")
         )
     }
 

@@ -103,6 +103,7 @@ import com.kennyb1201.kbstream.data.library.libraryRailTypeSuffix
 import com.kennyb1201.kbstream.data.library.key
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.reporting.CwFilterTrace
+import com.kennyb1201.kbstream.data.reporting.SpotlightDiagTrace
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
@@ -168,6 +169,8 @@ import com.kennyb1201.kbstream.ui.home.BILLBOARD_MAX_PAGES
 import com.kennyb1201.kbstream.ui.home.BILLBOARD_SEGMENT_TRACK_DP
 import com.kennyb1201.kbstream.ui.home.BillboardPage
 import com.kennyb1201.kbstream.ui.home.BillboardPlaySelection
+import com.kennyb1201.kbstream.ui.home.billboardHeroArt
+import com.kennyb1201.kbstream.ui.home.billboardPageArt
 import com.kennyb1201.kbstream.ui.home.BillboardSweep
 import com.kennyb1201.kbstream.ui.home.HeroInlineTrailerPlayer
 import com.kennyb1201.kbstream.ui.home.HeroTrailerPlayback
@@ -2185,6 +2188,29 @@ internal fun MobileBillboard(
     )
     val currentPage = pages.getOrNull(pagerState.currentPage)
 
+    // What the render actually has in front of it (spec 2026-11-12, follow-up
+    // F1): the page the pager is on, whether that page has art of its own, and
+    // the settled tally. Written in a SideEffect so it never writes into a
+    // composition - and it is the half of the render line the Home's list half
+    // cannot see.
+    SideEffect {
+        val page = currentPage
+        SpotlightDiagTrace.billboardRenderHero(
+            composed = true,
+            gate = null,
+            pageKey = page?.key,
+            art = when {
+                page == null -> "no-page"
+                !page.backdropUrl.isNullOrBlank() -> "backdrop"
+                billboardPageArt(page) != null -> "own-art"
+                billboardHeroArt(pages, pagerState.currentPage) != null -> "borrowed"
+                else -> "none"
+            },
+            settled = pages.count { it.settled },
+            total = pages.size
+        )
+    }
+
     // "Remove animations" (system animator duration scale 0): the house helper,
     // the same one the touch cards use. It turns OFF the sweep and the entrance
     // and leaves the progress bar showing position without motion - the
@@ -2763,7 +2789,10 @@ internal fun MobileBillboard(
                 val sweep = remember(index, cycleMs) { billboardSweep(index, cycleMs) }
                 MobileHero(
                     meta = page.meta,
-                    backdropUrl = page.backdropUrl,
+                    // The page's own art, or - when it settled with none at all -
+                    // the next settled page's, so the hero is never a black
+                    // frame (spec 2026-11-12, B4).
+                    backdropUrl = billboardHeroArt(pages, index),
                     logoUrl = page.logoUrl,
                     // Animations off is a STILL backdrop, not a slower one.
                     backdropSweep = sweep.takeUnless { reducedMotion },

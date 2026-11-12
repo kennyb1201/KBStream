@@ -138,7 +138,20 @@ internal fun SpotlightHeroSection(
         }
     }
 
-    if (!billboardEnabled || pages.none { page -> page.settled }) return
+    if (!billboardEnabled || pages.none { page -> page.settled }) {
+        // Which gate returned (spec 2026-11-12, follow-up F1): without this a
+        // hero that is not composed and a hero that composed blank read
+        // identically in the paste.
+        SpotlightDiagTrace.billboardRenderHero(
+            composed = false,
+            gate = if (!billboardEnabled) "!billboardEnabled" else "!settled",
+            pageKey = null,
+            art = null,
+            settled = pages.count { page -> page.settled },
+            total = pages.size
+        )
+        return
+    }
 
     // The billboard's pills are the only focus targets above the rails, so the
     // Play pill takes focus when Spotlight opens - something has to hold it for

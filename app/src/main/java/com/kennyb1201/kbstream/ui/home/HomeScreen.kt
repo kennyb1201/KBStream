@@ -5946,16 +5946,16 @@ fun HomeScreen(
                 // Once the viewer has moved (or the list is scrolled at all), the
                 // inset is the panel's top - the fixed header floor this spec
                 // always used. Read live: one spec serves both moments.
-                val heroFloorPx = if (
-                    spotlightActive &&
-                    isFreshEntry &&
-                    !viewerMovedFocusSinceEntry &&
-                    !railListState.canScrollBackward
-                ) {
-                    railListState.layoutInfo.visibleItemsInfo
-                        .firstOrNull { item -> item.key == SPOTLIGHT_HERO_ITEM_KEY }
-                        ?.let { item -> (item.offset + item.size).toFloat() }
-                        ?: 0f
+                // While the list is AT ITS START the hero is on screen, so the
+                // focused rail belongs under it - whatever moved focus there.
+                // Measured from the hero's own height, not from its laid-out
+                // item: on the first landing that item can be missing from
+                // visibleItemsInfo (nothing laid out yet), and the old `?: 0f`
+                // then handed the landing to the fixed header floor, which
+                // scrolled the whole 52% hero off the top - deterministically,
+                // on a slow first frame (spec 2026-11-12, follow-up B5).
+                val heroFloorPx = if (spotlightActive && !railListState.canScrollBackward) {
+                    with(density) { spotlightHeroItemHeight.toPx() }
                 } else {
                     0f
                 }
@@ -6628,6 +6628,35 @@ fun HomeScreen(
                 // inset — without it the tail rows stop short and leave a
                 // sliver of the rows above them peeking under the hero.
                 val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+                // THE RENDER LINE's list half (spec 2026-11-12, follow-up F1):
+                // is the hero ITEM emitted and laid out, how tall did it measure,
+                // and where does the list rest. Read after layout, so the numbers
+                // are the ones on screen - and it is written even when the hero
+                // is scrolled out (heroVisible=false with a non-zero item count),
+                // which is the difference between "not in the list" and "scrolled
+                // away" that the paste could not previously tell apart.
+                if (spotlightActive) {
+                    SideEffect {
+                        val info = railListState.layoutInfo
+                        val hero = info.visibleItemsInfo
+                            .firstOrNull { item -> item.key == SPOTLIGHT_HERO_ITEM_KEY }
+                        SpotlightDiagTrace.billboardRenderList(
+                            heroVisible = hero != null,
+                            heroIndex = hero?.index,
+                            // px -> dp by hand: the paste wants the number a
+                            // viewer can check against the screen, not a px
+                            // count that depends on the box's density.
+                            heroHeightDp = hero?.let {
+                                (it.size.height / density.density).toInt()
+                            },
+                            viewportHeightDp =
+                                (info.viewportSize.height / density.density).toInt(),
+                            firstIndex = info.firstVisibleItemIndex,
+                            firstOffset = info.firstVisibleItemScrollOffset,
+                            itemCount = info.totalItemsCount
+                        )
+                    }
+                }
                 LazyColumn(
                     state = railListState,
                     // Hold-Up from ANY rail reveals the top bar (see

@@ -59,6 +59,69 @@ class SpotlightDiagContractTest {
         )
     }
 
+    // ── F1 (follow-up spec): the render line ─────────────────────────────
+
+    @Test
+    fun `the render line separates not-in-the-list from scrolled-away from blank`() {
+        // B2/B5: the item is in the list but the viewport does not show it.
+        SpotlightDiagTrace.billboardRenderList(
+            heroVisible = false,
+            heroIndex = null,
+            heroHeightDp = null,
+            viewportHeightDp = 720,
+            firstIndex = 3,
+            firstOffset = 120,
+            itemCount = 21
+        )
+        SpotlightDiagTrace.billboardRenderHero(
+            composed = true,
+            gate = null,
+            pageKey = "series:tt1",
+            art = "borrowed",
+            settled = 20,
+            total = 20
+        )
+        val line = SpotlightDiagTrace.summaries().first { it.contains("render ") }
+        assertTrue("the list half: $line", line.contains("list=hero-not-visible"))
+        assertTrue("where the list rests: $line", line.contains("first=#3+120px items=21"))
+        assertTrue("the section half: $line", line.contains("section=composed page=series:tt1"))
+        assertTrue("what art it has: $line", line.contains("art=borrowed settled=20/20"))
+
+        // B5: present and laid out, with a measured height against the viewport.
+        SpotlightDiagTrace.billboardRenderList(
+            heroVisible = true,
+            heroIndex = 0,
+            heroHeightDp = 374,
+            viewportHeightDp = 720,
+            firstIndex = 0,
+            firstOffset = 0,
+            itemCount = 21
+        )
+        val shown = SpotlightDiagTrace.summaries().first { it.contains("render ") }
+        assertTrue(shown, shown.contains("list=hero#0 374dp/720dp"))
+
+        // B2: the section never composed, and which gate returned.
+        SpotlightDiagTrace.billboardRenderHero(
+            composed = false,
+            gate = "!settled",
+            pageKey = null,
+            art = null,
+            settled = 0,
+            total = 20
+        )
+        val gated = SpotlightDiagTrace.summaries().first { it.contains("render ") }
+        assertTrue(gated, gated.contains("section=gated (!settled)"))
+    }
+
+    @Test
+    fun `the render line sits right after the gate and before the pool`() {
+        SpotlightDiagTrace.billboardGate(enabled = true, layout = "spotlight", spotlightActive = true)
+        SpotlightDiagTrace.billboardRenderList(true, 0, 374, 720, 0, 0, 21)
+        SpotlightDiagTrace.billboardFeed(listOf("trending_day"), trendingDaySize = 20, merged = 20)
+        val kinds = SpotlightDiagTrace.summaries().map { it.removePrefix("billboard: ").substringBefore(" ") }
+        assertEquals(listOf("gate", "render", "feed"), kinds)
+    }
+
     // ── S1: empty feed vs never settled ──────────────────────────────────
 
     @Test
@@ -230,7 +293,7 @@ class SpotlightDiagContractTest {
         )
         assertTrue(
             "the summary kinds are fixed, so two pastes read alike",
-            SpotlightDiagTrace.summaries().size <= 8
+            SpotlightDiagTrace.summaries().size <= 9
         )
     }
 

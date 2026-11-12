@@ -50,7 +50,8 @@ internal object SpotlightDiagTrace {
     private const val SPOTLIGHT = "spotlight: "
 
     /** Summary slots in print order, so two pastes of one state read alike. */
-    private val BILLBOARD_ORDER = listOf("gate", "feed", "pages", "resolve", "clear")
+    private val BILLBOARD_ORDER =
+        listOf("gate", "render", "feed", "pages", "resolve", "clear")
     private val SPOTLIGHT_ORDER = listOf("tracker", "dwell", "panel")
 
     private val lock = Any()
@@ -120,6 +121,103 @@ internal object SpotlightDiagTrace {
             "gate billboardEnabled=${yesNo(enabled)} layout=$layout " +
                 "spotlightActive=${yesNo(spotlightActive)}"
         )
+    }
+
+    // ── The render line's own fields (spec 2026-11-12, follow-up F1) ─────
+    // Written from two places that cannot see each other: the Home's list (is
+    // the item there, how tall did it measure, where does the list rest) and the
+    // billboard's pager (is the section past its gate, which page is in front,
+    // does that page have art). One line, because the paste has to answer "why
+    // is there no hero" from ONE reading.
+    private var renderHeroVisible: Boolean? = null
+    private var renderHeroIndex: Int? = null
+    private var renderHeroHeightDp: Int? = null
+    private var renderViewportDp: Int? = null
+    private var renderFirstIndex = 0
+    private var renderFirstOffset = 0
+    private var renderItemCount = 0
+    private var renderComposed: Boolean? = null
+    private var renderGate: String? = null
+    private var renderPage: String? = null
+    private var renderArt: String? = null
+    private var renderSettled = 0
+    private var renderPages = 0
+
+    /**
+     * The hero item in the rails list, measured.
+     *
+     * [heroVisible] false with [renderItemCount] above zero is branch B2/B5 -
+     * the item is emitted but not in the viewport, which is a scroll, not a
+     * list. [heroHeightDp] 0 next to a non-zero viewport is B5's zero height.
+     */
+    fun billboardRenderList(
+        heroVisible: Boolean,
+        heroIndex: Int?,
+        heroHeightDp: Int?,
+        viewportHeightDp: Int,
+        firstIndex: Int,
+        firstOffset: Int,
+        itemCount: Int
+    ) {
+        synchronized(lock) {
+            renderHeroVisible = heroVisible
+            renderHeroIndex = heroIndex
+            renderHeroHeightDp = heroHeightDp
+            renderViewportDp = viewportHeightDp
+            renderFirstIndex = firstIndex
+            renderFirstOffset = firstOffset
+            renderItemCount = itemCount
+        }
+        putBillboard("render", renderLine())
+    }
+
+    /**
+     * The section and the page it is showing.
+     *
+     * [composed] false means the hero's own gate returned and names it; true
+     * with [art] null means the section drew a page with no art at all - B4.
+     */
+    fun billboardRenderHero(
+        composed: Boolean,
+        gate: String?,
+        pageKey: String?,
+        art: String?,
+        settled: Int,
+        total: Int
+    ) {
+        synchronized(lock) {
+            renderComposed = composed
+            renderGate = gate
+            renderPage = pageKey
+            renderArt = art
+            renderSettled = settled
+            renderPages = total
+        }
+        putBillboard("render", renderLine())
+    }
+
+    /** One line: the list's half, then the hero's half, in a fixed order. */
+    private fun renderLine(): String {
+        val hero = when {
+            renderHeroVisible == true -> {
+                val at = renderHeroIndex?.let { "#$it" } ?: "#?"
+                val height = renderHeroHeightDp?.let { "${it}dp" } ?: "?dp"
+                val viewport = renderViewportDp?.let { "${it}dp" } ?: "?dp"
+                "list=hero$at ${height}/$viewport"
+            }
+            renderHeroVisible == false -> "list=hero-not-visible"
+            else -> "list=not-reported"
+        }
+        val rest = "first=#${renderFirstIndex}+${renderFirstOffset}px items=${renderItemCount}"
+        val section = when {
+            renderComposed == true ->
+                "section=composed page=${renderPage ?: "(none)"} " +
+                    "art=${renderArt ?: "none"} settled=${renderSettled}/${renderPages}"
+            renderComposed == false ->
+                "section=gated (${renderGate ?: "?"}) settled=${renderSettled}/${renderPages}"
+            else -> "section=not-reported"
+        }
+        return "render $hero $rest $section"
     }
 
     /** The feed the screen asked for, and what it merged from (F2, F4). */
@@ -333,6 +431,19 @@ internal object SpotlightDiagTrace {
             dwellDelayMs = 0L
             dwellMenuOpen = false
             dwellClaimEntryFocus = false
+            renderHeroVisible = null
+            renderHeroIndex = null
+            renderHeroHeightDp = null
+            renderViewportDp = null
+            renderFirstIndex = 0
+            renderFirstOffset = 0
+            renderItemCount = 0
+            renderComposed = null
+            renderGate = null
+            renderPage = null
+            renderArt = null
+            renderSettled = 0
+            renderPages = 0
             dwellToken = 0
             dwellCard = null
             dwellCancel = null

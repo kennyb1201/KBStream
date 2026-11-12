@@ -405,6 +405,44 @@ internal data class BillboardSweep(
  * itself, so the move lands exactly as the page would advance; [cycleMs] of 0
  * ("Manual only") has no dwell, and uses [BILLBOARD_KEN_BURNS_MANUAL_MS].
  */
+/**
+ * The art URL a page can actually draw, in the order the hero tries them.
+ *
+ * A page can be SETTLED with no art at all: the resolve publishes the page when
+ * its detail lands, and a title TMDB has neither backdrop nor poster for (or a
+ * rail item with an empty poster field) settles into a page the hero can only
+ * draw black. `null` here is that page.
+ */
+internal fun billboardPageArt(page: BillboardPage): String? =
+    listOf(page.backdropUrl, page.meta.background, page.meta.poster)
+        .firstOrNull { url -> !url.isNullOrBlank() }
+
+/**
+ * The art a page draws, waiting for its own to exist (spec 2026-11-12, B4).
+ *
+ * A hero that renders a black frame is worse than a hero showing the next
+ * title's backdrop while its own art is missing: the viewer sees a billboard
+ * either way, and the missing art is a fact the paste now reports, not
+ * something the screen has to punish them for. [billboardPageArt] stays the
+ * authority on whether the page HAS its own art; this only decides what to
+ * draw when it does not.
+ */
+internal fun billboardHeroArt(pages: List<BillboardPage>, index: Int): String? {
+    val page = pages.getOrNull(index) ?: return null
+    // Its own art wins, exactly as the hero has always drawn it - the fallback
+    // must never replace a page's poster with another title's backdrop.
+    if (billboardPageArt(page) != null) return page.backdropUrl
+    if (pages.isEmpty()) return null
+    // The NEXT settled page with art, wrapping once: neighbours first, because
+    // they are what a swipe would show anyway.
+    for (step in 1 until pages.size) {
+        val next = pages[(index + step) % pages.size]
+        if (!next.settled) continue
+        billboardPageArt(next)?.let { return it }
+    }
+    return null
+}
+
 internal fun billboardSweep(index: Int, cycleMs: Long): BillboardSweep {
     val durationMs = if (cycleMs > 0L) cycleMs else BILLBOARD_KEN_BURNS_MANUAL_MS
     return if (index % 2 == 0) {

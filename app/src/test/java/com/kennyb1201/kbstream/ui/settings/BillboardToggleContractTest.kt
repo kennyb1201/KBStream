@@ -72,7 +72,7 @@ class BillboardToggleContractTest {
         )
         assertTrue(
             "and the gate renders nothing while it is off - no hero, no spacer",
-            spotlight.contains("if (!billboardEnabled || pages.none { page -> page.settled }) return")
+            spotlight.contains("if (!billboardEnabled || pages.none { page -> page.settled }) {")
         )
     }
 
