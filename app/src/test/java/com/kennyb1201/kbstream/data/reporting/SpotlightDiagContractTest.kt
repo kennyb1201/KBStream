@@ -80,7 +80,8 @@ class SpotlightDiagContractTest {
 
     @Test
     fun `the spotlight summary still names the held card after it blurred`() {
-        SpotlightDiagTrace.spotlightDwell(expandDelayMs = 2_000, menuOpen = false, claimEntryFocus = true)
+        SpotlightDiagTrace.spotlightDwell(expandDelayMs = 2_000L, menuOpen = false)
+        SpotlightDiagTrace.spotlightClaimGate(claimEntryFocus = true)
         SpotlightDiagTrace.spotlightFocused(token = 7, key = "movie:550", title = "Fight Club")
         SpotlightDiagTrace.spotlightClaim(false)
         SpotlightDiagTrace.spotlightBlurred()
@@ -99,6 +100,15 @@ class SpotlightDiagContractTest {
         assertTrue("the menu state: $dwell", dwell.contains("menuOpen=no"))
         assertTrue("the entry claim flag: $dwell", dwell.contains("claimEntryFocus=yes"))
         assertTrue("and the claim's outcome: $dwell", dwell.contains("lastClaim=not-taken"))
+    }
+
+    @Test
+    fun `the claim latch is one line, not a second one`() {
+        SpotlightDiagTrace.spotlightDwell(expandDelayMs = 2_000L, menuOpen = false)
+        SpotlightDiagTrace.spotlightClaimGate(false)
+        val dwell = SpotlightDiagTrace.summaries().filter { it.contains("dwell ") }
+        assertEquals("the latch updates the dwell line in place", 1, dwell.size)
+        assertTrue(dwell.first(), dwell.first().contains("claimEntryFocus=no"))
     }
 
     @Test
@@ -204,6 +214,11 @@ class SpotlightDiagContractTest {
 
         val host = source("com/kennyb1201/kbstream/ui/home/SpotlightHome.kt")
         assertTrue(host.contains("SpotlightDiagTrace.spotlightDwell("))
+        assertTrue(
+            "the claim latch is written where the latch lives, and folded into the " +
+                "dwell line rather than a second one",
+            host.contains("SpotlightDiagTrace.spotlightClaimGate(claimEntryFocus)")
+        )
         assertTrue(host.contains("SpotlightDiagTrace.spotlightClaim(taken)"))
         assertTrue(host.contains("SpotlightDiagTrace.spotlightExpanded("))
         listOf("\"menuOpen\"", "\"!hasSnapshot\"", "\"!expands\"").forEach { guard ->

@@ -86,9 +86,12 @@ internal object SpotlightDiagTrace {
     private var lastClaim: Boolean? = null
 
     // The dwell effect's inputs, kept so a later claim can re-emit the line.
-    private var dwellDelayMs = 0
+    private var dwellDelayMs = 0L
     private var dwellMenuOpen = false
     private var dwellClaimEntryFocus = false
+
+    /** True once the dwell effect has spoken, so a claim cannot print delay=0. */
+    private var dwellSeen = false
 
     // ── Billboard ─────────────────────────────────────────────────────────
 
@@ -183,13 +186,28 @@ internal object SpotlightDiagTrace {
     }
 
     /** The dwell effect's inputs on its last run, live values (F3). */
-    fun spotlightDwell(expandDelayMs: Int, menuOpen: Boolean, claimEntryFocus: Boolean) {
+    fun spotlightDwell(expandDelayMs: Long, menuOpen: Boolean) {
         synchronized(lock) {
             dwellDelayMs = expandDelayMs
             dwellMenuOpen = menuOpen
-            dwellClaimEntryFocus = claimEntryFocus
+            dwellSeen = true
         }
         putSpotlight("dwell", dwellLine())
+    }
+
+    /**
+     * Whether this composition may claim the entry focus (F3).
+     *
+     * Written from a different scope than the dwell effect - the hero's own
+     * claim effect - because that is where the latch lives, so it updates the
+     * dwell line rather than inventing a second one.
+     */
+    fun spotlightClaimGate(claimEntryFocus: Boolean) {
+        val emit = synchronized(lock) {
+            dwellClaimEntryFocus = claimEntryFocus
+            dwellSeen
+        }
+        if (emit) putSpotlight("dwell", dwellLine())
     }
 
     /**
@@ -247,9 +265,10 @@ internal object SpotlightDiagTrace {
             lastTitle = null
             lastExpanded = false
             lastClaim = null
-            dwellDelayMs = 0
+            dwellDelayMs = 0L
             dwellMenuOpen = false
             dwellClaimEntryFocus = false
+            dwellSeen = false
         }
     }
 

@@ -149,6 +149,9 @@ internal fun SpotlightHeroSection(
     // would yank focus off whichever card they were on (and, on a return from
     // Detail, race the restore that already owns the landing).
     LaunchedEffect(pages.isNotEmpty(), claimEntryFocus) {
+        // The latch itself, which is what keeps the entry focus live across
+        // re-deals when a claim failed (F3).
+        SpotlightDiagTrace.spotlightClaimGate(claimEntryFocus)
         if (!claimEntryFocus || pages.isEmpty()) return@LaunchedEffect
         // One frame, so the pill has a node to take focus.
         withFrameNanos { }
@@ -244,7 +247,7 @@ internal fun SpotlightPreviewHost(
     LaunchedEffect(tracker.focusToken, hasSnapshot, expandDelayMs, menuOpen) {
         // The three inputs are the dwell's whole fate on a card that never
         // expands; the paste needs their live values, not a guess (F3).
-        SpotlightDiagTrace.spotlightDwell(expandDelayMs, menuOpen, claimEntryFocus)
+        SpotlightDiagTrace.spotlightDwell(expandDelayMs, menuOpen)
         // The menu is the viewer's explicit request, so it wins: no panel opens
         // over it, and one already up collapses when it appears.
         if (!hasSnapshot || menuOpen || !HomeExpandDelay.expands(expandDelayMs)) {
