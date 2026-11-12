@@ -4920,14 +4920,21 @@ fun HomeScreen(
     // Spotlight-only; Modern pays nothing (the tracker is never provided).
     val spotlightTracker = remember { SpotlightCardFocus() }
     var spotlightCardExpanded by remember { mutableStateOf(false) }
-    val spotlightTrailerPrefMode = remember(activeProfileId, syncRevision) {
+    // The billboard's mode is DEVICE-LOCAL (see EXCLUDED_PREF_KEYS), so it is
+    // read with the profile only: keying it on the sync revision would let the
+    // other TV's answer move this one's.
+    val spotlightTrailerPrefMode = remember(activeProfileId) {
         AppPreferences.getHomeBillboardTrailerMode(context)
     }
+    // These two ARE synced, so they follow the account's revision.
     val spotlightTrailerMuted = remember(activeProfileId, syncRevision) {
         AppPreferences.getHeroTrailerMuted(context)
     }
     val spotlightTrailerAutoplay = remember(activeProfileId, syncRevision) {
         AppPreferences.getHeroTrailerAutoplay(context)
+    }
+    val spotlightTrailerDelayMs = remember(activeProfileId, syncRevision) {
+        AppPreferences.getHeroTrailerDelayMs(context)
     }
     // Settings' "hide finished titles on Home rails". Read with the same two
     // keys as its neighbours: it is profile-scoped and synced, so a value
@@ -6451,6 +6458,9 @@ fun HomeScreen(
                     viewModel = viewModel,
                     rails = rails,
                     trailerMode = spotlightTrailerPrefMode,
+                    trailerDelayMs = spotlightTrailerDelayMs,
+                    trailerMuted = spotlightTrailerMuted,
+                    trailerAutoplay = spotlightTrailerAutoplay,
                     cardExpanded = spotlightCardExpanded,
                     onPlay = onItemClick,
                     onDetails = onItemClick

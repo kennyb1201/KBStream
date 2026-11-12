@@ -41,6 +41,17 @@ internal fun SpotlightHeroSection(
     viewModel: HomeViewModel,
     rails: List<Rail>,
     trailerMode: BillboardTrailerMode,
+    /**
+     * The hero-trailer delay, mute and autoplay, handed in from the Home.
+     *
+     * They are read there, where their SYNCED revision key lives (see
+     * PrefsPayloadApplier.revision): a bare remember here would keep the value
+     * the screen opened with, so a change made on another device would never
+     * reach this hero.
+     */
+    trailerDelayMs: Long,
+    trailerMuted: Boolean,
+    trailerAutoplay: Boolean,
     /** True while a card is expanded: the hero shows its still and nothing else. */
     cardExpanded: Boolean,
     onPlay: (MetaPreview) -> Unit,
@@ -48,15 +59,13 @@ internal fun SpotlightHeroSection(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    // Device-local billboard prefs, exactly as the phone reads them. Keyed on
-    // nothing: the TV's Settings is a different destination, so coming back to
-    // Home re-enters this composable and these reads run again.
+    // These three billboard prefs are DEVICE-LOCAL (EXCLUDED_PREF_KEYS), so they
+    // are remembered with no revision key - the other TV's answer must not move
+    // this one's. Coming back from Settings re-enters this composable, which is
+    // how a change made here is picked up.
     val billboardEnabled = remember { AppPreferences.getHomeBillboardEnabled(context) }
     val billboardFeeds = remember { AppPreferences.getHomeBillboardFeeds(context) }
     val billboardCycleMs = remember { AppPreferences.getHomeBillboardCycleMs(context) }
-    val trailerDelayMs = remember { AppPreferences.getHeroTrailerDelayMs(context) }
-    val trailerMuted = remember { AppPreferences.getHeroTrailerMuted(context) }
-    val trailerAutoplay = remember { AppPreferences.getHeroTrailerAutoplay(context) }
 
     // The feeds the TV can offer: the same keys the phone's picker stores, built
     // from this Home's own rails (see billboardFeedKey).

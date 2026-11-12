@@ -56,10 +56,6 @@ internal val TV_ONLY_SEARCH_KEYS: Set<String> = setOf(
     // The screensaver is Home's TV overlay: the phone screen draws neither its
     // toggle nor its timeout row, so the phone's results must not name it.
     "interface.tv-screensaver",
-    // Tunneled playback keeps A/V in sync over an HDMI link into an AVR, which
-    // a phone does not have - so the phone draws no row for it (the stored pref
-    // is left alone for the TV that shares the profile).
-    "video.tunneling",
     // The Spotlight layout is a TV Home: its rail cards expand from D-pad focus,
     // which a phone does not have, and its rows are drawn in this pane only. The
     // phone Home is unchanged and offers no layout choice at all.
@@ -67,7 +63,11 @@ internal val TV_ONLY_SEARCH_KEYS: Set<String> = setOf(
     "interface.card-expand-delay",
     "interface.billboard-catalogs",
     "interface.billboard-hold",
-    "interface.billboard-trailer"
+    "interface.billboard-trailer",
+    // Tunneled playback keeps A/V in sync over an HDMI link into an AVR, which
+    // a phone does not have - so the phone draws no row for it (the stored pref
+    // is left alone for the TV that shares the profile).
+    "video.tunneling"
 )
 
 /**

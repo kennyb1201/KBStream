@@ -100,7 +100,7 @@ class MobileBillboardContractTest {
     @Test
     fun `a fresh billboard composition opens on a random page`() {
         val hero = mobileHome()
-            .substringAfter("private fun MobileBillboard(")
+            .substringAfter("fun MobileBillboard(")
             .substringBefore("One billboard action, as a pill drawn ON the art")
         assertTrue(
             "the pool only changes once a day, so the start page is what makes two " +
@@ -165,10 +165,13 @@ class MobileBillboardContractTest {
 
     @Test
     fun `a picked app-built rail can actually reach the hero`() {
-        val home = mobileHome()
-        val feedKey = home.substring(
-            home.indexOf("private fun Rail.billboardFeedKey()"),
-            home.indexOf("private fun UpNextItem.billboardPreview()")
+        // The rule moved to BillboardRules so the TV Spotlight hero resolves the
+        // same chip keys; the phone's own copy now delegates to it, so the body
+        // this test pins lives there.
+        val rules = source("com/kennyb1201/kbstream/ui/home/BillboardRules.kt")
+        val feedKey = rules.substring(
+            rules.indexOf("fun billboardFeedKey(rail: Rail)"),
+            rules.indexOf("fun billboardChosenFeed(")
         )
 
         // Field 2026-11-05: picking "Top Kids Movies" (or either Top Today row)
@@ -180,18 +183,18 @@ class MobileBillboardContractTest {
             "the built-in key is the arrangement key, so it has to be consulted " +
                 "FIRST - an app-built rail has neither a custom id nor a base URL",
             feedKey.contains(
-                "KBHomeOrderPrefs.builtinKeyForCatalogId(catalogId)?.let { return it }"
+                "KBHomeOrderPrefs.builtinKeyForCatalogId(rail.catalogId)?.let { return it }"
             )
         )
         assertTrue(
             "and before the custom-catalog and add-on spellings, so a rail that " +
                 "has both keys by the built-in one the picker chips",
-            feedKey.indexOf("builtinKeyForCatalogId(catalogId)") in 0 until
+            feedKey.indexOf("builtinKeyForCatalogId(rail.catalogId)") in 0 until
                 feedKey.indexOf("customCatalogKey(customId)")
         )
         assertTrue(
             "an add-on catalog keeps its manifest key",
-            feedKey.contains("KBHomeOrderPrefs.addonKey(base, type, catalogId)")
+            feedKey.contains("KBHomeOrderPrefs.addonKey(base, rail.type, rail.catalogId)")
         )
     }
 
@@ -249,11 +252,11 @@ class MobileBillboardContractTest {
         val home = mobileHome()
         val hero = home.substring(
             home.indexOf("private fun MobileHero("),
-            home.indexOf("private fun MobileBillboard(")
+            home.indexOf("fun MobileBillboard(")
         )
         val action = home.substring(
             home.indexOf("private fun BillboardAction("),
-            home.indexOf("private fun Rail.billboardFeedKey()")
+            home.indexOf("private fun UpNextItem.billboardPreview()")
         )
 
         // The frame: 16dp off the screen's edge, clipped to 20dp, so the page's
@@ -332,7 +335,7 @@ class MobileBillboardContractTest {
         val home = mobileHome()
         val hero = home.substring(
             home.indexOf("private fun MobileHero("),
-            home.indexOf("private fun MobileBillboard(")
+            home.indexOf("fun MobileBillboard(")
         )
 
         // ONE condition, keyed on playback and not on the trailer mode: Auto and
@@ -419,8 +422,8 @@ class MobileBillboardContractTest {
         // The billboard must not build a streams target or resolve a source: it
         // carries no copy of Detail's autoplay/episode rules.
         val billboard = home.substring(
-            home.indexOf("private fun MobileBillboard("),
-            home.indexOf("private fun Rail.billboardFeedKey()")
+            home.indexOf("fun MobileBillboard("),
+            home.indexOf("private fun UpNextItem.billboardPreview()")
         )
         assertFalse(billboard.contains("StreamsTarget("))
         assertFalse(billboard.contains("awaitStreamRootId"))
@@ -626,8 +629,14 @@ class MobileBillboardContractTest {
         val all = homeViewModel()
         assertTrue(all.contains("_heroSettledKey.value = \"\$requestedId:\$requestedType\""))
 
-        // The television screen has no billboard at all.
-        assertFalse(source("com/kennyb1201/kbstream/ui/home/HomeScreen.kt").contains("illboard"))
+        // The television screen draws a billboard only as Spotlight's hero
+        // (spec 2026-11-11), and even there it borrows the COMPOSABLE and the
+        // shared view model's pages - never the phone Home's own billboard
+        // state, its start page or its pager.
+        val tv = source("com/kennyb1201/kbstream/ui/home/HomeScreen.kt")
+        assertFalse(tv.contains("billboardStartPage"))
+        assertFalse(tv.contains("billboardPages"))
+        assertFalse(tv.contains("BillboardPage("))
     }
 
     // ── prefs and settings ──────────────────────────────────────────────
