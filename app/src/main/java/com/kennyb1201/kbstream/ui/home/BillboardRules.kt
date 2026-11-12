@@ -62,6 +62,36 @@ internal fun billboardShouldWalkNextPage(pagesWalked: Int, poolSize: Int): Boole
     pagesWalked < BILLBOARD_TRENDING_MAX_WALK_PAGES && poolSize < BILLBOARD_MAX_PAGES
 
 /**
+ * The pool the billboard deals from once a ceiling has had its say.
+ *
+ * [filtered] is the chosen feed after the active profile's ceiling
+ * (`kidsFilterMetas` - the same rule Up Next and the catalog rails use), and
+ * [walkedDefault] is the ceiling-filtered, walked trending-day pool the feed
+ * falls back to. The rule is pure so the fallback is testable without a
+ * network, and it is deliberately conservative:
+ *
+ *  - a feed that survives the ceiling at FULL size ([BILLBOARD_MAX_PAGES]) is
+ *    the pool, untouched;
+ *  - a thinner feed keeps a longer default pool only when the default really is
+ *    longer. A strict kids ceiling can leave a rail three titles out of forty,
+ *    and three is a hero with almost nothing to swipe to - but a day where the
+ *    ceiling thinned both pools must still show the catalog the viewer picked,
+ *    so "no longer than what survived" keeps the feed.
+ *
+ * Adult profiles never reach here at all: with no ceiling the resolve hands the
+ * feed straight to the dealer.
+ */
+internal fun billboardKidsSafePool(
+    filtered: List<MetaPreview>,
+    walkedDefault: List<MetaPreview>
+): List<MetaPreview> =
+    if (filtered.size >= BILLBOARD_MAX_PAGES || walkedDefault.size <= filtered.size) {
+        filtered
+    } else {
+        walkedDefault
+    }
+
+/**
  * One billboard page's identity: the title's id AND its type.
  *
  * Not the id alone. TMDB numbers movies and shows in separate spaces, so

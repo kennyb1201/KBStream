@@ -22,6 +22,7 @@ import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.reporting.SpotlightDiagTrace
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
 import com.kennyb1201.kbstream.ui.mobile.MobileBillboard
@@ -129,7 +130,11 @@ internal fun SpotlightHeroSection(
 
     val pages by viewModel.billboardPages.collectAsStateWithLifecycle()
     LaunchedEffect(billboardEnabled, feed) {
-        if (billboardEnabled) viewModel.resolveBillboard(feed) else viewModel.clearBillboard()
+        if (billboardEnabled) {
+            viewModel.resolveBillboard(feed)
+        } else {
+            viewModel.clearBillboard("billboard disabled")
+        }
     }
 
     if (!billboardEnabled || pages.none { page -> page.settled }) return
@@ -148,6 +153,10 @@ internal fun SpotlightHeroSection(
         // One frame, so the pill has a node to take focus.
         withFrameNanos { }
         val taken = runCatching { firstPillFocus.requestFocus() }.getOrDefault(false)
+        // The gate-hole case, recorded because it looks identical on screen: a
+        // claim that failed leaves claimEntryFocus true, so every re-deal yanks
+        // focus again from whatever the viewer is on.
+        SpotlightDiagTrace.spotlightClaim(taken)
         if (taken) onEntryFocusClaimed()
     }
 
@@ -233,9 +242,23 @@ internal fun SpotlightPreviewHost(
     // changes only when a card takes focus; hasSnapshot still closes the panel
     // when focus leaves.
     LaunchedEffect(tracker.focusToken, hasSnapshot, expandDelayMs, menuOpen) {
+        // The three inputs are the dwell's whole fate on a card that never
+        // expands; the paste needs their live values, not a guess (F3).
+        SpotlightDiagTrace.spotlightDwell(expandDelayMs, menuOpen, claimEntryFocus)
         // The menu is the viewer's explicit request, so it wins: no panel opens
         // over it, and one already up collapses when it appears.
         if (!hasSnapshot || menuOpen || !HomeExpandDelay.expands(expandDelayMs)) {
+            // Which guard fired, recorded only when there was something to
+            // collapse - otherwise every frame of a focusless Home would say so.
+            if (expanded != null) {
+                SpotlightDiagTrace.spotlightCollapsed(
+                    when {
+                        menuOpen -> "menuOpen"
+                        !hasSnapshot -> "!hasSnapshot"
+                        else -> "!expands"
+                    }
+                )
+            }
             expanded = null
             onExpandedChange(false)
             return@LaunchedEffect
@@ -244,6 +267,7 @@ internal fun SpotlightPreviewHost(
         // and the next card starts its own clock.
         delay(expandDelayMs)
         expanded = tracker.snapshot
+        if (expanded != null) SpotlightDiagTrace.spotlightExpanded(expanded?.title)
         onExpandedChange(expanded != null)
     }
     // A scroll under a still-focused card moves the panel with it. Applied after

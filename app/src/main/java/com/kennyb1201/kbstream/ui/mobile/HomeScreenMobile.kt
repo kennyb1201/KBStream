@@ -614,7 +614,7 @@ fun HomeScreenMobile(
             if (billboardEnabled) {
                 viewModel.resolveBillboard(billboardFeed)
             } else {
-                viewModel.clearBillboard()
+                viewModel.clearBillboard("billboard disabled")
             }
         }
         // The slot appears on the FIRST settled page and later pages fill in as

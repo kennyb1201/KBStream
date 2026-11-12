@@ -188,6 +188,16 @@ object Diagnostics {
         // `upcoming: ` prefix for both, so the block still reads as one.
         UpcomingDiagTrace.summaries().forEach { report.appendLine("upcoming: $it") }
         UpcomingDiagTrace.lines().forEach { report.appendLine("upcoming: $it") }
+        // What the Home billboard last dealt and what the Spotlight tracker last
+        // held. Two open TV reports live entirely in this state - a billboard
+        // that vanishes (empty feed, or pages that never settled) and cards that
+        // never expand on a 2s dwell (a tracker with no snapshot, a guard, or a
+        // failed entry claim) - and none of it reached the paste before (see
+        // [SpotlightDiagTrace]). The last snapshot is printed even though the
+        // card has long blurred: COPY DIAGNOSTICS is taken from Settings. Absent
+        // until Home has dealt a billboard or a card has taken focus.
+        SpotlightDiagTrace.summaries().forEach { report.appendLine(it) }
+        SpotlightDiagTrace.lines().forEach { report.appendLine(it) }
         // What each pinned Library rail's rows CARRIED as art, per load. A
         // Trakt rail drawn title-only is either a read that shipped no poster
         // URL or one that shipped URLs that do not load - and only the rail can

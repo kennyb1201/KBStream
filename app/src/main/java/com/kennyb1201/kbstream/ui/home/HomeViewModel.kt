@@ -33,6 +33,7 @@ import com.kennyb1201.kbstream.data.mdblist.mdbListWatchedEpisodesByShow
 import com.kennyb1201.kbstream.data.notifications.NewEpisodeRules
 import com.kennyb1201.kbstream.data.player.rerootedEpisodeStreamId
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
+import com.kennyb1201.kbstream.data.reporting.SpotlightDiagTrace
 import com.kennyb1201.kbstream.data.reporting.UpcomingDiagTrace
 import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
@@ -1805,6 +1806,18 @@ Log.d(
     private var billboardResolveJob: Job? = null
     private var billboardTrendingJob: Job? = null
 
+    /** The ceiling pass's own job, so a newer pool request supersedes it. */
+    private var billboardPoolJob: Job? = null
+
+    /** The last pool the screens asked for, re-requested on a profile switch (F2). */
+    private var billboardRequestedItems: List<MetaPreview>? = null
+
+    /**
+     * The profile key the PUBLISHED pool was filtered for - "<id>:<kidsMaxAge>",
+     * the spelling [loadBillboardTrendingDay] uses for its cached feed.
+     */
+    private var billboardPoolFor: String? = null
+
     /**
      * Bumped when the billboard's feed must not be published at all - today
      * only a profile switch, whose pages (and settled state) belong to the
@@ -1827,10 +1840,18 @@ Log.d(
      * Empties the billboard - what a hidden slot (the toggle off) asks for, so a
      * resolve in flight cannot publish pages over a Home that hides them.
      */
-    fun clearBillboard() {
+    fun clearBillboard(reason: String) {
         billboardResolveJob?.cancel()
         billboardResolveJob = null
+        // The ceiling pass is a hop of its own now (spec 2026-11-12): a pool it
+        // is still filtering must not publish pages over a cleared billboard.
+        billboardPoolJob?.cancel()
+        billboardPoolJob = null
         _billboardPages.value = emptyList()
+        // Why the slot went empty is one of the two things the paste must be
+        // able to tell apart (spec 2026-11-12, F2): a billboard hidden by the
+        // toggle and one whose feed resolved to nothing look identical on screen.
+        SpotlightDiagTrace.billboardCleared(reason, billboardResolveEpoch)
     }
 
     /**
@@ -1847,6 +1868,69 @@ Log.d(
      * is never re-resolved just because a watched-status tick repainted Home.
      */
     fun resolveBillboard(items: List<MetaPreview>) {
+        // The pool the viewer's screens last asked for, kept so a PROFILE SWITCH
+        // can ask for it again under the new ceiling (F2). The screens' effects
+        // key on the feed's VALUE, and an equal rail list after a switch is no
+        // change at all - so without this the new profile kept the old pool.
+        billboardRequestedItems = items
+        SpotlightDiagTrace.billboardFeed(
+            keys = AppPreferences.getHomeBillboardFeeds(getApplication()),
+            trendingDaySize = _billboardTrendingDay.value.size,
+            merged = items.size
+        )
+        val profile = com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value
+        val forProfile = "${profile?.id}:${profile?.kidsMaxAge}"
+        // One hop, because the ceiling pass is a suspend (it resolves each
+        // title's certification through the shared enriched-detail cache). The
+        // epoch is captured BEFORE it, so a filter that lands after a profile
+        // switch is dropped exactly like a resolve would be.
+        val epoch = billboardResolveEpoch
+        billboardPoolJob?.cancel()
+        billboardPoolJob = viewModelScope.launch {
+            val pool = billboardKidsSafePool(items)
+            if (epoch != billboardResolveEpoch) return@launch
+            publishBillboardPool(pool, forProfile)
+        }
+    }
+
+    /**
+     * The billboard's pool for the active profile: the chosen feed, whatever its
+     * source, put through the SAME ceiling rule Up Next and the catalog rails
+     * use (spec 2026-11-12, F1).
+     *
+     * This is the choke point because it is the last gate before a page is dealt
+     * and every surface reaches it - the phone's hero and the TV's Spotlight hero
+     * both resolve through [resolveBillboard], so neither can list a rail the
+     * other filters. No ceiling (an adult profile) returns the feed untouched:
+     * one null check, no list copy, no reorder.
+     *
+     * A ceiling-thinned feed falls back to the walked default pool (F3). The
+     * threshold is [BILLBOARD_MAX_PAGES], the "full" the trending walk itself
+     * aims at: a strict ceiling can keep three titles out of a forty-title rail,
+     * and three is not a billboard - it is a hero with almost nothing to swipe
+     * to. The walk's default feed is already ceiling-filtered per page and walked
+     * to full, so it is the one pool that is kids-safe AND long. The fallback
+     * only ever REPLACES the feed with more titles: when the default pool is no
+     * longer than what the chosen feed kept (a chosen catalog that IS the
+     * trending feed, or a day where the ceiling thinned both), the viewer keeps
+     * the catalog they picked.
+     */
+    private suspend fun billboardKidsSafePool(items: List<MetaPreview>): List<MetaPreview> {
+        tmdbRepository.kidsMaxAge() ?: return items
+        val filtered = tmdbRepository.kidsFilterMetas(items)
+        val walked = _billboardTrendingDay.value
+        return billboardKidsSafePool(filtered, walked)
+    }
+
+    /**
+     * Deals a ceiling-passed pool, atomically per page.
+     *
+     * Split out of [resolveBillboard] by this spec, not by taste: the filter and
+     * the fallback are suspends, and the seeding must not run before they land -
+     * a page dealt from the unfiltered feed is an adult title on a kids profile's
+     * hero for as long as its art takes to resolve.
+     */
+    private fun publishBillboardPool(items: List<MetaPreview>, forProfile: String) {
         val feed = items
             .filter { it.id.isNotBlank() }
             .distinctBy { item -> billboardPageKey(item) }
@@ -1859,11 +1943,23 @@ Log.d(
         // order, or after that shuffle - must still read as "nothing new". As a
         // list comparison this guard could not survive the re-deal: every Home
         // entry would re-resolve the art and flash the billboard.
+        // The ceiling the pool was filtered for is part of its identity (F2): the
+        // same titles on a different profile is NOT nothing-new - a kids profile
+        // inheriting the adult pool is the whole bug this spec closes.
         val samePool =
-            currentKeys.size == wantedKeys.size && currentKeys.toSet() == wantedKeys.toSet()
+            currentKeys.size == wantedKeys.size &&
+                currentKeys.toSet() == wantedKeys.toSet() &&
+                billboardPoolFor == forProfile
         if (samePool) {
             val stillWorking = billboardResolveJob?.isActive == true
-            if (stillWorking || _billboardPages.value.all { it.settled }) return
+            val settledNow = _billboardPages.value.count { it.settled }
+            if (stillWorking || settledNow == currentKeys.size) {
+                // Nothing is re-resolved on this path, so a page that never
+                // settled stays unsettled - which is the state the report has
+                // to be able to see.
+                SpotlightDiagTrace.billboardDealSkipped(currentKeys.size, settledNow)
+                return
+            }
         }
 
         // A NEW pool is dealt a fresh order; a same-membership feed keeps the
@@ -1894,7 +1990,15 @@ Log.d(
                 settled = false
             )
         }
-        if (dealt.isEmpty()) return
+        billboardPoolFor = forProfile
+        val dealEpoch = billboardResolveEpoch
+        SpotlightDiagTrace.billboardDealt(dealt.size, feed.size, dealEpoch)
+        if (dealt.isEmpty()) {
+            // A ceiling or a feed that kept nothing: the slot goes empty with a
+            // reason, not silently.
+            SpotlightDiagTrace.billboardCleared("empty feed", dealEpoch)
+            return
+        }
 
         val epoch = billboardResolveEpoch
         billboardResolveJob = viewModelScope.launch {
@@ -1905,13 +2009,24 @@ Log.d(
                             val key = billboardPageKey(item)
                             val resolved = billboardResolveSemaphore
                                 .withPermit { resolveBillboardPage(item) }
-                                ?: return@launch
+                            if (resolved == null) {
+                                // The page that never settles - the one this
+                                // report exists for.
+                                SpotlightDiagTrace.billboardPageNull(key)
+                                return@launch
+                            }
                             if (epoch != billboardResolveEpoch) return@launch
                             _billboardPages.update { pages ->
                                 pages.map { page ->
                                     if (page.key == key) resolved else page
                                 }
                             }
+                            val tally = _billboardPages.value
+                            SpotlightDiagTrace.billboardPageResolved(
+                                key = key,
+                                settledNow = tally.count { it.settled },
+                                total = tally.size
+                            )
                         }
                     }
                 }
@@ -1919,6 +2034,7 @@ Log.d(
                 throw e
             } catch (e: Exception) {
                 Log.w("HOME_BILLBOARD", "Billboard resolve failed", e)
+                SpotlightDiagTrace.billboardJobFailed(e.message ?: e.javaClass.simpleName)
             }
         }
     }
@@ -2415,7 +2531,16 @@ Log.d(
                     billboardResolveEpoch += 1
                     billboardResolveJob?.cancel()
                     billboardResolveJob = null
+                    billboardPoolJob?.cancel()
+                    billboardPoolJob = null
+                    billboardPoolFor = null
                     _billboardPages.value = emptyList()
+                    // F2: the pool that reached the dealer belonged to the profile
+                    // being left. Ask for it again, so the NEW ceiling filters it
+                    // even when the rail list itself came back the same shape -
+                    // the screens' effects key on the feed's value, and an equal
+                    // list is no change.
+                    billboardRequestedItems?.let { requested -> resolveBillboard(requested) }
                     // And its DEFAULT feed, which is TMDB's trending pair: it is
                     // loaded once and cached for the ViewModel's life, and it is
                     // ceiling-filtered for whichever profile loaded it. Left in

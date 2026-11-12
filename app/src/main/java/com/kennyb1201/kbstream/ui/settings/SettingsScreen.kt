@@ -86,6 +86,7 @@ import com.kennyb1201.kbstream.data.update.AppUpdater
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -5832,6 +5833,17 @@ private fun billboardFeedOptions(context: Context): List<Pair<String, String>> {
 @Composable
 private fun BillboardSettingsSection() {
     val context = LocalContext.current
+    // The billboard's own on/off (spec 2026-11-12).
+    //
+    // The pref and the Home's gate for it already existed - and the PHONE already
+    // writes it, from its Home manager - but the TV had no setter anywhere, so a
+    // TV viewer could only get rid of the hero by switching the Home layout to
+    // Modern. Same global, device-level key as the phone writes (see
+    // AppPreferences.getHomeBillboardEnabled): every profile on this TV sees the
+    // value, a profile switch does not reset it, and nothing is pushed anywhere.
+    var billboardOn by remember {
+        mutableStateOf(AppPreferences.getHomeBillboardEnabled(context))
+    }
     var feeds by remember { mutableStateOf(AppPreferences.getHomeBillboardFeeds(context)) }
     var cycleMs by remember { mutableLongStateOf(AppPreferences.getHomeBillboardCycleMs(context)) }
     var trailerMode by remember {
@@ -5864,128 +5876,174 @@ private fun BillboardSettingsSection() {
         }
     }
 
-    // ONE row, not a grid (spec 2026-11-12).
-    //
-    // The chooser now lists every rail the Home can draw, so a chip per catalog
-    // ran to many rows and made Settings long enough to be a scroll of chips
-    // between two unrelated settings. The row says what the selection is and
-    // opens the multi-select dialog, where the same options live - the list is
-    // as long as the catalogs are, but inside a bounded panel.
-    var catalogsOpen by remember { mutableStateOf(false) }
-    val defaultCatalogLabel = catalogOptions
-        .firstOrNull { (key, _) -> key == AppPreferences.BILLBOARD_TRENDING_DAY_FEED }
-        ?.second
-        ?: "Trending today"
-    // Ordered by the options, not by the stored list, so the summary reads in
-    // the same order the dialog lists.
-    val summary = if (catalogOptions.isEmpty()) {
-        "Reading your Home rails…"
-    } else {
-        com.kennyb1201.kbstream.ui.home.billboardFeedsSummary(
-            selectedLabels = catalogOptions.filter { (key, _) -> key in feeds }
-                .map { (_, label) -> label },
-            defaultLabel = defaultCatalogLabel
-        )
-    }
-    KBCard(
-        onClick = { catalogsOpen = true },
+    // The on/off row leads the section: every row under it configures the hero
+    // this one switches off.
+    Text(
+        text = "Billboard",
+        color = KBTextHi,
+        style = MaterialTheme.typography.bodySmall,
         modifier = Modifier
-            .fillMaxWidth()
-            // The search entry points at the row that replaced the chips.
-            .searchAnchor(SettingsSearchIndex.entryForLabel("Billboard catalogs"))
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Billboard catalogs",
-                color = KBTextHi,
-                style = MaterialTheme.typography.bodySmall
-            )
-            Text(
-                text = summary,
-                color = KBTextLo,
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = androidx.compose.ui.text.style.TextAlign.End,
-                modifier = Modifier.padding(start = 16.dp)
-            )
+            .searchAnchor(SettingsSearchIndex.entryForLabel("Billboard"))
+            .padding(bottom = 4.dp)
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf(false, true).forEach { value ->
+            KBCard(onClick = {
+                billboardOn = value
+                AppPreferences.setHomeBillboardEnabled(context, value)
+            }) {
+                PillChip(if (value) "On" else "Off", billboardOn == value)
+            }
         }
     }
     Text(
-        text = "Which catalogs feed the Spotlight hero. Pick several to merge them.",
+        text = "Off hides the Spotlight hero and starts the Home rails at the top. " +
+            "The catalogs, hold and trailer below are kept, not cleared.",
         color = KBTextLo,
         style = MaterialTheme.typography.labelSmall,
         modifier = Modifier.padding(top = 4.dp, bottom = 6.dp)
     )
-    if (catalogsOpen) {
-        BillboardCatalogsDialog(
-            options = catalogOptions,
-            selected = feeds,
-            // Done writes through the same normalizer the chips did; dismiss
-            // (BACK, or a tap outside) is Cancel and writes nothing.
-            onConfirm = { picked ->
-                writeFeeds(picked)
-                catalogsOpen = false
-            },
-            onDismiss = { catalogsOpen = false }
-        )
-    }
 
-    Spacer(modifier = Modifier.height(8.dp))
+    // Everything below configures a hero that is not on screen while the toggle
+    // is Off (F3): dimmed, out of the D-pad's walk, and inert on a press. It is
+    // only the CONTROLS that stop - none of the stored values is touched, so
+    // turning the billboard back on restores them exactly as they were.
+    Column(modifier = Modifier.alpha(if (billboardOn) 1f else 0.4f)) {
 
-    Text(
-        text = "Billboard hold",
-        color = KBTextHi,
-        style = MaterialTheme.typography.bodySmall,
-        modifier = Modifier
-            .searchAnchor(SettingsSearchIndex.entryForLabel("Billboard hold"))
-            .padding(bottom = 4.dp)
-    )
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        AppPreferences.BILLBOARD_CYCLE_OPTIONS_MS.forEach { option ->
-            KBCard(onClick = {
-                cycleMs = option
-                AppPreferences.setHomeBillboardCycleMs(context, option)
-            }) {
-                PillChip(
-                    com.kennyb1201.kbstream.ui.home.billboardCycleLabel(option),
-                    cycleMs == option
+        // ONE row, not a grid (spec 2026-11-12).
+        //
+        // The chooser now lists every rail the Home can draw, so a chip per catalog
+        // ran to many rows and made Settings long enough to be a scroll of chips
+        // between two unrelated settings. The row says what the selection is and
+        // opens the multi-select dialog, where the same options live - the list is
+        // as long as the catalogs are, but inside a bounded panel.
+        var catalogsOpen by remember { mutableStateOf(false) }
+        val defaultCatalogLabel = catalogOptions
+            .firstOrNull { (key, _) -> key == AppPreferences.BILLBOARD_TRENDING_DAY_FEED }
+            ?.second
+            ?: "Trending today"
+        // Ordered by the options, not by the stored list, so the summary reads in
+        // the same order the dialog lists.
+        val summary = if (catalogOptions.isEmpty()) {
+            "Reading your Home rails…"
+        } else {
+            com.kennyb1201.kbstream.ui.home.billboardFeedsSummary(
+                selectedLabels = catalogOptions.filter { (key, _) -> key in feeds }
+                    .map { (_, label) -> label },
+                defaultLabel = defaultCatalogLabel
+            )
+        }
+        KBCard(
+            onClick = { if (billboardOn) catalogsOpen = true },
+            modifier = Modifier
+                .fillMaxWidth()
+                // The search entry points at the row that replaced the chips.
+                .searchAnchor(SettingsSearchIndex.entryForLabel("Billboard catalogs"))
+                .focusProperties { if (!billboardOn) canFocus = false }
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Billboard catalogs",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    text = summary,
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                    modifier = Modifier.padding(start = 16.dp)
                 )
             }
         }
-    }
+        Text(
+            text = "Which catalogs feed the Spotlight hero. Pick several to merge them.",
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(top = 4.dp, bottom = 6.dp)
+        )
+        if (catalogsOpen) {
+            BillboardCatalogsDialog(
+                options = catalogOptions,
+                selected = feeds,
+                // Done writes through the same normalizer the chips did; dismiss
+                // (BACK, or a tap outside) is Cancel and writes nothing.
+                onConfirm = { picked ->
+                    writeFeeds(picked)
+                    catalogsOpen = false
+                },
+                onDismiss = { catalogsOpen = false }
+            )
+        }
 
-    Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-    Text(
-        text = "Billboard trailer",
-        color = KBTextHi,
-        style = MaterialTheme.typography.bodySmall,
-        modifier = Modifier
-            .searchAnchor(SettingsSearchIndex.entryForLabel("Billboard trailer"))
-            .padding(bottom = 4.dp)
-    )
-    Text(
-        text = "Auto-play waits the hero-trailer delay; mute is in Settings. " +
-            "The expanded card's trailer follows the same mode.",
-        color = KBTextLo,
-        style = MaterialTheme.typography.labelSmall,
-        modifier = Modifier.padding(bottom = 6.dp)
-    )
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        com.kennyb1201.kbstream.data.settings.BillboardTrailerMode.entries.forEach { mode ->
-            KBCard(onClick = {
-                trailerMode = mode
-                AppPreferences.setHomeBillboardTrailerMode(context, mode)
-            }) {
-                PillChip(
-                    com.kennyb1201.kbstream.ui.home.billboardTrailerModeLabel(mode),
-                    trailerMode == mode
-                )
+        Text(
+            text = "Billboard hold",
+            color = KBTextHi,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier
+                .searchAnchor(SettingsSearchIndex.entryForLabel("Billboard hold"))
+                .padding(bottom = 4.dp)
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AppPreferences.BILLBOARD_CYCLE_OPTIONS_MS.forEach { option ->
+                KBCard(
+                    onClick = {
+                        if (billboardOn) {
+                            cycleMs = option
+                            AppPreferences.setHomeBillboardCycleMs(context, option)
+                        }
+                    },
+                    modifier = Modifier.focusProperties { if (!billboardOn) canFocus = false }
+                ) {
+                    PillChip(
+                        com.kennyb1201.kbstream.ui.home.billboardCycleLabel(option),
+                        cycleMs == option
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "Billboard trailer",
+            color = KBTextHi,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier
+                .searchAnchor(SettingsSearchIndex.entryForLabel("Billboard trailer"))
+                .padding(bottom = 4.dp)
+        )
+        Text(
+            text = "Auto-play waits the hero-trailer delay; mute is in Settings. " +
+                "The expanded card's trailer follows the same mode.",
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(bottom = 6.dp)
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            com.kennyb1201.kbstream.data.settings.BillboardTrailerMode.entries.forEach { mode ->
+                KBCard(
+                    onClick = {
+                        if (billboardOn) {
+                            trailerMode = mode
+                            AppPreferences.setHomeBillboardTrailerMode(context, mode)
+                        }
+                    },
+                    modifier = Modifier.focusProperties { if (!billboardOn) canFocus = false }
+                ) {
+                    PillChip(
+                        com.kennyb1201.kbstream.ui.home.billboardTrailerModeLabel(mode),
+                        trailerMode == mode
+                    )
+                }
             }
         }
     }

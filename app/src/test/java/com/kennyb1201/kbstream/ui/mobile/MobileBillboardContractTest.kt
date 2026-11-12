@@ -160,7 +160,7 @@ class MobileBillboardContractTest {
         assertTrue(home.contains("if (billboardEnabled) viewModel.loadBillboardTrendingDay()"))
         // A missing driver would leave the slot inert again.
         assertTrue(home.contains("viewModel.resolveBillboard(billboardFeed)"))
-        assertTrue(home.contains("viewModel.clearBillboard()"))
+        assertTrue(home.contains("viewModel.clearBillboard(\"billboard disabled\")"))
     }
 
     @Test
@@ -646,7 +646,7 @@ class MobileBillboardContractTest {
     // ── prefs and settings ──────────────────────────────────────────────
 
     @Test
-    fun `the four prefs are device-local, defaulted and read back`() {
+    fun `the four prefs are device-level, defaulted and read back`() {
         val p = prefs()
 
         assertTrue(p.contains("private const val KEY_BILLBOARD_ENABLED = \"home_billboard_enabled\""))
@@ -657,21 +657,33 @@ class MobileBillboardContractTest {
         assertTrue(p.contains("getLong(KEY_BILLBOARD_CYCLE_MS, DEFAULT_BILLBOARD_CYCLE_MS)"))
         assertTrue(p.contains("const val BILLBOARD_TRENDING_DAY_FEED = \"trending_day\""))
         assertTrue(p.contains("val BILLBOARD_CYCLE_OPTIONS_MS = listOf(0L, 3_000L, 6_000L, 10_000L, 15_000L)"))
-        // Every setter stops at this device (no syncDisplayPrefsBlob).
+        // Every setter publishes the display blob now (spec 2026-11-12): the four
+        // keys sync TV to TV. What keeps a PHONE's billboard out of the account is
+        // the publish gate in the builder, not the setter - it is the same pref on
+        // both surfaces, and only a television puts it on the wire.
         val setters = p.substring(
             p.indexOf("fun setHomeBillboardEnabled"),
             p.indexOf("internal fun billboardFeedsFromStored")
         )
-        assertTrue(setters.contains("notifyDisplayPrefChanged()"))
-        assertFalse(setters.contains("syncDisplayPrefsBlob("))
+        assertTrue(setters.contains("syncDisplayPrefsBlob(context)"))
 
-        val exclusions = sync()
+        val payload = sync()
+        val synced = payload.substringAfter("internal val SYNCED_PREF_KEYS = setOf(")
+            .substringBefore("internal val EXCLUDED_PREF_KEYS")
         listOf(
             "\"home_billboard_enabled\"",
             "\"home_billboard_feeds\"",
             "\"home_billboard_cycle_ms\"",
             "\"home_billboard_trailer_mode\""
-        ).forEach { key -> assertTrue("$key not excluded from sync", exclusions.contains(key)) }
+        ).forEach { key -> assertTrue("$key is a synced key", synced.contains(key)) }
+        val excluded = payload.substringAfter("internal val EXCLUDED_PREF_KEYS = setOf(")
+            .substringBefore("internal val TV_SCOPED_SYNC_KEYS")
+        listOf(
+            "\"home_billboard_enabled\"",
+            "\"home_billboard_feeds\"",
+            "\"home_billboard_cycle_ms\"",
+            "\"home_billboard_trailer_mode\""
+        ).forEach { key -> assertFalse("$key is no longer excluded", excluded.contains(key)) }
     }
 
     @Test

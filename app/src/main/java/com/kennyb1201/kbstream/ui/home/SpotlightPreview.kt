@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.addon.Meta
+import com.kennyb1201.kbstream.data.reporting.SpotlightDiagTrace
 import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
 import com.kennyb1201.kbstream.ui.detail.isEpisodeUnavailable
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -157,10 +158,21 @@ internal class SpotlightCardFocus {
         if (focused) {
             handingOff = false
             focusToken++
-            snapshot = card()
+            val next = card()
+            snapshot = next
+            // The paste is taken from Settings, so by then this card has
+            // blurred and the live snapshot is null - the trace keeps THIS one
+            // as its last (spec 2026-11-12, F5), which is what answers "did
+            // the tracker ever get a snapshot for the card I held".
+            SpotlightDiagTrace.spotlightFocused(
+                token = focusToken,
+                key = next.id?.let { id -> "${next.type.orEmpty()}:$id" },
+                title = next.title
+            )
         } else {
             // A blur while the panel owns the viewer is the handoff, not leaving.
             if (handingOff || pillsFocused) return
+            if (snapshot != null) SpotlightDiagTrace.spotlightBlurred()
             snapshot = null
         }
     }

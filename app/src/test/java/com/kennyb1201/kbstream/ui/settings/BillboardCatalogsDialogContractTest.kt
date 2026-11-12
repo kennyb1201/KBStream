@@ -52,9 +52,11 @@ class BillboardCatalogsDialogContractTest {
             settings.contains("catalogOptions.chunked(3)")
         )
         val s = section()
+        // The row opens the dialog, and only while the billboard is on (the 2026-11-12
+        // toggle spec: the dependent rows are inert while it is Off).
         assertTrue(
             "the control is one focusable row that opens the dialog",
-            s.contains("onClick = { catalogsOpen = true }")
+            s.contains("onClick = { if (billboardOn) catalogsOpen = true }")
         )
         assertTrue(
             "and it is the row the search entry points at",
