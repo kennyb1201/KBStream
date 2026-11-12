@@ -1922,7 +1922,8 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // The auto-hide timeout is [PlayerChrome.AUTO_HIDE_MS]'s own default:
         // this engine used to pass eight seconds where the main player used six,
         // which left the bar up over the picture for two seconds longer on one
-        // engine than the other for no reason a viewer could see.        chrome = PlayerChrome(
+        // engine than the other for no reason a viewer could see.
+        chrome = PlayerChrome(
             findViewById(R.id.chrome_layer),
             this
         )
