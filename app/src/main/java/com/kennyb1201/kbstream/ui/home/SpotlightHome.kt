@@ -5,6 +5,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.SideEffect
@@ -97,7 +101,26 @@ internal fun SpotlightHeroSection(
 
     if (!billboardEnabled || pages.none { page -> page.settled }) return
 
+    // The TV height, as a fraction of the viewport rather than dp: the phone's
+    // width-driven 16:10 asks for more than a television has, which left the
+    // rails a zero-height viewport (and therefore no D-pad path to the top bar).
+    // 52% keeps the first rail on screen with the hero still the biggest thing
+    // on the page; the spec's ceiling is 60%.
+    val heroHeight = (LocalConfiguration.current.screenHeightDp * SPOTLIGHT_HERO_FRACTION).dp
+    // The billboard's pills are the only focus targets above the rails, so the
+    // Play pill takes focus when Spotlight opens - something has to hold it for
+    // the D-pad to move at all, and this is what the viewer's eye is on.
+    val firstPillFocus = remember { FocusRequester() }
+    LaunchedEffect(pages.isNotEmpty()) {
+        if (pages.isEmpty()) return@LaunchedEffect
+        // One frame, so the pill has a node to take focus.
+        withFrameNanos { }
+        runCatching { firstPillFocus.requestFocus() }
+    }
+
     MobileBillboard(
+        heroHeight = heroHeight,
+        firstPillFocusRequester = firstPillFocus,
         pages = pages,
         cycleMs = billboardCycleMs,
         // The single trailer surface rule: while a card is expanded the card owns
@@ -212,4 +235,13 @@ internal fun SpotlightPreviewHost(
 
 /** Above the rails and their menus, below the screensaver. */
 private const val SPOTLIGHT_PANEL_Z = 4f
+
+/**
+ * The spotlight hero's share of the viewport.
+ *
+ * 52%: big enough to be the layout's banner, small enough that the first rail
+ * shows under it without scrolling (the spec's ceiling is 60%). A fraction, not
+ * a dp height, so it holds at every TV density.
+ */
+private const val SPOTLIGHT_HERO_FRACTION = 0.52f
 

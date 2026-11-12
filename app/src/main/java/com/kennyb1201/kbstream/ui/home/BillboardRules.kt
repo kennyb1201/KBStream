@@ -227,6 +227,50 @@ internal fun billboardFeedKey(rail: Rail): String? {
     return KBHomeOrderPrefs.addonKey(base, rail.type, rail.catalogId)
 }
 
+/**
+ * Feed keys the billboard never offers, on either surface.
+ *
+ * Continue Watching and Upcoming are PROGRESS rails, not catalogs: every item
+ * on them is a title the viewer is already in the middle of, so a billboard
+ * built from them cycles the same few unfinished shows instead of the catalogs
+ * the picker is for. They were only ever offered because the TV's chooser was
+ * a hardcoded list; both pickers now skip them, and [billboardChosenFeed]
+ * skips them too, so a pref written by an older build cannot resurrect them.
+ */
+internal val BILLBOARD_EXCLUDED_FEED_KEYS: Set<String> = setOf(
+    KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING,
+    KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE
+)
+
+/** Whether this rail key may feed the billboard at all (see the excluded set). */
+internal fun billboardFeedOffered(key: String): Boolean =
+    key !in BILLBOARD_EXCLUDED_FEED_KEYS && key.isNotBlank()
+
+/**
+ * The feed list as it is written back to prefs.
+ *
+ * Excluded keys are dropped and duplicates collapsed, because a stored list is
+ * what the picker shows as selected AND what the hero cycles - so a legacy
+ * Continue Watching pick has to disappear the first time either picker writes,
+ * rather than sitting there as a chip the viewer cannot un-toggle into
+ * anything. An empty result is the default selection, never an empty feed (the
+ * same rule the picker's own toggle keeps).
+ */
+internal fun normalizeBillboardFeeds(feeds: List<String>): List<String> =
+    feeds.filter(::billboardFeedOffered)
+        .distinct()
+        .ifEmpty { AppPreferences.DEFAULT_BILLBOARD_FEEDS }
+
+/**
+ * A rail's name at chip width, shared by both pickers.
+ *
+ * Long catalog names are cut here rather than pushing a chip past the edge of
+ * its panel (a chip does not wrap). One copy, so the TV row and the phone
+ * dialog name the same rail the same way.
+ */
+internal fun billboardFeedLabel(title: String): String =
+    if (title.length <= 24) title else title.take(23).trimEnd() + "\u2026"
+
 internal fun billboardChosenFeed(
     keys: List<String>,
     sources: Map<String, List<MetaPreview>>,
@@ -235,7 +279,11 @@ internal fun billboardChosenFeed(
     /** The draw's randomness; a seeded one is what makes this testable. */
     random: Random = Random.Default
 ): List<MetaPreview>? {
-    val order = keys.ifEmpty { AppPreferences.DEFAULT_BILLBOARD_FEEDS }
+    // Excluded keys are filtered BEFORE the default is applied: a stored
+    // Continue Watching pick is not a selection the hero should honour, and it
+    // must not turn an otherwise-empty selection into "nothing to show".
+    val order = keys.filter(::billboardFeedOffered)
+        .ifEmpty { AppPreferences.DEFAULT_BILLBOARD_FEEDS }
     // Drawn, not sliced: an arranged Home reads as a curated wall, but a rail
     // selection is a POOL that is many times the pager's ten, and taking its
     // head meant the same ten forever (see [billboardRandomPages]).

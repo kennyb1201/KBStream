@@ -165,6 +165,7 @@ import com.kennyb1201.kbstream.ui.theme.kbCustomAccentState
 import com.kennyb1201.kbstream.ui.theme.refreshThemeMirrors
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 import com.kennyb1201.kbstream.data.runCatchingCancellable
@@ -5778,6 +5779,59 @@ private fun AudioTuningRow(
 }
 
 /**
+ * Every rail that can feed the Spotlight hero, keyed the way Home keys it.
+ *
+ * Three sources, merged and de-duplicated:
+ *  - the arrangement Home renders (`KBHomeOrderPrefs.get`), so every rail the
+ *    viewer can actually see is offered: built-ins, add-on catalogs, custom
+ *    catalogs;
+ *  - every installed add-on catalog, so a rail that exists but was never
+ *    arranged still is;
+ *  - the trending-day default, which is not a rail.
+ *
+ * Left out on purpose: Continue Watching and Upcoming (progress rails, not
+ * catalogs - see BILLBOARD_EXCLUDED_FEED_KEYS) and Library rows, whose `list:`
+ * keys the Home's rail->feed lookup cannot resolve, so a chip for one would
+ * select nothing.
+ *
+ * Labelled by the viewer's own rename first, then the add-on's catalog name,
+ * then the built-in title, and finally the key's last segment - never the whole
+ * raw key, which is what the old row printed.
+ */
+private fun billboardFeedOptions(context: Context): List<Pair<String, String>> {
+    val order = com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.get(context)
+    val addonTitles = runCatching {
+        com.kennyb1201.kbstream.data.addon.AddonManager.getInstance(context)
+            .getCatalogConfigurations()
+            .filterNot { it.catalog.isSearchPlaceholder }
+            .associate { config ->
+                com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.addonKeyFromManifest(
+                    config.addonManifestUrl,
+                    config.catalog.type,
+                    config.catalog.id
+                ) to config.catalog.displayName
+            }
+    }.getOrDefault(emptyMap())
+
+    val keys = (
+        listOf(AppPreferences.BILLBOARD_TRENDING_DAY_FEED) +
+            order.order +
+            addonTitles.keys
+        )
+        .distinct()
+        .filter(::com.kennyb1201.kbstream.ui.home.billboardFeedOffered)
+        .filterNot { key -> key.startsWith("list:") }
+
+    return keys.map { key ->
+        val title = order.renames[key]?.takeIf { it.isNotBlank() }
+            ?: addonTitles[key]
+            ?: com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.builtinDefaultTitle(key)
+            ?: key.substringAfterLast(':').ifBlank { key }
+        key to com.kennyb1201.kbstream.ui.home.billboardFeedLabel(title)
+    }
+}
+
+/**
  * The Spotlight billboard's three controls: catalogs, hold, trailer mode.
  *
  * The same three the phone's Home manager dialog offers, writing the same
@@ -5801,27 +5855,29 @@ private fun BillboardSettingsSection() {
     }
 
     fun writeFeeds(next: List<String>) {
-        // The picker's one invariant, shared with the phone: it never represents
-        // an EMPTY feed, so deselecting everything restores the default.
-        val normalized = next.ifEmpty { AppPreferences.DEFAULT_BILLBOARD_FEEDS }
+        // The shared rule, so this row and the phone's dialog write the same
+        // list: the excluded progress rails are dropped and an empty pick is the
+        // default selection, never an empty feed.
+        val normalized = com.kennyb1201.kbstream.ui.home.normalizeBillboardFeeds(next)
         feeds = normalized
         AppPreferences.setHomeBillboardFeeds(context, normalized)
     }
 
-    val catalogOptions = remember(feeds) {
-        val builtins = listOf(
-            AppPreferences.BILLBOARD_TRENDING_DAY_FEED to
-                com.kennyb1201.kbstream.ui.home.BILLBOARD_DEFAULT_FEED_LABEL,
-            com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU
-                to "Top Picks",
-            com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING
-                to "Continue Watching",
-            com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE
-                to "Upcoming"
-        )
-        builtins + feeds
-            .filterNot { key -> builtins.any { it.first == key } }
-            .map { key -> key to key }
+    // The rails THIS Home draws, not a hardcoded four.
+    //
+    // The phone's picker lists its Home manager's rows; the TV has no such
+    // dialog, so it lists the arrangement the Home actually renders - the order
+    // blob's keys (built-ins, add-on catalogs, custom catalogs) plus every
+    // installed add-on catalog, so a rail that exists but has never been
+    // arranged is still offered. Labelled by its rename, its catalog name, or
+    // its built-in title, and cut to chip width by the shared label rule.
+    var catalogOptions by remember {
+        mutableStateOf(listOf<Pair<String, String>>())
+    }
+    LaunchedEffect(feeds) {
+        catalogOptions = withContext(kotlinx.coroutines.Dispatchers.IO) {
+            billboardFeedOptions(context)
+        }
     }
 
     Text(
@@ -5838,17 +5894,25 @@ private fun BillboardSettingsSection() {
         style = MaterialTheme.typography.labelSmall,
         modifier = Modifier.padding(bottom = 6.dp)
     )
-    catalogOptions.chunked(3).forEach { row ->
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            row.forEach { (key, label) ->
-                KBCard(onClick = {
-                    writeFeeds(if (key in feeds) feeds - key else feeds + key)
-                }) {
-                    PillChip(label, key in feeds)
+    if (catalogOptions.isEmpty()) {
+        Text(
+            text = "Reading your Home rails…",
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall
+        )
+    } else {
+        catalogOptions.chunked(3).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                row.forEach { (key, label) ->
+                    KBCard(onClick = {
+                        writeFeeds(if (key in feeds) feeds - key else feeds + key)
+                    }) {
+                        PillChip(label, key in feeds)
+                    }
                 }
             }
+            Spacer(modifier = Modifier.height(6.dp))
         }
-        Spacer(modifier = Modifier.height(6.dp))
     }
 
     Spacer(modifier = Modifier.height(8.dp))

@@ -368,7 +368,10 @@ private fun BillboardSectionMobile(rows: List<HomeRailManagerRow>) {
      * an EMPTY feed, so deselecting everything restores the default.
      */
     fun writeFeeds(next: List<String>) {
-        val normalized = next.ifEmpty { AppPreferences.DEFAULT_BILLBOARD_FEEDS }
+        // The shared rule, so the phone and the TV write the same list: the
+        // excluded progress rails are dropped and an empty pick is the default
+        // selection rather than an empty feed.
+        val normalized = com.kennyb1201.kbstream.ui.home.normalizeBillboardFeeds(next)
         feeds = normalized
         AppPreferences.setHomeBillboardFeeds(context, normalized)
     }
@@ -385,6 +388,10 @@ private fun BillboardSectionMobile(rows: List<HomeRailManagerRow>) {
     val feedRows = remember(rows) {
         rows
             .filter { row -> row.config != null || row.isBuiltinRail }
+            // Continue Watching and Upcoming are progress rails, not catalogs: a
+            // billboard built from them cycles what is half-watched. Neither
+            // picker offers them any more (see BILLBOARD_EXCLUDED_FEED_KEYS).
+            .filter { row -> com.kennyb1201.kbstream.ui.home.billboardFeedOffered(row.key) }
             .distinctBy { it.key }
     }
 
@@ -564,7 +571,7 @@ private fun orderLabel(index: Int, title: String): String =
  * pushing the chip past the dialog's edge (the chip does not wrap).
  */
 private fun shortFeedLabel(title: String): String =
-    if (title.length <= 24) title else title.take(23).trimEnd() + "…"
+    com.kennyb1201.kbstream.ui.home.billboardFeedLabel(title)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

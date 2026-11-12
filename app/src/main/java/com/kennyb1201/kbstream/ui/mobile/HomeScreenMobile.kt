@@ -60,6 +60,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.focusRequester
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -1857,6 +1860,14 @@ private fun MobileHero(
      * Null draws none, which is what a page that is not current passes.
      */
     actions: (@Composable () -> Unit)? = null,
+    /**
+     * A fixed frame height, for a screen that cannot size the hero by width.
+     *
+     * Null is the phone's own rule below (16:10 off the width). A TV Home is
+     * wider than it is tall by a lot, so the same width math asks for a frame
+     * taller than the viewport - see MobileBillboard's cap.
+     */
+    heroHeight: Dp? = null,
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
@@ -1888,16 +1899,25 @@ private fun MobileHero(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            // 16:10, not 16:9 (spec 2.8, chosen 2026-10-30): the billboard is
-            // the first thing on Home and at 16:9 inside the premium refresh's
-            // 16dp margins it read small. On a 390dp phone the frame is 358dp
-            // wide, so 16:10 is ~224dp tall - ~23dp more than 16:9 in the same
-            // margins, and a touch more than the old full-bleed 16:9 (~219dp),
-            // which is the point. MobileHero's only call site is the billboard,
-            // so the phone's Detail header and every TV surface keep 16:9; a
-            // 16:9 backdrop under ContentScale.Crop here overflows on the SIDES
-            // (~11% of width), which is the room the Ken Burns pan sweeps.
-            .aspectRatio(16f / 10f)
+            .then(
+                if (heroHeight != null) {
+                    // The TV's frame: the height the Home handed down, full width,
+                    // with the backdrop still ContentScale.Crop - so the art fills
+                    // the frame and the 16:10 crop room becomes the sides'
+                    // overflow instead of the bottom of the screen.
+                    Modifier.height(heroHeight)
+                } else {
+                    // 16:10, not 16:9 (spec 2.8, chosen 2026-10-30): the billboard
+                    // is the first thing on Home and at 16:9 inside the premium
+                    // refresh's 16dp margins it read small. On a 390dp phone the
+                    // frame is 358dp wide, so 16:10 is ~224dp tall - ~23dp more
+                    // than 16:9 in the same margins, and a touch more than the old
+                    // full-bleed 16:9 (~219dp), which is the point. A 16:9 backdrop
+                    // under ContentScale.Crop here overflows on the SIDES (~11% of
+                    // width), which is the room the Ken Burns pan sweeps.
+                    Modifier.aspectRatio(16f / 10f)
+                }
+            )
             .clickable(onClick = onClick)
     ) {
         AsyncImage(
@@ -2104,6 +2124,26 @@ internal fun MobileBillboard(
     trailerDelayMs: Long,
     trailerMuted: Boolean,
     trailerAutoplay: Boolean = true,
+    /**
+     * A fixed hero height, for the TV Home.
+     *
+     * The phone sizes the frame by width (16:10), which on a television asks
+     * for more height than the viewport has and leaves the rails nothing: the
+     * hero is the whole screen and the rail list is composed with a zero
+     * viewport, so the D-pad has nowhere to go and nothing can reach the top
+     * bar. A TV Home passes a viewport fraction here instead; null keeps the
+     * phone's own math untouched.
+     */
+    heroHeight: Dp? = null,
+    /**
+     * Where focus lands when the billboard is the first thing on screen.
+     *
+     * The pills below are the billboard's only controls, so the TV Home points
+     * this at the Play pill and parks focus there on entry - without it nothing
+     * in the layout holds focus after the rails were given a viewport, and the
+     * D-pad has no starting point.
+     */
+    firstPillFocusRequester: FocusRequester? = null,
     onPlay: (BillboardPage) -> Unit,
     onDetails: (BillboardPage) -> Unit
 ) {
@@ -2602,6 +2642,7 @@ internal fun MobileBillboard(
             label = "Play",
             icon = Icons.Filled.PlayArrow,
             accent = true,
+            focusRequester = firstPillFocusRequester,
             onClick = { currentPage?.let(onPlay) }
         )
         BillboardAction(
@@ -2694,6 +2735,8 @@ internal fun MobileBillboard(
                         requestTrailerRetry(positionMs, durationMs, identity = true)
                     },
                     onStopTrailer = { stopTrailer() },
+                    // The TV's cap, or the phone's own width math (null).
+                    heroHeight = heroHeight,
                     // Only the page in front carries the pills: a neighbour
                     // sliding in must not drag its own live buttons with it.
                     actions = if (index == pagerState.currentPage) pageActions else null,
@@ -2789,21 +2832,35 @@ internal fun MobileBillboard(
  * A pill is drawn here instead: the accent fill for Play, a translucent glass
  * fill with a hairline border for the secondaries, full-round, inside the
  * frame. The press scale is the house one (KB_PRESS_SPRING at 0.98), so a press
- * still gives way under the thumb; there is no focus ring on touch.
+ * still gives way under the thumb.
+ *
+ * On a television these are the hero's ONLY controls, so they are real D-pad
+ * focusables: focus grows the pill a little and rings it in the app's accent,
+ * the same language the rail cards speak, and it is what the viewer sees move
+ * when the remote crosses the hero. Touch never focuses them, so the phone's
+ * press behaviour is exactly what it was.
  */
 @Composable
 private fun BillboardAction(
     label: String,
     icon: ImageVector? = null,
     accent: Boolean = false,
+    /** The pill a TV Home parks focus on when it opens (see MobileBillboard). */
+    focusRequester: FocusRequester? = null,
     onClick: () -> Unit
 ) {
     val contentColor = if (accent) KBVoid else KBTextHi
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
+    val focused by interactionSource.collectIsFocusedAsState()
     val reducedMotion = rememberReducedMotion()
     val pressScale by animateFloatAsState(
-        targetValue = if (pressed && !reducedMotion) 0.98f else 1f,
+        targetValue = when {
+            reducedMotion -> 1f
+            pressed -> 0.98f
+            focused -> 1.04f
+            else -> 1f
+        },
         animationSpec = if (reducedMotion) {
             tween(durationMillis = 0)
         } else {
@@ -2821,9 +2878,23 @@ private fun BillboardAction(
             .clip(CircleShape)
             .background(if (accent) KBAccent else KBTextHi.copy(alpha = 0.16f))
             .border(
-                width = 1.dp,
-                color = if (accent) Color.Transparent else KBTextHi.copy(alpha = 0.30f),
+                width = if (focused) 2.dp else 1.dp,
+                color = when {
+                    // The accent fill is already the focus colour on Play; on the
+                    // secondaries the ring is what makes focus visible.
+                    focused && accent -> KBTextHi
+                    focused -> KBAccent
+                    accent -> Color.Transparent
+                    else -> KBTextHi.copy(alpha = 0.30f)
+                },
                 shape = CircleShape
+            )
+            .then(
+                if (focusRequester != null) {
+                    Modifier.focusRequester(focusRequester)
+                } else {
+                    Modifier
+                }
             )
             .clickable(
                 interactionSource = interactionSource,
