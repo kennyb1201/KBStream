@@ -255,7 +255,12 @@ object PrefsPayloadBuilder {
         // `poster_size`, `home_landscape_cards` and `landscape_posters` are
         // deliberately NOT here (decision, 2026-10-20): the useful tile size
         // and card shape depend on the screen — a 65" TV and a 6.7" phone want
-        // different answers — so they are screen geometry, not identity. Each
+        // different answers — so they are screen geometry, not identity.
+        //
+        // `home_layout` and `home_card_expand_ms` join that family for the same
+        // reason (2026-11-11): the TV Home's layout and its card expand delay
+        // are statements about a screen with rail focus, which a phone does not
+        // have, so neither may follow the account onto one. Each
         // device keeps the value it already has stored locally, and changing
         // one only affects that device. This set gates BOTH directions (the
         // builder only publishes listed keys, [applyDisplayPrefs] skips any

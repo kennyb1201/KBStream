@@ -18,7 +18,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -176,10 +179,41 @@ fun PosterCard(
     }
     val showEyeBadge = isPartiallyWatched && eyeBadgeEnabled
 
+    // Spotlight's card preview (spec: Home second layout). Null on Modern and on
+    // every surface that is not a Home rail, in which case this card reports
+    // nothing and behaves exactly as it always has.
+    val spotlightFocus = com.kennyb1201.kbstream.ui.home.LocalSpotlightCardFocus.current
+    var spotlightFocused by remember { mutableStateOf(false) }
+    var spotlightBounds by remember {
+        mutableStateOf(androidx.compose.ui.geometry.Rect.Zero)
+    }
+    val spotlightModifier =
+        if (spotlightFocus == null) {
+            Modifier
+        } else {
+            Modifier
+                .onGloballyPositioned { coordinates ->
+                    spotlightBounds = coordinates.boundsInRoot()
+                    if (spotlightFocused) spotlightFocus.updateBounds(spotlightBounds)
+                }
+                .onFocusChanged { state ->
+                    spotlightFocused = state.isFocused
+                    spotlightFocus.onCardFocus(state.isFocused) {
+                        com.kennyb1201.kbstream.ui.home.SpotlightCardSnapshot(
+                            title = contentDescription,
+                            stillUrl = posterUrl,
+                            isWatched = isWatched,
+                            isPartiallyWatched = isPartiallyWatched,
+                            bounds = spotlightBounds
+                        )
+                    }
+                }
+        }
+
     KBCard(
         onClick = onClick,
         onLongClick = onLongClick,
-        modifier = modifier,
+        modifier = modifier.then(spotlightModifier),
         shape = posterEdgeShape()
     ) {
         Box(

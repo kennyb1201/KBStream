@@ -75,6 +75,8 @@ import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
+import com.kennyb1201.kbstream.ui.home.HomeExpandDelay
+import com.kennyb1201.kbstream.ui.home.HomeLayout
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.library.TasteSignals
@@ -3472,6 +3474,88 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
+                // ── Home layout (spec: Home second layout - Spotlight) ─────
+                //
+                // TV only: the phone Home never offers this and is unchanged.
+                // Device-local (see AppPreferences.getHomeLayout), which is why
+                // this pane is its only door - there is no synced copy.
+                var homeLayoutChoice by remember {
+                    mutableStateOf(HomeLayout.fromStored(AppPreferences.getHomeLayout(context)))
+                }
+                var expandDelayChoice by remember {
+                    mutableLongStateOf(
+                        HomeExpandDelay.normalize(AppPreferences.getHomeCardExpandMs(context))
+                    )
+                }
+                Text(
+                    text = "Home layout",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .searchAnchor(SettingsSearchIndex.entryForLabel("Home layout"))
+                        .padding(bottom = 4.dp)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    HomeLayout.entries.forEach { layout ->
+                        KBCard(onClick = {
+                            homeLayoutChoice = layout
+                            AppPreferences.setHomeLayout(context, layout.stored)
+                        }) {
+                            PillChip(layout.label, homeLayoutChoice == layout)
+                        }
+                    }
+                }
+                Text(
+                    text = homeLayoutChoice.description,
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // The Spotlight card's dwell. "No expand" changes nothing else
+                // about the layout - the billboard and the rails stay.
+                Text(
+                    text = "Card expand delay",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .searchAnchor(SettingsSearchIndex.entryForLabel("Card expand delay"))
+                        .padding(bottom = 4.dp)
+                )
+                Text(
+                    text = "How long a card holds focus in Spotlight before its preview opens. " +
+                        "No expand turns the preview off and leaves the layout as it is.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+                HomeExpandDelay.OPTIONS_MS.chunked(6).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        row.forEach { option ->
+                            KBCard(onClick = {
+                                expandDelayChoice = option
+                                AppPreferences.setHomeCardExpandMs(context, option)
+                            }) {
+                                PillChip(HomeExpandDelay.label(option), expandDelayChoice == option)
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // ── The Spotlight billboard's controls ─────────────────────
+                //
+                // The phone keeps its own controls in the Home manager dialog;
+                // these write the SAME prefs, so one billboard answers to one
+                // set of values (see the phone's BillboardSectionMobile).
+                BillboardSettingsSection()
+
+                Spacer(modifier = Modifier.height(10.dp))
+
                 Text(
                     text = "Poster Border",
                     color = KBTextHi,
@@ -5691,6 +5775,136 @@ private fun AudioTuningRow(
         color = KBTextLo,
         style = MaterialTheme.typography.labelSmall
     )
+}
+
+/**
+ * The Spotlight billboard's three controls: catalogs, hold, trailer mode.
+ *
+ * The same three the phone's Home manager dialog offers, writing the same
+ * prefs - one billboard, one set of values, whichever screen names them. They
+ * live in Settings on the TV because a TV has no Home manager dialog of its own
+ * (its "Manage rails" press goes to Add-ons), which is where the spec puts them
+ * when there is no Home manager to host them.
+ *
+ * The catalog chooser lists the feeds a TV Home can be fed from without a rail
+ * inventory: the trending-day default and the three built-in rows, plus any key
+ * the stored selection already names (so an older pick stays deselectable
+ * rather than silently sticking). The phone's dialog still lists every rail.
+ */
+@Composable
+private fun BillboardSettingsSection() {
+    val context = LocalContext.current
+    var feeds by remember { mutableStateOf(AppPreferences.getHomeBillboardFeeds(context)) }
+    var cycleMs by remember { mutableLongStateOf(AppPreferences.getHomeBillboardCycleMs(context)) }
+    var trailerMode by remember {
+        mutableStateOf(AppPreferences.getHomeBillboardTrailerMode(context))
+    }
+
+    fun writeFeeds(next: List<String>) {
+        // The picker's one invariant, shared with the phone: it never represents
+        // an EMPTY feed, so deselecting everything restores the default.
+        val normalized = next.ifEmpty { AppPreferences.DEFAULT_BILLBOARD_FEEDS }
+        feeds = normalized
+        AppPreferences.setHomeBillboardFeeds(context, normalized)
+    }
+
+    val catalogOptions = remember(feeds) {
+        val builtins = listOf(
+            AppPreferences.BILLBOARD_TRENDING_DAY_FEED to
+                AppPreferences.BILLBOARD_DEFAULT_FEED_LABEL,
+            com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU
+                to "Top Picks",
+            com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING
+                to "Continue Watching",
+            com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE
+                to "Upcoming"
+        )
+        builtins + feeds
+            .filterNot { key -> builtins.any { it.first == key } }
+            .map { key -> key to key }
+    }
+
+    Text(
+        text = "Billboard catalogs",
+        color = KBTextHi,
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier
+            .searchAnchor(SettingsSearchIndex.entryForLabel("Billboard catalogs"))
+            .padding(bottom = 4.dp)
+    )
+    Text(
+        text = "Which catalogs feed the Spotlight hero. Pick several to merge them.",
+        color = KBTextLo,
+        style = MaterialTheme.typography.labelSmall,
+        modifier = Modifier.padding(bottom = 6.dp)
+    )
+    catalogOptions.chunked(3).forEach { row ->
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            row.forEach { (key, label) ->
+                KBCard(onClick = {
+                    writeFeeds(if (key in feeds) feeds - key else feeds + key)
+                }) {
+                    PillChip(label, key in feeds)
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    Text(
+        text = "Billboard hold",
+        color = KBTextHi,
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier
+            .searchAnchor(SettingsSearchIndex.entryForLabel("Billboard hold"))
+            .padding(bottom = 4.dp)
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        AppPreferences.BILLBOARD_CYCLE_OPTIONS_MS.forEach { option ->
+            KBCard(onClick = {
+                cycleMs = option
+                AppPreferences.setHomeBillboardCycleMs(context, option)
+            }) {
+                PillChip(
+                    com.kennyb1201.kbstream.ui.home.billboardCycleLabel(option),
+                    cycleMs == option
+                )
+            }
+        }
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    Text(
+        text = "Billboard trailer",
+        color = KBTextHi,
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier
+            .searchAnchor(SettingsSearchIndex.entryForLabel("Billboard trailer"))
+            .padding(bottom = 4.dp)
+    )
+    Text(
+        text = "Auto-play waits the hero-trailer delay; mute is in Settings. " +
+            "The expanded card's trailer follows the same mode.",
+        color = KBTextLo,
+        style = MaterialTheme.typography.labelSmall,
+        modifier = Modifier.padding(bottom = 6.dp)
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        com.kennyb1201.kbstream.data.settings.BillboardTrailerMode.entries.forEach { mode ->
+            KBCard(onClick = {
+                trailerMode = mode
+                AppPreferences.setHomeBillboardTrailerMode(context, mode)
+            }) {
+                PillChip(
+                    com.kennyb1201.kbstream.ui.home.billboardTrailerModeLabel(mode),
+                    trailerMode == mode
+                )
+            }
+        }
+    }
 }
 
 /**

@@ -4902,6 +4902,33 @@ fun HomeScreen(
     val landscapeCards by remember(activeProfileId, syncRevision) {
         mutableStateOf(AppPreferences.homeLandscapeActive(context))
     }
+    // The TV Home's layout (spec: Home second layout - Spotlight). DEVICE-LOCAL
+    // and read with the profile only: it is not a synced pref, so the sync
+    // revision has nothing to say about it, and a profile switch re-reads it
+    // because the whole screen is rebuilt by then anyway.
+    val homeLayout by remember(activeProfileId) {
+        mutableStateOf(HomeLayout.fromStored(AppPreferences.getHomeLayout(context)))
+    }
+    // The layout is a presentation switch: the rails, their order, pins and
+    // hidden rows below are untouched by it, and switching back to Modern
+    // restores the focus-following hero exactly as it was.
+    val spotlightActive = homeLayout == HomeLayout.SPOTLIGHT
+    val spotlightExpandMs by remember(activeProfileId) {
+        mutableLongStateOf(HomeExpandDelay.normalize(AppPreferences.getHomeCardExpandMs(context)))
+    }
+    // The focused card's report, and whether its preview is up. Both are
+    // Spotlight-only; Modern pays nothing (the tracker is never provided).
+    val spotlightTracker = remember { SpotlightCardFocus() }
+    var spotlightCardExpanded by remember { mutableStateOf(false) }
+    val spotlightTrailerPrefMode = remember(activeProfileId, syncRevision) {
+        AppPreferences.getHomeBillboardTrailerMode(context)
+    }
+    val spotlightTrailerMuted = remember(activeProfileId, syncRevision) {
+        AppPreferences.getHeroTrailerMuted(context)
+    }
+    val spotlightTrailerAutoplay = remember(activeProfileId, syncRevision) {
+        AppPreferences.getHeroTrailerAutoplay(context)
+    }
     // Settings' "hide finished titles on Home rails". Read with the same two
     // keys as its neighbours: it is profile-scoped and synced, so a value
     // arriving from the account has to repaint Home rather than wait for the
@@ -6405,7 +6432,30 @@ fun HomeScreen(
         Column(
             modifier = Modifier.fillMaxSize()
         ) {
-            HomeHeroHost(
+            // Modern: the hero that follows focus. Spotlight: the same hero is
+            // NOT drawn - the billboard replaces it and the focused card owns the
+            // preview - so the meta resolve is driven directly here instead (the
+            // expanded card renders it, see SpotlightPreviewHost).
+            if (spotlightActive) {
+                val focused = focusedItemState.value
+                LaunchedEffect(focused?.id) {
+                    // The hero's own dwell, unchanged (HomeScreen.kt's
+                    // HERO_RESOLVE_DEBOUNCE_MS): a held D-pad collapses onto the
+                    // card the viewer settles on.
+                    if (focused != null) {
+                        delay(HERO_RESOLVE_DEBOUNCE_MS)
+                        viewModel.resolveHeroMeta(focused)
+                    }
+                }
+                SpotlightHeroSection(
+                    viewModel = viewModel,
+                    rails = rails,
+                    trailerMode = spotlightTrailerPrefMode,
+                    cardExpanded = spotlightCardExpanded,
+                    onPlay = onItemClick,
+                    onDetails = onItemClick
+                )
+            } else HomeHeroHost(
                 focusedItem = focusedItemState,
                 focusedFolder = focusedFolderState,
                 focusedBrowseShortcut = focusedBrowseShortcutState,
@@ -6434,7 +6484,12 @@ fun HomeScreen(
             // slides the spacer under the hero instead of leaving the
             // CW/Upcoming sliver peeking out from behind it.
             CompositionLocalProvider(
-                LocalBringIntoViewSpec provides railRowsBringIntoViewSpec
+                LocalBringIntoViewSpec provides railRowsBringIntoViewSpec,
+                // Spotlight's cards report their focus and bounds here (see
+                // SpotlightCardFocus); Modern provides null, which is what makes
+                // PosterCard do nothing at all.
+                LocalSpotlightCardFocus provides
+                    (if (spotlightActive) spotlightTracker else null)
             ) {
                 // KB parity: bottom contentPadding equals the rows
                 // viewport so the LAST rail can also land at the focus
@@ -7511,6 +7566,24 @@ fun HomeScreen(
                 onDismiss = {
                     dismissBrowseShortcutMenu()
                 }
+            )
+        }
+
+        // Spotlight's expanding card, over the rails and their menus (the
+        // screensaver below still covers it). Nothing in the rail moves while it
+        // is up: the panel is drawn at the focused card's own bounds.
+        if (spotlightActive) {
+            SpotlightPreviewHost(
+                tracker = spotlightTracker,
+                expandDelayMs = spotlightExpandMs,
+                meta = heroMetaState.value,
+                trailerKey = heroTrailerKeyState.value,
+                trailerMode = spotlightTrailerPrefMode,
+                trailerMuted = spotlightTrailerMuted,
+                heroTrailerAutoplay = spotlightTrailerAutoplay,
+                onPlay = onItemClick,
+                onDetails = onItemClick,
+                onExpandedChange = { spotlightCardExpanded = it }
             )
         }
 

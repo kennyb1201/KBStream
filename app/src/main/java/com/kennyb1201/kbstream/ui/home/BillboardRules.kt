@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.home
 
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
 import com.kennyb1201.kbstream.data.tmdb.TmdbDiscoverItem
@@ -197,6 +198,35 @@ internal fun billboardRandomPages(
  * falls back to the default feed, and hides the slot when that is empty too.
  * An EMPTY selection is the default selection, never an empty feed.
  */
+/**
+ * The rail key the billboard's feed picker stores for this rail.
+ *
+ * The same key the Home manager arranges the rail by, spelled through the same
+ * functions, so a chip in the manager and the items here cannot disagree: a
+ * built catalog keys by its id, an add-on catalog by its base URL (manifest URL
+ * minus "/manifest.json"), and an app-built arrangement keys by the built-in key
+ * for the catalog id it was built with.
+ *
+ * One copy for both Homes: the phone's billboard picker and the TV Spotlight
+ * hero's picker offer the same chips, and a feed chosen on one names the same
+ * rail on the other (the pref itself is device-local - see the billboard
+ * section - so the KEY has to agree even where the value does not travel).
+ */
+internal fun billboardFeedKey(rail: Rail): String? {
+    // The APP-BUILT rails first (the Top Today pair, the six kids rows, the
+    // guest rows): they have no manifest to key against, so their arrangement -
+    // and therefore the picker's chip - key is the built-in key for the catalog
+    // id they are built with. Without this branch the picker offered those rows
+    // and this lookup named none of them, so picking "Top Kids Movies" put
+    // NOTHING in the hero and the slot fell back to trending (field 2026-11-05:
+    // "one title, then four").
+    KBHomeOrderPrefs.builtinKeyForCatalogId(rail.catalogId)?.let { return it }
+    val customId = rail.customCatalogId?.takeIf { it.isNotBlank() }
+    if (customId != null) return KBHomeOrderPrefs.customCatalogKey(customId)
+    val base = rail.baseUrl?.takeIf { it.isNotBlank() } ?: return null
+    return KBHomeOrderPrefs.addonKey(base, rail.type, rail.catalogId)
+}
+
 internal fun billboardChosenFeed(
     keys: List<String>,
     sources: Map<String, List<MetaPreview>>,

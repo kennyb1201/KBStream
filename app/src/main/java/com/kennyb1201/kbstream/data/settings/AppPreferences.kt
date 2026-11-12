@@ -127,6 +127,8 @@ object AppPreferences {
     private const val KEY_SEARCH_SHOW_CATALOG_TYPE = "search_rail_show_catalog_type"
     private const val KEY_SEARCH_SHOW_ADDON_NAME = "search_rail_show_addon_name"
     private const val KEY_POSTER_SIZE = "poster_size"                       // 0=small, 1=medium, 2=large
+    private const val KEY_HOME_LAYOUT = "home_layout"                       // "modern" | "spotlight"
+    private const val KEY_HOME_CARD_EXPAND_MS = "home_card_expand_ms"       // 0=no expand, else ms
     private const val KEY_POSTER_CAPTION_TITLE = "poster_caption_title"
     private const val KEY_POSTER_CAPTION_YEAR = "poster_caption_year"
     private const val KEY_POSTER_CAPTION_RATING = "poster_caption_rating"
@@ -1926,6 +1928,43 @@ object AppPreferences {
 
     fun setPosterSize(context: Context, size: Long) {
         prefs(context).edit().putLong(KEY_POSTER_SIZE, size).apply()
+        notifyDisplayPrefChanged()
+    }
+
+    // ── TV Home layout (device-local) ──────────────────────────────────────
+    //
+    // The TV Home's presentation: `modern` is the hero-that-follows-focus it
+    // has always been, `spotlight` is the cycling billboard hero plus the
+    // expanding rail card. Both are read only on a TV - the phone never offers
+    // the choice and its Home is the same code either way.
+    //
+    // DEVICE-LOCAL on purpose, and part of the layout family this file already
+    // keeps out of the account (`poster_size`, `home_landscape_cards`,
+    // `landscape_posters`): a phone has no rail focus to expand a card from, so
+    // these are statements about this screen - see
+    // [com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.SYNCED_PREF_KEYS].
+    fun getHomeLayout(context: Context): String =
+        prefs(context).getString(KEY_HOME_LAYOUT, "modern") ?: "modern"
+
+    fun setHomeLayout(context: Context, layout: String) {
+        prefs(context).edit().putString(KEY_HOME_LAYOUT, layout).apply()
+        notifyDisplayPrefChanged()
+    }
+
+    /**
+     * How long a rail card must hold focus before Spotlight expands it.
+     *
+     * 0 is "No expand": the layout stays Spotlight - billboard and rails
+     * unchanged - and no card ever previews. The default two seconds is slow
+     * enough that a held D-pad scroll never flashes an expansion, quick enough
+     * that a settled card opens promptly, and inside the six-second trailer
+     * delay so the trailer can still follow it.
+     */
+    fun getHomeCardExpandMs(context: Context): Long =
+        prefs(context).getLong(KEY_HOME_CARD_EXPAND_MS, 2_000L)
+
+    fun setHomeCardExpandMs(context: Context, ms: Long) {
+        prefs(context).edit().putLong(KEY_HOME_CARD_EXPAND_MS, ms).apply()
         notifyDisplayPrefChanged()
     }
 

@@ -59,7 +59,15 @@ internal val TV_ONLY_SEARCH_KEYS: Set<String> = setOf(
     // Tunneled playback keeps A/V in sync over an HDMI link into an AVR, which
     // a phone does not have - so the phone draws no row for it (the stored pref
     // is left alone for the TV that shares the profile).
-    "video.tunneling"
+    "video.tunneling",
+    // The Spotlight layout is a TV Home: its rail cards expand from D-pad focus,
+    // which a phone does not have, and its rows are drawn in this pane only. The
+    // phone Home is unchanged and offers no layout choice at all.
+    "interface.home-layout",
+    "interface.card-expand-delay",
+    "interface.billboard-catalogs",
+    "interface.billboard-hold",
+    "interface.billboard-trailer"
 )
 
 /**
@@ -635,6 +643,42 @@ internal object SettingsSearchIndex {
             SettingsPane.INTERFACE,
             "Spoiler-free Episodes",
             "spoiler free episodes thumbnails still"
+        ),
+        // The second Home layout and its card dwell (spec: Home second layout -
+        // Spotlight). TV only: the phone Home has no rail focus to expand a card
+        // from and offers neither row (see TV_ONLY_SEARCH_KEYS).
+        SettingSearchEntry(
+            "interface.home-layout",
+            SettingsPane.INTERFACE,
+            "Home layout",
+            "home layout spotlight modern billboard hero expanding card preview " +
+                "netflix style home screen"
+        ),
+        SettingSearchEntry(
+            "interface.card-expand-delay",
+            SettingsPane.INTERFACE,
+            "Card expand delay",
+            "home card expand delay hover preview spotlight seconds no expand"
+        ),
+        // The Spotlight hero's controls, the phone's Home-manager set on the TV.
+        SettingSearchEntry(
+            "interface.billboard-catalogs",
+            SettingsPane.INTERFACE,
+            "Billboard catalogs",
+            "billboard hero catalog feeds trending top picks continue watching " +
+                "upcoming spotlight"
+        ),
+        SettingSearchEntry(
+            "interface.billboard-hold",
+            SettingsPane.INTERFACE,
+            "Billboard hold",
+            "billboard hero cycle interval hold seconds rotation spotlight"
+        ),
+        SettingSearchEntry(
+            "interface.billboard-trailer",
+            SettingsPane.INTERFACE,
+            "Billboard trailer",
+            "billboard hero trailer auto manual off spotlight preview"
         ),
         SettingSearchEntry(
             "interface.hide-unreleased",

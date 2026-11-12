@@ -2097,7 +2097,7 @@ private fun MobileHero(
  * is the ask.
  */
 @Composable
-private fun MobileBillboard(
+internal fun MobileBillboard(
     pages: List<BillboardPage>,
     cycleMs: Long,
     trailerMode: BillboardTrailerMode,
@@ -2865,21 +2865,13 @@ private fun BillboardAction(
  * URL minus "/manifest.json"), and a rail the app builds itself (a pinned Top
  * Today row) keys by nothing - it is never offered, exactly as it is never
  * arrangeable.
+ *
+ * The rule itself now lives in `BillboardRules` (shared with the TV Spotlight
+ * hero), so the two Homes resolve the SAME chip keys instead of carrying two
+ * copies that could disagree.
  */
-private fun Rail.billboardFeedKey(): String? {
-    // The APP-BUILT rails first (the Top Today pair, the six kids rows, the
-    // guest rows): they have no manifest to key against, so their arrangement -
-    // and therefore the picker's chip - key is the built-in key for the catalog
-    // id they are built with. Without this branch the picker offered those rows
-    // and this lookup named none of them, so picking "Top Kids Movies" put
-    // NOTHING in the hero and the slot fell back to trending (field 2026-11-05:
-    // "one title, then four").
-    KBHomeOrderPrefs.builtinKeyForCatalogId(catalogId)?.let { return it }
-    val customId = customCatalogId?.takeIf { it.isNotBlank() }
-    if (customId != null) return KBHomeOrderPrefs.customCatalogKey(customId)
-    val base = baseUrl?.takeIf { it.isNotBlank() } ?: return null
-    return KBHomeOrderPrefs.addonKey(base, type, catalogId)
-}
+private fun Rail.billboardFeedKey(): String? =
+    com.kennyb1201.kbstream.ui.home.billboardFeedKey(this)
 
 /** A Continue Watching card as a billboard item: the SHOW (or the film). */
 private fun UpNextItem.billboardPreview(): MetaPreview {
