@@ -112,6 +112,10 @@ internal class RemoteServer(
                 }
                 is RemoteProtocol.Incoming.Play -> play(incoming)
                 RemoteProtocol.Incoming.Unknown -> Unit
+                // decode() answers null for a frame that is not JSON at all, or
+                // that is longer than a remote frame may be. Nothing to do with
+                // it: the phone is simply not speaking this protocol.
+                null -> Unit
             }
         }
 

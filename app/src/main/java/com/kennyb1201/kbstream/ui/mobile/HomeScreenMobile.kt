@@ -177,6 +177,8 @@ import com.kennyb1201.kbstream.ui.home.HeroInlineTrailerPlayer
 import com.kennyb1201.kbstream.ui.home.HeroTrailerPlayback
 import com.kennyb1201.kbstream.ui.home.HomeViewModel
 import com.kennyb1201.kbstream.ui.home.Rail
+import com.kennyb1201.kbstream.ui.home.YearInReviewCard
+import com.kennyb1201.kbstream.ui.home.YearInReviewHomeCard
 import com.kennyb1201.kbstream.ui.home.billboardChosenFeed
 import com.kennyb1201.kbstream.ui.home.billboardSegmentFill
 import com.kennyb1201.kbstream.ui.home.billboardSweep
