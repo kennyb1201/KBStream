@@ -104,46 +104,17 @@ internal object SpotlightTrailerRule {
     /**
      * Whether the expanded card plays its trailer on its own once it is up.
      *
-     * AUTO does (after [expandedCardDelayMs] from the expansion, never from
-     * focus - the two delays never stack into one timer); MANUAL offers the
-     * button instead; OFF offers nothing, exactly as on the hero.
+     * The viewer's autoplay pref decides, and OFF is the only mode that vetoes
+     * it (spec 2026-11-12, F4). The old rule demanded AUTO as well, back when
+     * MANUAL had a TRAILER pill in the panel to press - and the field build
+     * showed an autoplay-pref viewer with a panel that never played, because a
+     * MANUAL billboard mode silently switched the card's trailer off. The pills
+     * are gone (F2), so MANUAL no longer HAS a manual path here; treating it as
+     * "off for cards too" would leave those viewers with no trailer at all.
+     * Still counted from the EXPANSION, never from focus ([expandedCardDelayMs]).
      */
     fun autoplaysInCard(mode: BillboardTrailerMode, heroTrailerAutoplay: Boolean): Boolean =
-        mode == BillboardTrailerMode.AUTO && heroTrailerAutoplay
-
-    /**
-     * Whether the expanded card draws a Trailer button.
-     *
-     * MANUAL always offers it, and the hero-trailer autoplay switch does not get
-     * a say: that switch turns off trailers nobody asked for, while this press IS
-     * the ask - the same reason the phone billboard's Manual pill ignores it.
-     */
-    @Suppress("UNUSED_PARAMETER")
-    fun showsTrailerButton(mode: BillboardTrailerMode, heroTrailerAutoplay: Boolean): Boolean =
-        mode == BillboardTrailerMode.MANUAL
-
-    /**
-     * Whether the expanded card draws its TRAILER pill.
-     *
-     * Only when the title HAS a trailer: the mode says what a trailer would do,
-     * not whether there is one, and MANUAL on a title with no key offered a pill
-     * whose press silently did nothing (a fresh press could not even retry -
-     * the resolve returns on a blank key). A failed resolve keeps the pill: it is
-     * the retry affordance, and the panel's request counter is what makes that
-     * press fire again.
-     */
-    fun showsTrailerPill(
-        mode: BillboardTrailerMode,
-        heroTrailerAutoplay: Boolean,
-        trailerKey: String?
-    ): Boolean = !trailerKey.isNullOrBlank() && showsTrailerButton(mode, heroTrailerAutoplay)
-
-    /**
-     * Whether an exact press of the pill may start a trailer at all (see
-     * [showsTrailerPill]) - kept as a name for the press path, so the rule is
-     * read in one place.
-     */
-    fun trailerPressStarts(trailerKey: String?): Boolean = !trailerKey.isNullOrBlank()
+        mode != BillboardTrailerMode.OFF && heroTrailerAutoplay
 }
 
 /**
@@ -156,9 +127,8 @@ internal object SpotlightTrailerRule {
  * panel and the rail agree about where the edge is - there is no second
  * screen-size estimate to drift.
  *
- * A still-too-big panel is capped rather than allowed to overhang: the pills
- * row at its bottom is the part a viewer presses, so the whole panel is what has
- * to be on screen.
+ * A still-too-big panel is capped rather than allowed to overhang: the panel is
+ * what the viewer reads, so all of it has to be on screen.
  */
 internal data class SpotlightPanelBox(
     val left: Int,

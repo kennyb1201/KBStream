@@ -281,7 +281,7 @@ class SpotlightScrollHeroContractTest {
         // card already held bumped the token and restarted the two seconds.
         assertTrue(
             "the host's effect is keyed on the held card, not on the live snapshot",
-            section().contains("LaunchedEffect(heldCard, expandDelayMs, menuOpen)")
+            section().contains("LaunchedEffect(heldNode, expandDelayMs, menuOpen)")
         )
         assertFalse(
             "and not on the snapshot object, which is what restarted it",

@@ -249,7 +249,7 @@ class SpotlightHomeContractTest {
     }
 
     @Test
-    fun `the panel carries the meta line, the two-line overview and both pills`() {
+    fun `the panel carries the meta line and the two-line overview, and no action row`() {
         val preview = source(SPOTLIGHT_PREVIEW)
         assertTrue("title", preview.contains("meta?.name ?: snapshot.title.orEmpty()"))
         assertTrue("meta line", preview.contains("spotlightMetaLine(meta)"))
@@ -261,9 +261,10 @@ class SpotlightHomeContractTest {
             "the watched mark",
             preview.contains("if (snapshot.isWatched)")
         )
-        assertTrue(
-            "and the two pill actions the billboard offers",
-            preview.contains("label = \"PLAY\"") &&
+        assertFalse(
+            "and NO action row (rework 2026-11-12, F2): the card's own OK opens " +
+                "Details, so the panel does not need a copy of it",
+            preview.contains("label = \"PLAY\"") ||
                 preview.contains("label = \"DETAILS\"")
         )
         assertTrue(
@@ -288,18 +289,25 @@ class SpotlightHomeContractTest {
             tracker.contains("cardFocused = false")
         )
         val host = source(SPOTLIGHT_HOME)
-        // Repointed again by the 2026-11-12 collapse spec: a blur does not
-        // collapse an OPEN panel. It fired ~0.5 s after the panel appeared and
-        // took it with it, and the card never re-earned the focus it lost.
+        // Repointed again by the 2026-11-12 panel rework (F3): the panel follows
+        // the CARD the viewer is on. A different card collapses it, a departure
+        // collapses it once the grace has passed, a menu or a disabled expand
+        // collapses it - and a blur that lands back on the same card does not.
         assertTrue(
-            "and the host collapses only on a menu, a disabled expand, or a real move",
+            "the host collapses on a menu, a disabled expand, another card, or a departure",
             host.contains("menuOpen -> \"menuOpen\"") &&
                 host.contains("\"cardChanged\"") &&
-                host.contains("if (heldCard == null) return@LaunchedEffect")
+                host.contains("\"focusLeft\"") &&
+                host.contains("live.node !== heldNode")
+        )
+        assertTrue(
+            "and the card the panel is on is the tracker's NODE, not the title",
+            host.contains("val heldNodeNow = if (tracker.cardFocused) tracker.focusedNode else null") &&
+                tracker.contains("var focusedNode: Any? = null")
         )
         assertTrue(
             "the panel (and its trailer) only exist while expanded",
-            host.contains("val panel = expanded ?: return")
+            host.contains("val panel = expanded?.snapshot ?: return")
         )
     }
 
@@ -334,25 +342,17 @@ class SpotlightHomeContractTest {
             trailer.contains("delay(delayMs.coerceAtLeast(0L))") &&
                 source(SPOTLIGHT_HOME).contains("SpotlightTrailerRule.expandedCardDelayMs(")
         )
-        assertTrue(
-            "MANUAL offers the button instead",
-            preview.contains("SpotlightTrailerRule.showsTrailerPill(") &&
-                preview.contains("label = \"TRAILER\"")
-        )
-        assertTrue(
-            "OFF offers neither - the same rule answers for the button",
-            trailer.contains("SpotlightTrailerRule.autoplaysInCard(") &&
-                preview.contains("SpotlightTrailerRule.showsTrailerPill(")
+        assertFalse(
+            "the panel has no TRAILER pill any more (rework 2026-11-12, F2)",
+            preview.contains("label = \"TRAILER\"")
         )
 
-        // The rule itself, as arithmetic: AUTO plays, MANUAL buttons, OFF neither.
+        // The rule itself, as arithmetic (rework F4): the autoplay pref decides,
+        // OFF is the only veto, and there is no manual path left to fall back on.
         assertTrue(SpotlightTrailerRule.autoplaysInCard(auto, heroTrailerAutoplay = true))
-        assertTrue(SpotlightTrailerRule.showsTrailerButton(manual, heroTrailerAutoplay = true))
-        assertFalse(SpotlightTrailerRule.autoplaysInCard(manual, heroTrailerAutoplay = true))
-        assertTrue(SpotlightTrailerRule.showsTrailerButton(manual, heroTrailerAutoplay = false))
+        assertTrue(SpotlightTrailerRule.autoplaysInCard(manual, heroTrailerAutoplay = true))
         assertFalse(SpotlightTrailerRule.autoplaysInCard(auto, heroTrailerAutoplay = false))
         assertFalse(SpotlightTrailerRule.autoplaysInCard(off, heroTrailerAutoplay = true))
-        assertFalse(SpotlightTrailerRule.showsTrailerButton(off, heroTrailerAutoplay = true))
     }
 
     // ── (e) Modern is the same screen it was ───────────────────────────────

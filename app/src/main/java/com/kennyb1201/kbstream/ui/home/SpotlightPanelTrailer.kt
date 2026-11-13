@@ -15,6 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
+import com.kennyb1201.kbstream.data.reporting.SpotlightDiagTrace
 import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
 import com.kennyb1201.kbstream.data.youtube.HeroTrailerResumeVerdict
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
@@ -64,14 +65,6 @@ internal fun SpotlightPanelTrailer(
     heroTrailerAutoplay: Boolean,
     /** The viewer's hero-trailer delay, counted from the EXPANSION (see F7). */
     delayMs: Long,
-    /**
-     * A press of the panel's TRAILER pill, as a counter.
-     *
-     * The pill is the manual ask AND the retry affordance, so each press must
-     * start a resolve even when the last one failed: a generation, not a flag,
-     * is what makes the resolve effect fire again.
-     */
-    pressRequest: Int = 0,
     /** What the panel shows when there is no trailer on screen. */
     stillUrl: String?,
     title: String?,
@@ -92,26 +85,42 @@ internal fun SpotlightPanelTrailer(
     var identicalReplays by remember(key) { mutableIntStateOf(0) }
     var resumeAttempts by remember(key) { mutableIntStateOf(0) }
 
-    // AUTO waits the VIEWER'S delay (F7), counted from the expansion - the
-    // panel's own composition - and never from focus: the expand delay and the
-    // trailer delay do not stack into one timer.
-    LaunchedEffect(key, mode, heroTrailerAutoplay, delayMs) {
-        if (key == null) return@LaunchedEffect
-        if (!SpotlightTrailerRule.autoplaysInCard(mode, heroTrailerAutoplay)) return@LaunchedEffect
-        if (request > 0) return@LaunchedEffect
-        delay(delayMs.coerceAtLeast(0L))
-        request += 1
+    /** This trailer's own state, for the diagnostics line (F4). */
+    fun report(status: String) {
+        SpotlightDiagTrace.spotlightPanelTrailer(status)
     }
 
-    // A press of the pill: the manual start, and the retry after a failure.
-    LaunchedEffect(pressRequest) {
-        if (pressRequest > 0) request += 1
+    // Autoplay waits the VIEWER'S delay (F7), counted from the expansion - the
+    // panel's own composition - and never from focus: the expand delay and the
+    // trailer delay do not stack into one timer.
+    //
+    // The gate's own answer is REPORTED (spec 2026-11-12, F4), because "the
+    // trailer did not start" has four indistinguishable causes on screen: no
+    // trailer key for the card, the mode/autoplay gate, a resolve that failed,
+    // and a player that never painted. The paste now names the one it is.
+    LaunchedEffect(key, mode, heroTrailerAutoplay, delayMs) {
+        if (key == null) {
+            report("none (no trailer key)")
+            return@LaunchedEffect
+        }
+        if (!SpotlightTrailerRule.autoplaysInCard(mode, heroTrailerAutoplay)) {
+            report(
+                "none (gate: mode=$mode autoplay=" +
+                    (if (heroTrailerAutoplay) "on" else "off") + ")"
+            )
+            return@LaunchedEffect
+        }
+        if (request > 0) return@LaunchedEffect
+        report("waiting ${delayMs.coerceAtLeast(0L)}ms")
+        delay(delayMs.coerceAtLeast(0L))
+        request += 1
     }
 
     // One resolve path, the launcher's own result (it handles its cancellation
     // and its refusals): a null answer leaves the still showing.
     LaunchedEffect(request, key) {
         if (request == 0 || key == null) return@LaunchedEffect
+        report("resolving")
         val result = TrailerPlayerLauncher.resolvePlayableUrl(
             key,
             excludeClients = excludedClients,
@@ -123,6 +132,10 @@ internal fun SpotlightPanelTrailer(
             mountedSource = resolved
             firstFrame = false
             source = resolved
+            report("mounted")
+        }
+        result.onFailure { error ->
+            report("none (resolve failed: ${error.javaClass.simpleName})")
         }
     }
 
@@ -235,6 +248,7 @@ internal fun SpotlightPanelTrailer(
                 onEnded = {
                     source = null
                     firstFrame = false
+                    report("ended")
                 },
                 onFailed = { positionMs -> requestRetry(positionMs, 0L) },
                 onStalled = { positionMs, stalledDuration -> requestRetry(positionMs, stalledDuration) },

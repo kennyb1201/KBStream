@@ -239,50 +239,48 @@ internal fun SpotlightPreviewHost(
     menuOpen: Boolean,
     /** The hero meta has not landed yet (and has not failed): the panel says so. */
     metaLoading: Boolean = false,
-    /** The hero meta resolve failed: the panel says so and offers its retry. */
+    /** The hero meta resolve failed: the panel says so. */
     metaFailed: Boolean = false,
-    onRetryMeta: () -> Unit = {},
-    onPlay: (MetaPreview) -> Unit,
-    onDetails: (MetaPreview) -> Unit,
     onTrailerPlayingChange: (Boolean) -> Unit,
     onExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var expanded by remember { mutableStateOf<SpotlightCardSnapshot?>(null) }
+    var expanded by remember { mutableStateOf<ExpandedPanel?>(null) }
     val snapshot = tracker.snapshot
-    // The identity the dwell keys on: the card while it HOLDS focus, nothing
-    // while focus is away (debounced below, so a flicker is not a departure).
-    val cardId = if (tracker.cardFocused) snapshot?.cardIdentity() else null
+    // The card the viewer is HELD on, as a NODE (spec 2026-11-12, F5).
+    //
+    // The dwell used to key on the card's `type:id` string, which is not a card
+    // identity: the same show sits on Continue Watching, on Upcoming and on a
+    // catalog rail, and on two catalog rails as well. Moving between two of those
+    // cards read as "no move", so the panel followed the new bounds and never
+    // collapsed - the field report's stuck panel. A node cannot collide.
+    val heldNodeNow = if (tracker.cardFocused) tracker.focusedNode else null
 
     // ── The card the viewer is HELD on, debounced (spec 2026-11-12) ──────
     //
-    // The dwell used to key on `hasSnapshot`, which is `tracker.snapshot != null`
-    // - and the tracker nulls that snapshot on EVERY blur, including a blur a
-    // recomposition causes and the same card takes straight back. Keyed on it,
-    // one such flicker cancelled the two seconds mid-hold and the panel never
-    // opened: exactly the field report (five cards, each focused once, 2000 ms, 
-    // no menu, no expand).
-    //
-    // So the dwell keys on an IDENTITY that only changes when the viewer really
-    // moves: a card taking focus is immediate, and a card losing focus is only
-    // believed after a grace. A flicker shorter than [SPOTLIGHT_BLUR_GRACE_MS]
-    // lands back on the same identity and cancels nothing.
-    var heldCard by remember { mutableStateOf(cardId) }
-    LaunchedEffect(cardId) {
-        if (cardId != null) {
-            heldCard = cardId
+    // The dwell keys on the card's identity, and a card losing focus is only
+    // believed after a grace. A one-frame recomposition blur that takes focus
+    // back lands on the same node and cancels nothing: that is the survival
+    // 4c29def2a earned, and it stays.
+    var heldNode by remember { mutableStateOf<Any?>(null) }
+    var heldLabel by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(heldNodeNow) {
+        if (heldNodeNow != null) {
+            heldNode = heldNodeNow
+            heldLabel = snapshot?.cardIdentity()
             return@LaunchedEffect
         }
-        // Nothing is focused: give the card a frame of grace to take it back.
+        // Nothing is focused: give the card a moment to take it back.
         delay(SPOTLIGHT_BLUR_GRACE_MS)
-        heldCard = null
+        heldNode = null
+        heldLabel = null
     }
 
     // What the in-flight delay was armed on, so a cancellation can NAME the
     // input that did it (F1). Plain holder: the effect is the only writer.
     val dwellRun = remember { DwellRun() }
-    LaunchedEffect(heldCard, expandDelayMs, menuOpen) {
-        val now = DwellInputs(heldCard, expandDelayMs, menuOpen)
+    LaunchedEffect(heldNode, expandDelayMs, menuOpen) {
+        val now = DwellInputs(heldLabel, expandDelayMs, menuOpen)
         // A delay that was armed and never completed was cancelled by the input
         // that changed under it. Reported BEFORE this run re-arms.
         if (dwellRun.armed) {
@@ -296,40 +294,39 @@ internal fun SpotlightPreviewHost(
             expandDelayMs = expandDelayMs,
             menuOpen = menuOpen,
             token = tracker.focusToken,
-            card = heldCard
+            card = heldLabel
         )
-        // ── An open panel is the source of truth (F3, spec 2026-11-12) ──
+        // ── The panel follows the CARD, not the snapshot (F3) ───────────
         //
-        // The field build opened the panel and lost it ~0.5 s later, because
-        // the panel's lifetime was still tied to the live snapshot: the card
-        // blurred (focus lost to NOTHING - it never came back), the snapshot
-        // cleared, and the guard above collapsed what the viewer had just
-        // earned. Once expanded, only three things end it: the viewer opens a
-        // menu, turns expansion off, or moves focus to ANOTHER card (which
-        // starts that card's own dwell). A blur is not one of them - the card
-        // keeps the panel until a real move, or BACK.
+        // Three things end an open panel: the viewer opens a menu, turns
+        // expansion off, or takes their card away - a DIFFERENT card taking
+        // focus (`cardChanged`), or focus leaving the cards altogether
+        // (`focusLeft`, believed after the grace above). What does NOT end it is
+        // a blur that lands back on the same card, which is the case
+        // 4c29def2a fixed and this keeps.
         val live = expanded
         val collapseGuard = when {
             menuOpen -> "menuOpen"
             !HomeExpandDelay.expands(expandDelayMs) -> "!expands"
-            live != null && heldCard != null && heldCard != live.cardIdentity() ->
-                "cardChanged"
+            live != null && live.node !== heldNode ->
+                if (heldNode == null) "focusLeft" else "cardChanged"
             else -> null
         }
         if (collapseGuard != null) {
-            if (live != null) SpotlightDiagTrace.spotlightCollapsed(collapseGuard)
-            expanded = null
-            onExpandedChange(false)
+            if (live != null) {
+                SpotlightDiagTrace.spotlightCollapsed(collapseGuard)
+                expanded = null
+                onExpandedChange(false)
+            }
             if (collapseGuard != "cardChanged") return@LaunchedEffect
         }
-        // Focus is nowhere (a blur), or belongs to the card already up: nothing
-        // to arm, and nothing to collapse.
-        if (heldCard == null) return@LaunchedEffect
+        // Focus is nowhere: nothing to arm, and the guard above has already
+        // closed what was up.
+        if (heldNode == null) return@LaunchedEffect
         // The card must HOLD focus for the whole delay; a move cancels this run
         // and the next card starts its own clock.
-        // Read fresh: the tracker keeps this across a blur now, so it is the
-        // card the viewer is on, not a value that a flicker can empty.
         val armedOn = tracker.snapshot ?: return@LaunchedEffect
+        val armedNode = tracker.focusedNode
         dwellRun.inputs = now
         dwellRun.armed = true
         delay(expandDelayMs)
@@ -337,7 +334,7 @@ internal fun SpotlightPreviewHost(
         // The snapshot captured when the dwell ARMED, not whatever the tracker
         // holds now (F3): the panel a held card earned must not be lost to a
         // live snapshot that flickered during the last frame of the wait.
-        expanded = armedOn
+        expanded = ExpandedPanel(armedOn, armedNode)
         SpotlightDiagTrace.spotlightExpanded(armedOn.title)
         onExpandedChange(true)
     }
@@ -345,15 +342,14 @@ internal fun SpotlightPreviewHost(
     // composition, so the write schedules a frame instead of mutating inside one.
     SideEffect {
         val current = snapshot
-        if (expanded != null && current != null && expanded?.bounds != current.bounds) {
-            expanded = current
+        val live = expanded
+        if (live != null && current != null && live.node === tracker.focusedNode &&
+            live.snapshot.bounds != current.bounds
+        ) {
+            expanded = live.copy(snapshot = current)
         }
     }
 
-    // The panel is the card's own focus neighbourhood while it is up (see
-    // SpotlightCardFocus): DOWN from the card enters its pills, and their focus
-    // keeps it open.
-    SideEffect { tracker.panelExpanded = expanded != null }
     // Audit a2: BACK with a panel up collapses it and hands focus back to the
     // card that owns it, instead of leaving Home. The top bar and the screensaver
     // have their own handlers, but neither can be up with a panel: a menu
@@ -364,21 +360,7 @@ internal fun SpotlightPreviewHost(
         onExpandedChange(false)
         runCatching { tracker.cardRequester?.requestFocus() }
     }
-    val panel = expanded ?: return
-    // Audit A4: the pills act on the CARD's own identity, never on the
-    // enrichment. PLAY and DETAILS used to be gated on the resolved meta, so a
-    // slow or failed resolve left both as silent dead presses; the panel now has
-    // what the card already had.
-    val preview = (panel.id ?: meta?.id)?.let { id ->
-        MetaPreview(
-            id = id,
-            type = panel.type ?: meta?.type ?: "movie",
-            name = meta?.name ?: panel.title.orEmpty(),
-            poster = meta?.poster ?: panel.stillUrl,
-            background = meta?.background,
-            imdbRating = meta?.imdbRating
-        )
-    }
+    val panel = expanded?.snapshot ?: return
 
     Box(modifier = modifier.fillMaxSize().zIndex(SPOTLIGHT_PANEL_Z)) {
         // The overlay's own size is the viewport the panel clamps to: it is the
@@ -397,27 +379,23 @@ internal fun SpotlightPreviewHost(
             heroTrailerAutoplay = heroTrailerAutoplay,
             trailerDelayMs = SpotlightTrailerRule.expandedCardDelayMs(trailerDelayMs),
             viewport = viewport,
-            tracker = tracker,
             metaLoading = metaLoading,
             metaFailed = metaFailed,
-            onRetryMeta = onRetryMeta,
-            onPlay = {
-                // The card's Play is the billboard's: ask Detail to press its own
-                // Play for this title, the one path that resolves a stream.
-                val target = preview
-                if (target != null) {
-                    BillboardPlaySelection.request(target.id)
-                    onPlay(target)
-                }
-            },
-            onDetails = {
-                val target = preview
-                if (target != null) onDetails(target)
-            },
             onTrailerPlayingChange = onTrailerPlayingChange
         )
     }
 }
+
+/**
+ * The panel that is up: the card's snapshot and the NODE that earned it.
+ *
+ * The node is what makes "another card" mean another card (F3/F5); the snapshot
+ * is what the panel draws.
+ */
+private data class ExpandedPanel(
+    val snapshot: SpotlightCardSnapshot,
+    val node: Any?
+)
 
 /** Above the rails and their menus, below the screensaver. */
 private const val SPOTLIGHT_PANEL_Z = 4f
@@ -427,11 +405,13 @@ private const val SPOTLIGHT_PANEL_Z = 4f
  *
  * A recomposition can blur and re-focus the held card inside a frame or two;
  * treating that as a departure is what cancelled the two-second dwell on the
- * field TV. Long enough to cover such a flicker, short enough that a real move
- * (which is immediate - the next card's identity lands at once) or a real exit
- * (to the top bar, a menu, another screen) still closes the panel promptly.
+ * field TV. The field build also lost its card to NOTHING for about half a
+ * second after the panel opened (2026-11-12, 4c29def2a), so this is 600 ms: long
+ * enough to cover that blur, short enough that a real move - which is immediate,
+ * the next card's node lands at once - or a real exit still closes the panel
+ * promptly.
  */
-private const val SPOTLIGHT_BLUR_GRACE_MS = 250L
+private const val SPOTLIGHT_BLUR_GRACE_MS = 600L
 
 /**
  * The four inputs the dwell effect keys on, and their last armed values.

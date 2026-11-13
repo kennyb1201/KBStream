@@ -94,6 +94,12 @@ internal object SpotlightDiagTrace {
     private var dwellCard: String? = null
     private var dwellCancel: String? = null
 
+    /** The card the panel last expanded for, as `type:id (title)`. */
+    private var expandedCard: String? = null
+
+    /** The expanded card's trailer's state, as its own composable reported it (F4). */
+    private var panelTrailer: String? = null
+
     /** When the panel last expanded, so a following blur can be dated against it. */
     private var expandedAtMs = 0L
 
@@ -384,21 +390,42 @@ internal object SpotlightDiagTrace {
 
     /** The panel expanded for the held card. */
     fun spotlightExpanded(title: String?) {
-        synchronized(lock) { expandedAtMs = clock() }
-        val card: String
         synchronized(lock) {
+            expandedAtMs = clock()
             lastExpanded = true
-            card = label(lastKey, title ?: lastTitle)
+            expandedCard = label(lastKey, title ?: lastTitle)
+            panelTrailer = "not-reported"
         }
         putSpotlight("tracker", trackerLine())
-        putSpotlight("panel", "panel expanded=yes last=expanded $card")
-        note(SPOTLIGHT + "expanded $card")
+        putSpotlight("panel", panelLine("expanded=yes last=expanded"))
+        note(SPOTLIGHT + "expanded ${expandedCard}")
+    }
+
+    /**
+     * The expanded card's trailer's own state (spec 2026-11-12, F4).
+     *
+     * "The trailer did not start" has four causes that look identical on screen:
+     * no key for the card, the mode/autoplay gate, a resolve that failed, and a
+     * player that never painted. This is the word from inside the panel's own
+     * trailer composable, so the next paste names the one it is.
+     */
+    fun spotlightPanelTrailer(status: String) {
+        synchronized(lock) { panelTrailer = status }
+        putSpotlight("panel", panelLine(if (lastExpanded) "expanded=yes last=expanded" else "expanded=no"))
     }
 
     /** The dwell guard collapsed the panel, and which guard fired (F3/F5). */
     fun spotlightCollapsed(guard: String) {
-        putSpotlight("panel", "panel expanded=no last=collapsed guard=$guard")
+        synchronized(lock) { panelTrailer = null }
+        putSpotlight("panel", panelLine("expanded=no last=collapsed guard=$guard"))
         note(SPOTLIGHT + "collapse guard=$guard")
+    }
+
+    /** One panel line: what the panel is doing, for which card, and its trailer. */
+    private fun panelLine(state: String): String {
+        val card = expandedCard?.let { " $it" } ?: ""
+        val trailer = panelTrailer?.let { " trailer=$it" } ?: ""
+        return "panel $state$card$trailer"
     }
 
     // ── Reads ─────────────────────────────────────────────────────────────
@@ -448,6 +475,8 @@ internal object SpotlightDiagTrace {
             dwellCard = null
             dwellCancel = null
             expandedAtMs = 0L
+            expandedCard = null
+            panelTrailer = null
             dwellSeen = false
         }
     }

@@ -244,6 +244,15 @@ private val HomeRailGap = 12.dp
 private const val HERO_RESOLVE_DEBOUNCE_MS = 150L
 
 /**
+ * How many frames a Spotlight entry keeps the rails list at the hero (F5).
+ *
+ * ~1.5 s at the panel's 60 Hz: long enough to outlast the entry landing and the
+ * first frames of a feed arriving, short enough that it is over before a viewer
+ * scrolling rail by rail has gone anywhere.
+ */
+private const val SPOTLIGHT_ENTRY_TOP_FRAMES = 90
+
+/**
  * This screen's log tag.
  *
  * Was a string literal on each of its eighteen log lines (some in HomeViewModel,
@@ -2896,9 +2905,12 @@ private fun UpcomingEpisodeCard(
     PosterCard(
         posterUrl = upcoming.backdrop ?: upcoming.poster,
         contentDescription = upcoming.title,
-        // The panel's pills act on the SHOW the episode belongs to (audit A4).
+        // Upcoming cards NEVER expand (spec 2026-11-12, F1): they are not
+        // catalog cards, and the panel's trailer/title/meta belong to a catalog
+        // title. The id stays for the ring and the click, which are unchanged.
         spotlightId = upcoming.parentId,
         spotlightType = upcoming.parentType,
+        spotlightExpandable = false,
         isWatched = false,
         // An Upcoming card is an UNAIRED episode by construction, and the panel
         // must not offer PLAY for it (Detail's UNAVAILABLE rule).
@@ -3817,6 +3829,12 @@ private fun BuiltinContinueWatchingRail(
      */
     isFreshEntry: Boolean = false,
     /**
+     * Whether a hero item sits above this rail (Spotlight), in which case the
+     * fresh-entry landing never runs: landing here would scroll the hero off the
+     * top of the list (spec 2026-11-12, F5).
+     */
+    heroPresent: Boolean = false,
+    /**
      * Whether the viewer has moved focus themselves since this entry - the
      * fresh-entry landing's licence (see [continueWatchingLandsOnFreshEntry]).
      *
@@ -3936,7 +3954,13 @@ private fun BuiltinContinueWatchingRail(
             continueWatchingLandsOnFreshEntry(
                 isFreshEntry = isFreshEntry,
                 initialLandingDone = initialLandingDone,
-                viewerMovedFocusSinceEntry = viewerMovedFocusSinceEntry
+                viewerMovedFocusSinceEntry = viewerMovedFocusSinceEntry,
+                // Spotlight's hero is the rails list's OWN first item, so a
+                // landing on this rail scrolls the column - and takes the 52%
+                // hero off the top with it (spec 2026-11-12, F5). The hero owns
+                // the entry focus there instead (see SpotlightHeroSection's
+                // claimEntryFocus), so this landing declines.
+                heroPresent = heroPresent
             )
         ) {
             // Fresh entry, data has arrived, and the viewer has pressed nothing:
@@ -4598,10 +4622,12 @@ private fun CompactUpNextCard(
         },
         contentDescription = item.title,
         // A continue-watching card is a SHOW (or a film): its parent is what
-        // Detail opens, and what the panel's PLAY and DETAILS must act on
-        // (audit A4). A film's item carries no parent, so its own id is it.
+        // Detail opens. It NEVER expands (spec 2026-11-12, F1) - a resume card
+        // is a progress row, not a catalog card, and its card here is exactly
+        // what it always was apart from that.
         spotlightId = item.parentId ?: item.id,
         spotlightType = item.parentType ?: if (item.season != null) "series" else "movie",
+        spotlightExpandable = false,
         isWatched = false,
         onClick = onClick,
         onLongClick = onLongClick,
@@ -5467,6 +5493,31 @@ fun HomeScreen(
     // The restore window: 20 frames at the shared hand-back cadence, the same
     // ~1s the rails get to compose the card the viewer left Home on.
     val HOME_RETURN_FOCUS_STEPS = 20
+
+    // ── A Spotlight entry starts AT the hero (spec 2026-11-12, F5) ────────
+    //
+    // The render line caught the last build with the hero emitted, composed and
+    // holding art - and the list resting at `first=#1+4px`, the 52% hero scrolled
+    // off the top on entry, deterministically. The Continue Watching landing is
+    // one way in and now declines when a hero is above the rails (see
+    // [continueWatchingLandsOnFreshEntry]'s heroPresent); this is the guarantee
+    // behind it, because whatever else asks the column to scroll (a focus
+    // bring-into-view, a rail's own anchor) must not be able to put the entry
+    // there. Until the viewer presses anything, a list that is not at the hero is
+    // put back.
+    //
+    // Bounded to the entry window and dead the moment they take the D-pad, so it
+    // never fights a scroll the viewer is making.
+    LaunchedEffect(spotlightActive, isFreshEntry, mergedEntries) {
+        if (!spotlightActive || !isFreshEntry) return@LaunchedEffect
+        repeat(SPOTLIGHT_ENTRY_TOP_FRAMES) {
+            awaitFrame()
+            if (viewerMovedFocusSinceEntry) return@LaunchedEffect
+            if (railListState.firstVisibleItemIndex != 0) {
+                runCatching { railListState.scrollToItem(0) }
+            }
+        }
+    }
 
     // The other half of the restore: the scroll seed above puts the remembered
     // rail back in the viewport, and this asks that card for focus. The rails
@@ -6352,6 +6403,9 @@ fun HomeScreen(
                     // landing on this rail's head.
                     isFreshEntry = isFreshEntry,
                     viewerMovedFocusSinceEntry = viewerMovedFocusSinceEntry,
+                    // Spotlight draws its hero as the list's first item, so the
+                    // landing below must not scroll it away (spec 2026-11-12, F5).
+                    heroPresent = spotlightActive,
                     railsViewportBounds = railsViewportBounds,
                     onUpPressed = upHook,
                     // Ungated, unlike Up: no head card has a Left target (see
@@ -7791,9 +7845,6 @@ fun HomeScreen(
                 meta = heroMetaState.value,
                 metaLoading = heroMetaState.value == null && !heroMetaFailedState.value,
                 metaFailed = heroMetaFailedState.value,
-                // The panel's own retry: re-run the resolve for the card that
-                // owns it, without moving focus away.
-                onRetryMeta = { viewModel.resolveHeroMeta(focusedItemState.value) },
                 trailerKey = heroTrailerKeyState.value,
                 // The card's trailer resolves with the title's own ids, so the
                 // ladder's IMDb leg can fire on a YouTube death (F5).
@@ -7807,8 +7858,6 @@ fun HomeScreen(
                 // A long-press menu is the viewer's explicit request: no panel
                 // opens over it, and one already up collapses first (F6).
                 menuOpen = posterMenu != null || browseShortcutMenu != null,
-                onPlay = onItemClick,
-                onDetails = onItemClick,
                 onTrailerPlayingChange = { playing ->
                     spotlightPanelTrailerPlaying = playing
                 },

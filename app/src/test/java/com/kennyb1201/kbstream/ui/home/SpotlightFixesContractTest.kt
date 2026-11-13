@@ -142,58 +142,34 @@ class SpotlightFixesContractTest {
         )
     }
 
-    // ── (c) F3: DOWN enters the pills, and focus inside keeps the panel ────
+    // ── (c) Rework 2026-11-12 F2: there is no pill row, so no neighbourhood ─
 
     @Test
-    fun `DOWN from the focused card enters the panel before the next rail`() {
-        val card = source(POSTER_CARD)
-        assertTrue(
-            "the card's own DOWN is the handoff",
-            card.contains("spotlightFocus.onDownFromCard()") &&
-                card.contains("Key.DirectionDown")
-        )
+    fun `the panel has no actions of its own any more`() {
         val preview = source(SPOTLIGHT_PREVIEW)
         val tracker = between(preview, "internal class SpotlightCardFocus", "staticCompositionLocalOf")
-        assertTrue(
-            "only while the panel is up, and it consumes the press so the rail " +
-                "below never also moves",
-            tracker.contains("if (!panelExpanded || snapshot == null) return false") &&
-                tracker.contains("fun onDownFromCard(): Boolean")
+        assertFalse(
+            "the clipped PLAY/DETAILS row is deleted, not shrunk",
+            preview.contains("SpotlightPillRow(") || preview.contains("label = \"PLAY\"")
         )
-        assertTrue(
-            "the panel registers the pill row as the target",
-            preview.contains("tracker?.focusPills = {") &&
-                preview.contains("pillsFocus.requestFocus()")
+        assertFalse(
+            "and its focus neighbourhood went with it - the pill row was the only " +
+                "thing DOWN from a card could enter",
+            tracker.contains("focusPills") ||
+                tracker.contains("pillsFocused") ||
+                tracker.contains("onDownFromCard") ||
+                tracker.contains("onUpFromPills")
         )
-        assertTrue(
-            "and focus inside the row is not a collapse",
-            tracker.contains("if (handingOff || pillsFocused) return") &&
-                tracker.contains("fun onPillsFocusChanged(focused: Boolean)")
+        val card = source(POSTER_CARD)
+        assertFalse(
+            "so a card no longer consumes DOWN - it moves to the next rail, which " +
+                "is what collapses the panel",
+            card.contains("spotlightFocus.onDownFromCard()") || card.contains("Key.DirectionDown")
         )
-        assertTrue(
-            "UP returns to the card that owns the panel",
-            tracker.contains("fun onUpFromPills(): Boolean") &&
-                preview.contains("tracker?.onUpFromPills() == true")
-        )
-    }
-
-    @Test
-    fun `a last-rail card lands on PLAY and the panel stays up`() {
-        // The same mechanism is what makes this case work: there is no
-        // geometry involved in the DOWN any more, so the last rail (no card
-        // below) and a middle rail behave identically.
-        val tracker = between(
-            source(SPOTLIGHT_PREVIEW),
-            "internal class SpotlightCardFocus",
-            "staticCompositionLocalOf"
-        )
-        assertTrue(
-            "the handoff ignores the rail's geometry entirely",
-            !tracker.contains("bounds.")
-        )
-        assertTrue(
-            "and the panel is expanded before DOWN can be consumed",
-            tracker.contains("var panelExpanded by mutableStateOf(false)")
+        assertFalse(
+            "and the panel takes no click: the CARD's own OK opens Details, " +
+                "unchanged",
+            preview.contains("onPlay: () -> Unit") || preview.contains("onDetails: () -> Unit")
         )
     }
 
@@ -216,7 +192,8 @@ class SpotlightFixesContractTest {
         )
         assertEquals(342, firstRail.height)
         assertTrue(
-            "the whole panel, pills row included, is inside the bottom edge",
+            "the whole panel is inside the bottom edge - the pills that had to fit " +
+                "are gone, and the clamp is still what keeps the rest on screen",
             firstRail.top + firstRail.height <= 540 - 16
         )
         assertTrue("and not above the top edge", firstRail.top >= 16)
@@ -258,10 +235,10 @@ class SpotlightFixesContractTest {
             preview.contains("spotlightPanelBox(") &&
                 preview.contains("viewportWidthPx = viewport.width")
         )
-        assertTrue(
-            "and the pills wrap, so they stay inside the panel's background",
-            preview.contains("FlowRow(") &&
-                !preview.contains("Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {\n            SpotlightPill")
+        assertFalse(
+            "and there is no pill row left to wrap - the whole panel is text and " +
+                "art (rework 2026-11-12, F2)",
+            preview.contains("FlowRow(") || preview.contains("SpotlightPill(")
         )
     }
 
@@ -319,7 +296,7 @@ class SpotlightFixesContractTest {
         // The menu is still a guard and still a key.
         assertTrue(
             "the dwell is cancelled by an open menu, and keyed on the held CARD",
-            host.contains("LaunchedEffect(heldCard, expandDelayMs, menuOpen)") &&
+            host.contains("LaunchedEffect(heldNode, expandDelayMs, menuOpen)") &&
                 host.contains("menuOpen -> \"menuOpen\"") &&
                 host.contains("\"!expands\"")
         )
@@ -353,37 +330,42 @@ class SpotlightFixesContractTest {
         )
     }
 
-    // ── (h) F8: the TRAILER pill needs a trailer, and a press retries ──────
+    // ── (h) Rework 2026-11-12 F4: autoplay decides, OFF is the only veto ───
 
     @Test
-    fun `no TRAILER pill without a key, and a press retries a failed resolve`() {
-        val mode = com.kennyb1201.kbstream.data.settings.BillboardTrailerMode.MANUAL
+    fun `the panel's trailer plays on the viewer's autoplay pref, and OFF is the only veto`() {
+        val auto = com.kennyb1201.kbstream.data.settings.BillboardTrailerMode.AUTO
+        val manual = com.kennyb1201.kbstream.data.settings.BillboardTrailerMode.MANUAL
+        val off = com.kennyb1201.kbstream.data.settings.BillboardTrailerMode.OFF
         assertTrue(
-            SpotlightTrailerRule.showsTrailerPill(mode, true, "abc123")
+            "autoplay on plays in the panel, whatever the billboard mode (MANUAL " +
+                "has no pill here any more, so denying it would mean no trailer at all)",
+            SpotlightTrailerRule.autoplaysInCard(manual, heroTrailerAutoplay = true) &&
+                SpotlightTrailerRule.autoplaysInCard(auto, heroTrailerAutoplay = true)
         )
         assertFalse(
-            "MANUAL on a title with no trailer used to offer a dead press",
-            SpotlightTrailerRule.showsTrailerPill(mode, true, null)
+            "the autoplay pref is still the viewer's say",
+            SpotlightTrailerRule.autoplaysInCard(auto, heroTrailerAutoplay = false)
         )
-        assertFalse(SpotlightTrailerRule.showsTrailerPill(mode, true, "  "))
         assertFalse(
-            "OFF offers none at all",
-            SpotlightTrailerRule.showsTrailerPill(
-                com.kennyb1201.kbstream.data.settings.BillboardTrailerMode.OFF,
-                true,
-                "abc123"
-            )
+            "and OFF is still off",
+            SpotlightTrailerRule.autoplaysInCard(off, heroTrailerAutoplay = true)
         )
         val trailer = source(SPOTLIGHT_PANEL_TRAILER)
         assertTrue(
-            "a fresh press is a generation, so it re-fires even after a failure",
-            trailer.contains("pressRequest: Int = 0") &&
-                trailer.contains("LaunchedEffect(pressRequest)") &&
-                trailer.contains("if (pressRequest > 0) request += 1")
+            "the gate reports its own answer, so a paste can tell 'no key' from " +
+                "'the gate' from 'the resolve failed'",
+            trailer.contains("report(\"none (no trailer key)\")") &&
+                trailer.contains("report(") &&
+                trailer.contains("SpotlightDiagTrace.spotlightPanelTrailer(")
         )
-        assertTrue(
-            "the pill is shown by the key-aware rule",
-            source(SPOTLIGHT_PREVIEW).contains("SpotlightTrailerRule.showsTrailerPill(")
+        assertFalse(
+            "the pill's press generation went with the pill",
+            trailer.contains("pressRequest")
+        )
+        assertFalse(
+            "and no pill rule survives in the panel",
+            source(SPOTLIGHT_PREVIEW).contains("showsTrailerPill(")
         )
     }
 
@@ -409,20 +391,19 @@ class SpotlightFixesContractTest {
         )
     }
 
-    // ── (j) F10: an unaired card offers UNAVAILABLE, not PLAY ─────────────
+    // ── (j) F10: the card's date still rides on the snapshot ──────────────
 
     @Test
-    fun `an unaired card shows UNAVAILABLE instead of PLAY`() {
+    fun `an unaired card still reports its date`() {
         val preview = source(SPOTLIGHT_PREVIEW)
         assertTrue(
             "the snapshot carries the card's date",
             preview.contains("val airDate: String? = null") &&
                 preview.contains("isEpisodeUnavailable(airDate)")
         )
-        assertTrue(
-            "and the pill row swaps PLAY for UNAVAILABLE",
-            preview.contains("if (unaired) {") &&
-                preview.contains("label = \"UNAVAILABLE\"")
+        assertFalse(
+            "the UNAVAILABLE pill is gone with the rest of the row (rework F2)",
+            preview.contains("label = \"UNAVAILABLE\"")
         )
         val card = source(POSTER_CARD)
         assertTrue(

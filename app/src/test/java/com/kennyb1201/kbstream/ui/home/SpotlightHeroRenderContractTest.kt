@@ -144,8 +144,8 @@ class SpotlightHeroRenderContractTest {
     @Test
     fun `the dwell, the panel and the scroll-away are untouched`() {
         assertTrue(
-            "the dwell still keys on the held card",
-            section.contains("LaunchedEffect(heldCard, expandDelayMs, menuOpen) {")
+            "the dwell still keys on the held card (its NODE since the 2026-11-12 panel rework)",
+            section.contains("LaunchedEffect(heldNode, expandDelayMs, menuOpen) {")
         )
         assertTrue(
             "the hero is still the list's first item, so it still scrolls away",

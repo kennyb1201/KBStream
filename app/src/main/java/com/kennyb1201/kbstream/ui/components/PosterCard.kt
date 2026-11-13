@@ -20,10 +20,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -176,6 +172,18 @@ fun PosterCard(
      */
     spotlightId: String? = null,
     spotlightType: String? = null,
+    /**
+     * Whether this card may ever expand into Spotlight's preview panel.
+     *
+     * Expand is CATALOG ONLY (spec 2026-11-12, F1): the Continue Watching and
+     * Upcoming rails pass false, so their cards never set a snapshot, never arm
+     * the dwell and never open a panel - while their focus ring, their click and
+     * their resume/progress bar are exactly what they always were. The rail kind
+     * lives here because a card is the only thing that knows which rail handed it
+     * its art, and the alternative (guessing from the title's media type) cannot
+     * tell a catalog card from a CW card ABOUT THE SAME SHOW.
+     */
+    spotlightExpandable: Boolean = true,
     overlayContent: (@Composable BoxScope.() -> Unit)? = null
 ) {
     val context = LocalContext.current
@@ -216,7 +224,7 @@ fun PosterCard(
     // only way out of the row that does not collapse the panel by accident.
     val spotlightCardRequester = remember { androidx.compose.ui.focus.FocusRequester() }
     val spotlightModifier =
-        if (spotlightFocus == null) {
+        if (spotlightFocus == null || !spotlightExpandable) {
             Modifier
         } else {
             Modifier
@@ -243,16 +251,6 @@ fun PosterCard(
                             bounds = spotlightBounds
                         )
                     }
-                }
-                // DOWN enters the panel's pills while it is up, BEFORE the rail
-                // below: without this the panel's actions were unreachable (the
-                // nearer next-rail card won the focus search) or a trap (on the
-                // last rail, DOWN landed on PLAY and the card's blur collapsed
-                // the panel out from under it).
-                .onPreviewKeyEvent { event ->
-                    event.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
-                        event.key == androidx.compose.ui.input.key.Key.DirectionDown &&
-                        spotlightFocus.onDownFromCard()
                 }
         }
 

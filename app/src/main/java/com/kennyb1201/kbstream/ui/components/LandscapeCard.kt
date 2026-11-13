@@ -21,11 +21,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -99,6 +94,12 @@ fun LandscapeCard(
      */
     spotlightId: String? = null,
     spotlightType: String? = null,
+    /**
+     * Whether this card may ever expand into Spotlight's preview panel - the
+     * same contract and the same reason as [PosterCard]'s (expand is catalog
+     * only, spec 2026-11-12 F1).
+     */
+    spotlightExpandable: Boolean = true,
     /** The row's air date, when the card is an episode's (the panel's meta line). */
     airDate: String? = null
 ) {
@@ -161,7 +162,7 @@ fun LandscapeCard(
     // The card's own node, so the panel's pills can send UP back to it.
     val spotlightCardRequester = remember { androidx.compose.ui.focus.FocusRequester() }
     val spotlightModifier =
-        if (spotlightFocus == null) {
+        if (spotlightFocus == null || !spotlightExpandable) {
             Modifier
         } else {
             Modifier
@@ -185,13 +186,6 @@ fun LandscapeCard(
                             bounds = spotlightBounds
                         )
                     }
-                }
-                // DOWN enters the panel's pills while it is up, before the rail
-                // below can take the press.
-                .onPreviewKeyEvent { event ->
-                    event.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
-                        event.key == androidx.compose.ui.input.key.Key.DirectionDown &&
-                        spotlightFocus.onDownFromCard()
                 }
         }
 

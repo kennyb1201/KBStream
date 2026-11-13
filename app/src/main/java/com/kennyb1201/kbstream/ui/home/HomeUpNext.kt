@@ -2028,13 +2028,21 @@ internal fun continueWatchingLandsOnHead(
  * HomeViewModel.lastFocusedRailItemKey); [initialLandingDone] makes it a one-shot
  * per composition, because the head card being deleted mid-session is the remove
  * signal's own landing and must still be able to run.
+ *
+ * [heroPresent] (spec 2026-11-12, F5) is the one layout that must NOT land here:
+ * in Spotlight the hero is the rails list's own first item, so landing on a rail
+ * scrolls the column - and the render line caught it doing exactly that, entry
+ * after entry: `list=hero-not-visible first=#1+4px`. The hero owns the entry
+ * focus in that layout (its Play pill), so the landing declines rather than
+ * compete for it.
  */
 internal fun continueWatchingLandsOnFreshEntry(
     isFreshEntry: Boolean,
     initialLandingDone: Boolean,
-    viewerMovedFocusSinceEntry: Boolean
+    viewerMovedFocusSinceEntry: Boolean,
+    heroPresent: Boolean = false
 ): Boolean =
-    isFreshEntry && !initialLandingDone && !viewerMovedFocusSinceEntry
+    isFreshEntry && !initialLandingDone && !viewerMovedFocusSinceEntry && !heroPresent
 
 /**
  * Where a laid-out node sits in the window, as the fresh-entry landing's

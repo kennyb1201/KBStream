@@ -33,7 +33,7 @@ class SpotlightDwellContractTest {
 
     /** The dwell effect's own body, from its keys to its completion. */
     private val dwellEffect: String by lazy {
-        host.substringAfter("LaunchedEffect(heldCard, expandDelayMs, menuOpen) {")
+        host.substringAfter("LaunchedEffect(heldNode, expandDelayMs, menuOpen) {")
             .substringBefore("// A scroll under a still-focused card")
     }
 
@@ -43,7 +43,7 @@ class SpotlightDwellContractTest {
     fun `the dwell keys on a debounced card identity, not on the live snapshot`() {
         assertTrue(
             "the effect exists with these keys",
-            host.contains("LaunchedEffect(heldCard, expandDelayMs, menuOpen) {")
+            host.contains("LaunchedEffect(heldNode, expandDelayMs, menuOpen) {")
         )
         assertFalse(
             "a live hasSnapshot must not be a key: a flicker cancelled the wait",
@@ -56,14 +56,15 @@ class SpotlightDwellContractTest {
         )
         assertTrue(
             "a card taking focus is immediate; losing it is only believed after a grace",
-            host.contains("var heldCard by remember { mutableStateOf(cardId) }") &&
-                host.contains("LaunchedEffect(cardId) {") &&
+            host.contains("var heldNode by remember { mutableStateOf<Any?>(null) }") &&
+                host.contains("LaunchedEffect(heldNodeNow) {") &&
                 host.contains("delay(SPOTLIGHT_BLUR_GRACE_MS)") &&
-                host.contains("private const val SPOTLIGHT_BLUR_GRACE_MS = 250L")
+                host.contains("private const val SPOTLIGHT_BLUR_GRACE_MS = 600L")
         )
         assertTrue(
-            "the identity is the card while it holds focus, nothing otherwise",
-            host.contains("val cardId = if (tracker.cardFocused) snapshot?.cardIdentity() else null")
+            "the identity is the card NODE while it holds focus, nothing otherwise " +
+                "(rework 2026-11-12 F3: the title's type:id collides across rails)",
+            host.contains("val heldNodeNow = if (tracker.cardFocused) tracker.focusedNode else null")
         )
     }
 
@@ -77,16 +78,13 @@ class SpotlightDwellContractTest {
             "focus set on a card taking focus",
             tracker.contains("cardFocused = true")
         )
-        val blur = tracker.substringAfter("if (handingOff || pillsFocused) return")
-            .substringBefore("fun onDownFromCard")
+        val blur = tracker.substringAfter("fun onCardFocus(")
+            .substringAfter("} else {")
+            .substringBefore("fun updateBounds")
         assertTrue("the blur clears the focus bit", blur.contains("cardFocused = false"))
         assertFalse(
             "but it must NOT clear the snapshot: the Home debounces and decides",
             blur.contains("snapshot = null")
-        )
-        assertTrue(
-            "and the handoff exemption is untouched (S3)",
-            tracker.contains("if (handingOff || pillsFocused) return")
         )
     }
 
@@ -99,16 +97,17 @@ class SpotlightDwellContractTest {
         )
         assertTrue(
             "and expanded from THAT, not from the live snapshot at the end",
-            dwellEffect.contains("expanded = armedOn") &&
+            dwellEffect.contains("expanded = ExpandedPanel(armedOn, armedNode)") &&
                 !dwellEffect.contains("expanded = tracker.snapshot")
         )
-        assertTrue(
-            "the panel is still published to the tracker after every composition",
-            host.contains("SideEffect { tracker.panelExpanded = expanded != null }")
+        assertFalse(
+            "no panelExpanded flag is published any more: DOWN has nothing to enter " +
+                "(rework 2026-11-12, F2)",
+            host.contains("tracker.panelExpanded")
         )
         assertTrue(
             "and drawn from the held snapshot",
-            host.contains("val panel = expanded ?: return") &&
+            host.contains("val panel = expanded?.snapshot ?: return") &&
                 host.contains("snapshot = panel,")
         )
     }
@@ -122,15 +121,16 @@ class SpotlightDwellContractTest {
             host.contains("Triple(\"hasSnapshot\", card ?: \"none\", next.card ?: \"none\")")
         )
         assertTrue(
-            "and an open panel is only ended by a menu, a disabled expand, or a move",
+            "and an open panel is ended by a menu, a disabled expand, another " +
+                "card, or the focus leaving the cards",
             dwellEffect.contains("if (collapseGuard != \"cardChanged\") return@LaunchedEffect") &&
-                dwellEffect.contains("if (heldCard == null) return@LaunchedEffect")
+                dwellEffect.contains("if (heldNode == null) return@LaunchedEffect")
         )
         assertTrue(
             "the wait is the delay, after which the panel opens and nothing earlier",
             dwellEffect.contains("delay(expandDelayMs)") &&
                 dwellEffect.indexOf("delay(expandDelayMs)") <
-                dwellEffect.indexOf("expanded = armedOn")
+                dwellEffect.indexOf("expanded = ExpandedPanel(armedOn, armedNode)")
         )
         // Repointed by the 2026-11-12 collapse spec: `!hasSnapshot` is NOT a
         // collapse reason any more - that blur fired a few hundred ms after a
@@ -140,7 +140,8 @@ class SpotlightDwellContractTest {
             "the collapse guards are the viewer's own actions, plus a real move",
             dwellEffect.contains("\"menuOpen\"") &&
                 dwellEffect.contains("\"!expands\"") &&
-                dwellEffect.contains("\"cardChanged\"")
+                dwellEffect.contains("\"cardChanged\"") &&
+                dwellEffect.contains("\"focusLeft\"")
         )
         assertFalse(
             "a blur must not be a collapse guard: the card cannot re-earn focus it " +
@@ -152,9 +153,11 @@ class SpotlightDwellContractTest {
             host.contains("BackHandler(enabled = expanded != null)") &&
                 host.contains("runCatching { tracker.cardRequester?.requestFocus() }")
         )
-        assertTrue(
-            "and DOWN still enters the pills only while the panel is up (S3)",
-            tracker.contains("if (!panelExpanded || snapshot == null) return false")
+        assertFalse(
+            "and DOWN no longer enters anything (rework 2026-11-12, F2): with no " +
+                "pills, DOWN from a card is the next rail - which is a move, and " +
+                "collapses the panel through the guard above",
+            tracker.contains("panelExpanded")
         )
     }
 
