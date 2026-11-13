@@ -375,19 +375,51 @@ class BingeCatProfileMapSyncContractTest {
             "every mapping clear site is pinned here (found ${sites.size})",
             sites.size == 2
         )
-        sites.forEach { at ->
-            val window = repository.substring(at, (at + 700).coerceAtMost(repository.length))
-            assertContains(
-                window,
-                "recordBingeCatMappingChanged(context, cleared = true)",
-                "a deliberate local clear must be stamped as one"
-            )
-            assertContains(
-                window,
-                "publishMappingToSync()",
-                "and published, or the sibling keeps an orphaned mapping"
-            )
-        }
+
+        // Each site is pinned by the FUNCTION it lives in rather than by a
+        // fixed window of characters: the disconnect grew a profile pin (F4)
+        // and its tombstone now sits a few lines further out, while the
+        // requirement - a local clear always leaves a tombstone and publishes
+        // it - did not move at all.
+        val stale = between(repository, "private fun clearStaleMapping() {", "Files this KBStream")
+        assertContains(
+            stale,
+            "mapping.clear()",
+            "the stale-id helper clears this device's mapping"
+        )
+        assertContains(
+            stale,
+            "recordBingeCatMappingChanged(context, cleared = true)",
+            "a deliberate local clear must be stamped as one"
+        )
+        assertContains(
+            stale,
+            "publishMappingToSync()",
+            "and published, or the sibling keeps an orphaned mapping"
+        )
+
+        // Disconnect clears the STARTED profile's mapping (F4), never whichever
+        // profile happens to be active when the revoke returns.
+        val disconnect = between(
+            repository,
+            "suspend fun disconnect(): Boolean {",
+            "Re-asserts this device's session to the account"
+        )
+        assertContains(
+            disconnect,
+            "pinnedMapping.clear()",
+            "a disconnect clears the profile it started on"
+        )
+        assertContains(
+            disconnect,
+            "recordBingeCatMappingChanged(context, cleared = true)",
+            "the mapping half of a disconnect is a deliberate clear"
+        )
+        assertContains(
+            disconnect,
+            "publishMappingToSync()",
+            "and it is published, or the sibling keeps an orphaned mapping"
+        )
     }
 
     // ── F3: validation against the account's profiles ───────────────────────
