@@ -287,38 +287,42 @@ class AutoSkipRulesTest {
         assertNull(AutoSkipRules.handoffSkipTarget(stamps, 8_400_000L, creditsOn, 0L))
     }
 
-    // ── F2 (2026-11-13): AniSkip is button-only ───────────────────────────
+    // ── F2 (2026-11-13): the anime sources are button-only ─────────────────
 
     /**
-     * AniSkip is the only source with no confidence value - so the
-     * [AutoSkipRules.MIN_CONFIDENCE] gate cannot protect it - and its identity
-     * comes from a fuzzy title match. A wrong MyAnimeList id must never be able
-     * to move the playhead by itself, so these rows follow no toggle at all.
+     * AniSkip and Anime Skip are the two sources with no confidence value - so
+     * the [AutoSkipRules.MIN_CONFIDENCE] gate cannot protect them - and both
+     * identify a show through an id resolved from a title match. A wrong show
+     * must never be able to move the playhead by itself, so these rows follow no
+     * toggle at all.
      */
     @Test
-    fun `AniSkip stamps never auto-skip, with both prefs on`() {
+    fun `the button-only sources never auto-skip, with both prefs on`() {
         val bothOn = AutoSkipRules.Settings(skipIntros = true, skipCredits = true)
-        val op = IntroDbStamp(
-            startMs = 5_000,
-            endMs = 95_000,
-            type = IntroDbMarkerType.Intro,
-            source = IntroDbSource.AniSkip
-        )
-        val ed = IntroDbStamp(
-            startMs = 1_380_000,
-            endMs = 1_470_000,
-            type = IntroDbMarkerType.Credits,
-            source = IntroDbSource.AniSkip
-        )
 
-        assertFalse(AutoSkipRules.shouldAutoSkip(op, bothOn, runtime))
-        assertFalse(AutoSkipRules.shouldAutoSkip(ed, bothOn, runtime))
+        listOf(IntroDbSource.AniSkip, IntroDbSource.AnimeSkip).forEach { source ->
+            val op = IntroDbStamp(
+                startMs = 5_000,
+                endMs = 95_000,
+                type = IntroDbMarkerType.Intro,
+                source = source
+            )
+            val ed = IntroDbStamp(
+                startMs = 1_380_000,
+                endMs = 1_470_000,
+                type = IntroDbMarkerType.Credits,
+                source = source
+            )
+
+            assertFalse("$source must not auto-skip an intro", AutoSkipRules.shouldAutoSkip(op, bothOn, runtime))
+            assertFalse("$source must not auto-skip credits", AutoSkipRules.shouldAutoSkip(ed, bothOn, runtime))
+        }
     }
 
     @Test
     fun `the kind rule itself is unchanged for every other source`() {
         // The exemption is the SOURCE, not the kind: the same shape from any of
-        // the other three sources still follows the toggles.
+        // the three keyless sources still follows the toggles.
         val bothOn = AutoSkipRules.Settings(skipIntros = true, skipCredits = true)
         listOf(
             IntroDbSource.IntroDbApp,
@@ -331,22 +335,53 @@ class AutoSkipRulesTest {
     }
 
     @Test
-    fun `an AniSkip segment is still offered as a button`() {
+    fun `a button-only segment is still offered as a button`() {
         // The button path is shape alone - no confidence, no source - exactly as
         // it already is for a below-threshold row and for Preview.
-        val op = IntroDbStamp(5_000, 95_000, IntroDbMarkerType.Intro, source = IntroDbSource.AniSkip)
+        listOf(IntroDbSource.AniSkip, IntroDbSource.AnimeSkip).forEach { source ->
+            val op = IntroDbStamp(5_000, 95_000, IntroDbMarkerType.Intro, source = source)
 
-        assertTrue(AutoSkipRules.isSkippableSegment(op, runtime))
-        assertTrue(AutoSkipRules.autoSkipsType(op.type, AutoSkipRules.Settings(true, true)))
+            assertTrue(AutoSkipRules.isSkippableSegment(op, runtime))
+            assertTrue(AutoSkipRules.autoSkipsType(op.type, AutoSkipRules.Settings(true, true)))
+        }
     }
 
     @Test
-    fun `the hand-off never seeks past an AniSkip segment on its own`() {
+    fun `an open-ended Anime Skip row is offered against the runtime`() {
+        // Anime Skip's LAST timestamp has no next timestamp, so its end is the
+        // end of the file - the shape TheIntroDB already sends for credits.
+        val last = IntroDbStamp(
+            startMs = 1_460_000,
+            endMs = null,
+            type = IntroDbMarkerType.Preview,
+            source = IntroDbSource.AnimeSkip
+        )
+        val withRuntime = IntroDbStamp(1_365_000, 1_460_000, IntroDbMarkerType.Credits, source = IntroDbSource.AnimeSkip)
+
+        // A runtime close to the segment: an open-ended row that would cover
+        // the whole file is still refused by MAX_SEGMENT_MS, as it already is
+        // for an open-ended credits row from TheIntroDB.
+        val runtimeNearSegment = 1_500_000L
+
+        assertTrue(AutoSkipRules.isSkippableSegment(last, runtimeNearSegment))
+        assertEquals(runtimeNearSegment, AutoSkipRules.segmentEndMs(last, runtimeNearSegment))
+        assertTrue(AutoSkipRules.isSkippableSegment(withRuntime, runtimeNearSegment))
+        assertFalse(
+            "and the length guard still refuses one that would cover the episode",
+            AutoSkipRules.isSkippableSegment(last, runtime)
+        )
+    }
+
+    @Test
+    fun `the hand-off never seeks past a button-only segment on its own`() {
         // ExternalPlayerActivity decides its up-front skip through this same
         // predicate, so this is the hand-off half of the button-only rule.
-        val op = IntroDbStamp(5_000, 95_000, IntroDbMarkerType.Intro, source = IntroDbSource.AniSkip)
         val bothOn = AutoSkipRules.Settings(skipIntros = true, skipCredits = true)
 
-        assertNull(AutoSkipRules.handoffSkipTarget(listOf(op), 0L, bothOn, runtime))
+        listOf(IntroDbSource.AniSkip, IntroDbSource.AnimeSkip).forEach { source ->
+            val op = IntroDbStamp(5_000, 95_000, IntroDbMarkerType.Intro, source = source)
+
+            assertNull("$source must not hand off past an intro", AutoSkipRules.handoffSkipTarget(listOf(op), 0L, bothOn, runtime))
+        }
     }
 }

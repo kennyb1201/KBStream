@@ -776,6 +776,15 @@ fun SettingsScreen(
     var omdbKeySaved by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getOmdbApiKey(context).isNotBlank())
     }
+    // Anime Skip client id: not a key this app ships, and blank is the normal
+    // state. A blank field means the fifth skip source never runs, which is not
+    // an error - so the card says "Not set" rather than anything alarming.
+    var animeSkipKeyInput by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getAnimeSkipClientId(context))
+    }
+    var animeSkipKeySaved by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getAnimeSkipClientId(context).isNotBlank())
+    }
     var autoFetchSubtitles by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getAutoFetchSubtitles(context))
     }
@@ -1177,11 +1186,75 @@ fun SettingsScreen(
                         onClick = { animeEditor = "anilist" }
                     )
 
+                    // Kitsu has a real connect as well (spec 2026-11-13 phase 2):
+                    // the password grant, which is the one tracker flow that
+                    // works on a TV unchanged - text fields, no browser, no QR.
+                    // The public-username read stays inside the same dialog, so
+                    // a viewer who only wants that still needs no account.
+                    var kitsuEditor by remember { mutableStateOf(false) }
+                    var kitsuStateRevision by remember { mutableStateOf(0) }
+                    val kitsuState = remember(profileRowKey, syncedRevision, kitsuStateRevision) {
+                        com.kennyb1201.kbstream.data.kitsu.KitsuAuth.connectionState(context)
+                    }
                     NavigationRow(
-                        label = animeTrackerRowLabel("Kitsu", kitsuUsername),
-                        description = animeTrackerDescription("Kitsu", kitsuUsername),
-                        onClick = { animeEditor = "kitsu" }
+                        label = if (kitsuState ==
+                            com.kennyb1201.kbstream.data.kitsu.KitsuConnectionState.Connected
+                        ) {
+                            "Kitsu — connected"
+                        } else {
+                            animeTrackerRowLabel("Kitsu", kitsuUsername)
+                        },
+                        description = if (kitsuState ==
+                            com.kennyb1201.kbstream.data.kitsu.KitsuConnectionState.Connected
+                        ) {
+                            "Progress and ratings are written to your Kitsu library. " +
+                                "Open to disconnect, or to read a public profile instead."
+                        } else {
+                            animeTrackerDescription("Kitsu", kitsuUsername)
+                        },
+                        onClick = { kitsuEditor = true }
                     )
+
+                    if (kitsuEditor) {
+                        KitsuConnectDialog(
+                            state = kitsuState,
+                            currentUsername = kitsuUsername,
+                            onDismiss = { kitsuEditor = false },
+                            onConnect = { email, password ->
+                                val result = com.kennyb1201.kbstream.data.kitsu.KitsuAuth
+                                    .connect(context, email, password)
+                                kitsuStateRevision++
+                                if (result is
+                                    com.kennyb1201.kbstream.data.kitsu.KitsuAuth.ConnectResult.Failed
+                                ) {
+                                    result.reason
+                                } else {
+                                    // A connect re-opens the rating leg, so
+                                    // anything the profile queued while it was
+                                    // connected-but-dead is due now.
+                                    com.kennyb1201.kbstream.data.library.TasteRatingSubmission
+                                        .onTrackerConnected(
+                                            context,
+                                            com.kennyb1201.kbstream.data.library.TasteRatingTracker.KITSU
+                                        )
+                                    null
+                                }
+                            },
+                            onDisconnect = {
+                                com.kennyb1201.kbstream.data.kitsu.KitsuAuth.disconnect(context)
+                                com.kennyb1201.kbstream.data.library.TasteRatingSubmission
+                                    .onTrackerDisconnected(
+                                        context,
+                                        com.kennyb1201.kbstream.data.library.TasteRatingTracker.KITSU
+                                    )
+                                kitsuStateRevision++
+                            },
+                            onSaveUsername = { username ->
+                                AppPreferences.setKitsuUsername(context, username)
+                                kitsuEditor = false
+                            }
+                        )
+                    }
 
                     // The dialog lives beside the rows it edits: a username is
                     // the whole connection, so a "connect screen" would be one
@@ -1515,6 +1588,100 @@ fun SettingsScreen(
                         if (omdbKeySaved) {
                             Text(
                                 text = "Saved — the AWARDS fact appears on the next title you open.",
+                                color = KBAccent,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(top = 5.dp)
+                            )
+                        }
+                    }
+                }
+
+                // ── ANIME SKIP CLIENT ID (fifth skip source) ────────
+                // Not a key anybody can hand out: the viewer registers it at
+                // anime-skip.com/account/api-clients and the service rate-limits
+                // per id. Blank is the normal state, and it costs nothing but
+                // this one source. It SYNCS to the account's other devices.
+                Spacer(modifier = Modifier.height(12.dp))
+                val animeSkipFocusRequester = remember { FocusRequester() }
+                KBCard(
+                    onClick = { animeSkipFocusRequester.requestFocus() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(KBSurfaceRaised, KBShapeSmall)
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        Text(
+                            text = if (animeSkipKeySaved) {
+                                "Anime Skip — Client ID set"
+                            } else {
+                                "Anime Skip — Client ID not set"
+                            },
+                            color = KBTextHi,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "Optional. Register a free client ID at " +
+                                "anime-skip.com/account/api-clients, then paste it here: " +
+                                "it adds anime-skip.com timestamps as the fifth intro/credits " +
+                                "source for anime episodes. Those skips are button-only and " +
+                                "never jump on their own. Synced to your other devices.",
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                        val animeSkipPaste: (String) -> Unit = { pasted ->
+                            animeSkipKeyInput = pasted.trim()
+                            AppPreferences.setAnimeSkipClientId(context, animeSkipKeyInput)
+                            animeSkipKeySaved = animeSkipKeyInput.isNotBlank()
+                        }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .padding(top = 6.dp)
+                                .fillMaxWidth()
+                        ) {
+                            // Masked with a reveal chip, like every other credential
+                            // here: this screen is on a TV in a room. The id is not
+                            // a high-value secret, but it is the viewer's own
+                            // registration and is treated like the rest.
+                            KBSecretField(
+                                value = animeSkipKeyInput,
+                                revealable = !kidsKeysHidden,
+                                onValueChange = {
+                                    animeSkipKeyInput = it.trim()
+                                    animeSkipKeySaved = false
+                                },
+                                placeholder = "Paste client ID",
+                                modifier = Modifier.weight(1f),
+                                focusRequester = animeSkipFocusRequester,
+                                onDone = {
+                                    AppPreferences.setAnimeSkipClientId(context, animeSkipKeyInput)
+                                    animeSkipKeySaved = animeSkipKeyInput.isNotBlank()
+                                },
+                                onFocusChanged = { focusedNow ->
+                                    // Save on focus loss too — remote users often
+                                    // just navigate away after pasting.
+                                    if (!focusedNow) {
+                                        AppPreferences.setAnimeSkipClientId(
+                                            context,
+                                            animeSkipKeyInput
+                                        )
+                                        animeSkipKeySaved = animeSkipKeyInput.isNotBlank()
+                                    }
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            KBPasteChip(onPaste = animeSkipPaste)
+                        }
+                        if (animeSkipKeySaved) {
+                            // No VERIFY action: the only way to test a client id is
+                            // to spend a lookup, and the rates are unpublished.
+                            Text(
+                                text = "Saved — anime episodes can now use Anime Skip " +
+                                    "(button only, never auto-skip).",
                                 color = KBAccent,
                                 style = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier.padding(top = 5.dp)

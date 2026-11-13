@@ -5149,6 +5149,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             // stream's length, and AniSkip can only be found through the title.
             // mpv reports its duration once the file opens, so a session whose
             // lookup beats the first frame simply has no duration to give.
+            // The Anime Skip client id is read here, off the Activity, because
+            // the body below runs on IO.
+            val animeSkipClientId =
+                AppPreferences.getAnimeSkipClientId(this@MpvPlayerActivity)
             val stamps = withContext(Dispatchers.IO) {
                 runCatchingCancellable {
                     fetchIntroDbStamps(
@@ -5156,7 +5160,8 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                         season,
                         episode,
                         durationMs.takeIf { it > 0L },
-                        itemName.takeIf { it.isNotBlank() }
+                        itemName.takeIf { it.isNotBlank() },
+                        animeSkipClientId
                     )
                 }
                     .getOrElse { error ->
@@ -6135,6 +6140,43 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 .onFailure { Log.w(TAG, "MDBList scrobble/$action failed", it) }
             runCatchingCancellable { scrobbleTrakt(action, progress) }
                 .onFailure { Log.w(TAG, "Trakt scrobble/$action failed", it) }
+            // Kitsu (spec 2026-11-13 phase 2): a stop at the end is the only
+            // event that carries a watched episode count. Its own leg, so a
+            // failure here cannot affect the other three.
+            if (action == "stop" && progress >= 99.0) {
+                runCatchingCancellable { scrobbleKitsu() }
+                    .onFailure { Log.w(TAG, "Kitsu scrobble/$action failed", it) }
+            }
+        }
+    }
+
+
+    /**
+     * The Kitsu leg of a completion (spec 2026-11-13 phase 2, F4).
+     *
+     * Fire-and-forget beside Simkl/Trakt/MDBList, gated on the connection inside
+     * [KitsuWrites] rather than here, and only for a series episode: Kitsu's
+     * progress is "episodes watched", which a film has nothing to send for. Its
+     * own scope, so a stop scrobble outlives this activity exactly as the other
+     * legs' do.
+     */
+    private fun scrobbleKitsu() {
+        if (isLiveChannel || parentId.isBlank()) return
+        if (!parentType.equals("series", ignoreCase = true)) return
+        val episodeNumber = episode?.takeIf { it > 0 } ?: return
+        val title = itemName.takeIf { it.isNotBlank() } ?: return
+        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return
+        val total = totalEpisodesInSeason
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching {
+                com.kennyb1201.kbstream.data.kitsu.KitsuWrites.markEpisodeWatched(
+                    context = applicationContext,
+                    showTitle = title,
+                    episode = episodeNumber,
+                    totalEpisodes = total,
+                    sessionProfileId = sessionProfileId
+                )
+            }
         }
     }
 

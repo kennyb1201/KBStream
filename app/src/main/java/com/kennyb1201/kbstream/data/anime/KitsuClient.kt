@@ -32,7 +32,8 @@ internal object KitsuClient {
 
     const val USER_AGENT = "KBStream/" + BuildConfig.VERSION_NAME
 
-    const val BASE_URL = "https://kitsu.app/api/edge"
+    /** One literal for the JSON:API base - see `KitsuConfig.API_BASE`. */
+    const val BASE_URL = com.kennyb1201.kbstream.data.kitsu.KitsuConfig.API_BASE
 
     /** Kitsu's page ceiling; also the default we ask for. */
     const val PAGE_LIMIT = 20

@@ -702,13 +702,18 @@ class ExternalPlayerActivity : ComponentActivity() {
             // only way to resolve an anime's MyAnimeList id. This engine is the
             // one that needs them most - it gets no second chance at a segment
             // once the other app owns the screen.
+            //
+            // The Anime Skip client id goes too: that leg cannot ask anything
+            // without it, and a blank one simply stops the chain after AniSkip.
+            val animeSkipClientId = AppPreferences.getAnimeSkipClientId(this@ExternalPlayerActivity)
             val stamps = withTimeoutOrNull(SEGMENT_LOOKUP_TIMEOUT_MS) {
                 fetchIntroDbStamps(
                     parentId,
                     season,
                     episode,
                     durationMs.takeIf { it > 0L },
-                    itemName.takeIf { it.isNotBlank() }
+                    itemName.takeIf { it.isNotBlank() },
+                    animeSkipClientId
                 )
             }.orEmpty()
             if (isFinishing || isDestroyed) return@launch
@@ -966,6 +971,7 @@ class ExternalPlayerActivity : ComponentActivity() {
         if (finished) {
             saveProgress(forceCompleted = true)
             scrobble("stop", progressOverride = 100.0)
+            scrobbleKitsu()
             showEndPanels()
         } else {
             // A mid-title return: record the position and hand the viewer back
@@ -1798,6 +1804,36 @@ class ExternalPlayerActivity : ComponentActivity() {
      * final "stop" outlives this activity - the same rule both in-app engines
      * follow.
      */
+
+    /**
+     * The Kitsu leg of a completion (spec 2026-11-13 phase 2, F4).
+     *
+     * Fire-and-forget beside Simkl/Trakt/MDBList, gated on the connection inside
+     * [KitsuWrites] rather than here, and only for a series episode: Kitsu's
+     * progress is "episodes watched", which a film has nothing to send for. Its
+     * own scope, so a stop scrobble outlives this activity exactly as the other
+     * legs' do.
+     */
+    private fun scrobbleKitsu() {
+        if (isLiveChannel || parentId.isBlank()) return
+        if (!parentType.equals("series", ignoreCase = true)) return
+        val episodeNumber = episode?.takeIf { it > 0 } ?: return
+        val title = itemName.takeIf { it.isNotBlank() } ?: return
+        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return
+        val total = totalEpisodesInSeason
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching {
+                com.kennyb1201.kbstream.data.kitsu.KitsuWrites.markEpisodeWatched(
+                    context = applicationContext,
+                    showTitle = title,
+                    episode = episodeNumber,
+                    totalEpisodes = total,
+                    sessionProfileId = sessionProfileId
+                )
+            }
+        }
+    }
+
     private fun scrobble(action: String, progressOverride: Double? = null) {
         if (isLiveChannel || parentId.isBlank()) return
         // A tracker call resolves the ACTIVE profile's token/key at fire time,

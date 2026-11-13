@@ -22,7 +22,14 @@ import java.util.concurrent.ConcurrentHashMap
 enum class TasteRatingTracker(val label: String) {
     SIMKL("Simkl"),
     TRAKT("Trakt"),
-    MDBLIST("MDBList");
+    MDBLIST("MDBList"),
+
+    /**
+     * Kitsu (spec 2026-11-13 phase 2). Added last and after every older value on
+     * purpose: a stored queue names its tracker by [name], so appending keeps
+     * every existing entry readable by an older build's `from()`.
+     */
+    KITSU("Kitsu");
 
     companion object {
         /** The tracker a stored entry names, or null for a value this build does not know. */

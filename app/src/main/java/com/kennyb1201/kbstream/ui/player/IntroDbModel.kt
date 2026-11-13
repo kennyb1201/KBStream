@@ -23,7 +23,15 @@ internal enum class IntroDbSource(val label: String) {
     SkipDb("skipdb"),
 
     /** AniSkip - anime openings/endings/recaps, button-only (never auto-skipped). */
-    AniSkip("aniskip")
+    AniSkip("aniskip"),
+
+    /**
+     * Anime Skip - anime timestamps as POINTS, button-only for the same reasons
+     * as [AniSkip] and one more (see [AutoSkipRules.shouldAutoSkip]): the API
+     * states no confidence at all, and the show is identified by an external id
+     * or a title match.
+     */
+    AnimeSkip("anime-skip")
 }
 
 internal enum class IntroDbMarkerType(val buttonLabel: String) {

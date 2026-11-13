@@ -166,6 +166,12 @@ object AppPreferences {
     // through migrateApiKey.
     const val KEY_OMDB_API_KEY = "omdb_api_key"
     private const val KEY_MDBLIST_API_KEY = "mdblist_api_key"
+    // Anime Skip's client id (anime-skip.com/account/api-clients). A credential
+    // like the keys below: encrypted, profile-scoped, and in [SYNCED_API_KEYS].
+    // It is NOT an API key the app can ship - the service rate-limits per id and
+    // its own example id is published as heavily throttled - so it is only ever
+    // the one the viewer registered.
+    private const val KEY_ANIME_SKIP_CLIENT_ID = "anime_skip_client_id"
     private const val KEY_OPENSUBTITLES_API_KEY = "opensubtitles_api_key"
     private const val KEY_TORBOX_API_KEY = "torbox_api_key"
     private const val KEY_TORBOX_LIBRARY_SYNC = "torbox_library_sync"
@@ -2222,7 +2228,8 @@ object AppPreferences {
         KEY_TORBOX_API_KEY,
         KEY_OPENSUBTITLES_API_KEY,
         KEY_MDBLIST_API_KEY,
-        KEY_OMDB_API_KEY
+        KEY_OMDB_API_KEY,
+        KEY_ANIME_SKIP_CLIENT_ID
     )
 
     private fun apiKeySyncStampKey(keyName: String) = "__sync_ts__$keyName"
@@ -2348,6 +2355,27 @@ object AppPreferences {
         // Never leave a plaintext copy behind.
         prefs(context).edit().remove(KEY_MDBLIST_API_KEY).apply()
         stampApiKeyEdit(context, KEY_MDBLIST_API_KEY, System.currentTimeMillis())
+        pushApiKeysBlob()
+    }
+
+    // ── Anime Skip client id (the fifth intro-skip source) ────────────
+    // Registered by the viewer at anime-skip.com/account/api-clients, sent as
+    // the `X-Client-ID` header. Blank is the normal state on a new install and
+    // means only that the Anime Skip leg of the skip chain never runs; the other
+    // four sources are unaffected and nothing is reported.
+    //
+    // The id SYNCS (it is in [SYNCED_API_KEYS]) so registering once on one TV
+    // reaches the account's other devices on the next pull - the same mechanism
+    // the MDBList key uses. It never appears in a diagnostics paste: nothing
+    // logs it and it is not part of any exported setting.
+    fun getAnimeSkipClientId(context: Context): String =
+        apiKeyPrefs(context).getString(KEY_ANIME_SKIP_CLIENT_ID, "")?.trim().orEmpty()
+
+    fun setAnimeSkipClientId(context: Context, clientId: String) {
+        apiKeyPrefs(context).edit().putString(KEY_ANIME_SKIP_CLIENT_ID, clientId.trim()).apply()
+        // Never leave a plaintext copy behind.
+        prefs(context).edit().remove(KEY_ANIME_SKIP_CLIENT_ID).apply()
+        stampApiKeyEdit(context, KEY_ANIME_SKIP_CLIENT_ID, System.currentTimeMillis())
         pushApiKeysBlob()
     }
 

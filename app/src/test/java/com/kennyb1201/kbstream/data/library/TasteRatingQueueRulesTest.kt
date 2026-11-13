@@ -214,6 +214,10 @@ class TasteRatingQueueRulesTest {
             "a stored name this build does not know is skipped, not crashed on",
             entry().copy(tracker = "LETTERBOXD").trackerOrNull
         )
+        // Kitsu joined last and only by appending: a stored entry names its
+        // tracker by name, so an older build must keep reading every older one.
+        assertEquals(TasteRatingTracker.KITSU, entry(tracker = TasteRatingTracker.KITSU).trackerOrNull)
+        assertEquals("Kitsu", TasteRatingTracker.KITSU.label)
         assertEquals("Simkl", TasteRatingTracker.SIMKL.label)
         assertEquals("Trakt", TasteRatingTracker.TRAKT.label)
         assertNull(TasteRatingTracker.from(null))

@@ -13013,6 +13013,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // that exits early still cannot lose the fact.
         playbackEndReached = true
         scrobbleSimkl("stop", progressOverride = 100.0)
+        scrobbleKitsu()
         // Saved SYNCHRONOUSLY rather than from `scope`. saveProgress reads the
         // position while the player is still alive and then does its own
         // NonCancellable database write, whereas a scope-bound call was a
@@ -14264,6 +14265,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             )
         }
         scrobbleSimkl("stop", progressOverride = if (completed) 100.0 else null)
+        // The advance write files the same completion, so the Kitsu leg rides it
+        // too - [KitsuWrites] de-duplicates the pair, and a Next that did not
+        // complete the episode writes nothing.
+        if (completed) scrobbleKitsu()
     }
 
     private fun launchNextEpisode(
@@ -15075,6 +15080,36 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
     }
 
+
+    /**
+     * The Kitsu leg of a completion (spec 2026-11-13 phase 2, F4).
+     *
+     * Fire-and-forget beside Simkl/Trakt/MDBList, gated on the connection inside
+     * [KitsuWrites] rather than here, and only for a series episode: Kitsu's
+     * progress is "episodes watched", which a film has nothing to send for. Its
+     * own scope, so a stop scrobble outlives this activity exactly as the other
+     * legs' do.
+     */
+    private fun scrobbleKitsu() {
+        if (isLiveChannel || parentId.isBlank()) return
+        if (!parentType.equals("series", ignoreCase = true)) return
+        val episodeNumber = episode?.takeIf { it > 0 } ?: return
+        val title = itemName.takeIf { it.isNotBlank() } ?: return
+        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return
+        val total = totalEpisodesInSeason
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching {
+                com.kennyb1201.kbstream.data.kitsu.KitsuWrites.markEpisodeWatched(
+                    context = applicationContext,
+                    showTitle = title,
+                    episode = episodeNumber,
+                    totalEpisodes = total,
+                    sessionProfileId = sessionProfileId
+                )
+            }
+        }
+    }
+
     private fun scrobbleSimkl(action: String, progressOverride: Double? = null) {
         if (isLiveChannel || parentId.isBlank()) return
         if (action == "start" && simklScrobbleActive && !simklScrobblePaused) return
@@ -15756,8 +15791,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 // state is not ours to touch from a background dispatcher.
                 val knownDurationMs = exoPlayer?.duration?.takeIf { it > 0L }
                 val showTitle = itemName.takeIf { it.isNotBlank() }
+                val animeSkipClientId = AppPreferences.getAnimeSkipClientId(this@NativePlayerActivity)
                 introDbStamps = withContext(Dispatchers.IO) {
-                    fetchIntroDbStamps(parentId, season, episode, knownDurationMs, showTitle)
+                    fetchIntroDbStamps(
+                        parentId,
+                        season,
+                        episode,
+                        knownDurationMs,
+                        showTitle,
+                        animeSkipClientId
+                    )
                 }
             }
         }

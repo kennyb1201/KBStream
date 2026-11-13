@@ -94,6 +94,17 @@ val malClientId = localProps.getProperty("MAL_CLIENT_ID")
     ?: System.getenv("MAL_CLIENT_ID")
     ?: ""
 
+// Kitsu, by client id only. Its connect is the resource-owner password grant
+// (Doorkeeper), which Kitsu's own docs show without app credentials; a
+// registered app's id is sent when this build has one and omitted when it does
+// not, so a blank value is a working build rather than a broken one. No secret:
+// a token issued WITH a secret needs that secret to refresh, this app's
+// registration does not use one, and a secret compiled into an APK is
+// recoverable from every published build.
+val kitsuClientId = localProps.getProperty("KITSU_CLIENT_ID")
+    ?: System.getenv("KITSU_CLIENT_ID")
+    ?: ""
+
 // BingeCat, by client id only - the same rule as Trakt and Simkl above, and for
 // the same reason. The BingeCat contract defines the `bingecat-api-key` header
 // as the application's `client_id` ("must match the JSON client_id where a body
@@ -262,6 +273,7 @@ android {
         buildConfigField("String", "SIMKL_CLIENT_ID", "\"$simklClientId\"")
         buildConfigField("String", "TRAKT_CLIENT_ID", "\"$traktClientId\"")
         buildConfigField("String", "MAL_CLIENT_ID", "\"$malClientId\"")
+        buildConfigField("String", "KITSU_CLIENT_ID", "\"$kitsuClientId\"")
         buildConfigField("String", "BINGECAT_CLIENT_ID", "\"$bingecatClientId\"")
         buildConfigField("String", "SENTRY_DSN", "\"$sentryDsn\"")
         buildConfigField("String", "MDBLIST_API_KEY", "\"$mdbListApiKey\"")

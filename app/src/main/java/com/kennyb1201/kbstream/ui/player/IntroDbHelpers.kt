@@ -6,7 +6,9 @@ import com.kennyb1201.kbstream.data.anime.AnimeIdHub
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.Locale
 import java.util.concurrent.TimeUnit
@@ -194,7 +196,7 @@ private fun readIntroDbSegments(root: JSONObject): List<IntroDbStamp> {
  * Segments for one episode (season + episode present) or one movie (both null —
  * how the player represents a movie).
  *
- * Four sources, in a fixed order, merged per segment KIND (F5, kinds combine):
+ * Five sources, in a fixed order, merged per segment KIND (F5, kinds combine):
  * for each kind the first source in the chain that provides it wins and later
  * sources' rows for that kind are ignored, because two services' timings for the
  * same kind can come from different releases. The chain keeps going while any
@@ -206,25 +208,30 @@ private fun readIntroDbSegments(root: JSONObject): List<IntroDbStamp> {
  *  2. TheIntroDB v4 - unchanged, second: human-validated and the larger library,
  *     so it outranks SkipDB.
  *  3. SkipDB - general movies and TV, duration-aware, IMDb ids only.
- *  4. AniSkip - anime TV episodes only, and last: narrowest (anime only) and the
- *     most expensive (a Jikan title lookup before the skip-times call).
+ *  4. AniSkip - anime TV episodes only.
+ *  5. Anime Skip - anime TV episodes only, and last of all: it is the only leg
+ *     that needs a credential this app does not ship (the viewer's own client
+ *     id), so it is asked once every keyless source has had its chance.
  *
  * Every leg fails on its own: a timeout, a 429 or an unreadable body contributes
  * nothing and the chain moves on. Nothing here ever blocks playback, and nothing
  * here writes to any service.
  *
- * [durationMs] and [showTitle] are optional so an older caller keeps compiling,
- * but all three players pass both: the duration is what makes SkipDB shift its
- * timestamps for a stream whose logo/scene length differs, and the title is the
- * only way to find an anime's MyAnimeList id. A call with no title simply has no
- * AniSkip leg.
+ * [durationMs], [showTitle] and [animeSkipClientId] are optional so an older
+ * caller keeps compiling, but all three players pass all three: the duration is
+ * what makes SkipDB shift its timestamps for a stream whose logo/scene length
+ * differs, the title is the only way to find an anime's MyAnimeList/AniList id,
+ * and the client id is the Anime Skip credential without which that leg cannot
+ * ask anything. A call with no title simply has no anime legs, and a call with
+ * no client id stops after AniSkip.
  */
 internal suspend fun fetchIntroDbStamps(
     parentId: String,
     season: Int?,
     episode: Int?,
     durationMs: Long? = null,
-    showTitle: String? = null
+    showTitle: String? = null,
+    animeSkipClientId: String? = null
 ): List<IntroDbStamp> = withContext(Dispatchers.IO) {
     val normalizedId = parentId.trim()
     val isImdbId = isSkipDbImdbId(normalizedId)
@@ -277,6 +284,17 @@ internal suspend fun fetchIntroDbStamps(
             merged,
             fetchAniSkipStamps(showTitle, episodeNumber, durationMs)
         )
+
+        // 5. Anime Skip — same gate, and last: it is the only leg with a
+        // credential, so it only runs while a kind is still open. It fills the
+        // kinds the four keyless sources missed and never overrides one of
+        // theirs (the merge is unchanged, which is the invariant).
+        if (introDbChainStillOpen(merged)) {
+            merged = mergeIntroDbStamps(
+                merged,
+                fetchAnimeSkipStamps(showTitle, season, episodeNumber, durationMs, animeSkipClientId)
+            )
+        }
     }
 
     merged
@@ -423,6 +441,219 @@ private fun readAniSkipResult(row: JSONObject?): IntroDbStamp? {
  */
 internal suspend fun resolveMalId(showTitle: String?): Int? =
     AnimeIdHub.resolve(showTitle).malId
+
+// ── Anime Skip (the fifth leg, spec 2026-11-13) ───────────────────────────
+
+/** The header Anime Skip requires on every request: the viewer's own client id. */
+internal const val ANIME_SKIP_CLIENT_ID_HEADER = "X-Client-ID"
+
+/**
+ * A 429 parks the leg for this long. One lookup per episode is the design, but
+ * zapping through a season is still bursty, and the chain must not retry inside
+ * a window the service has just closed.
+ */
+private const val ANIME_SKIP_RATE_LIMIT_PARK_MS = 60_000L
+
+@Volatile
+private var animeSkipParkedUntilMs = 0L
+
+/** Test hook: forget a parked window. */
+internal fun resetAnimeSkipRateLimitForTest() {
+    animeSkipParkedUntilMs = 0L
+}
+
+/**
+ * The one request this leg sends.
+ *
+ * A body-carrying request (GraphQL has no GET equivalent), with the client id
+ * in [ANIME_SKIP_CLIENT_ID_HEADER] and the app's own User-Agent. The header is the
+ * only place the credential travels: it is never a query parameter, never a
+ * log line and never part of the request body, so nothing that records a URL or
+ * a payload can capture it.
+ */
+internal fun animeSkipRequest(clientId: String, body: String): Request =
+    Request.Builder()
+        .url(ANIME_SKIP_GRAPHQL_URL)
+        .post(body.toRequestBody("application/json".toMediaType()))
+        .header("Content-Type", "application/json")
+        .header(ANIME_SKIP_CLIENT_ID_HEADER, clientId)
+        .header("User-Agent", INTRO_DB_USER_AGENT)
+        .build()
+
+internal fun fetchAnimeSkipJson(clientId: String, body: String): JSONObject? {
+    if (System.currentTimeMillis() < animeSkipParkedUntilMs) return null
+    return runCatching {
+        introDbHttpClient.newCall(animeSkipRequest(clientId, body)).execute().use { response ->
+            when {
+                response.code == 429 -> {
+                    animeSkipParkedUntilMs = System.currentTimeMillis() + ANIME_SKIP_RATE_LIMIT_PARK_MS
+                    null
+                }
+                !response.isSuccessful -> null
+                else -> JSONObject(response.body?.string().orEmpty())
+            }
+        }
+    }.getOrElse { null }
+}
+
+/** The `data` member, or null when the body is an error envelope. */
+private fun JSONObject.animeSkipData(): JSONObject? {
+    val errors = optJSONArray("errors")
+    if (errors != null && errors.length() > 0) return null
+    return optJSONObject("data")
+}
+
+/**
+ * Anime Skip's segments for one anime episode, or none.
+ *
+ * Anime TV episodes only: everything here is episode-addressed, so a movie (a
+ * null episode) never reaches it, and the season is only ever used to pick
+ * BETWEEN matches. Read-only - no login, no token, no mutation - and the client
+ * id is the only credential, which is why a blank one ends the leg before a
+ * request is made.
+ *
+ * Show resolution, in order:
+ *
+ *  1. **By AniList id**, the authoritative path: the live schema HAS
+ *     `findShowsByExternalId`, its only service is `ANILIST`, and the anime ID
+ *     hub already resolved that id for this title (the same resolution the
+ *     AniSkip leg makes - one answer, not two).
+ *  2. **By title**, only when the hub has no AniList id: `searchShows`, and the
+ *     top result is accepted only when its name matches after normalization.
+ *
+ * Episode match, then the point pairing: [pairAnimeSkipTimestamps] turns the
+ * timestamps into segments and keeps the skippable ones, all of them marked
+ * [IntroDbSource.AnimeSkip] so the button-only rule applies per stamp.
+ *
+ * Any failure - no client id, no show, no episode, no timestamps, timeout, 429,
+ * an error envelope - is no stamps from this leg and nothing else. The earlier
+ * sources are already merged and unaffected.
+ */
+internal suspend fun fetchAnimeSkipStamps(
+    showTitle: String?,
+    season: Int?,
+    episode: Int?,
+    durationMs: Long?,
+    clientId: String?
+): List<IntroDbStamp> {
+    val episodeNumber = episode ?: return emptyList()
+    val client = clientId?.trim().orEmpty()
+    if (client.isEmpty()) return emptyList()
+
+    val anilistId = AnimeIdHub.resolve(showTitle).anilistId
+    val showId = when {
+        anilistId != null -> fetchAnimeSkipJson(client, animeSkipShowsByAniListIdQuery(anilistId))
+            ?.let { readAnimeSkipShowByAniListId(it, anilistId) }
+        else -> null
+    } ?: showTitle
+        ?.takeIf { it.isNotBlank() }
+        ?.let { title ->
+            fetchAnimeSkipJson(client, animeSkipShowSearchQuery(title))
+                ?.let { readAnimeSkipShowByTitle(it, title) }
+        }
+        ?: return emptyList()
+
+    val episodesBody = fetchAnimeSkipJson(client, animeSkipEpisodesQuery(showId)) ?: return emptyList()
+    val episodes = readAnimeSkipEpisodes(episodesBody)
+    val episodeId = episodes.getOrNull(selectAnimeSkipEpisode(episodes, season, episodeNumber) ?: -1)
+        ?.id
+        ?.takeIf { it.isNotBlank() }
+        ?: return emptyList()
+
+    val timestampsBody = fetchAnimeSkipJson(client, animeSkipTimestampsQuery(episodeId))
+        ?: return emptyList()
+
+    return pairAnimeSkipTimestamps(readAnimeSkipTimestamps(timestampsBody), durationMs)
+}
+
+/**
+ * The show whose external AniList link is exactly [anilistId].
+ *
+ * The filter matters: `serviceId` is matched loosely server-side - a one-digit
+ * id comes back with hundreds of shows - so a result is accepted only when it
+ * carries a link naming this exact id under the AniList service.
+ */
+internal fun readAnimeSkipShowByAniListId(root: JSONObject, anilistId: Int): String? {
+    val shows = root.animeSkipData()?.optJSONArray("findShowsByExternalId") ?: return null
+    val wanted = anilistId.toString()
+
+    for (index in 0 until shows.length()) {
+        val show = shows.optJSONObject(index) ?: continue
+        val links = show.optJSONArray("externalLinks") ?: continue
+        for (linkIndex in 0 until links.length()) {
+            val link = links.optJSONObject(linkIndex) ?: continue
+            val exact = link.optString("serviceId").trim() == wanted &&
+                link.optString("service").trim().equals("anilist.co", ignoreCase = true)
+            if (exact) return show.optString("id").takeIf { it.isNotBlank() }
+        }
+    }
+    return null
+}
+
+/**
+ * The first `searchShows` result whose name is the title we asked about.
+ *
+ * Same gate as the Jikan title match - normalized, exact, no prefix matching -
+ * because this is the path taken when no id is known, and a wrong show's
+ * timestamps must never become a skip button.
+ */
+internal fun readAnimeSkipShowByTitle(root: JSONObject, showTitle: String): String? {
+    val shows = root.animeSkipData()?.optJSONArray("searchShows") ?: return null
+
+    for (index in 0 until shows.length()) {
+        val show = shows.optJSONObject(index) ?: continue
+        val matches = animeTitleMatches(
+            showTitle = showTitle,
+            title = show.optString("name"),
+            titleEnglish = show.optString("originalName"),
+            titles = emptyList()
+        )
+        if (matches) return show.optString("id").takeIf { it.isNotBlank() }
+    }
+    return null
+}
+
+/** A `findEpisodesByShowId` body. Episode numbers are STRINGS in this API. */
+internal fun readAnimeSkipEpisodes(root: JSONObject): List<AnimeSkipEpisode> {
+    val episodes = root.animeSkipData()?.optJSONArray("findEpisodesByShowId") ?: return emptyList()
+
+    return (0 until episodes.length()).mapNotNull { index ->
+        val episode = episodes.optJSONObject(index) ?: return@mapNotNull null
+        AnimeSkipEpisode(
+            id = episode.optString("id"),
+            season = episode.optStringOrNull("season"),
+            number = episode.optStringOrNull("number"),
+            absoluteNumber = episode.optStringOrNull("absoluteNumber")
+        )
+    }
+}
+
+/**
+ * A `findTimestampsByEpisodeId` body, as points.
+ *
+ * `at` is a FLOAT in seconds - `1365.0833333333333` is a real value - so it is
+ * read as a double and converted once, in [pairAnimeSkipTimestamps]. No
+ * confidence and no vote field exists on this type, which is why these rows
+ * carry none and why the source is button-only.
+ */
+internal fun readAnimeSkipTimestamps(root: JSONObject): List<AnimeSkipPoint> {
+    val timestamps = root.animeSkipData()?.optJSONArray("findTimestampsByEpisodeId")
+        ?: return emptyList()
+
+    return (0 until timestamps.length()).mapNotNull { index ->
+        val timestamp = timestamps.optJSONObject(index) ?: return@mapNotNull null
+        val at = when (val raw = timestamp.opt("at")) {
+            is Number -> raw.toDouble()
+            is String -> raw.trim().toDoubleOrNull()
+            else -> null
+        } ?: return@mapNotNull null
+        AnimeSkipPoint(atSeconds = at, typeName = timestamp.optJSONObject("type")?.optString("name"))
+    }
+}
+
+/** A JSON string field, or null when absent/null/empty (GraphQL sends nulls). */
+private fun JSONObject.optStringOrNull(key: String): String? =
+    if (!has(key) || isNull(key)) null else optString(key).takeIf { it.isNotBlank() }
 
 /**
  * Reads one `/media` body into stamps.

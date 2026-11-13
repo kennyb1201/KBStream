@@ -4,6 +4,10 @@ import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.data.BackgroundWork
 import com.kennyb1201.kbstream.data.format.DateFormats
+import com.kennyb1201.kbstream.data.kitsu.KITSU_RATINGS_ENABLED
+import com.kennyb1201.kbstream.data.kitsu.KitsuAuth
+import com.kennyb1201.kbstream.data.kitsu.KitsuRatingOutcome
+import com.kennyb1201.kbstream.data.kitsu.submitKitsuRating
 import com.kennyb1201.kbstream.data.mdblist.MDBLIST_RATINGS_ENABLED
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListRatingOutcome
@@ -93,6 +97,7 @@ object TasteRatingSubmission {
         TasteRatingTracker.SIMKL -> SIMKL_RATINGS_ENABLED
         TasteRatingTracker.TRAKT -> TRAKT_RATINGS_ENABLED
         TasteRatingTracker.MDBLIST -> MDBLIST_RATINGS_ENABLED
+        TasteRatingTracker.KITSU -> KITSU_RATINGS_ENABLED
     }
 
     /** True when at least one leg is open, i.e. when queuing can lead anywhere. */
@@ -219,6 +224,7 @@ object TasteRatingSubmission {
                     TasteRatingTracker.TRAKT -> drainTrakt(app, entry, now)
                     TasteRatingTracker.SIMKL -> drainSimkl(app, entry, now)
                     TasteRatingTracker.MDBLIST -> drainMdbList(app, entry, now)
+                    TasteRatingTracker.KITSU -> drainKitsu(app, entry, now)
                 }
                 if (paused) {
                     val waitMs = remainingPauseMs(app, tracker)
@@ -383,6 +389,56 @@ object TasteRatingSubmission {
     }
 
     /**
+     * One Kitsu attempt. True when the leg asked to be tried again shortly.
+     *
+     * The title is the only identity the queue carries that Kitsu can be asked
+     * about (Kitsu is addressed by its own anime id), so the resolution goes
+     * through the phase-1 ID hub and is cached there.
+     */
+    private suspend fun drainKitsu(
+        app: Context,
+        entry: TasteRatingQueueEntry,
+        now: Long
+    ): Boolean {
+        val outcome = submitKitsuRating(
+            context = app,
+            title = entry.title,
+            rating = entry.rating,
+            removal = entry.removal
+        )
+        when (outcome) {
+            KitsuRatingOutcome.LANDED -> TasteRatingQueue.removeEntry(app, entry)
+            KitsuRatingOutcome.NO_IDS -> TasteRatingQueue.dropEntry(
+                app,
+                entry,
+                now,
+                "no Kitsu id or session for the title"
+            )
+            KitsuRatingOutcome.NOT_FOUND -> {
+                Log.w(TAG, "Kitsu could not match ${entry.title.ifBlank { "a title" }}")
+                TasteRatingQueue.dropEntry(
+                    app,
+                    entry,
+                    now,
+                    "kitsu.app could not match the title"
+                )
+            }
+            KitsuRatingOutcome.AUTH -> {
+                TasteRatingQueue.dropEntry(app, entry, now, "the Kitsu session was refused")
+                closeLeg(app, TasteRatingTracker.KITSU)
+            }
+            KitsuRatingOutcome.PAUSED -> Unit
+            KitsuRatingOutcome.NO_ANSWER -> TasteRatingQueue.markAttempt(
+                app,
+                entry,
+                now,
+                "kitsu.app did not answer"
+            )
+        }
+        return outcome == KitsuRatingOutcome.PAUSED
+    }
+
+    /**
      * The tracker ids an entry carries, read back out of the store's own key
      * spellings (see [TasteRatingMapping.imdbIdOf] / [tmdbIdOf]).
      *
@@ -466,6 +522,11 @@ object TasteRatingSubmission {
             // different grant and re-opens the leg with no connect flow, and the
             // raw secret never reaches this map.
             TasteRatingTracker.MDBLIST -> mdbListKeyGrant(app)
+            // Kitsu's grant IS its access token, and it rotates: a refreshed
+            // token is a different grant, which re-opens the leg without a
+            // reconnect - exactly the behaviour Trakt and Simkl get from their
+            // own stores.
+            TasteRatingTracker.KITSU -> KitsuAuth.accessTokenSnapshot(app)
         }
 
     /**

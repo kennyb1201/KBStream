@@ -1011,6 +1011,20 @@ private fun IntegrationsPaneMobile(
             onSave = { key -> AppPreferences.setOmdbApiKey(context, key) },
             savedDescription = "Saved — the AWARDS fact appears on the next title you open."
         )
+        // The fifth skip source's credential. Like every other key card it is
+        // optional; blank just means the Anime Skip leg never runs.
+        KeyCardMobile(
+            title = "Anime Skip Client ID",
+            description = "Optional. Register a free client ID at " +
+                "anime-skip.com/account/api-clients to add anime-skip.com timestamps " +
+                "as a fifth intro/credits source for anime episodes. Those skips are " +
+                "button-only and never auto-skip. Syncs to your other devices.",
+            placeholder = "Paste client ID",
+            loadedValue = AppPreferences.getAnimeSkipClientId(context),
+            onSave = { id -> AppPreferences.setAnimeSkipClientId(context, id) },
+            savedDescription = "Saved — anime episodes can now use Anime Skip " +
+                "(button only, never auto-skip)."
+        )
         KeyCardMobile(
             title = "OpenSubtitles API Key",
             description = "Enables subtitle search in the player.",

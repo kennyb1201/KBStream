@@ -188,7 +188,7 @@ class IntroDbSourcesContractTest {
     // ── The chain itself ─────────────────────────────────────────────────
 
     @Test
-    fun `the four sources are asked in the documented order, with early exit`() {
+    fun `the five sources are asked in the documented order, with early exit`() {
         val chain = helpers.substringAfter("internal suspend fun fetchIntroDbStamps(")
             .substringBefore("internal suspend fun fetchSkipDbStamps(")
 
@@ -196,12 +196,21 @@ class IntroDbSourcesContractTest {
         val theIntroDbAt = chain.indexOf("INTRO_DB_MEDIA_URL")
         val skipDbAt = chain.indexOf("fetchSkipDbStamps(")
         val aniSkipAt = chain.indexOf("fetchAniSkipStamps(")
+        val animeSkipAt = chain.indexOf("fetchAnimeSkipStamps(")
 
         assertTrue(
-            "IntroDB.app first, TheIntroDB second, SkipDB third, AniSkip last",
+            "IntroDB.app, TheIntroDB, SkipDB, AniSkip, then Anime Skip last",
             introDbAppAt in 0 until theIntroDbAt &&
                 theIntroDbAt in 0 until skipDbAt &&
-                skipDbAt in 0 until aniSkipAt
+                skipDbAt in 0 until aniSkipAt &&
+                aniSkipAt in 0 until animeSkipAt
+        )
+        assertTrue(
+            "Anime Skip is only asked while a core kind is still open, so a fully " +
+                "answered title never spends a rate-limited lookup",
+            chain.substringAfter("fetchAniSkipStamps(")
+                .substringBefore("fetchAnimeSkipStamps(")
+                .contains("if (introDbChainStillOpen(merged)) {")
         )
         assertEquals(
             "each answered leg checks whether anything is still missing before " +
@@ -272,9 +281,10 @@ class IntroDbSourcesContractTest {
                 rule.indexOf("autoSkipsType(stamp.type, settings)")
         )
         assertTrue(
-            "and it is the only source named in the decision",
+            "and the only sources named in the decision are the two anime legs",
             rule.windowed("IntroDbSource.".length)
-                .count { it == "IntroDbSource." } == 1
+                .count { it == "IntroDbSource." } == 2 &&
+                rule.contains("if (stamp.source == IntroDbSource.AnimeSkip) return false")
         )
         assertTrue(
             "the source marker is what makes it checkable after the merge",
@@ -320,9 +330,151 @@ class IntroDbSourcesContractTest {
                     "    season: Int?,\n" +
                     "    episode: Int?,\n" +
                     "    durationMs: Long? = null,\n" +
-                    "    showTitle: String? = null\n" +
+                    "    showTitle: String? = null,\n" +
+                    "    animeSkipClientId: String? = null\n" +
                     "): List<IntroDbStamp>"
             )
+        )
+    }
+
+    // ── Anime Skip: the fifth leg (spec 2026-11-13) ──────────────────────
+
+    @Test
+    fun `Anime Skip is asked with the client id header, and nothing else`() {
+        val request = helpers.substringAfter("internal fun animeSkipRequest(")
+            .substringBefore("internal fun fetchAnimeSkipJson(")
+
+        assertTrue(
+            "the one documented endpoint, as a body-carrying request",
+            request.contains(".url(ANIME_SKIP_GRAPHQL_URL)") &&
+                request.contains(".post(")
+        )
+        assertTrue(
+            "the client id travels as X-Client-ID",
+            request.contains(""".header(ANIME_SKIP_CLIENT_ID_HEADER, clientId)""") &&
+                helpers.contains("""internal const val ANIME_SKIP_CLIENT_ID_HEADER = "X-Client-ID"""")
+        )
+        assertTrue(
+            "and the chain's User-Agent goes with it",
+            request.contains(""".header("User-Agent", INTRO_DB_USER_AGENT)""")
+        )
+        assertFalse(
+            "no Bearer token: the authenticated flow is mutation-only and unused",
+            request.contains("Bearer")
+        )
+        assertFalse(
+            "the id is never a query parameter, so no URL log can capture it",
+            request.contains("client_id=")
+        )
+    }
+
+    @Test
+    fun `a blank client id ends the leg before any request`() {
+        val fetcher = helpers.substringAfter("internal suspend fun fetchAnimeSkipStamps(")
+            .substringBefore("internal fun readAnimeSkipShowByAniListId(")
+
+        assertTrue(
+            "episode-addressed, so a movie never reaches it",
+            fetcher.contains("val episodeNumber = episode ?: return emptyList()")
+        )
+        assertTrue(
+            "and the credential gate runs before the first lookup",
+            fetcher.indexOf("if (client.isEmpty()) return emptyList()") in 0 until
+                fetcher.indexOf("fetchAnimeSkipJson(")
+        )
+        assertTrue(
+            "every failure - no show, no episode, no timestamps, an error envelope - " +
+                "is no data rather than a throw",
+            fetcher.contains("?: return emptyList()") &&
+                helpers.contains("errors != null && errors.length() > 0")
+        )
+        assertTrue(
+            "a 429 parks the leg instead of retrying inside the window",
+            helpers.contains("response.code == 429") &&
+                helpers.contains("animeSkipParkedUntilMs = System.currentTimeMillis() + ANIME_SKIP_RATE_LIMIT_PARK_MS") &&
+                helpers.contains("if (System.currentTimeMillis() < animeSkipParkedUntilMs) return null")
+        )
+        assertTrue(
+            "and it is still bounded by the chain's own 5s client, not a longer timeout",
+            helpers.substringAfter("internal fun fetchAnimeSkipJson(")
+                .contains("introDbHttpClient.newCall(")
+        )
+    }
+
+    @Test
+    fun `the show is resolved by AniList id through the real external-id query`() {
+        // The spec asked for a MAL-id lookup if the live schema had one, and for
+        // a reported answer. The schema has findShowsByExternalId, whose only
+        // service is ANILIST - so the hub's AniList id is the authoritative path,
+        // and a title search is only the fallback.
+        assertTrue(
+            "the verified query, with the exact-link filter the loose match needs",
+            chainRules.contains("findShowsByExternalId(service: ANILIST, serviceId: ") &&
+                helpers.substringAfter("internal fun readAnimeSkipShowByAniListId(")
+                    .substringBefore("internal fun readAnimeSkipShowByTitle(")
+                    .contains("""link.optString("serviceId").trim() == wanted""")
+        )
+        assertTrue(
+            "the id comes from the hub - the same cached resolution AniSkip uses",
+            helpers.contains("AnimeIdHub.resolve(showTitle).anilistId")
+        )
+        assertTrue(
+            "and the title gate is the chain's own, for the fallback path only",
+            helpers.substringAfter("internal fun readAnimeSkipShowByTitle(")
+                .substringBefore("internal fun readAnimeSkipEpisodes(")
+                .contains("animeTitleMatches(")
+        )
+    }
+
+    @Test
+    fun `Anime Skip timestamps are points, and the pairing keeps every bound`() {
+        val reader = helpers.substringAfter("internal fun readAnimeSkipTimestamps(")
+            .substringBefore("/** A JSON string field")
+
+        assertTrue(
+            "`at` is read as the float in seconds the API sends",
+            reader.contains("AnimeSkipPoint(atSeconds = at, typeName = timestamp.optJSONObject(\"type\")?.optString(\"name\"))")
+        )
+        assertTrue(
+            "and the point model documents why: no interval exists to read",
+            chainRules.contains("internal data class AnimeSkipPoint(val atSeconds: Double, val typeName: String?)")
+        )
+        assertTrue(
+            "every stamp is marked as Anime Skip's, with no invented confidence",
+            chainRules.substringAfter("internal fun pairAnimeSkipTimestamps(")
+                .contains("source = IntroDbSource.AnimeSkip") &&
+                chainRules.substringAfter("internal fun pairAnimeSkipTimestamps(")
+                    .contains("confidence = null")
+        )
+    }
+
+    @Test
+    fun `the client id is a synced credential and is never hardcoded`() {
+        val prefs = source(PREFERENCES)
+
+        assertTrue(
+            "it lives in the encrypted, profile-scoped store the other keys use",
+            prefs.contains("getString(KEY_ANIME_SKIP_CLIENT_ID, \"\")") &&
+                prefs.contains("apiKeyPrefs(context).edit().putString(KEY_ANIME_SKIP_CLIENT_ID")
+        )
+        assertTrue(
+            "and travels in the account's api_keys blob, like the MDBList key",
+            prefs.substringAfter("val SYNCED_API_KEYS").substringBefore(")")
+                .contains("KEY_ANIME_SKIP_CLIENT_ID")
+        )
+        assertTrue(
+            "a save stamps the edit so the merge can order it",
+            prefs.contains("stampApiKeyEdit(context, KEY_ANIME_SKIP_CLIENT_ID")
+        )
+        assertFalse(
+            "the npm README's shared example id is never shipped",
+            (helpers + chainRules + prefs).contains("ZGfO0sMF3eCwLYf8yMSCJjlynwNGRXWE")
+        )
+        assertFalse(
+            "and the leg logs nothing that could carry it",
+            helpers.substringAfter("internal fun animeSkipRequest(")
+                .substringBefore("internal fun fetchAnimeSkipJson(")
+                .contains("Log.")
         )
     }
 
@@ -367,6 +519,7 @@ class IntroDbSourcesContractTest {
         const val CHAIN_RULES = "${ROOT}IntroDbChainRules.kt"
         const val AUTO_SKIP = "${ROOT}AutoSkipRules.kt"
         const val HUB = "com/kennyb1201/kbstream/data/anime/AnimeIdHub.kt"
+        const val PREFERENCES = "com/kennyb1201/kbstream/data/settings/AppPreferences.kt"
         const val EXTERNAL = "${ROOT}ExternalPlayerActivity.kt"
         const val MPV = "${ROOT}MpvPlayerActivity.kt"
         const val NATIVE = "${ROOT}NativePlayerActivity.kt"

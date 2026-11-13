@@ -249,4 +249,223 @@ class IntroDbChainRulesTest {
         assertEquals("a%20b", urlEncode("a b"))
         assertEquals("%C3%A9", urlEncode("\u00e9"))
     }
+
+    // ── Anime Skip: the fifth leg (spec 2026-11-13) ──────────────────────
+
+    private fun point(at: Double, type: String?) = AnimeSkipPoint(at, type)
+
+    @Test
+    fun `the skippable type names are the ones the API actually sends`() {
+        val skippable = listOf(
+            "Intro", "New Intro", "Mixed Intro",
+            "Recap",
+            "Credits", "New Credits", "Mixed Credits",
+            "Preview"
+        )
+        skippable.forEach { name ->
+            assertTrue("$name must be offered", animeSkipKind(name) != null)
+        }
+        assertEquals(IntroDbMarkerType.Intro, animeSkipKind("New Intro"))
+        assertEquals(IntroDbMarkerType.Intro, animeSkipKind("mixed intro"))
+        assertEquals(IntroDbMarkerType.Credits, animeSkipKind("New Credits"))
+        assertEquals(IntroDbMarkerType.Recap, animeSkipKind("Recap"))
+        assertEquals(IntroDbMarkerType.Preview, animeSkipKind("Preview"))
+
+        listOf("Branding", "Canon", "Filler", "Must Watch", "Title Card", "Transition", "Unknown")
+            .forEach { name ->
+                assertEquals("$name is content or too short to offer", null, animeSkipKind(name))
+            }
+        assertEquals("an absent type is not a kind", null, animeSkipKind(null))
+    }
+
+    @Test
+    fun `a point is bounded by the next point, whatever its type`() {
+        // The verified shape of a real episode: intro at 57s, then a title card
+        // at 147s. The title card is not offerable, but it is what ENDS the intro.
+        val points = listOf(
+            point(0.0, "Branding"),
+            point(10.0, "Canon"),
+            point(57.0, "New Intro"),
+            point(147.0, "Title Card")
+        )
+
+        val stamps = pairAnimeSkipTimestamps(points, durationMs = null)
+
+        assertEquals("one offerable segment", 1, stamps.size)
+        assertEquals(57_000L, stamps[0].startMs)
+        assertEquals("the non-skippable point still ends it", 147_000L, stamps[0].endMs)
+        assertEquals(IntroDbMarkerType.Intro, stamps[0].type)
+        assertEquals(IntroDbSource.AnimeSkip, stamps[0].source)
+        assertEquals("no confidence is invented", null, stamps[0].confidence)
+    }
+
+    @Test
+    fun `a skippable point followed by another skippable one ends at it`() {
+        val stamps = pairAnimeSkipTimestamps(
+            listOf(point(0.0, "Intro"), point(90.0, "Recap"), point(120.0, "Canon")),
+            durationMs = null
+        )
+
+        assertEquals(listOf(0L, 90_000L), stamps.map { it.startMs })
+        assertEquals(
+            "the intro ends where the recap starts, and the recap where content does",
+            listOf(90_000L, 120_000L),
+            stamps.map { it.endMs }
+        )
+        assertEquals(IntroDbMarkerType.Intro, stamps[0].type)
+        assertEquals(IntroDbMarkerType.Recap, stamps[1].type)
+    }
+
+    @Test
+    fun `the last point runs to the end of the file`() {
+        val stamps = pairAnimeSkipTimestamps(
+            listOf(point(1365.0833333, "New Credits"), point(1460.0, "Preview")),
+            durationMs = null
+        )
+
+        assertEquals(1_365_083L, stamps[0].startMs)
+        assertEquals(1_460_000L, stamps[1].startMs)
+        assertEquals(
+            "the preview is the last point, so its segment is open-ended",
+            null,
+            stamps[1].endMs
+        )
+    }
+
+    @Test
+    fun `two points at the same second emit no zero-length stamp`() {
+        val stamps = pairAnimeSkipTimestamps(
+            listOf(point(60.0, "Intro"), point(60.0, "Canon"), point(90.0, "Credits")),
+            durationMs = null
+        )
+
+        assertEquals("the empty intro is dropped, the credits survive", 1, stamps.size)
+        assertEquals(IntroDbMarkerType.Credits, stamps[0].type)
+        assertEquals(90_000L, stamps[0].startMs)
+    }
+
+    @Test
+    fun `a known runtime clamps the end and drops points past it`() {
+        val stamps = pairAnimeSkipTimestamps(
+            listOf(point(1_400.0, "Credits"), point(1_600.0, "Preview")),
+            durationMs = 1_500_000L
+        )
+
+        assertEquals("one segment, because the preview starts after the file ends", 1, stamps.size)
+        assertEquals(1_400_000L, stamps[0].startMs)
+        assertEquals("the end is clamped to the runtime", 1_500_000L, stamps[0].endMs)
+    }
+
+    @Test
+    fun `an empty or degenerate episode is no stamps, not a crash`() {
+        assertEquals(emptyList<IntroDbStamp>(), pairAnimeSkipTimestamps(emptyList(), null))
+        assertEquals(
+            emptyList<IntroDbStamp>(),
+            pairAnimeSkipTimestamps(listOf(point(Double.NaN, "Intro")), null)
+        )
+        assertEquals(
+            "a negative point cannot be acted on",
+            emptyList<IntroDbStamp>(),
+            pairAnimeSkipTimestamps(listOf(point(-5.0, "Intro")), null)
+        )
+        assertEquals(
+            "and a single unknown type is nothing to offer",
+            emptyList<IntroDbStamp>(),
+            pairAnimeSkipTimestamps(listOf(point(0.0, "Canon")), null)
+        )
+    }
+
+    @Test
+    fun `the episode match prefers the season, then the absolute number`() {
+        val episodes = listOf(
+            AnimeSkipEpisode("s1e1", "1", "1", null),
+            AnimeSkipEpisode("s3e1", "3", "1", "25"),
+            AnimeSkipEpisode("s3e5", "3", "5", "29")
+        )
+
+        assertEquals(
+            "season three's episode one, not season one's",
+            1,
+            selectAnimeSkipEpisode(episodes, season = 3, episode = 1)
+        )
+        assertEquals(
+            "with no season to disambiguate, the first match wins",
+            0,
+            selectAnimeSkipEpisode(episodes, season = null, episode = 1)
+        )
+        assertEquals(
+            "an episode only the absolute number names is still found",
+            2,
+            selectAnimeSkipEpisode(episodes, season = 3, episode = 29)
+        )
+        assertEquals(
+            "and a numbered string is matched as a number",
+            0,
+            selectAnimeSkipEpisode(
+                listOf(AnimeSkipEpisode("a", "1", "01", null)),
+                season = 1,
+                episode = 1
+            )
+        )
+        assertEquals(
+            "an episode the show does not list is no match",
+            null,
+            selectAnimeSkipEpisode(episodes, season = 3, episode = 9)
+        )
+    }
+
+    @Test
+    fun `the show lookup is the AniList external-id query, escaped as JSON`() {
+        val body = animeSkipShowsByAniListIdQuery(5114)
+
+        assertEquals(
+            "{\"query\":\"{ findShowsByExternalId(service: ANILIST, serviceId: \\\"5114\\\") " +
+                "{ id name externalLinks { service serviceId } } }\"}",
+            body
+        )
+        assertTrue(
+            "externalLinks is asked for, because the match is loose server-side",
+            body.contains("externalLinks { service serviceId }")
+        )
+    }
+
+    @Test
+    fun `a title in the search query cannot break the document`() {
+        val body = animeSkipShowSearchQuery("Frieren: Beyond Journey's End \"Special\"")
+
+        assertTrue(body.startsWith("{\"query\":\""))
+        assertTrue(body.contains("searchShows(search: "))
+        assertTrue("the title survives intact", body.contains("Frieren: Beyond Journey's End"))
+        assertTrue(
+            "the title's quotes are escaped at both layers (GraphQL string, then JSON member), " +
+                "so no unescaped pair survives to close the document",
+            !body.contains("\"Special\"") && body.contains("Special")
+        )
+        assertTrue(body.contains("limit: 5"))
+        assertFalse("a title is never a URL parameter here", body.contains("&"))
+        assertEquals(
+            "the body is one JSON member, and its quotes are escaped",
+            "{\"query\":\"a \\\"b\\\" c\"}",
+            animeSkipQueryBody("a \"b\" c")
+        )
+    }
+
+    @Test
+    fun `the episode and timestamp queries address ids, never titles`() {
+        assertEquals(
+            "{\"query\":\"{ findEpisodesByShowId(showId: \\\"abc\\\") " +
+                "{ id season number absoluteNumber } }\"}",
+            animeSkipEpisodesQuery("abc")
+        )
+        assertEquals(
+            "{\"query\":\"{ findTimestampsByEpisodeId(episodeId: \\\"abc\\\") " +
+                "{ at type { name } } }\"}",
+            animeSkipTimestampsQuery("abc")
+        )
+    }
+
+    @Test
+    fun `the endpoint is the one the web client pins`() {
+        assertEquals("https://api.anime-skip.com/graphql", ANIME_SKIP_GRAPHQL_URL)
+    }
 }

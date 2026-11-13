@@ -32,12 +32,13 @@ internal object AutoSkipRules {
      * Whether this kind of segment may be skipped with no press at all.
      *
      * Source is part of the answer since the skip-source chain (2026-11-13):
-     * [IntroDbSource.AniSkip] rows never auto-skip, whatever the toggles say.
-     * AniSkip is the only source with no confidence value - so [MIN_CONFIDENCE]
-     * cannot protect it - and its identity comes from a fuzzy title match, so a
-     * wrong MyAnimeList id must not be able to yank the viewer out of the show.
-     * The rule is hard on purpose: no toggle, no settings row, and the button
-     * still offers the segment exactly as it does for a below-threshold row.
+     * [IntroDbSource.AniSkip] and [IntroDbSource.AnimeSkip] rows never auto-skip,
+     * whatever the toggles say. Neither states a confidence value - so
+     * [MIN_CONFIDENCE] cannot protect them - and both identify the show through an
+     * id resolved from a title match, so a wrong show must not be able to yank the
+     * viewer out of the episode. The rule is hard on purpose: no toggle, no
+     * settings row, and the button still offers the segment exactly as it does for
+     * a below-threshold row.
      */
     fun autoSkipsType(type: IntroDbMarkerType, settings: Settings): Boolean = when (type) {
         IntroDbMarkerType.Intro, IntroDbMarkerType.Recap -> settings.skipIntros
@@ -75,8 +76,11 @@ internal object AutoSkipRules {
         settings: Settings,
         durationMs: Long
     ): Boolean {
-        // Button-only source (see [autoSkipsType]): the viewer presses it.
+        // Button-only sources (see [autoSkipsType]): the viewer presses them.
+        // Anime Skip is here for the same two reasons, and its API confirms the
+        // first: `GqlTimestamp` carries no confidence or vote field at all.
         if (stamp.source == IntroDbSource.AniSkip) return false
+        if (stamp.source == IntroDbSource.AnimeSkip) return false
         if (!autoSkipsType(stamp.type, settings)) return false
         val confidence = stamp.confidence
         if (confidence != null && confidence < MIN_CONFIDENCE) return false
