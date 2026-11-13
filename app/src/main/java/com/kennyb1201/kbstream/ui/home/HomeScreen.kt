@@ -216,6 +216,8 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
 import com.kennyb1201.kbstream.data.youtube.PoTokenTrace
 import com.kennyb1201.kbstream.data.youtube.trailerDataSourceFactory
+import java.time.LocalDate
+import java.time.ZoneId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
@@ -5211,11 +5213,31 @@ fun HomeScreen(
     // filter kept its CW card, because a card names its show with
     // (parentType, show title, ids) chosen for the rail, and those three can
     // each miss where the rail meta's own (type, name, year, id) hit.
-    val cwFilterPass = remember(upNextRaw, hiddenTitleKeys, cwShowNames) {
-        upNextRaw.map { item -> item to item.hiddenDecision(hiddenTitleKeys, cwShowNames) }
+    //
+    // The same pass also withholds a TRACKER card whose own episode has not
+    // aired yet (spec 2026-11-13): a show whose next episode airs today belongs
+    // in Upcoming only. That is a rule about this LIST, not about the card - the
+    // same card is leg (a) of Upcoming's schedule, so filtering at the publish
+    // would take the show off both rails (see upNextUnairedForCW).
+    //
+    // TODAY is part of the pass's identity: the verdict is a fact about the
+    // current date, so the morning after an episode airs the same card comes
+    // back here on its own - no publish, no dismiss to clear.
+    val cwFilterDate = LocalDate.now(ZoneId.systemDefault())
+    val cwFilterPass = remember(upNextRaw, hiddenTitleKeys, cwShowNames, cwFilterDate) {
+        upNextRaw.map { item ->
+            item to upNextContinueWatchingDecision(
+                item,
+                hiddenTitleKeys,
+                cwShowNames,
+                cwFilterDate
+            )
+        }
     }
     val upNext = remember(cwFilterPass) {
-        cwFilterPass.filterNot { (_, decision) -> decision.hidden }.map { (item, _) -> item }
+        cwFilterPass
+            .filterNot { (_, decision) -> decision.hidden || decision.dropped }
+            .map { (item, _) -> item }
     }
     // What the filter decided, for COPY DIAGNOSTICS - after composition, so a
     // capture can say which identity each card was matched by. Kept for the

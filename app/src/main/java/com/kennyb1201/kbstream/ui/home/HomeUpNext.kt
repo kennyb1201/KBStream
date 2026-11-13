@@ -853,6 +853,79 @@ internal fun UpNextItem.hiddenDecision(
     )
 
 /**
+ * The token a Continue Watching card's line carries when the card was withheld
+ * because its episode has not aired yet (see [upNextUnairedForCW]).
+ *
+ * It rides the same `cw.filter:` line the hidden-titles pass writes, because
+ * that is the line a paste carries: the `cw skip` logcat lines never reach one,
+ * so a rule whose verdict is only in logcat is a rule a report cannot check.
+ */
+internal const val CW_UNAIRED_DROP_SUFFIX = " dropped=unaired"
+
+/**
+ * True when a Continue Watching card must be withheld because the episode it
+ * points at has not aired yet.
+ *
+ * Reported 2026-11-13 (build 0.9.267): MobLand S2E9 and Tulsa King S4E5 appear
+ * in Continue Watching on the day they air, when they belong only in Upcoming
+ * until the episode has actually aired. Both were Simkl-leg cards whose feed
+ * still saw them as not caught up, so the merged walk handed the builder the
+ * tracker's next pair with no air-date check - and the same card is the one
+ * thing feeding leg (a) of Upcoming. That is why the rule lives HERE, at the CW
+ * read, and not in the publish path: dropping the card from `_upNext` would
+ * take it out of Upcoming too (the 2026-11-12 regression), while filtering the
+ * CW read leaves the schedule untouched.
+ *
+ * Three conditions, all required, so the rule can only ever fire on the shape it
+ * was written for:
+ *
+ *  1. a TRACKER card - local cards are built from history rows, and the
+ *     resolver's walk already skips unaired episodes for them;
+ *  2. no progress - a genuine resume keeps its card whatever the air date says;
+ *  3. [trackerCardNamesUnairedEpisode] - the air record must name the CARD's own
+ *     episode and date it today or later. A card with no air info, or one whose
+ *     air info names a different episode (a stale card for the episode just
+ *     finished, carrying the show's next airing), proves nothing and stays -
+ *     fail open, always.
+ *
+ * [today] is the caller's, so one pass cannot see two different days, and the
+ * date is part of the pass's identity: the morning after an episode airs the
+ * same card proves its episode has aired and comes back on its own.
+ */
+internal fun upNextUnairedForCW(
+    item: UpNextItem,
+    today: LocalDate = LocalDate.now(ZoneId.systemDefault())
+): Boolean {
+    if (!isTrackerSourcedCard(item)) return false
+    if (item.startPositionMs != 0L) return false
+    return trackerCardNamesUnairedEpisode(item, today)
+}
+
+/**
+ * One card's pass through BOTH Continue Watching read-site filters: the
+ * hidden-titles verdict, and the unaired-episode one beside it.
+ *
+ * Kept as one function so the two screens cannot drift, and so the line a paste
+ * carries names the rule that fired: `hidden=` stays the hidden-titles verdict
+ * alone, and `dropped=unaired` is present exactly when [upNextUnairedForCW] is.
+ */
+internal fun upNextContinueWatchingDecision(
+    item: UpNextItem,
+    hiddenKeys: Set<String>,
+    showNamesFromHistory: Map<String, String>,
+    today: LocalDate = LocalDate.now(ZoneId.systemDefault())
+): UpNextHiddenDecision {
+    val hidden = item.hiddenDecision(hiddenKeys, showNamesFromHistory)
+
+    if (!upNextUnairedForCW(item, today)) return hidden
+
+    return hidden.copy(
+        line = hidden.line + CW_UNAIRED_DROP_SUFFIX,
+        dropped = true
+    )
+}
+
+/**
  * The same identity, for the other direction: the long-press "Hide everywhere"
  * on a Continue Watching card stores its keys from this (see the card menus in
  * HomeScreen / HomeScreenMobile).

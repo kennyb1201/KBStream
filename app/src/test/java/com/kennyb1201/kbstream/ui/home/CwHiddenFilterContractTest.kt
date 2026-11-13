@@ -72,16 +72,24 @@ class CwHiddenFilterContractTest {
     fun `the CW filter asks the card for its identity`() {
         val block = cwFilterBlock()
         assertTrue(
+            // Still the card's own identity: the composed decision calls
+            // hiddenDecision with exactly these two inputs (the unaired rule
+            // that joined it in 2026-11-13 is beside it, not a replacement).
             "the filter must go through the card's identity, not rebuild one: $block",
-            block.contains("item.hiddenDecision(hiddenTitleKeys, cwShowNames)")
+            block.contains("upNextContinueWatchingDecision(") &&
+                block.contains("hiddenTitleKeys, cwShowNames, cwFilterDate")
         )
         assertFalse(
             "the pre-fix inline identity must not come back: $block",
             block.contains("item.showTitle ?: item.title")
         )
         assertTrue(
+            // `|| decision.dropped` joined it in 2026-11-13 (the CW unaired
+            // rule): the hidden verdict itself is still the first term.
             "and it must still filter against the hidden key set",
-            block.contains("cwFilterPass.filterNot { (_, decision) -> decision.hidden }")
+            block.contains(
+                "filterNot { (_, decision) -> decision.hidden || decision.dropped }"
+            )
         )
     }
 
@@ -96,7 +104,7 @@ class CwHiddenFilterContractTest {
                 .substringBefore("val upcomingRaw by")
         assertTrue(
             "the phone's CW filter must go through the card's identity: $block",
-            block.contains("item.hiddenDecision(hiddenTitleKeys, cwShowNames)")
+            block.contains("upNextContinueWatchingDecision(")
         )
         assertFalse(
             "the pre-fix inline identity must not come back on the phone: $block",
@@ -174,7 +182,11 @@ class CwHiddenFilterContractTest {
             "the screen reads that map and keys the pass on it",
             squash(home).contains(
                 "viewModel.continueWatchingShowNames.collectAsStateWithLifecycle()"
-            ) && cwFilterBlock().contains("remember(upNextRaw, hiddenTitleKeys, cwShowNames)")
+            ) && cwFilterBlock().contains(
+                // The date joined the keys in 2026-11-13: the unaired rule is a
+                // fact about today, so a new day has to re-derive the pass.
+                "remember(upNextRaw, hiddenTitleKeys, cwShowNames, cwFilterDate)"
+            )
         )
     }
 

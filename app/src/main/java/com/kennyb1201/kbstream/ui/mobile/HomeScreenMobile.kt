@@ -210,6 +210,8 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.MobileTheme
 import com.kennyb1201.kbstream.ui.theme.InterFamily
 import kotlin.random.Random
+import java.time.LocalDate
+import java.time.ZoneId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -387,11 +389,25 @@ fun HomeScreenMobile(
         // decision, from the same card identity, because this is the screen the
         // hidden-title report came from: the rails dropped the show and this
         // row kept it.
-        val cwFilterPass = remember(upNextRaw, hiddenTitleKeys, cwShowNames) {
-            upNextRaw.map { item -> item to item.hiddenDecision(hiddenTitleKeys, cwShowNames) }
+        // The same pass withholds a tracker card whose own episode has not aired
+        // yet - see upNextUnairedForCW; TV and phone share the decision, and the
+        // date is part of the pass's identity so a card withheld on its release
+        // day returns by itself.
+        val cwFilterDate = LocalDate.now(ZoneId.systemDefault())
+        val cwFilterPass = remember(upNextRaw, hiddenTitleKeys, cwShowNames, cwFilterDate) {
+            upNextRaw.map { item ->
+                item to upNextContinueWatchingDecision(
+                    item,
+                    hiddenTitleKeys,
+                    cwShowNames,
+                    cwFilterDate
+                )
+            }
         }
         val upNext = remember(cwFilterPass) {
-            cwFilterPass.filterNot { (_, decision) -> decision.hidden }.map { (item, _) -> item }
+            cwFilterPass
+                .filterNot { (_, decision) -> decision.hidden || decision.dropped }
+                .map { (item, _) -> item }
         }
         // For COPY DIAGNOSTICS, after composition (spec F2, see CwFilterTrace).
         val cwFilterLines = remember(cwFilterPass) {

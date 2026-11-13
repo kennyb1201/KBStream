@@ -37,11 +37,20 @@ internal data class UpNextHiddenIdentity(
     val ids: List<String?>
 )
 
-/** One card's pass through the hidden-titles filter, with its line. */
+/**
+ * One card's pass through the filter, with its line.
+ *
+ * [hidden] is the hidden-titles verdict and nothing else - the line's `hidden=`
+ * field prints it, so widening it would make a paste lie about which rule fired.
+ * [dropped] is the Continue Watching unaired verdict, added beside it for the
+ * cards withheld because the episode they point at has not aired yet (see
+ * `upNextUnairedForCW`); the rail drops on either, and the line names which.
+ */
 internal data class UpNextHiddenDecision(
     val identity: UpNextHiddenIdentity,
     val hidden: Boolean,
-    val line: String
+    val line: String,
+    val dropped: Boolean = false
 )
 
 /**
