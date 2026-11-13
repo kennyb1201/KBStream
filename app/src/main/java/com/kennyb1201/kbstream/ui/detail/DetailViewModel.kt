@@ -49,6 +49,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbSeasonSummary
 import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
+import com.kennyb1201.kbstream.data.watched.WatchedKeysRebuild
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.Job
@@ -322,6 +323,41 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val _watchedEpisodeKeys = MutableStateFlow<Set<String>>(emptySet())
     val watchedEpisodeKeys: StateFlow<Set<String>> = _watchedEpisodeKeys.asStateFlow()
+
+    /**
+     * Which title [watchedEpisodeKeys] holds the keys OF, and whether every
+     * tracker leg that can answer for it has answered (spec 2026-11-12, F1).
+     *
+     * Detail draws every season's markers from this one set. A rebuild that
+     * has only heard from local history is a partial set, and replacing the
+     * complete one with it is what showed a show watched to the end with only
+     * its last season ticked on the way back from the player - the tracker
+     * legs had not answered yet. So the last complete set is held until a
+     * rebuild really is complete.
+     */
+    private var watchedKeysParentId: String? = null
+    private var watchedKeysComplete = false
+
+    /**
+     * Local marks made while a rebuild is in flight (F2). The rebuild's read of
+     * the history table can predate the write the player just made, so a
+     * rebuild is unioned with these rather than allowed to overwrite them - the
+     * episode just finished never flickers off.
+     */
+    private val watchedKeyAddsInFlight = mutableSetOf<String>()
+    private val watchedKeyRemovalsInFlight = mutableSetOf<String>()
+
+    /**
+     * The tracker legs that have answered for [watchedKeysParentId].
+     *
+     * Kept per show so the "complete" question is about THIS title: another
+     * show's legs must never count. A leg whose read fails does not set its
+     * marker - the set it would produce is exactly the partial one F1 is about.
+     */
+    private var trackerSetsFor: String? = null
+    private var simklKeysReadFor: String? = null
+    private var mdbListKeysReadFor: String? = null
+    private var traktKeysReadFor: String? = null
 
     private val _watchedKeys = MutableStateFlow<Set<String>>(emptySet())
     val watchedKeys: StateFlow<Set<String>> = _watchedKeys.asStateFlow()
@@ -934,6 +970,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
             }.onSuccess { episodes ->
                 _simklWatchedEpisodes.value = episodes
                 _simklSeriesWatched.value = episodes.isNotEmpty()
+                simklKeysReadFor = parentId
             }
         }
 
@@ -945,6 +982,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 )
             }.onSuccess { episodes ->
                 mdbListWatchedEpisodes = episodes
+                mdbListKeysReadFor = parentId
             }
         }
 
@@ -955,6 +993,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 )
             }.onSuccess { episodes ->
                 traktWatchedEpisodes = episodes
+                traktKeysReadFor = parentId
             }
         }
     }
@@ -1146,6 +1185,15 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         parentId: String,
         localCompletedEntries: List<WatchHistoryEntity>
     ) {
+        // The local slice on its own: every key this profile's own history
+        // rows derive. It is the whole answer for a title another profile
+        // owns, and the part that keeps moving while a rebuild is in flight.
+        val localSlice = WatchedEpisodeState.buildMergedWatchedKeys(
+            parentId = parentId,
+            localCompletedEntries = localCompletedEntries,
+            simklCompletedEpisodes = emptySet()
+        )
+
         if (detailOwnedByAnotherProfile()) {
             // The merged set has non-per-profile members (Simkl, MDBList,
             // Trakt), so a title finished on the kids profile was ticking its
@@ -1156,24 +1204,116 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
             // episodes the viewer ticked by hand here. Publish exactly what
             // the local entries derive (empty Simkl set), nothing from the
             // tracker feeds.
-            _watchedEpisodeKeys.value =
-                WatchedEpisodeState.buildMergedWatchedKeys(
-                    parentId = parentId,
-                    localCompletedEntries = localCompletedEntries,
-                    simklCompletedEpisodes = emptySet()
-                )
+            _watchedEpisodeKeys.value = localSlice
+            watchedKeysParentId = parentId
+            watchedKeysComplete = true
             return
         }
-        _watchedEpisodeKeys.value =
-            WatchedEpisodeState.buildMergedWatchedKeys(
-                parentId = parentId,
-                localCompletedEntries = localCompletedEntries,
-                simklCompletedEpisodes = _simklWatchedEpisodes.value
-            ) + mdbListWatchedEpisodes.map { (season, episode) ->
-                "$parentId:$season:$episode"
-            } + traktWatchedEpisodes.map { (season, episode) ->
-                "$parentId:$season:$episode"
-            }
+
+        val sameTitle = watchedKeysParentId == parentId
+        if (!sameTitle) {
+            // In-flight marks belong to the show they were made on.
+            watchedKeyAddsInFlight.clear()
+            watchedKeyRemovalsInFlight.clear()
+        }
+
+        // HOLD (F1): a rebuild that has not heard from every tracker leg has
+        // the local slice and nothing else. Swapping it in is the bug this
+        // fixes, so while a complete set is already on screen the only thing
+        // this publish does is take the local slice's new keys - a row the
+        // player just wrote has to appear immediately.
+        if (
+            !WatchedKeysRebuild.shouldReplace(
+                sameTitle = sameTitle,
+                holdingComplete = watchedKeysComplete,
+                rebuildComplete = trackerLegsComplete(parentId)
+            )
+        ) {
+            // The local slice's new keys still land (the row the player just
+            // wrote), and an un-watch made in flight still wins over a history
+            // read that predates the delete.
+            _watchedEpisodeKeys.value =
+                _watchedEpisodeKeys.value + localSlice - watchedKeyRemovalsInFlight
+            return
+        }
+
+        val built = WatchedEpisodeState.buildMergedWatchedKeys(
+            parentId = parentId,
+            localCompletedEntries = localCompletedEntries,
+            simklCompletedEpisodes = _simklWatchedEpisodes.value
+        ) + mdbListWatchedEpisodes.map { (season, episode) -> "$parentId:$season:$episode" } +
+            traktWatchedEpisodes.map { (season, episode) -> "$parentId:$season:$episode" }
+
+        // F2: the build can predate a local write that landed while it was
+        // running, so the marks made meanwhile are unioned in, not overwritten.
+        _watchedEpisodeKeys.value = WatchedKeysRebuild.merge(
+            built = built,
+            addedInFlight = watchedKeyAddsInFlight,
+            removedInFlight = watchedKeyRemovalsInFlight
+        )
+        watchedKeysParentId = parentId
+        watchedKeysComplete = trackerLegsComplete(parentId)
+        if (watchedKeysComplete) {
+            // The build has taken them in (the local slice is in `built`), so
+            // they are no longer "in flight".
+            watchedKeyAddsInFlight.clear()
+            watchedKeyRemovalsInFlight.clear()
+        }
+    }
+
+    /**
+     * True when no tracker leg still has something to say about [parentId] -
+     * because it has already answered for this show, or because it is not
+     * configured at all.
+     */
+    private fun trackerLegsComplete(parentId: String): Boolean {
+        if (
+            simklRepository.isConfigured() &&
+            simklRepository.hasToken() &&
+            simklKeysReadFor != parentId
+        ) {
+            return false
+        }
+        if (
+            MdbListClient.isConfigured(getApplication()) &&
+            mdbListKeysReadFor != parentId
+        ) {
+            return false
+        }
+        return !(
+            traktRepository.isConfigured() &&
+                traktRepository.hasToken() &&
+                traktKeysReadFor != parentId
+            )
+    }
+
+    /**
+     * Points the three tracker legs at ONE show. They are single fields, so a
+     * different title must clear them: otherwise the first publish of the new
+     * page - which happens before its own tracker reads - would union another
+     * show's episodes into its keys. Same title is a no-op, which is what lets
+     * a return to Detail keep the complete set it already holds.
+     */
+    private fun adoptTrackerSetsFor(parentId: String) {
+        if (trackerSetsFor == parentId) return
+        trackerSetsFor = parentId
+        _simklWatchedEpisodes.value = emptySet()
+        mdbListWatchedEpisodes = emptySet()
+        traktWatchedEpisodes = emptySet()
+    }
+
+    /** Records a local mark made while a rebuild may be in flight (F2). */
+    private fun noteAddedKeys(keys: Set<String>) {
+        if (keys.isEmpty()) return
+        watchedKeyRemovalsInFlight -= keys
+        watchedKeyAddsInFlight += keys
+    }
+
+    /** Records a local un-watch made while a rebuild may be in flight (F2). */
+    private fun noteRemovedKeys(keys: Set<String>) {
+        if (keys.isEmpty()) return
+        watchedKeyAddsInFlight -= keys
+        watchedKeyRemovalsInFlight += keys
     }
 
     fun load(
@@ -1214,6 +1354,9 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                     "type=$normalizedType id=$id"
             )
             viewModelScope.launch {
+                // Same title in practice; a no-op unless another show's page
+                // was the last thing this ViewModel loaded.
+                adoptTrackerSetsFor(id)
                 val localCompletedEntries = refreshLocalWatchState(
                     parentId = id,
                     normalizedType = normalizedType,
@@ -1522,6 +1665,11 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 // today and can never delay the TMDB detail paint.
                 fetchAwards(normalizedType)
 
+                // The tracker legs are per show: clear another title's before
+                // anything publishes, so this page's first keys cannot carry
+                // its episodes.
+                adoptTrackerSetsFor(id)
+
                 // Local watch state for this title (resume row, per-episode
                 // in-progress map, completed ids) plus the Simkl/MDBList cloud
                 // fallbacks for the resume row. Read through the shared reader
@@ -1534,8 +1682,19 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                     cloudResumeFallback = true
                 )
 
-                // 2. Fetch Simkl watch states utilizing the resolved TMDB show ID safely
-                val simklCompleted = if (
+                // 2. Fetch Simkl watch states utilizing the resolved TMDB show ID safely.
+                //
+                // A failed read KEEPS the set already held instead of emptying
+                // it (spec 2026-11-12, F1). This used to be
+                // `.getOrDefault(emptySet())`: one timed-out call on the way
+                // back from the player replaced a fully watched show's set with
+                // nothing, the merge then published the local slice only, and
+                // the screen showed "only the last season ticked" until some
+                // later entry read Simkl successfully again - which is exactly
+                // the report, down to the self-correction. adoptTrackerSetsFor
+                // above is what makes the held set safe to keep: it belongs to
+                // this show.
+                if (
                     normalizedType == "series" &&
                     simklRepository.isConfigured() &&
                     simklRepository.hasToken()
@@ -1543,13 +1702,15 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                     val tmdbShowId = tmdbDetailResult.getOrNull()?.id
                     runCatchingCancellable {
                         simklRepository.getWatchedEpisodesForShowByImdb(imdbId = id, tmdbId = tmdbShowId)
-                    }.getOrDefault(emptySet())
+                    }.onSuccess { episodes ->
+                        _simklWatchedEpisodes.value = episodes
+                        _simklSeriesWatched.value = episodes.isNotEmpty()
+                        simklKeysReadFor = id
+                    }
                 } else {
-                    emptySet()
+                    _simklWatchedEpisodes.value = emptySet()
+                    _simklSeriesWatched.value = false
                 }
-
-                _simklWatchedEpisodes.value = simklCompleted
-                _simklSeriesWatched.value = simklCompleted.isNotEmpty()
 
                 // The attribution link for this screen, from the same cached
                 // body: Simkl's rules want the Simkl page for the exact title
@@ -1580,7 +1741,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 // id form (and, when the device only ever pushed one, under
                 // both at once), so the index is asked for every flavor this
                 // title answers to and unions them.
-                val mdbListCompleted = if (
+                if (
                     normalizedType == "series" &&
                     MdbListClient.isConfigured(getApplication())
                 ) {
@@ -1589,20 +1750,23 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                             context = getApplication(),
                             showKeys = localHistoryParentIds(id)
                         )
-                    }.getOrDefault(emptySet())
+                    }.onSuccess { episodes ->
+                        // Kept so the freshness gate's local-only refresh can
+                        // rebuild the merged keys without re-reading the cloud
+                        // snapshot - and kept on FAILURE too (F1): a read that
+                        // did not answer must not empty ticks that were right.
+                        mdbListWatchedEpisodes = episodes
+                        mdbListKeysReadFor = id
+                    }
                 } else {
-                    emptySet()
+                    mdbListWatchedEpisodes = emptySet()
                 }
-
-                // Kept so the freshness gate's local-only refresh can rebuild
-                // the merged keys without re-reading the cloud snapshot.
-                mdbListWatchedEpisodes = mdbListCompleted
 
                 // Trakt's watched episodes, unioned into the same keys. Guarded
                 // on its own client id and token; a failed read leaves the
                 // previous set rather than clearing ticks that were already
                 // right (same posture as MDBList above).
-                val traktCompleted = if (
+                if (
                     normalizedType == "series" &&
                     traktRepository.isConfigured() &&
                     traktRepository.hasToken()
@@ -1611,11 +1775,13 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                         traktRepository.watchedEpisodesForShow(
                             showKeys = localHistoryParentIds(id)
                         )
-                    }.getOrElse { traktWatchedEpisodes }
+                    }.onSuccess { episodes ->
+                        traktWatchedEpisodes = episodes
+                        traktKeysReadFor = id
+                    }
                 } else {
-                    emptySet()
+                    traktWatchedEpisodes = emptySet()
                 }
-                traktWatchedEpisodes = traktCompleted
 
                 // 3. Build merged keys *before* evaluating target episodes or seasons
                 publishWatchedEpisodeKeys(id, localCompletedEntries)
@@ -2663,16 +2829,19 @@ for ((metaAddon, response, error) in probeResults) {
             publishPlayButtonLabel()
 
             // 2. Optimistic in-memory state so badges light up instantly.
-            val newKeys =
-                _watchedEpisodeKeys.value +
-                    validEpisodes.mapNotNull { episode ->
-                        WatchedEpisodeState.buildEpisodeKey(
-                            parentId = parentId,
-                            season = season,
-                            episode = episode
-                        )
-                    }
-            _watchedEpisodeKeys.value = newKeys
+            val addedKeys =
+                validEpisodes.mapNotNull { episode ->
+                    WatchedEpisodeState.buildEpisodeKey(
+                        parentId = parentId,
+                        season = season,
+                        episode = episode
+                    )
+                }.toSet()
+            _watchedEpisodeKeys.value = _watchedEpisodeKeys.value + addedKeys
+            // F2: a rebuild already in flight may have read the history table
+            // before this write landed, so the mark is remembered and unioned
+            // into that rebuild instead of being overwritten by it.
+            noteAddedKeys(addedKeys)
 
             val newSimklPairs =
                 _simklWatchedEpisodes.value +
@@ -2873,6 +3042,8 @@ for ((metaAddon, response, error) in probeResults) {
                 }.toSet()
             _watchedEpisodeKeys.value =
                 _watchedEpisodeKeys.value - removeKeys
+            // F2: an un-watch must survive a rebuild in flight too.
+            noteRemovedKeys(removeKeys)
 
             val removePairs =
                 validEpisodes.map { episode ->
@@ -3456,15 +3627,16 @@ for ((metaAddon, response, error) in probeResults) {
                     }
                     .toSet()
 
-            _watchedEpisodeKeys.value =
-                _watchedEpisodeKeys.value +
-                    pairs.mapNotNull { (season, episode) ->
-                        WatchedEpisodeState.buildEpisodeKey(
-                            parentId = parentId,
-                            season = season,
-                            episode = episode
-                        )
-                    }
+            val addedKeys =
+                pairs.mapNotNull { (season, episode) ->
+                    WatchedEpisodeState.buildEpisodeKey(
+                        parentId = parentId,
+                        season = season,
+                        episode = episode
+                    )
+                }.toSet()
+            _watchedEpisodeKeys.value = _watchedEpisodeKeys.value + addedKeys
+            noteAddedKeys(addedKeys)
             _simklWatchedEpisodes.value =
                 _simklWatchedEpisodes.value + pairs
             _simklSeriesWatched.value = true
@@ -3669,10 +3841,13 @@ for ((metaAddon, response, error) in probeResults) {
             }
 
             // 2. Optimistic in-memory state so badges clear instantly.
-            _watchedEpisodeKeys.value =
+            val removedSeriesKeys =
                 _watchedEpisodeKeys.value
-                    .filterNot { key -> key.startsWith("$parentId:") }
+                    .filter { key -> key.startsWith("$parentId:") }
                     .toSet()
+            _watchedEpisodeKeys.value =
+                _watchedEpisodeKeys.value - removedSeriesKeys
+            noteRemovedKeys(removedSeriesKeys)
             _completedEpisodeIds.value =
                 emptySet()
             _simklWatchedEpisodes.value =
@@ -3819,6 +3994,8 @@ for ((metaAddon, response, error) in probeResults) {
                 }.toSet()
             _watchedEpisodeKeys.value =
                 _watchedEpisodeKeys.value - removeKeys
+            // F2: an un-watch must survive a rebuild in flight too.
+            noteRemovedKeys(removeKeys)
 
             val removePairs =
                 validEpisodes.map { episode ->
