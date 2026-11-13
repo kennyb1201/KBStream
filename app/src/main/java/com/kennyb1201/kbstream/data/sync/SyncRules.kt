@@ -281,11 +281,49 @@ internal object BingeCatAuthRules {
         nowMs: Long
     ): Boolean {
         if (incomingAccess.isNullOrBlank()) return false
-        if (localAccess == null) return true
+        if (localAccess == null) {
+            // No local session is nothing to protect, but it is also no reason
+            // to install a DEAD one: an already-expired pair cannot read, and
+            // its refresh token is usually the one BingeCat consumed when it
+            // issued the copy the sibling has since refreshed. Adopting it is
+            // how a device ends up reporting "connected" while every call
+            // fails with `no-token` (field report, build 253). An expiry this
+            // device cannot read (0 = absent) is still adopted: refusing that
+            // would drop the login the row exists to share.
+            return incomingExpiresAt <= 0L || incomingExpiresAt > nowMs
+        }
         if (localAccess == incomingAccess) return true
         val incomingLive = incomingExpiresAt > nowMs
         val localLive = localExpiresAt > nowMs
         return incomingLive || !localLive
+    }
+
+    /**
+     * The refresh token to keep when [shouldAdopt] accepts a pulled session.
+     *
+     * BingeCat ROTATES the pair on refresh, so a blob can carry the same access
+     * token and an OLDER expiry - a stale echo of a session this device has
+     * already renewed. Taking that blob's refresh token would replace a working
+     * one with the token BingeCat consumed when it minted the newer pair, and
+     * the next expiry would be permanent: every refresh refused, the mapping
+     * untouched, and nothing but `no-token` in the trace.
+     *
+     * So a session whose access token matches this device's but whose expiry is
+     * older keeps the LOCAL refresh token; a blank incoming refresh token never
+     * erases one either (a sibling on an older build publishes it blank).
+     */
+    fun adoptedRefreshToken(
+        incomingAccess: String?,
+        incomingRefresh: String?,
+        incomingExpiresAt: Long,
+        localAccess: String?,
+        localRefresh: String?,
+        localExpiresAt: Long
+    ): String? = when {
+        incomingRefresh.isNullOrBlank() -> localRefresh
+        localAccess == null -> incomingRefresh
+        localAccess == incomingAccess && incomingExpiresAt < localExpiresAt -> localRefresh
+        else -> incomingRefresh
     }
 }
 

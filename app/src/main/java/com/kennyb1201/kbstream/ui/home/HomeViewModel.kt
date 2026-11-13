@@ -3130,7 +3130,18 @@ Log.d(
                 emptyList()
             }
 
-        if (recentRows.isEmpty() && completedRows.isEmpty()) return items
+        // The tracker feeds' OWN verdict, for a completion that left no row on
+        // this device at all (spec 2026-11-12, F2 - Eternally Yours S1E6). A
+        // show finished on another device, or one the tracker records as
+        // finished before this TV ever saw it, writes nothing into this
+        // profile's watch_history, so the local reads below are empty and the
+        // ghost card survived every re-merge. Read BEFORE the early return:
+        // "no local rows" is exactly the case that return used to swallow.
+        val caughtUpShowKeys = trackerCaughtUpShowKeys(items)
+
+        if (recentRows.isEmpty() && completedRows.isEmpty() && caughtUpShowKeys.isEmpty()) {
+            return items
+        }
 
         // The rows carry no TMDB id (watch_history has no such column), and the
         // tracker cards' show identity is mostly `parent:<type>:<tmdbId>`. The
@@ -3144,17 +3155,79 @@ Log.d(
             dropTrackerCardsForCompletedTargets(
                 items,
                 completedRowList,
-                tmdbByParentId
+                tmdbByParentId,
+                caughtUpShowKeys
             )
 
         if (kept.size != items.size) {
             Log.d(
                 "HOME_UPNEXT",
-                "Dropped ${items.size - kept.size} tracker card(s) for locally watched episodes"
+                "Dropped ${items.size - kept.size} tracker card(s) for watched episodes"
             )
         }
 
         return kept
+    }
+
+    /**
+     * The tracker feeds' own "nothing left to watch" verdict for the shows
+     * behind this build's tracker cards, as the identity keys a card answers to
+     * ([upNextStrongIdentityKeys]).
+     *
+     * WHY THIS EXISTS (spec 2026-11-12, F2). The merge's completion rule reads
+     * this DEVICE's watch_history, and only that. An episode finished on another
+     * device - or a show the tracker itself records as finished, from before
+     * this TV ever played it - leaves no local row, so there was no evidence at
+     * all and the "next up" card for a finished episode stayed on the rail
+     * through every re-merge (Eternally Yours S1E6, build 262). The tracker feed
+     * that offered it is also the source that SAYS it is finished;
+     * [WatchedStatusRepository] is where that answer already lives, because it
+     * merges the remote feeds' own watched sets (Simkl, MDBList, Trakt) with the
+     * profile's rows and answers "is there anything left to watch" per title.
+     *
+     * Only POSITIVE answers are used. A cold cache, a blank title, a failed
+     * lookup or an id form the cache has never seen answers false and the card
+     * is kept - exactly the behaviour before this existed - so the rule can
+     * never drop a card on missing information, and can never over-match on a
+     * title (the keys here are ids, not names).
+     */
+    private suspend fun trackerCaughtUpShowKeys(
+        items: List<UpNextItem>
+    ): Set<String> {
+        if (items.none { item -> isTrackerSourcedCard(item) }) return emptySet()
+
+        return buildSet {
+            items.forEach { item ->
+                if (!isTrackerSourcedCard(item)) return@forEach
+
+                val mediaType =
+                    item.parentType?.takeIf { type -> type.isNotBlank() } ?: "series"
+
+                // Both id flavors this card can be cached under: the parent id
+                // it navigates by ("tt…" on a Simkl card) and the TMDB id it
+                // resolved. Any hit is this card's own show, so a hit is enough.
+                val idForms =
+                    listOfNotNull(
+                        item.parentId?.takeIf { id -> id.isNotBlank() },
+                        item.tmdbId
+                            ?.takeIf { tmdb -> tmdb > 0 }
+                            ?.let { tmdb -> "tmdb:$tmdb" }
+                    )
+
+                val caughtUp =
+                    idForms.any { form ->
+                        try {
+                            watchedStatusRepository.isWatchedCached(form, mediaType)
+                        } catch (_: Exception) {
+                            false
+                        }
+                    }
+
+                if (caughtUp) {
+                    addAll(upNextStrongIdentityKeys(item))
+                }
+            }
+        }
     }
 
     /**

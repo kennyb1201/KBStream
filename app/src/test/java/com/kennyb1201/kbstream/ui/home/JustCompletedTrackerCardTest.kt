@@ -172,6 +172,117 @@ class JustCompletedTrackerCardTest {
         )
     }
 
+    // ── 2026-11-12 field report: Eternally Yours S1E6 ──────────────────────
+
+    @Test
+    fun `the finished episode is dropped when the id flavors do not meet`() {
+        // The row the player wrote is filed under the imdb id (or has no
+        // resolvable TMDB bridge at all) and the tracker card's own type
+        // collapsed to "unknown", so the two title keys are built in different
+        // buckets and no id key is shared. The TITLE + EPISODE triple is the
+        // thing that identifies the episode, and it is what must decide.
+        val mark = completedTitleMark(
+            parentId = "tt33078239",
+            parentType = "series",
+            tmdbId = null,
+            season = 1,
+            episode = 6,
+            title = "Eternally Yours"
+        )!!
+
+        assertTrue(
+            "a finished episode must not survive because the ids disagree " +
+                "about how to spell the same show",
+            trackerCardJustCompletedByProfile(
+                trackerCard(
+                    id = "simkl:show-3076407",
+                    parentId = "tt33078239",
+                    tmdbId = 313630,
+                    title = "Eternally Yours",
+                    parentType = "unknown",
+                    season = 1,
+                    episode = 6
+                ),
+                listOf(mark)
+            )
+        )
+    }
+
+    @Test
+    fun `the next episode survives when the id flavors do not meet`() {
+        // S3/S4: the fallback is the FULL triple, so the same title at another
+        // episode is the card the rail should still show.
+        val mark = completedTitleMark(
+            parentId = "tt33078239",
+            parentType = "series",
+            tmdbId = null,
+            season = 1,
+            episode = 6,
+            title = "Eternally Yours"
+        )!!
+
+        assertFalse(
+            trackerCardJustCompletedByProfile(
+                trackerCard(
+                    id = "simkl:show-3076407",
+                    parentId = "tt33078239",
+                    tmdbId = 313630,
+                    title = "Eternally Yours",
+                    parentType = "unknown",
+                    season = 1,
+                    episode = 7
+                ),
+                listOf(mark)
+            )
+        )
+    }
+
+    @Test
+    fun `a card for a show the tracker records as finished is dropped with no local row`() {
+        // F2: the completion happened somewhere else. This device has NO
+        // completed row, so no mark can be built - the feed that offers the
+        // card is also the feed that says the show is finished.
+        assertTrue(
+            trackerCardJustCompletedByProfile(
+                trackerCard(
+                    id = "simkl:show-3076407",
+                    parentId = "tt33078239",
+                    tmdbId = 313630,
+                    title = "Eternally Yours",
+                    season = 1,
+                    episode = 6
+                ),
+                emptyList(),
+                caughtUpShowKeys = setOf("parent:series:tt33078239")
+            )
+        )
+    }
+
+    @Test
+    fun `another show's tracker verdict does not drop this card`() {
+        assertFalse(
+            trackerCardJustCompletedByProfile(
+                trackerCard(
+                    id = "simkl:show-3076407",
+                    parentId = "tt33078239",
+                    tmdbId = 313630,
+                    title = "Eternally Yours",
+                    season = 1,
+                    episode = 6
+                ),
+                emptyList(),
+                caughtUpShowKeys = setOf("parent:series:tt0000001")
+            )
+        )
+    }
+
+    @Test
+    fun `no evidence of either kind keeps the card`() {
+        assertFalse(
+            trackerCardJustCompletedByProfile(trackerCard(), emptyList())
+        )
+    }
+
     @Test
     fun `a local card is never dropped by this rule`() {
         val mark = completedTitleMark(

@@ -16,6 +16,17 @@ data class BingeCatUiState(
     val isMapped: Boolean = false,
 
     /**
+     * The credential is gone or was refused, so BingeCat cannot be read until
+     * the device flow runs again (spec F2).
+     *
+     * Its own state rather than a second reading of [isConnected]: a mapped
+     * profile whose session the server has stopped accepting is not connected
+     * AND is not the ordinary "never connected" case, and the page must say
+     * which one it is looking at.
+     */
+    val needsReconnect: Boolean = false,
+
+    /**
      * Connected and mapped, but the grant was issued before `history:write`:
      * the tracker is OFF until the viewer reconnects (spec F4). Never true for
      * an unmapped or disconnected profile - both need a different answer, not a

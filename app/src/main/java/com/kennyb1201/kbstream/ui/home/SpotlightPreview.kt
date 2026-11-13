@@ -4,6 +4,7 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -259,7 +260,11 @@ internal fun SpotlightPreviewPanel(
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Box(modifier = Modifier.fillMaxWidth().height((height.value * 0.46f))) {
+        // The backdrop is the panel's own shape now (16:9 at the panel's
+        // width), not a share of a card-height panel: that is what makes the
+        // still and the trailer read as a picture instead of a thumbnail
+        // (spec 2026-11-12, F1).
+        Box(modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
             // A title with no still, no backdrop and no poster used to leave this
             // half of the panel an empty KBVoid box (audit a5). The tile's own
             // fallback says what the title is, so the panel uses the same
@@ -321,7 +326,9 @@ internal fun SpotlightPreviewPanel(
             text = meta?.name ?: snapshot.title.orEmpty(),
             color = KBTextHi,
             style = androidx.tv.material3.MaterialTheme.typography.titleSmall,
-            maxLines = 1,
+            // Two lines, because the panel is now wide enough to carry them: a
+            // long title wraps instead of ending in an ellipsis (F2).
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
         // Silence while the meta resolves was the other half of audit A4: the
@@ -335,7 +342,9 @@ internal fun SpotlightPreviewPanel(
             },
             color = KBTextLo,
             style = androidx.tv.material3.MaterialTheme.typography.labelSmall,
-            maxLines = 1,
+            // Year, runtime, rating and genre at the panel's width: two lines
+            // is the whole meta line, not an ellipsis'd start of it.
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
         val overview = meta?.description?.trim().orEmpty()
@@ -352,7 +361,10 @@ internal fun SpotlightPreviewPanel(
                 text = overviewLine,
                 color = KBTextLo,
                 style = androidx.tv.material3.MaterialTheme.typography.labelSmall,
-                maxLines = 2,
+                // The synopsis gets the panel's own line limit - several lines
+                // - rather than the two a card-width panel could show. A long
+                // description still ellipsizes, but at the panel's limit (F2).
+                maxLines = 5,
                 overflow = TextOverflow.Ellipsis
             )
         }

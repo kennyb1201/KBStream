@@ -51,6 +51,17 @@ internal class BingeCatTokenStore(
          * never connected) must never do it.
          */
         const val KEY_SIGNED_OUT = "signed_out"
+
+        /**
+         * LOCAL marker: the server refused this grant (or its refresh), so the
+         * viewer has to run the device flow again.
+         *
+         * Deliberately NOT published: it names a fault of THIS device's
+         * credential, and a sibling with a working pair must not adopt it - nor
+         * may it be confused with [KEY_SIGNED_OUT], which is a person's
+         * decision and signs the account out everywhere.
+         */
+        const val KEY_NEEDS_RECONNECT = "needs_reconnect"
     }
 
     private fun storeName(appContext: Context): String =
@@ -106,8 +117,31 @@ internal class BingeCatTokenStore(
             .putLong(KEY_EXPIRES_AT, token.expiresAtEpochMillis)
             .putString(KEY_SCOPE, token.scope)
             .putBoolean(KEY_SIGNED_OUT, false)
+            // A live pair retires a refused one: connect, a successful refresh
+            // and an adopted account session all land here, and the first three
+            // are exactly the ways back out of "needs reconnect".
+            .putBoolean(KEY_NEEDS_RECONNECT, false)
             .apply()
     }
+
+    /**
+     * Records that the stored grant was REFUSED, without deleting it.
+     *
+     * A 401 says the ACCESS token was rejected; it says nothing about the
+     * refresh token, and deleting the pair is how a recoverable expiry became a
+     * permanent `no-token` with the profile mapping still in place (the field
+     * report, builds 242-253). Keeping the pair also keeps the honest answer
+     * reachable: a refresh, or an account session for this same login, can
+     * still revive it, and the connect flow's own prompt is driven off
+     * [needsReconnect].
+     */
+    fun markNeedsReconnect() {
+        prefs?.edit()?.putBoolean(KEY_NEEDS_RECONNECT, true)?.apply()
+    }
+
+    /** True when this device holds a grant the server has refused. */
+    fun needsReconnect(): Boolean =
+        prefs?.getBoolean(KEY_NEEDS_RECONNECT, false) == true
 
     fun isSignedOut(): Boolean = prefs?.getBoolean(KEY_SIGNED_OUT, false) == true
 
@@ -126,6 +160,10 @@ internal class BingeCatTokenStore(
             .remove(KEY_EXPIRES_AT)
             .remove(KEY_SCOPE)
             .putBoolean(KEY_SIGNED_OUT, true)
+            // A deliberate disconnect is the answer a "needs reconnect" state
+            // was asking for, so the marker goes with the session - otherwise a
+            // reconnect prompt would survive the disconnect that resolved it.
+            .putBoolean(KEY_NEEDS_RECONNECT, false)
             .apply()
         return true
     }
@@ -157,6 +195,7 @@ internal class BingeCatTokenStore(
             ?.remove(KEY_REFRESH_TOKEN)
             ?.remove(KEY_EXPIRES_AT)
             ?.remove(KEY_SCOPE)
+            ?.remove(KEY_NEEDS_RECONNECT)
             ?.apply()
     }
 }

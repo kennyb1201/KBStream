@@ -54,6 +54,17 @@ object BingeCatTrace {
     @Volatile
     private var needsReapproval: Boolean = false
 
+    // ── Needs reconnect (the lost/refused session) ────────────────────
+    //
+    // Its own flag rather than a second reading of the connected one, because a
+    // report has to be able to tell "never connected" from "was connected, the
+    // credential is gone, and the viewer must sign in again" - the state that
+    // used to read `connected=yes needs_reapproval=no` over an empty Library
+    // (field report, build 253).
+
+    @Volatile
+    private var needsReconnect: Boolean = false
+
     // ── List writes (step 3) ──────────────────────────────────────────
     //
     // Counted apart from the history writes for the same reason those are
@@ -213,6 +224,14 @@ object BingeCatTrace {
         needsReapproval = needed
     }
 
+    /**
+     * The needs-reconnect state a missing or refused credential puts the tracker
+     * in. Never true for a profile that simply never connected.
+     */
+    fun recordNeedsReconnect(needed: Boolean) {
+        needsReconnect = needed
+    }
+
     fun lines(): List<String> {
         val refreshed = if (lastRefreshAtMs > 0L) {
             "${(System.currentTimeMillis() - lastRefreshAtMs) / 60_000L} min ago"
@@ -230,6 +249,7 @@ object BingeCatTrace {
                 "last_list_write_error=$lastListWriteError " +
                 "last_list_write=$lastListWriteDetail " +
                 "needs_reapproval=${if (needsReapproval) "yes" else "no"} " +
+                "needs_reconnect=${if (needsReconnect) "yes" else "no"} " +
                 "public_list_reads=$publicListReads " +
                 "last_public_list_error=$lastPublicListError " +
                 "imports=$importsAttempted/$importsSucceeded " +
@@ -253,6 +273,7 @@ object BingeCatTrace {
         lastListWriteError = NONE
         lastListWriteDetail = NONE
         needsReapproval = false
+        needsReconnect = false
         publicListReads = 0
         lastPublicListError = NONE
         importsAttempted = 0

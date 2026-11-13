@@ -80,8 +80,21 @@ class BingeCatPublicListsContractTest {
             home.contains("BingeCatPublicLists") || home.contains("public-list")
         )
         assertFalse(
-            "Home had no BingeCat surface before this step and gains none",
-            home.contains("BingeCat")
+            "Home gains no BingeCat SURFACE from this step: no rail, no browser, no " +
+                "read, no wiring (a pinned list's Home rail belongs to " +
+                "LibraryHomeRails, not to HomeScreen)",
+            home.contains("BingeCatRepository") ||
+                home.contains("LibrarySource.BINGECAT_LIST") ||
+                home.contains("BingeCatPublic")
+        )
+        // One BingeCat reference Home IS allowed to carry: the STATUS line that
+        // says a pinned BingeCat rail cannot load until the session is
+        // reconnected (2026-11-12 token-loss report, F2). It starts no read and
+        // draws no rows, and nothing here may grow it into a surface.
+        assertTrue(
+            "Home's only BingeCat wiring is the reconnect status line",
+            home.contains("val bingecatNeedsReconnect = rememberBingeCatReconnectNotice()") &&
+                !home.contains("BingeCatRepository")
         )
     }
 

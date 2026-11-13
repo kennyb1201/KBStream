@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.data.sync
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -49,6 +50,59 @@ class BingeCatAuthRulesTest {
     }
 
     @Test
+    fun `a stale echo cannot replace the live refresh token`() {
+        assertEquals(
+            "same access token and an older expiry is an echo of the pair already " +
+                "renewed, and its refresh token is the one the rotation consumed",
+            "local-refresh",
+            BingeCatAuthRules.adoptedRefreshToken(
+                incomingAccess = "same",
+                incomingRefresh = "consumed",
+                incomingExpiresAt = now - hour,
+                localAccess = "same",
+                localRefresh = "local-refresh",
+                localExpiresAt = now + hour
+            )
+        )
+        assertEquals(
+            "a blank incoming refresh token never erases one (an older build publishes it blank)",
+            "local-refresh",
+            BingeCatAuthRules.adoptedRefreshToken(
+                incomingAccess = "remote",
+                incomingRefresh = "",
+                incomingExpiresAt = now + hour,
+                localAccess = "local",
+                localRefresh = "local-refresh",
+                localExpiresAt = now - hour
+            )
+        )
+        assertEquals(
+            "a newer pair's rotated refresh token is exactly what this device needs",
+            "rotated",
+            BingeCatAuthRules.adoptedRefreshToken(
+                incomingAccess = "new",
+                incomingRefresh = "rotated",
+                incomingExpiresAt = now + 2 * hour,
+                localAccess = "old",
+                localRefresh = "local-refresh",
+                localExpiresAt = now - hour
+            )
+        )
+        assertEquals(
+            "and a first session is taken whole",
+            "first",
+            BingeCatAuthRules.adoptedRefreshToken(
+                incomingAccess = "first",
+                incomingRefresh = "first",
+                incomingExpiresAt = now + hour,
+                localAccess = null,
+                localRefresh = null,
+                localExpiresAt = 0L
+            )
+        )
+    }
+
+    @Test
     fun `a blank session is never adopted`() {
         assertFalse(
             BingeCatAuthRules.shouldAdopt(
@@ -62,10 +116,19 @@ class BingeCatAuthRulesTest {
     }
 
     @Test
-    fun `the first session and a refresh of the same one are adopted`() {
+    fun `the first session is adopted only while it can still be used`() {
         assertTrue(
-            "no local session: nothing to protect",
+            "a live first session is exactly what the row is for",
             BingeCatAuthRules.shouldAdopt("remote", now + hour, localAccess = null, localExpiresAt = 0, nowMs = now)
+        )
+        assertFalse(
+            "a dead first session is not a connection: it cannot read, and its " +
+                "refresh token is usually the one already consumed by the rotation",
+            BingeCatAuthRules.shouldAdopt("dead", now - hour, localAccess = null, localExpiresAt = 0, nowMs = now)
+        )
+        assertTrue(
+            "an absent expiry is not evidence of death (older builds publish it blank)",
+            BingeCatAuthRules.shouldAdopt("unknown", 0L, localAccess = null, localExpiresAt = 0, nowMs = now)
         )
         assertTrue(
             "same access token means the sibling refreshed and rotated the pair",

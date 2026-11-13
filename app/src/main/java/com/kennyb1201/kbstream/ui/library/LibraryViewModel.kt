@@ -237,7 +237,16 @@ data class LibraryUiState(
     val traktConnected: Boolean = false,
 
     /** True when this profile is connected AND mapped to a BingeCat profile. */
-    val bingecatConnected: Boolean = false
+    val bingecatConnected: Boolean = false,
+
+    /**
+     * A mapped BingeCat profile with no usable session (spec F2).
+     *
+     * The lists are NOT "empty" in this state - they cannot be read - so the
+     * surface says so and points at the connect page instead of drawing a
+     * Library that looks like the viewer never had any.
+     */
+    val bingecatNeedsReconnect: Boolean = false
 )
 
 /**
@@ -1412,7 +1421,8 @@ class LibraryViewModel(
                 simklConnected = simklConnected,
                 mdbListConfigured = mdbListConfigured,
                 traktConnected = traktConnected,
-                bingecatConnected = bingecatReady
+                bingecatConnected = bingecatReady,
+                bingecatNeedsReconnect = bingecatRepository.needsReconnect()
             )
             pushDisplay()
 

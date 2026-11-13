@@ -383,6 +383,21 @@ fun LibraryScreen(
             )
         }
 
+        // Spec F2: a mapped profile whose session is gone is not "connected with
+        // nothing in it". The header names the sources that answer; this line
+        // names the one that needs the viewer, because the lists are not coming
+        // back until they reconnect - and the pinned rails are waiting for them.
+        if (state.bingecatNeedsReconnect) {
+            Text(
+                text = "BINGECAT NEEDS RECONNECTING - Settings > BingeCat. Your profile " +
+                    "choice and pinned rails are kept.",
+                style = MaterialTheme.typography.labelMedium,
+                color = KBAccent,
+                maxLines = 2
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
         Spacer(modifier = Modifier.height(12.dp))
 
         // Every control lives in ONE horizontally scrollable strip: focus walks

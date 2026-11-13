@@ -288,10 +288,27 @@ fun BingeCatConnectScreenMobile(
                         }
 
                         else -> {
+                            // A mapped profile whose session was refused lands
+                            // here (`isConnected` is false by then), and "Device
+                            // link required" would read as first-time setup: the
+                            // session existed and stopped working, which is the
+                            // state that must not pass for "connected" (F2).
                             BingeCatPanelMobile(
-                                title = "Device link required",
-                                message = "Generate a code, then approve it on BingeCat's " +
-                                    "page in this phone's browser."
+                                title = if (uiState.needsReconnect) {
+                                    "Reconnect required"
+                                } else {
+                                    "Device link required"
+                                },
+                                message = if (uiState.needsReconnect) {
+                                    "BingeCat no longer accepts this device's session, so " +
+                                        "your watchlist, saved list and lists cannot be " +
+                                        "read until you sign in again. Your profile choice " +
+                                        "and pinned rails are kept. Generate a code to " +
+                                        "reconnect."
+                                } else {
+                                    "Generate a code, then approve it on BingeCat's " +
+                                        "page in this phone's browser."
+                                }
                             )
                             uiState.statusMessage?.let { BingeCatLineMobile(it) }
                             uiState.errorMessage?.let { BingeCatErrorMobile(it) }

@@ -173,14 +173,42 @@ class SpotlightFixesContractTest {
         )
     }
 
-    // ── (d) F4: the panel fits the viewport ───────────────────────────────
+    // ── (d) F4: the panel is a READER, and it still fits the viewport ──────
 
     @Test
-    fun `the panel flips up and clamps to the viewport, pills included`() {
-        // A first-rail portrait card on a 540px-tall viewport: growing down from
-        // its top would end at 666, so the panel flips to grow UP from the card's
+    fun `the panel is sized from the viewport, not from the card`() {
+        // A 1920x1080 television and an ordinary 340px-wide rail card. The old
+        // rule drew this panel at the card times 1.9 - 646px, a thumbnail of a
+        // backdrop with a one-line title - which is the field report (2026-11-12
+        // panel size spec, F1).
+        val big = spotlightPanelBox(
+            cardLeftPx = 200f,
+            cardTopPx = 300f,
+            cardRightPx = 540f,
+            cardBottomPx = 700f,
+            growth = 1.9f,
+            viewportWidthPx = 1920,
+            viewportHeightPx = 1080,
+            marginPx = 16f
+        )
+        assertTrue(
+            "the panel is a reader: well over half the screen wide, not a card",
+            big.width >= 1100
+        )
+        assertTrue(
+            "and its 16:9 backdrop is a picture, not a thumbnail",
+            big.height >= (big.width * 9) / 16
+        )
+        assertTrue(
+            "the whole panel is on screen",
+            big.left >= 16 && big.left + big.width <= 1920 - 16 &&
+                big.top >= 16 && big.top + big.height <= 1080 - 16
+        )
+
+        // A first-rail card low on a 540px viewport: growing down from its top
+        // would run past the bottom, so it flips to grow UP from the card's
         // bottom and lands fully on screen.
-        val firstRail = spotlightPanelBox(
+        val flips = spotlightPanelBox(
             cardLeftPx = 0f,
             cardTopPx = 324f,
             cardRightPx = 180f,
@@ -190,16 +218,11 @@ class SpotlightFixesContractTest {
             viewportHeightPx = 540,
             marginPx = 16f
         )
-        assertEquals(342, firstRail.height)
-        assertTrue(
-            "the whole panel is inside the bottom edge - the pills that had to fit " +
-                "are gone, and the clamp is still what keeps the rest on screen",
-            firstRail.top + firstRail.height <= 540 - 16
-        )
-        assertTrue("and not above the top edge", firstRail.top >= 16)
+        assertTrue(flips.top + flips.height <= 540 - 16)
+        assertTrue("and not above the top edge", flips.top >= 16)
 
         // A right-column card: the panel is clamped to the right edge instead of
-        // hanging off it (which used to cut the TRAILER pill entirely).
+        // hanging off it.
         val rightColumn = spotlightPanelBox(
             cardLeftPx = 780f,
             cardTopPx = 100f,
@@ -210,9 +233,6 @@ class SpotlightFixesContractTest {
             viewportHeightPx = 540,
             marginPx = 16f
         )
-        // The card is 140 wide, so the panel asks 266 and the clamp is what keeps
-        // it on screen rather than the growth.
-        assertEquals(266, rightColumn.width)
         assertTrue(rightColumn.left + rightColumn.width <= 960 - 16)
 
         // A panel that cannot fit is capped, never overhung.
@@ -229,11 +249,33 @@ class SpotlightFixesContractTest {
         assertTrue(capped.width <= 960 - 32)
         assertTrue(capped.height <= 540 - 32)
 
+        // A tiny card can never produce a panel smaller than the old rule drew.
+        val tinyCard = spotlightPanelBox(
+            cardLeftPx = 0f,
+            cardTopPx = 0f,
+            cardRightPx = 40f,
+            cardBottomPx = 60f,
+            growth = 1.9f,
+            viewportWidthPx = 1920,
+            viewportHeightPx = 1080,
+            marginPx = 16f
+        )
+        assertTrue(tinyCard.width >= (40 * 1.9f).toInt())
+
         val preview = source(SPOTLIGHT_PREVIEW)
         assertTrue(
             "the panel is placed by that arithmetic, on the measured viewport",
             preview.contains("spotlightPanelBox(") &&
                 preview.contains("viewportWidthPx = viewport.width")
+        )
+        assertTrue(
+            "the backdrop is 16:9 at the panel's own width",
+            preview.contains("aspectRatio(16f / 9f)")
+        )
+        assertTrue(
+            "the title wraps to two lines and the synopsis to five, so the " +
+                "panel's room is the limit rather than the card's (F2)",
+            preview.contains("maxLines = 2") && preview.contains("maxLines = 5")
         )
         assertFalse(
             "and there is no pill row left to wrap - the whole panel is text and " +
@@ -275,8 +317,17 @@ class SpotlightFixesContractTest {
         assertTrue(
             "and the still is held until the first frame, so the start never " +
                 "flashes black",
-            trailer.contains("onFirstFrame = { firstFrame = true }") &&
-                trailer.contains("source == null || !firstFrame")
+            trailer.contains("onFirstFrame = {") &&
+                trailer.contains("if (still != null && !firstFrame && !frameMissing)")
+        )
+        // The cover is BOUNDED (2026-11-12, F1): the still is removed by a
+        // first frame and by the player's own "playing, no picture" report, so
+        // an event that never arrives cannot mask a playing trailer. See
+        // SpotlightTrailerFirstFrameContractTest for the rule itself.
+        assertTrue(
+            "but the cover is bounded: a playing, picture-less trailer lifts it",
+            trailer.contains("onNoVideoFrame = {") &&
+                trailer.contains("frameMissing = true")
         )
         val host = source(SPOTLIGHT_HOME)
         assertTrue(

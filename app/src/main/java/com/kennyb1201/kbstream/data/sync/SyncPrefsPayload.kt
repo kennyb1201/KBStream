@@ -2625,7 +2625,18 @@ object PrefsPayloadApplier {
         )
         if (!adopt) return
 
-        val nextRefresh = refresh.takeIf { it.isNotBlank() } ?: local?.refreshToken
+        // A rotated pair and a stale echo can share an access token, so which
+        // refresh token to keep is a decision, not a coalesce: see
+        // [BingeCatAuthRules.adoptedRefreshToken] for why taking the stale one
+        // would strand this device with `no-token` forever.
+        val nextRefresh = BingeCatAuthRules.adoptedRefreshToken(
+            incomingAccess = access,
+            incomingRefresh = refresh,
+            incomingExpiresAt = expiresAt,
+            localAccess = local?.accessToken,
+            localRefresh = local?.refreshToken,
+            localExpiresAt = local?.expiresAtEpochMillis ?: 0L
+        )
         val nextScope = scope.takeIf { it.isNotBlank() } ?: local?.scope
         val unchanged = local?.accessToken == access &&
             local.refreshToken == nextRefresh &&

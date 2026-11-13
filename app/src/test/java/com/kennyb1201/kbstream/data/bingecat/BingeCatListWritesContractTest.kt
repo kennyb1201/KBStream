@@ -169,7 +169,7 @@ class BingeCatListWritesContractTest {
         listOf(
             "if (response.code() == 401)",
             "ensureFreshToken(force = true)",
-            "store.clear()",
+            "store.markNeedsReconnect()",
             "noteBingeCatWriteRateLimit(",
             "response.code() == 403",
             "recordListWriteFailure(\"403-scope\")",

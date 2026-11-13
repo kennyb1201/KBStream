@@ -279,10 +279,26 @@ fun BingeCatConnectScreen(
                     }
 
                     else -> {
+                        // A mapped profile with no usable session lands here
+                        // (`isConnected` is false by then), and "Device link
+                        // required" would read as a first-time setup: the
+                        // session was there and stopped working, and nothing
+                        // would say so while the lists sat empty (spec F2).
                         BingeCatPanel(
-                            title = "Device link required",
-                            message = "Generate a code, open the verification address on " +
-                                "your phone or computer, and enter the code."
+                            title = if (uiState.needsReconnect) {
+                                "Reconnect required"
+                            } else {
+                                "Device link required"
+                            },
+                            message = if (uiState.needsReconnect) {
+                                "BingeCat no longer accepts this device's session, so " +
+                                    "your watchlist, saved list and lists cannot be read " +
+                                    "until you sign in again. Your profile choice and " +
+                                    "pinned rails are kept. Generate a code to reconnect."
+                            } else {
+                                "Generate a code, open the verification address on " +
+                                    "your phone or computer, and enter the code."
+                            }
                         )
                         uiState.statusMessage?.let { BingeCatStatusLine(it) }
                         uiState.errorMessage?.let { BingeCatErrorLine(it) }

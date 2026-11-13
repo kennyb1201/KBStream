@@ -91,8 +91,9 @@ class BingeCatTrackerContractTest {
                 "write scope counts, because one reconnect fixes both (a step-2 grant has " +
                 "history:write and not lists:write)",
             squash(repository).contains(
-                "fun needsReapproval(): Boolean = isConfigured() && hasToken() && " +
-                    "mappedProfileId() != null && (!hasWriteScope() || !hasListsWriteScope())"
+                "fun needsReapproval(): Boolean = isConfigured() && !needsReconnect() && " +
+                    "hasToken() && mappedProfileId() != null && " +
+                    "(!hasWriteScope() || !hasListsWriteScope())"
             )
         )
     }
@@ -104,8 +105,11 @@ class BingeCatTrackerContractTest {
             .substringBefore("private suspend fun send(")
         assertTrue("a 401 refreshes once", submit.contains("if (response.code() == 401)"))
         assertTrue(
-            "and a second 401 drops the session, like the reads",
-            submit.contains("store.clear()")
+            "a second 401 flags a reconnect instead of deleting the pair: the " +
+                "access token was refused, the refresh token was not, and deleting " +
+                "both is how a recoverable expiry became a permanent no-token",
+            submit.contains("store.markNeedsReconnect()") &&
+                !submit.contains("store.clear()")
         )
         assertTrue(
             "a 429 parks the leg for its Retry-After instead of storming",

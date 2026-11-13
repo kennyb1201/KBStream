@@ -44,8 +44,20 @@ import kotlinx.coroutines.delay
  * The still is what stays on screen, and it stays until the player's FIRST
  * FRAME - the same rule the hero keeps with its backdrop. Mounting a trailer
  * over a bare SurfaceView is an unpainted black rectangle for as long as the
- * first frame takes, so the still is drawn over the surface and removed only
- * when [HeroInlineTrailerPlayer] says it has painted.
+ * first frame takes, so the still is drawn over the surface until
+ * [HeroInlineTrailerPlayer] says it has painted.
+ *
+ * THAT COVER IS BOUNDED (2026-11-12, F1/F2). A still held until a frame is a
+ * cover for a brief gap; held until an event that never arrives, it is a mask
+ * over a playing trailer - which is the field report: the trailer mounted,
+ * resolved, played (audio audible) and the panel never showed it. So the player
+ * also reports a PLAYING trailer with no picture
+ * ([HeroInlineTrailerPlayer]'s `onNoVideoFrame`), and that report lifts the
+ * still: the surface is shown, because if the video is there the event is what
+ * was missing. If no frame follows inside [PANEL_AUDIO_ONLY_GRACE_MS] the
+ * playback is audio-only, which is not a trailer worth watching - it is
+ * stopped, the still comes back, and the trailer line says which of the two
+ * happened.
  *
  * A deliberate CUT is not a death: the caller removes this composable (a
  * collapsed card, a swept page) and the dispose below releases the pooled player
@@ -75,6 +87,9 @@ internal fun SpotlightPanelTrailer(
     var source by remember(key) { mutableStateOf<PlayableSource?>(null) }
     var mountedSource by remember(key) { mutableStateOf<PlayableSource?>(null) }
     var firstFrame by remember(key) { mutableStateOf(false) }
+    // The player is playing with nothing painted (see the header): the still
+    // lifts on it, and a frame that never follows stops the playback.
+    var frameMissing by remember(key) { mutableStateOf(false) }
     // The resolve a press or a death asks for, through a COUNTER: writing any
     // state the resolve effect itself keys on would cancel it mid-flight.
     var request by remember(key) { mutableIntStateOf(0) }
@@ -131,6 +146,7 @@ internal fun SpotlightPanelTrailer(
         result.onSuccess { resolved ->
             mountedSource = resolved
             firstFrame = false
+            frameMissing = false
             source = resolved
             report("mounted")
         }
@@ -150,6 +166,23 @@ internal fun SpotlightPanelTrailer(
     }
     LaunchedEffect(source != null) {
         onPlayingChange(source != null)
+    }
+
+    // A playing trailer that paints nothing must not keep the still (F1), and
+    // must not play on unheard-of behind it either (F2). The player's frame
+    // watch is what says so; this is what the panel does about it.
+    LaunchedEffect(source, frameMissing, firstFrame) {
+        if (source == null || !frameMissing || firstFrame) return@LaunchedEffect
+        report("playing, no picture (surface shown)")
+        delay(PANEL_AUDIO_ONLY_GRACE_MS)
+        if (frameMissing && !firstFrame) {
+            report("no video: stopped the audio-only trailer")
+            // Still FIRST, so the cover is back before the surface goes: the
+            // player leaves, the still is what the panel shows.
+            frameMissing = false
+            source = null
+            TrailerPlayerPool.releaseForReuse()
+        }
     }
 
     /** Plans the replacement a death is owed, or declines it. */
@@ -226,7 +259,7 @@ internal fun SpotlightPanelTrailer(
         // The still, over the surface until the first frame: mounting a trailer
         // is an unpainted black rectangle until then.
         val still = stillUrl?.takeIf { it.isNotBlank() }
-        if (still != null && (source == null || !firstFrame)) {
+        if (still != null && !firstFrame && !frameMissing) {
             AsyncImage(
                 model = still,
                 contentDescription = title,
@@ -242,12 +275,22 @@ internal fun SpotlightPanelTrailer(
                 startPositionMs = resumeAtMs,
                 modifier = Modifier.fillMaxSize(),
                 videoId = key,
-                onFirstFrame = { firstFrame = true },
+                onFirstFrame = {
+                    firstFrame = true
+                    frameMissing = false
+                    report("first-frame")
+                },
+                // Playing, nothing painted: lift the still and show the
+                // surface. The escalation above decides whether it stays.
+                onNoVideoFrame = {
+                    frameMissing = true
+                },
                 // A natural end is not a death: the player unmounts and the
                 // still returns, which is the rule the hero keeps too.
                 onEnded = {
                     source = null
                     firstFrame = false
+                    frameMissing = false
                     report("ended")
                 },
                 onFailed = { positionMs -> requestRetry(positionMs, 0L) },
@@ -262,5 +305,14 @@ internal fun SpotlightPanelTrailer(
         }
     }
 }
+
+/**
+ * How long the panel shows a surface it has been told is picture-less before
+ * deciding the playback is audio-only and stopping it.
+ *
+ * Long enough for a slow first frame to land after the still has lifted, short
+ * enough that nobody listens to a trailer they cannot see. See the header.
+ */
+private const val PANEL_AUDIO_ONLY_GRACE_MS = 2_500L
 
 private const val TAG = "SPOTLIGHT_CARD"

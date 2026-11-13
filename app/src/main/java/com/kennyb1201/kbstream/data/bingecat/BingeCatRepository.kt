@@ -235,10 +235,54 @@ class BingeCatRepository private constructor(private val context: Context?) {
 
     fun isConfigured(): Boolean = BingeCatConfig.isConfigured
 
+    /**
+     * Whether this profile holds a session it can actually CALL with.
+     *
+     * A stored pair the server has already refused is not a connection: it is
+     * the state that produced `connected=yes ... last_error=no-token` while the
+     * Library sat empty (field report, build 253). [store]'s refusal marker is
+     * what separates the two, and recording it here is what keeps the
+     * diagnostics line and every gate reading the same fact.
+     *
+     * The needs-reapproval flag is re-derived on the same read, from the store
+     * rather than from the last attempt, so a session that comes back (a
+     * reconnect, a successful refresh, an adopted account copy) clears it
+     * without anything else having to remember to.
+     */
     fun hasToken(): Boolean {
-        val has = store.read() != null
-        BingeCatTrace.recordSession(has)
-        return has
+        val usable = store.read() != null && !store.needsReconnect()
+        val reconnect = needsReconnect()
+        BingeCatTrace.recordSession(usable)
+        BingeCatTrace.recordNeedsReconnect(reconnect)
+        BingeCatTrace.recordNeedsReapproval(
+            reconnect || (
+                usable && mappedProfileId() != null &&
+                    (!hasWriteScope() || !hasListsWriteScope())
+                )
+        )
+        return usable
+    }
+
+    /**
+     * Whether BingeCat needs the viewer to run the connect flow again.
+     *
+     * Two shapes, one answer: the store is EMPTY while this profile is mapped to
+     * a BingeCat profile (the credential is gone and only a fresh grant brings
+     * the lists back), or the store holds a pair the server REFUSED (a 401 we no
+     * longer delete on - see [BingeCatTokenStore.markNeedsReconnect]).
+     *
+     * A profile that never connected and never mapped is not in this state, and
+     * neither is a deliberate disconnect (that clears the mapping and leaves the
+     * tombstone): both must stay quiet rather than asking for a reconnect. The
+     * plain store read, NOT [hasToken], so the two facts cannot recurse into each
+     * other.
+     */
+    fun needsReconnect(): Boolean {
+        if (!isConfigured()) return false
+        val refused = store.needsReconnect()
+        val noSession = store.read() == null
+        if (!refused && !noSession) return false
+        return refused || mappedProfileId() != null
     }
 
     fun accountScope(): String? = store.scope()
@@ -253,7 +297,10 @@ class BingeCatRepository private constructor(private val context: Context?) {
      */
     fun onSyncedSessionChanged() {
         cached = null
-        BingeCatTrace.recordSession(store.read() != null)
+        // The same honesty the gates use: a refused pair the applier left in
+        // place is not a connection, and the screen must not read as one.
+        BingeCatTrace.recordSession(store.read() != null && !store.needsReconnect())
+        BingeCatTrace.recordNeedsReconnect(needsReconnect())
     }
 
     /**
@@ -372,7 +419,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
      * the screen must not claim the connection is fully working in either case.
      */
     fun needsReapproval(): Boolean =
-        isConfigured() && hasToken() && mappedProfileId() != null &&
+        isConfigured() && !needsReconnect() && hasToken() && mappedProfileId() != null &&
             (!hasWriteScope() || !hasListsWriteScope())
 
     // ── Device flow ──────────────────────────────────────────────────────
@@ -518,7 +565,15 @@ class BingeCatRepository private constructor(private val context: Context?) {
         )
         return try {
             store.save(token)
+            // A new grant is a new read: the snapshot held by the lost (or
+            // refused) session must not keep the Library empty for a TTL after
+            // the viewer reconnects (spec F3).
+            cached = null
             BingeCatTrace.recordSession(true)
+            // A fresh grant is the way OUT of a reconnect state, so the two
+            // flags are cleared by the save that just retired the marker.
+            BingeCatTrace.recordNeedsReconnect(false)
+            BingeCatTrace.recordNeedsReapproval(false)
             // Cross-device sync: share the new session so a sibling comes up
             // already connected (see [com.kennyb1201.kbstream.data.sync.BingeCatAuthRules]).
             // Only a session that actually reached this device is worth
@@ -644,6 +699,8 @@ class BingeCatRepository private constructor(private val context: Context?) {
         pinnedMapping.clear()
         cached = null
         BingeCatTrace.recordSession(false)
+        BingeCatTrace.recordNeedsReconnect(false)
+        BingeCatTrace.recordNeedsReapproval(false)
         BingeCatTrace.recordMapping(null, null)
         PrefsPayloadBuilder.recordBingeCatMappingChanged(context, cleared = true)
         if (cleared) publishAuthToSync()
@@ -876,7 +933,9 @@ class BingeCatRepository private constructor(private val context: Context?) {
                     // The reads' rule, kept for writes: degrade to disconnected,
                     // never to anonymous calls, so the next screen reads a real
                     // state instead of a token the server has already refused.
-                    store.clear()
+                    // A 401 refuses the ACCESS token, not the grant: keep the pair and
+                    // flag a reconnect, so the state says so and nothing prompts for it.
+                    store.markNeedsReconnect()
                     cached = null
                     BingeCatTrace.recordSession(false)
                     BingeCatTrace.recordWriteFailure("401")
@@ -1226,7 +1285,9 @@ class BingeCatRepository private constructor(private val context: Context?) {
                     return ListWriteResult.Failed
                 }
                 if (response.code() == 401) {
-                    store.clear()
+                    // A 401 refuses the ACCESS token, not the grant: keep the pair and
+                    // flag a reconnect, so the state says so and nothing prompts for it.
+                    store.markNeedsReconnect()
                     cached = null
                     BingeCatTrace.recordSession(false)
                     BingeCatTrace.recordListWriteFailure("401")
@@ -1778,7 +1839,9 @@ class BingeCatRepository private constructor(private val context: Context?) {
                 }.getOrNull() ?: return BingeCatTitleProbe.Failed("network")
             }
             if (response.code() == 401) {
-                store.clear()
+                // A 401 refuses the ACCESS token, not the grant: keep the pair and
+                // flag a reconnect, so the state says so and nothing prompts for it.
+                store.markNeedsReconnect()
                 cached = null
                 BingeCatTrace.recordSession(false)
                 return BingeCatTitleProbe.Failed("401")
@@ -1867,7 +1930,9 @@ class BingeCatRepository private constructor(private val context: Context?) {
                     return BingeCatImportAttempt.Failed("network")
                 }
                 if (response.code() == 401) {
-                    store.clear()
+                    // A 401 refuses the ACCESS token, not the grant: keep the pair and
+                    // flag a reconnect, so the state says so and nothing prompts for it.
+                    store.markNeedsReconnect()
                     cached = null
                     BingeCatTrace.recordSession(false)
                     BingeCatTrace.recordImportFailure("401")
@@ -1986,7 +2051,9 @@ class BingeCatRepository private constructor(private val context: Context?) {
                 }.getOrNull() ?: return BingeCatJobPoll.Failed("network")
             }
             if (response.code() == 401) {
-                store.clear()
+                // A 401 refuses the ACCESS token, not the grant: keep the pair and
+                // flag a reconnect, so the state says so and nothing prompts for it.
+                store.markNeedsReconnect()
                 cached = null
                 BingeCatTrace.recordSession(false)
                 return BingeCatJobPoll.Failed("401")
@@ -2051,7 +2118,9 @@ class BingeCatRepository private constructor(private val context: Context?) {
                 return BingeCatPublicBrowse.Failed("network")
             }
             if (response.code() == 401) {
-                store.clear()
+                // A 401 refuses the ACCESS token, not the grant: keep the pair and
+                // flag a reconnect, so the state says so and nothing prompts for it.
+                store.markNeedsReconnect()
                 cached = null
                 BingeCatTrace.recordSession(false)
                 BingeCatTrace.recordPublicListError("401")
@@ -2118,7 +2187,9 @@ class BingeCatRepository private constructor(private val context: Context?) {
                 return null
             }
             if (response.code() == 401) {
-                store.clear()
+                // A 401 refuses the ACCESS token, not the grant: keep the pair and
+                // flag a reconnect, so the state says so and nothing prompts for it.
+                store.markNeedsReconnect()
                 cached = null
                 BingeCatTrace.recordSession(false)
                 BingeCatTrace.recordError("401")
@@ -2136,23 +2207,57 @@ class BingeCatRepository private constructor(private val context: Context?) {
         return response.body()
     }
 
-    /** A usable access token, refreshing it first when it is close to expiry. */
+    /**
+     * A usable access token, refreshing it first when it is close to expiry.
+     *
+     * Null means "BingeCat cannot be called with what this profile holds", and
+     * every null is reported as the state it is: a refusal (no session, no
+     * refresh token, a server-rejected refresh) marks the store as needing a
+     * reconnect, so the connect flow is offered instead of the app quietly
+     * painting nothing (spec F2). An EXPIRED access token is never handed out:
+     * the old code returned it when there was no refresh token, which earned a
+     * 401 and then deleted the whole pair - the field report's `no-token` with
+     * the mapping still in place.
+     */
     private suspend fun ensureFreshToken(force: Boolean = false): String? {
-        val current = store.read() ?: return null
+        val current = store.read()
+        // Nothing to call with, or a pair the server already refused: no request
+        // is worth making, and the honest answer is "reconnect".
+        if (current == null || store.needsReconnect()) {
+            refuseSession()
+            return null
+        }
         val now = System.currentTimeMillis()
         if (!force && current.expiresAtEpochMillis - now > EXPIRY_SKEW_MS) {
             return current.accessToken
         }
         val refreshToken = current.refreshToken
         if (refreshToken.isNullOrBlank()) {
-            return if (force) null else current.accessToken
+            // Expired with no way to renew it from here. The token is still
+            // offered ONCE: BingeCat can accept a token a clock-skewed expiry
+            // calls dead, and a grant that never carried a refresh token has no
+            // other way to work. What made this destructive was the 401 path
+            // DELETING the pair - that now flags a reconnect instead, so a token
+            // the server really has stopped accepting ends in the honest state
+            // rather than in `no-token` with the mapping still in place.
+            return current.accessToken
         }
         return refreshMutex.withLock {
-            val latest = store.read() ?: return@withLock null
+            val latest = store.read()
+            if (latest == null || store.needsReconnect()) {
+                refuseSession()
+                return@withLock null
+            }
             if (!force && latest.expiresAtEpochMillis - now > EXPIRY_SKEW_MS) {
                 return@withLock latest.accessToken
             }
-            val latestRefresh = latest.refreshToken ?: return@withLock null
+            val latestRefresh = latest.refreshToken
+            if (latestRefresh.isNullOrBlank()) {
+                // The same rule as the check before the lock: a pair with no
+                // refresh token (raced away, or a grant that never carried one)
+                // is offered once, and the server's own answer is the verdict.
+                return@withLock latest.accessToken
+            }
             val response = runCatchingCancellable {
                 service.refreshToken(
                     BingeCatRefreshTokenRequest(
@@ -2161,12 +2266,23 @@ class BingeCatRepository private constructor(private val context: Context?) {
                     )
                 )
             }.getOrNull()
-            val granted = response?.body()
+            // A transport failure is not a verdict on the grant: the pair stays
+            // and only this attempt fails, so a later call can still refresh.
+            if (response == null) {
+                BingeCatTrace.recordError("refresh-failed")
+                return@withLock null
+            }
+            val granted = response.body()
             // Locals, because a property of another module's class cannot be
             // smart-cast (the same rule the device-code path follows).
             val access = granted?.accessToken?.takeIf { it.isNotBlank() }
-            if (response?.isSuccessful != true || access == null) {
+            if (!response.isSuccessful || access == null) {
+                // The server answered and refused (invalid_grant on a rotated
+                // refresh token, a revoked grant, a 401): the pair cannot be
+                // revived here, so it is flagged for the connect flow rather
+                // than retried on every read.
                 BingeCatTrace.recordError("refresh-failed")
+                refuseSession()
                 return@withLock null
             }
             val token = BingeCatToken(
@@ -2179,6 +2295,9 @@ class BingeCatRepository private constructor(private val context: Context?) {
                 ),
                 scope = granted.scope ?: latest.scope
             )
+            // Persisted BEFORE the token is returned: a refresh that rotated
+            // the pair and never saved it leaves the next call holding a
+            // refresh token BingeCat has already consumed.
             runCatching { store.save(token) }.getOrNull() ?: return@withLock null
             // A refresh ROTATES the pair (and may invalidate the old refresh
             // token), so the account copy is now stale: push the new one or a
@@ -2186,6 +2305,27 @@ class BingeCatRepository private constructor(private val context: Context?) {
             publishAuthToSync()
             token.accessToken
         }
+    }
+
+    /**
+     * The honest report of a session that cannot call BingeCat.
+     *
+     * The store keeps its pair (see [BingeCatTokenStore.markNeedsReconnect]) and
+     * this records the state the viewer needs: not connected, reconnect needed.
+     * The reason stays ["no-token"] so the diagnostics line names the same cause
+     * the gates answered with.
+     */
+    private fun refuseSession() {
+        // Only a STORED pair can be "refused". A profile that never connected
+        // has nothing to refuse, and must not be given a marker that would then
+        // ask it to reconnect out of a clean "not connected" state.
+        if (store.read() != null) store.markNeedsReconnect()
+        cached = null
+        val reconnect = needsReconnect()
+        BingeCatTrace.recordSession(false)
+        BingeCatTrace.recordNeedsReconnect(reconnect)
+        BingeCatTrace.recordNeedsReapproval(reconnect)
+        BingeCatTrace.recordError("no-token")
     }
 
     /** The OAuth `error` code in a non-2xx body, parsed with the token adapter. */

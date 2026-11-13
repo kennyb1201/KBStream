@@ -120,12 +120,22 @@ internal object SpotlightTrailerRule {
 /**
  * Where the expanded card's panel is drawn, in pixels, inside [viewport].
  *
- * The panel grows from the card and must fit the television: it starts at the
- * card's top-left, FLIPS to grow upward when growing down would run past the
- * bottom edge, and clamps horizontally to the viewport. This is arithmetic on
- * the same coordinates the rail measured the card in (`boundsInRoot`), so the
- * panel and the rail agree about where the edge is - there is no second
- * screen-size estimate to drift.
+ * THE PANEL IS SIZED FROM THE VIEWPORT, NOT FROM THE CARD (spec 2026-11-12,
+ * build 262). It used to be the card times [growth] and nothing else, which is
+ * how the field got a panel the width of a rail card: a tiny backdrop and a
+ * title, meta line and synopsis with no room, all of them ellipsized. The
+ * expansion is a READER, so it is drawn at a real reader's size - a fixed
+ * fraction of the screen ([PANEL_WIDTH_FRACTION]) whose 16:9 backdrop plus its
+ * text block set the height ([PANEL_BACKDROP_RATIO] + [PANEL_INFO_FRACTION]) -
+ * and still grows at least [growth] times the card, so it is never smaller than
+ * the card it came from.
+ *
+ * It ANCHORS to the card - its left edge is the card's, and its top is the
+ * card's top unless growing down would run past the bottom edge, in which case
+ * it FLIPS to grow upward from the card's bottom - and it clamps to the
+ * viewport on both axes. This is arithmetic on the same coordinates the rail
+ * measured the card in (`boundsInRoot`), so the panel and the rail agree about
+ * where the edge is - there is no second screen-size estimate to drift.
  *
  * A still-too-big panel is capped rather than allowed to overhang: the panel is
  * what the viewer reads, so all of it has to be on screen.
@@ -152,8 +162,18 @@ internal fun spotlightPanelBox(
     val usableHeight = (viewportHeightPx - 2f * margin).coerceAtLeast(0f)
     val cardWidth = (cardRightPx - cardLeftPx).coerceAtLeast(0f)
     val cardHeight = (cardBottomPx - cardTopPx).coerceAtLeast(0f)
-    val width = (cardWidth * growth).coerceAtMost(usableWidth)
-    val height = (cardHeight * growth).coerceAtMost(usableHeight)
+    // A reader's width, floored by the card's own growth so a tiny card can
+    // never produce a panel smaller than the one this rule always drew.
+    val width =
+        (usableWidth * PANEL_WIDTH_FRACTION)
+            .coerceAtLeast(cardWidth * growth)
+            .coerceAtMost(usableWidth)
+    // The backdrop is 16:9 and the text block is a fixed share of the width, so
+    // the height follows the width - a wider panel is a taller one, which is
+    // what gives the synopsis its lines. Capped by the screen like the width.
+    val height =
+        (width * (PANEL_BACKDROP_RATIO + PANEL_INFO_FRACTION))
+            .coerceAtMost(usableHeight)
     val left = cardLeftPx.coerceIn(margin, (margin + usableWidth - width).coerceAtLeast(margin))
     val below = cardTopPx
     val above = cardBottomPx - height
@@ -169,3 +189,26 @@ internal fun spotlightPanelBox(
         height = height.toInt()
     )
 }
+
+/**
+ * How much of the usable viewport width the expanded panel takes.
+ *
+ * 0.62 of a 1920 screen is ~1190px: a 16:9 backdrop ~670px tall, and a text
+ * block with room for a two-line title, a two-line meta line and four or five
+ * lines of synopsis. Substantially wider than a rail card at any rail's poster
+ * size - which is the whole point of the fix - and still leaves the card's
+ * neighbours visible around it, so focus is never lost.
+ */
+private const val PANEL_WIDTH_FRACTION = 0.62f
+
+/** The backdrop's own shape: 16:9, the shape a still and a trailer both are. */
+private const val PANEL_BACKDROP_RATIO = 9f / 16f
+
+/**
+ * The text block's share of the panel width, under the backdrop.
+ *
+ * Expressed against the WIDTH so the text grows with the panel: at 1190px it is
+ * ~357px of title, meta and synopsis, which is several lines of the panel's
+ * type - not the one truncated line the card-width panel had.
+ */
+private const val PANEL_INFO_FRACTION = 0.30f

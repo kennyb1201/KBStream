@@ -1249,17 +1249,42 @@ internal fun upcomingCardWithNextEpisodePair(item: UpNextItem): UpNextItem {
  */
 internal fun trackerCardJustCompletedByProfile(
     item: UpNextItem,
-    completed: List<CompletedTitleMark>
+    completed: List<CompletedTitleMark>,
+    /**
+     * Shows the TRACKER FEEDS THEMSELVES record as finished, as the identity
+     * keys [upNextStrongIdentityKeys] builds (spec 2026-11-12, F2).
+     *
+     * [completed] is this DEVICE's evidence, and it was the only evidence this
+     * rule read. A show finished on another device - or finished before this TV
+     * ever saw it, with the tracker as the only witness - leaves no local row,
+     * so the ghost card survived every merge (Eternally Yours S1E6). The caller
+     * supplies the feeds' own verdict here (see
+     * `HomeViewModel.trackerCaughtUpShowKeys`), which is what makes the rule
+     * independent of which device did the watching. Empty keeps the local-only
+     * rule, which is exactly what a cold cache or a tracker-less setup gets.
+     */
+    caughtUpShowKeys: Set<String> = emptySet()
 ): Boolean {
-    if (completed.isEmpty()) return false
     if (!isTrackerSourcedCard(item)) return false
 
     // An episode that has not aired cannot be the one just finished, and
     // Upcoming's caught-up cards are exactly that shape: a card naming a future
     // episode was being dropped for the finished episode behind it, which took
     // four reported shows off Upcoming entirely (see
-    // [trackerCardNamesUnairedEpisode]).
+    // [trackerCardNamesUnairedEpisode]). Checked BEFORE the caught-up verdict
+    // too, because that card is the one legitimate card for a finished show.
     if (trackerCardNamesUnairedEpisode(item)) return false
+
+    // The tracker's own answer: a show it records as finished has nothing left
+    // to watch, so a "next up" card for it is stale whatever this device's
+    // history does or does not say (F2).
+    if (caughtUpShowKeys.isNotEmpty() &&
+        upNextStrongIdentityKeys(item).any { key -> key in caughtUpShowKeys }
+    ) {
+        return true
+    }
+
+    if (completed.isEmpty()) return false
 
     // The title key is carried alongside the id keys on purpose: a local row
     // filed under "tt123" and a tracker card carrying "tmdb:123" meet on
@@ -1269,11 +1294,44 @@ internal fun trackerCardJustCompletedByProfile(
         upNextGroupingKeys(item) +
             upNextTitleKey(item)
 
+    val cardTitleName = titleKeyName(upNextTitleKey(item))
     val cardSeason = namedEpisodeNumber(item.season)
     val cardEpisode = namedEpisodeNumber(item.episode)
 
     return completed.any { mark ->
-        if (mark.keys.none { it in cardKeys }) return@any false
+        // The two identities, weighed apart (F1, 2026-11-12). The old gate asked
+        // "does ANY key intersect", which made the type bucket part of the
+        // answer: a mark bucketed "series" and a card whose parentType had
+        // collapsed to "unknown" built different title keys, and the episode
+        // pair below - the thing that actually identifies an episode - was
+        // never consulted.
+        val idsMeet =
+            mark.keys.any { key ->
+                !key.startsWith(TITLE_KEY_PREFIX) && key in cardKeys
+            }
+
+        val titlesMeet =
+            cardTitleName != null &&
+                mark.keys.any { key -> titleKeyName(key) == cardTitleName }
+
+        if (!idsMeet) {
+            // The id flavors do not meet. What may drop the card here is the
+            // title plus the episode, never the title alone and never an
+            // episode pair alone:
+            //
+            //  - the FULL TRIPLE (same title, same season, same episode) - the
+            //    case this branch exists for; or
+            //  - a completion of the whole title (a movie, a row that named no
+            //    episode), or a card that names no episode at all - the two
+            //    shapes no episode pair can describe, which a shared title has
+            //    always been enough for.
+            if (!titlesMeet) return@any false
+            return@any when {
+                mark.season == null || mark.episode == null -> true
+                cardSeason == null || cardEpisode == null -> true
+                else -> mark.season == cardSeason && mark.episode == cardEpisode
+            }
+        }
 
         // A mark with no episode is a movie (or a row that named none): the
         // whole title is finished, so any card for it is stale.
@@ -1286,6 +1344,26 @@ internal fun trackerCardJustCompletedByProfile(
         mark.season == cardSeason && mark.episode == cardEpisode
     }
 }
+
+/** The prefix every title identity key carries (see [upNextTitleKeyFor]). */
+private const val TITLE_KEY_PREFIX = "title:"
+
+/**
+ * The TITLE a [TITLE_KEY_PREFIX] key names, without its media-type bucket.
+ *
+ * The bucket is an accident of which side built the key - a completed row that
+ * names an episode is always bucketed "series", while a tracker card whose
+ * `parentType` was missing or an add-on's flavour ("anime") collapses to
+ * "unknown" - so a bucket compared as part of the key hides a pair that is the
+ * same show. The name is what the two sides can always agree on, and the caller
+ * still requires the episode pair before anything is dropped.
+ */
+private fun titleKeyName(key: String): String? =
+    key
+        .takeIf { it.startsWith(TITLE_KEY_PREFIX) }
+        ?.removePrefix(TITLE_KEY_PREFIX)
+        ?.substringAfter(':')
+        ?.takeIf { it.isNotBlank() }
 
 /**
  * The merge-time invariant behind "Continue Watching never offers an episode
@@ -1317,10 +1395,21 @@ internal fun dropTrackerCardsForCompletedTargets(
      * which is where the resolver lives; empty = today's behaviour, every mark
      * built from the row's own fields alone.
      */
-    tmdbByParentId: Map<String, Int> = emptyMap()
+    tmdbByParentId: Map<String, Int> = emptyMap(),
+    /**
+     * The tracker feeds' own finished verdict, as [upNextStrongIdentityKeys]
+     * builds it - see [trackerCardJustCompletedByProfile]'s parameter of the
+     * same name for why local rows are not the only evidence a completion
+     * leaves (F2, 2026-11-12). Empty = local rows only.
+     */
+    caughtUpShowKeys: Set<String> = emptySet()
 ): List<UpNextItem> {
-    if (items.isEmpty() || completedRows.isEmpty()) return items
+    if (items.isEmpty()) return items
     if (items.none { item -> isTrackerSourcedCard(item) }) return items
+    // The rows read is skipped only when there is no evidence of EITHER kind:
+    // a completion that lives in the tracker alone has no local row to build a
+    // mark from, and returning here was what let that card survive (F2).
+    if (completedRows.isEmpty() && caughtUpShowKeys.isEmpty()) return items
 
     val marks =
         completedRows.mapNotNull { row ->
@@ -1335,10 +1424,10 @@ internal fun dropTrackerCardsForCompletedTargets(
             )
         }
 
-    if (marks.isEmpty()) return items
+    if (marks.isEmpty() && caughtUpShowKeys.isEmpty()) return items
 
     return items.filterNot { item ->
-        trackerCardJustCompletedByProfile(item, marks)
+        trackerCardJustCompletedByProfile(item, marks, caughtUpShowKeys)
     }
 }
 

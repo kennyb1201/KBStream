@@ -125,6 +125,7 @@ import com.kennyb1201.kbstream.data.youtube.heroTrailerRetryPlan
 import com.kennyb1201.kbstream.data.youtube.signedUrl
 import com.kennyb1201.kbstream.ui.home.LibraryHomeRailUi
 import com.kennyb1201.kbstream.ui.home.failedAddonsMessage
+import com.kennyb1201.kbstream.ui.home.rememberBingeCatReconnectNotice
 import com.kennyb1201.kbstream.ui.home.rememberLibraryHomeRails
 import com.kennyb1201.kbstream.ui.components.BrandMarkImage
 import com.kennyb1201.kbstream.ui.components.CarriedArt
@@ -353,6 +354,9 @@ fun HomeScreenMobile(
         // The add-ons whose catalogs did not answer in the last build (see
         // HomeViewModel.failedAddons and the notice below).
         val failedAddons by viewModel.failedAddons.collectAsStateWithLifecycle()
+        // Pinned BingeCat rails wait on a reconnect instead of being unpinned
+        // (see rememberBingeCatReconnectNotice).
+        val bingecatNeedsReconnect = rememberBingeCatReconnectNotice()
 
         // Settings' hide-watched switch, applied to the catalog rails exactly as
         // the television applies it (see HomeScreen): finished titles leave the
@@ -1159,6 +1163,24 @@ fun HomeScreenMobile(
                     item(key = "failed_addons", contentType = "status") {
                         Text(
                             text = failedAddonsMessage(failedAddons),
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier
+                                .padding(horizontal = 16.dp)
+                                .fillMaxWidth()
+                        )
+                    }
+                }
+
+                // ...and the pinned BingeCat rails that cannot load until the
+                // session is reconnected. The pins are kept, so they reappear
+                // without the viewer pinning anything again.
+                if (bingecatNeedsReconnect) {
+                    item(key = "bingecat_reconnect", contentType = "status") {
+                        Text(
+                            text = "BingeCat needs reconnecting: your pinned BingeCat rails " +
+                                "are kept but cannot load until you sign in again " +
+                                "(Settings > BingeCat).",
                             color = KBTextLo,
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier

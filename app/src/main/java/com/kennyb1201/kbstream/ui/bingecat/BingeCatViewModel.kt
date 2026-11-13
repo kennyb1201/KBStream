@@ -77,6 +77,10 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun initialState(): BingeCatUiState {
         val connected = repository.hasToken()
+        // Read BEFORE the mapping is resolved off `connected`: a refused session
+        // reports "not connected", and the screen still has to know that the
+        // answer is "reconnect", not "never set up" (spec F2).
+        val needsReconnect = repository.needsReconnect()
         val mappedId = if (connected) repository.mappedProfileId() else null
         return BingeCatUiState(
             isConfigured = repository.isConfigured(),
@@ -86,9 +90,17 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
             // the repository's own rule, so the screen and the write gates can
             // never disagree about when writing is off.
             needsReapproval = connected && mappedId != null && repository.needsReapproval(),
+            needsReconnect = needsReconnect,
             mappedProfileId = mappedId,
             mappedProfileName = if (mappedId != null) repository.mappedProfileName() else null,
             statusMessage = when {
+                // The field report's state: mapped, reporting connected, reading
+                // nothing. Name it and offer the way out - the profile choice and
+                // the pinned rails survive a reconnect.
+                needsReconnect ->
+                    "BingeCat needs reconnecting: this device no longer has a " +
+                        "working session, so nothing can be read. Your profile choice " +
+                        "and pinned rails are kept."
                 connected && mappedId != null && repository.needsReapproval() ->
                     // Not "tracking is off": a step-2 grant records plays and
                     // cannot save (and a step-1 grant can do neither), so the
@@ -166,6 +178,7 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
         if (next.isConnected == _uiState.value.isConnected &&
             next.isMapped == _uiState.value.isMapped &&
             next.needsReapproval == _uiState.value.needsReapproval &&
+            next.needsReconnect == _uiState.value.needsReconnect &&
             next.userCode == null
         ) {
             // The early return exists to keep a GENUINELY in-flight request or
@@ -328,6 +341,11 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
                             isConnected = result.saveError == null,
                             isMapped = stillMapped != null,
                             needsReapproval = false,
+                            // A fresh grant is the way OUT of the reconnect
+                            // state, and only a KEPT one is: a save that failed
+                            // leaves the prompt exactly where it was.
+                            needsReconnect =
+                                result.saveError != null && repository.needsReconnect(),
                             mappedProfileId = stillMapped,
                             mappedProfileName = if (stillMapped != null) {
                                 repository.mappedProfileName()

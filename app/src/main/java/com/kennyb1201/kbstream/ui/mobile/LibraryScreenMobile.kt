@@ -397,6 +397,20 @@ fun LibraryScreenMobile(
                             color = KBTextLo,
                             modifier = Modifier.fillMaxWidth()
                         )
+                        // Spec F2, the phone's half: a mapped BingeCat whose
+                        // session is gone is not "connected with no rows". Its
+                        // lists cannot be read until the viewer reconnects, and
+                        // the pinned rails are kept, so say so here rather than
+                        // leaving an empty shelf to explain itself.
+                        if (state.bingecatNeedsReconnect) {
+                            Text(
+                                text = "BINGECAT NEEDS RECONNECTING - Settings > BingeCat. " +
+                                    "Your profile choice and pinned rails are kept.",
+                                color = KBAccent,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                         notice?.let { text ->
                             Text(
                                 text = text,

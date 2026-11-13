@@ -3,12 +3,15 @@ package com.kennyb1201.kbstream.ui.home
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.library.LibraryHomeRailItems
 import com.kennyb1201.kbstream.data.library.LibraryHomeRailPin
 import com.kennyb1201.kbstream.data.library.LibraryHomeRails
 import com.kennyb1201.kbstream.data.library.LibraryItem
+import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -66,6 +69,26 @@ internal fun rememberLibraryHomeRails(): State<List<LibraryHomeRailUi>> {
                 if (items.isEmpty()) null else LibraryHomeRailUi(pin, items)
             }
         }
+    }
+}
+
+/**
+ * True when a pinned BingeCat list cannot load because BingeCat needs a
+ * reconnect (spec F2).
+ *
+ * A pinned rail whose list cannot be read is dropped rather than drawn empty
+ * (see [rememberLibraryHomeRails]), so without this line Home simply came up a
+ * row short and only the Library said why. Read where the pins are read, and
+ * re-read whenever the pinned set changes - which is also when the rail
+ * disappears or comes back.
+ */
+@Composable
+internal fun rememberBingeCatReconnectNotice(): Boolean {
+    val context = LocalContext.current
+    val pins = LibraryHomeRails.pins(context)
+    return remember(pins) {
+        pins.any { it.source == LibrarySource.BINGECAT_LIST.name } &&
+            BingeCatRepository.getInstance(context).needsReconnect()
     }
 }
 

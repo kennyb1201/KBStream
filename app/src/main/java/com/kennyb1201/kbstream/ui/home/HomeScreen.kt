@@ -101,6 +101,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -664,6 +665,21 @@ private fun heroSourceOrigin(source: PlayableSource): String =
 private const val HeroTrailerStartGraceMs = 8_000L
 
 /**
+ * How long a player that is already PLAYING may go without painting a frame
+ * before its owner is told (see `onNoVideoFrame`).
+ *
+ * A trailer's first frame normally lands well inside this. The bound exists
+ * because a still held over the player until the first frame is a cover for a
+ * brief gap, and a cover with no upper bound is a MASK: the 2026-11-12
+ * Spotlight report is exactly that - the trailer mounted, resolved, played
+ * (audio audible) and the panel's still never lifted, because the one event
+ * that lifts it never arrived. One second is long enough for a healthy first
+ * frame on this hardware and short enough that the viewer never watches a
+ * playing trailer through a photograph.
+ */
+internal const val HeroTrailerFrameGraceMs = 1_000L
+
+/**
  * How long an already-playing trailer may sit in a mid-play re-buffer before
  * the hero gives up and crossfades back to the backdrop.
  *
@@ -770,6 +786,23 @@ internal fun HeroInlineTrailerPlayer(
      * surface behind it.
      */
     onFirstFrame: () -> Unit = {},
+    /**
+     * The player is READY and PLAYING but has painted no frame inside
+     * [HeroTrailerFrameGraceMs]: audio is running and there is no picture to
+     * show.
+     *
+     * This is the event `onFirstFrame` is not: `onRenderedFirstFrame` is the
+     * frame's own report, and a surface/codec combination that never delivers
+     * it leaves an owner holding its cover over a playing trailer forever (the
+     * 2026-11-12 Spotlight panel). The owner is told so it can lift the cover
+     * and show the surface it was hiding - and, if the picture never arrives,
+     * stop presenting an audio-only playback as a trailer.
+     *
+     * Fired at most once per mount, and never after [onFirstFrame]. The default
+     * does nothing, so every surface that has no cover of its own (the TV Home
+     * hero, the phone's Home hero and Detail hero) is unchanged.
+     */
+    onNoVideoFrame: (positionMs: Long) -> Unit = {},
     onEnded: () -> Unit = {},
     /**
      * Playback failed; [positionMs] is where it failed, read while the player
@@ -982,6 +1015,37 @@ internal fun HeroInlineTrailerPlayer(
 
         var startedPlaying = false
 
+        // The picture, as this mount knows it: whether the video track has
+        // been seen at all, whether a frame reached the surface, and whether a
+        // picture-less playback has already been reported to the owner.
+        var videoTrackPresent = false
+        var frameReported = false
+        var noVideoReported = false
+
+        /**
+         * The frame watch: armed the moment playback RUNS, and the answer to
+         * "playing but nothing painted". `onRenderedFirstFrame` is the frame's
+         * own event, but it is not guaranteed to arrive for every surface or
+         * codec combination - and when it does not, a cover held until it is
+         * held forever. The owner is told instead of being left to guess.
+         */
+        val frameWatchdog = object : Runnable {
+            override fun run() {
+                if (frameReported || noVideoReported) return
+                if (!exoPlayer.isPlaying) return
+                noVideoReported = true
+                val positionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+                Log.w(
+                    TAG,
+                    "Inline trailer playing with no video frame after " +
+                        "${HeroTrailerFrameGraceMs}ms (video=${videoId ?: "?"} " +
+                        "track=$videoTrackPresent positionMs=$positionMs); " +
+                        "reporting a picture-less playback to the owner"
+                )
+                onNoVideoFrame(positionMs)
+            }
+        }
+
         // Watchdog with two budgets: a short one before the first frame
         // (so the hero never hangs on a blank gray screen), and a much
         // longer one for a mid-play re-buffer (so a healthy trailer is not
@@ -1021,6 +1085,8 @@ internal fun HeroInlineTrailerPlayer(
                     } else if (playbackState == Player.STATE_READY && exoPlayer.isPlaying) {
                         startedPlaying = true
                         handler.removeCallbacks(watchdog)
+                        handler.removeCallbacks(frameWatchdog)
+                        handler.postDelayed(frameWatchdog, HeroTrailerFrameGraceMs)
                         onProgress(
                             exoPlayer.currentPosition.coerceAtLeast(0L),
                             exoPlayer.duration
@@ -1038,6 +1104,8 @@ internal fun HeroInlineTrailerPlayer(
                     if (isPlaying) {
                         startedPlaying = true
                         handler.removeCallbacks(watchdog)
+                        handler.removeCallbacks(frameWatchdog)
+                        handler.postDelayed(frameWatchdog, HeroTrailerFrameGraceMs)
                         // The duration is only known once the container has been
                         // read, which is exactly here.
                         onProgress(
@@ -1051,7 +1119,19 @@ internal fun HeroInlineTrailerPlayer(
                     // The surface has a real frame on it now, so the hero can
                     // drop the backdrop it was holding over the (until now
                     // black) player surface.
+                    if (frameReported) return
+                    frameReported = true
                     onFirstFrame()
+                }
+
+                override fun onVideoSizeChanged(videoSize: VideoSize) {
+                    // Not a painted frame, so it must not lift a cover early -
+                    // it is the proof the video TRACK exists, which is what
+                    // tells the frame watch's report apart from "this media has
+                    // no video at all".
+                    if (videoSize.width > 0 && videoSize.height > 0) {
+                        videoTrackPresent = true
+                    }
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
@@ -1138,12 +1218,22 @@ internal fun HeroInlineTrailerPlayer(
 
         exoPlayer.addListener(listener)
 
+        // A POOLED player is warm (the Spotlight paste says `state=cached
+        // source=warm`), so playback can already be running by the time this
+        // listener attaches - the frame watch must not depend on an event this
+        // mount may have missed being told about.
+        if (exoPlayer.isPlaying) {
+            handler.removeCallbacks(frameWatchdog)
+            handler.postDelayed(frameWatchdog, HeroTrailerFrameGraceMs)
+        }
+
         // Give the trailer the short start budget to render a first frame;
         // if it hasn't, fall back to the backdrop.
         handler.postDelayed(watchdog, HeroTrailerStartGraceMs)
 
         onDispose {
             handler.removeCallbacks(watchdog)
+            handler.removeCallbacks(frameWatchdog)
             exoPlayer.removeListener(listener)
         }
     }
@@ -5069,6 +5159,10 @@ fun HomeScreen(
     // The add-ons whose catalogs did not answer in the last build (see the
     // notice above the rails).
     val failedAddons by viewModel.failedAddons.collectAsStateWithLifecycle()
+    // A pinned BingeCat rail that cannot load because the session needs a
+    // reconnect: the rail is kept (pins are stored by list identity) but it
+    // draws nothing, so this LINE says why and where the fix is.
+    val bingecatNeedsReconnect = rememberBingeCatReconnectNotice()
     val railsAfterHiddenTitles = remember(railsRawForProfile, hiddenTitleKeys) {
         railsRawForProfile.mapNotNull { rail ->
             val visible = rail.items.filterNot { meta ->
@@ -6959,6 +7053,21 @@ fun HomeScreen(
                                 item(key = "failed_addons", contentType = "status") {
                                     KBStatusMessage(
                                         message = failedAddonsMessage(failedAddons),
+                                        modifier = Modifier.padding(horizontal = 24.dp)
+                                    )
+                                }
+                            }
+
+                            // ...and the pinned BingeCat rails that are waiting
+                            // on a reconnect. They are NOT unpinned: the pins
+                            // survive the empty cache, so reconnecting brings
+                            // them back without the viewer re-pinning anything.
+                            if (bingecatNeedsReconnect) {
+                                item(key = "bingecat_reconnect", contentType = "status") {
+                                    KBStatusMessage(
+                                        message = "BingeCat needs reconnecting: your pinned " +
+                                            "BingeCat rails are kept but cannot load until you " +
+                                            "sign in again (Settings > BingeCat).",
                                         modifier = Modifier.padding(horizontal = 24.dp)
                                     )
                                 }
