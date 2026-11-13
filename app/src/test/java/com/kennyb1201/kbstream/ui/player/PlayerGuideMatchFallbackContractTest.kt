@@ -137,9 +137,21 @@ class PlayerGuideMatchFallbackContractTest {
             "the watcher must key on the guide import revision",
             player.contains("GuideRevision.total()")
         )
+        // REPOINTED (2026-11-13): the empty read no longer publishes "not
+        // loading" outright. A viewer who opened the overlay before the guide
+        // screen had matched the lineup was told "No guide data" while the
+        // resolution was still running, which is what the field report saw as a
+        // permanent loss. The pass now ends itself: the read reports the loading
+        // state, and the watcher's fill budget repaints the rows as final once
+        // it is spent (see channelGuideFillPlan).
         assertTrue(
-            "an empty read must end the identity pass rather than load forever",
-            player.contains("publishChannelGuideRows(programs = emptyMap(), loading = false)")
+            "an empty read must report whether it is still resolving",
+            player.contains("loading = !channelGuideSettled")
+        )
+        assertTrue(
+            "and the fill budget must end the identity pass for good",
+            player.contains("channelGuideSettled = plan.settled") &&
+                player.contains("publishChannelGuideRows(channelGuidePrograms, loading = false)")
         )
     }
 }
