@@ -1,6 +1,6 @@
 package com.kennyb1201.kbstream.widget
 
-import com.kennyb1201.kbstream.MainActivity.Screen
+import com.kennyb1201.kbstream.Screen
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.home.upNextPlayerDisplayName
 

@@ -166,7 +166,6 @@ internal class CwWidgetFactory(
                 val request = ImageRequest.Builder(context)
                     .data(url)
                     .size(POSTER_WIDTH_PX, POSTER_HEIGHT_PX)
-                    .allowHardware(false)
                     .build()
                 when (val result = kotlinx.coroutines.runBlocking { loader.execute(request) }) {
                     is SuccessResult -> result.image.toBitmap()
