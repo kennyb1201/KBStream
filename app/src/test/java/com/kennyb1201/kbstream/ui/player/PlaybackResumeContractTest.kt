@@ -310,10 +310,14 @@ class PlaybackResumeContractTest {
         // The file is opened through ONE call (the source switch goes through
         // the surface), so a second copy of the load cannot be left behind
         // outside the branch that read the position.
+        //
+        // Counted on the player's own request type: the picker's season poster
+        // is a Coil `ImageView.load(url)` in the same activity, and a bare
+        // `view.load(` count mistook that image for a second stream open.
         assertEquals(
             "MPV stopped opening the file through the shared call",
             1,
-            Regex("view\\.load\\(").findAll(mpv).count()
+            Regex("view\\.load\\(\\s*\\n?\\s*MpvPlayerView\\.LoadRequest\\(").findAll(mpv).count()
         )
     }
 
