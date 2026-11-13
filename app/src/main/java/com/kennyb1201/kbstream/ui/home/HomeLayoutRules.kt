@@ -86,9 +86,26 @@ internal object SpotlightTrailerRule {
      * must not find the card still waiting six seconds. Still counted from the
      * EXPANSION, never from focus - the expand delay and the trailer delay do
      * not stack into one timer.
+     *
+     * CAPPED at [MAX_EXPANDED_CARD_DELAY_MS] (spec 2026-11-13, F4). The card's
+     * delay runs from the expansion, so a viewer's 6s hero delay asked them to
+     * stay on a card for 6s AFTER the 2s dwell had already proved they wanted
+     * it - and the panel collapses as soon as they move on, which is why hardly
+     * any expanded card ever played a trailer (field 0.9.267: the pooled player
+     * idle, one source resolved). The dwell is the interest signal; the card's
+     * trailer must not wait longer than the dwell that opened it. A 0s or 2s
+     * hero delay is unchanged, and the BILLBOARD keeps the viewer's own delay.
      */
     fun expandedCardDelayMs(heroTrailerDelayMs: Long): Long =
-        heroTrailerDelayMs.coerceAtLeast(0L)
+        heroTrailerDelayMs.coerceIn(0L, MAX_EXPANDED_CARD_DELAY_MS)
+
+    /**
+     * The longest the expanded card waits for its trailer. A ceiling, not a pref:
+     * the 2s expand dwell already proves the interest, and a panel that stays up
+     * for 2-3s would otherwise never reach a 6s delay. One line to change if the
+     * field wants a different value.
+     */
+    const val MAX_EXPANDED_CARD_DELAY_MS = 2_000L
 
     /**
      * The hero billboard's trailer mode while a card is expanded: OFF, whatever

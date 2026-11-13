@@ -5564,6 +5564,27 @@ fun HomeScreen(
     // the answer mid-visit.
     val isFreshEntry = remember { viewModel.recordHomeEntry() }
 
+    // ── Whether this entry has a CARD to come back to (spec 2026-11-13, F1) ──
+    //
+    // The hero claim and the scroll-to-top restore were gated on [isFreshEntry],
+    // which is true once per ViewModel lifetime - and Home is a route, so every
+    // later arrival is a "return" as far as it is concerned. Field 0.9.267: the
+    // paste read `list=hero-not-visible first=#2+151px` on a fresh entry, because
+    // the list was never put back and the hero never reclaimed focus again.
+    //
+    // The question those two actually need answered is not "has Home ever been
+    // entered" but "is there a card this entry has to restore" - and that is
+    // exactly what [com.kennyb1201.kbstream.ui.home.HomeViewModel.lastFocusedRailItemKey]
+    // records. A return from a Detail, Search or Settings has one, and the
+    // restore owns the landing (unchanged: focus must not be yanked off the card
+    // the viewer left on). A true fresh entry has none, and the hero owns it.
+    //
+    // Read once, at composition: a card taking focus later in this visit sets the
+    // key, and that must not turn this entry into a return half-way through it.
+    // [isFreshEntry] is deliberately untouched - the Continue Watching head
+    // landing is its own gate and its one-shot behavior is correct there.
+    val entryHasRestoreTarget = remember { !viewModel.lastFocusedRailItemKey.isNullOrBlank() }
+
     // Whether the viewer has taken focus into their own hands since this entry,
     // set by the first deliberate D-pad press. This - not where focus happens to
     // rest - is what the Continue Watching landing is gated on (see
@@ -5602,8 +5623,16 @@ fun HomeScreen(
     //
     // Bounded to the entry window and dead the moment they take the D-pad, so it
     // never fights a scroll the viewer is making.
-    LaunchedEffect(spotlightActive, isFreshEntry, mergedEntries) {
-        if (!spotlightActive || !isFreshEntry) return@LaunchedEffect
+    //
+    // Gated on "no card to restore" rather than on the one-shot fresh entry
+    // (spec 2026-11-13, F1): a return with a card to come back to keeps its own
+    // landing, and every entry without one starts at the hero - not just the
+    // first entry of the process.
+    LaunchedEffect(spotlightActive, entryHasRestoreTarget, mergedEntries) {
+        if (!spotlightActive || entryHasRestoreTarget) return@LaunchedEffect
+        // A fresh entry re-arms the hero's one-shot claim, so the billboard can
+        // take focus on each such entry rather than only the first.
+        spotlightEntryFocusClaimed = false
         repeat(SPOTLIGHT_ENTRY_TOP_FRAMES) {
             awaitFrame()
             if (viewerMovedFocusSinceEntry) return@LaunchedEffect
@@ -6877,9 +6906,13 @@ fun HomeScreen(
                                     trailerAutoplay = spotlightTrailerAutoplay,
                                     heroHeight = spotlightHeroItemHeight,
                                     pillFocusRequester = spotlightHeroPillRequester,
+                                    // No card to restore is a fresh entry, and
+                                    // the hero owns its landing (spec
+                                    // 2026-11-13, F1 - see
+                                    // [entryHasRestoreTarget]).
                                     claimEntryFocus = !spotlightEntryFocusClaimed &&
                                         !viewerMovedFocusSinceEntry &&
-                                        isFreshEntry,
+                                        !entryHasRestoreTarget,
                                     onEntryFocusClaimed = { spotlightEntryFocusClaimed = true },
                                     cardExpanded = spotlightCardExpanded,
                                     onPlay = onItemClick,

@@ -271,7 +271,15 @@ internal fun SpotlightPreviewPanel(
             // words: the app has no generic empty-art image (ic_cast_placeholder
             // is the cast silhouette, not a title), and the card's fallback has
             // always been text.
-            val stillNow = snapshot.stillUrl ?: meta?.background ?: meta?.poster
+            // The FULL-RESOLUTION backdrop first (spec 2026-11-13, F3). The
+            // card's `stillUrl` is the rail's own image - a poster/backdrop at
+            // card size - and the panel is 62% of the viewport wide in 16:9, so
+            // blowing that small image up is what made the backdrop fuzzy. The
+            // hero meta's `background` is the title's own backdrop (the w1280
+            // variant, or the addon's full-size artwork - see the resolve in
+            // HomeViewModel), which is the picture this size wants. The card's
+            // still is the fallback, then the poster.
+            val stillNow = meta?.background ?: snapshot.stillUrl ?: meta?.poster
             if (stillNow.isNullOrBlank()) {
                 Box(
                     modifier = Modifier

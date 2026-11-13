@@ -279,7 +279,25 @@ internal fun SpotlightPreviewHost(
     // What the in-flight delay was armed on, so a cancellation can NAME the
     // input that did it (F1). Plain holder: the effect is the only writer.
     val dwellRun = remember { DwellRun() }
-    LaunchedEffect(heldNode, expandDelayMs, menuOpen) {
+
+    // The held card's snapshot IDENTITY is a key (spec 2026-11-13, F2).
+    //
+    // The dwell bails out while the card's details are still resolving, and
+    // nothing restarted it when they arrived - so a card whose meta was already
+    // cached expanded and one that needed a resolve never did, however long the
+    // viewer held it (field 0.9.267: 3 of 7 expanded, the rest `hasSnapshot`
+    // cancellations of a dwell that had not armed). Keyed on the IDENTITY, not on
+    // the snapshot object: `updateBounds` copies the snapshot on every scroll,
+    // and keying on the object is what restarted the delay forever in the older
+    // bug this keys the same way to avoid.
+    val heldSnapshotIdentity = snapshot?.cardIdentity()
+    LaunchedEffect(heldNode, expandDelayMs, menuOpen, heldSnapshotIdentity) {
+        // The details landed for the card being held: the trace's label is the
+        // card's own identity, so it can be named now (`card=none` in the field
+        // paste was this same unresolved snapshot).
+        if (heldNode != null && heldLabel == null) {
+            heldLabel = snapshot?.cardIdentity()
+        }
         val now = DwellInputs(heldLabel, expandDelayMs, menuOpen)
         // A delay that was armed and never completed was cancelled by the input
         // that changed under it. Reported BEFORE this run re-arms.
@@ -324,7 +342,10 @@ internal fun SpotlightPreviewHost(
         // closed what was up.
         if (heldNode == null) return@LaunchedEffect
         // The card must HOLD focus for the whole delay; a move cancels this run
-        // and the next card starts its own clock.
+        // and the next card starts its own clock. A null snapshot still means
+        // "nothing to expand yet" - but the identity above is a key now, so the
+        // dwell re-arms the moment the details land (F2) instead of dropping the
+        // wait on the floor.
         val armedOn = tracker.snapshot ?: return@LaunchedEffect
         val armedNode = tracker.focusedNode
         dwellRun.inputs = now

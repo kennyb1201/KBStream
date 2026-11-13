@@ -234,8 +234,11 @@ class SpotlightAuditFixesContractTest {
     fun `a title with no art shows a placeholder in the panel's media area`() {
         val p = preview()
         assertTrue(
-            "the panel checks the same three sources the trailer does",
-            p.contains("val stillNow = snapshot.stillUrl ?: meta?.background ?: meta?.poster")
+            // Order repointed by the 2026-11-13 spec (F3): the full-resolution
+            // backdrop first, because the card's still is a rail-sized image and
+            // the panel is 62% of the viewport wide in 16:9.
+            "the panel checks the same three sources the trailer does, best first",
+            p.contains("val stillNow = meta?.background ?: snapshot.stillUrl ?: meta?.poster")
         )
         val placeholder = p.substringAfter("if (stillNow.isNullOrBlank()) {")
             .substringBefore("SpotlightPanelTrailer(")

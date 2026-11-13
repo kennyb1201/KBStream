@@ -346,8 +346,11 @@ class SpotlightFixesContractTest {
         // blur away from false, and a one-frame blur used to cancel the wait.
         // The menu is still a guard and still a key.
         assertTrue(
+            // The snapshot's IDENTITY joined the keys in the 2026-11-13 spec
+            // (F2): the dwell used to bail while the card's details resolved and
+            // nothing restarted it when they landed.
             "the dwell is cancelled by an open menu, and keyed on the held CARD",
-            host.contains("LaunchedEffect(heldNode, expandDelayMs, menuOpen)") &&
+            host.contains("LaunchedEffect(heldNode, expandDelayMs, menuOpen, heldSnapshotIdentity)") &&
                 host.contains("menuOpen -> \"menuOpen\"") &&
                 host.contains("\"!expands\"")
         )
@@ -361,14 +364,26 @@ class SpotlightFixesContractTest {
     // ── (g) F7: the card's trailer delay is the viewer's ───────────────────
 
     @Test
-    fun `the card's trailer waits the viewer's hero-trailer delay`() {
-        assertEquals(6_000L, SpotlightTrailerRule.expandedCardDelayMs(6_000L))
+    fun `the card's trailer follows the viewer's delay, capped at the dwell`() {
+        // Repointed by the 2026-11-13 spec (F4): the panel used to take the
+        // hero's delay unchanged, so a 6s hero delay asked the viewer to stay on
+        // a card for 6s AFTER the 2s dwell - and the panel collapses as soon as
+        // they move on, which is why hardly any expanded card played a trailer.
+        assertEquals(2_000L, SpotlightTrailerRule.expandedCardDelayMs(6_000L))
+        assertEquals(2_000L, SpotlightTrailerRule.expandedCardDelayMs(4_000L))
+        assertEquals(2_000L, SpotlightTrailerRule.expandedCardDelayMs(2_000L))
         assertEquals(0L, SpotlightTrailerRule.expandedCardDelayMs(0L))
         assertEquals(0L, SpotlightTrailerRule.expandedCardDelayMs(-1L))
         val rules = source(LAYOUT_RULES)
         assertFalse(
             "the hardcoded six seconds is what the fix removed",
-            rules.contains("EXPANDED_CARD_DELAY_MS")
+            rules.contains("EXPANDED_CARD_DELAY_MS = 6_000L") ||
+                rules.contains("EXPANDED_CARD_DELAY_MS = 6000L")
+        )
+        assertTrue(
+            "and the cap is one named constant, not a literal in the function",
+            rules.contains("MAX_EXPANDED_CARD_DELAY_MS = 2_000L") &&
+                rules.contains("heroTrailerDelayMs.coerceIn(0L, MAX_EXPANDED_CARD_DELAY_MS)")
         )
         val host = source(SPOTLIGHT_HOME)
         assertTrue(

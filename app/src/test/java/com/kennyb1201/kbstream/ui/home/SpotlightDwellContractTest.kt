@@ -33,7 +33,7 @@ class SpotlightDwellContractTest {
 
     /** The dwell effect's own body, from its keys to its completion. */
     private val dwellEffect: String by lazy {
-        host.substringAfter("LaunchedEffect(heldNode, expandDelayMs, menuOpen) {")
+        host.substringAfter("LaunchedEffect(heldNode, expandDelayMs, menuOpen, heldSnapshotIdentity) {")
             .substringBefore("// A scroll under a still-focused card")
     }
 
@@ -43,7 +43,7 @@ class SpotlightDwellContractTest {
     fun `the dwell keys on a debounced card identity, not on the live snapshot`() {
         assertTrue(
             "the effect exists with these keys",
-            host.contains("LaunchedEffect(heldNode, expandDelayMs, menuOpen) {")
+            host.contains("LaunchedEffect(heldNode, expandDelayMs, menuOpen, heldSnapshotIdentity) {")
         )
         assertFalse(
             "a live hasSnapshot must not be a key: a flicker cancelled the wait",

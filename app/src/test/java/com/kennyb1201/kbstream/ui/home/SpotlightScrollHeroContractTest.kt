@@ -112,9 +112,15 @@ class SpotlightScrollHeroContractTest {
             h.contains("!viewerMovedFocusSinceEntry &&")
         )
         assertTrue(
+            // Repointed by the 2026-11-13 spec (F1): the claim used to be gated
+            // on `isFreshEntry`, which is true once per ViewModel lifetime, so
+            // the hero could claim entry focus exactly once per process. The
+            // gate is now "this entry has no card to restore".
             "and a return from Detail never claims it: the remembered card owns " +
                 "the landing there",
-            h.contains("isFreshEntry")
+            h.contains("!entryHasRestoreTarget") &&
+                h.contains("val entryHasRestoreTarget = remember { !viewModel.lastFocusedRailItemKey.isNullOrBlank() }") &&
+                !h.contains("!viewerMovedFocusSinceEntry &&\n                                        isFreshEntry")
         )
     }
 
@@ -281,7 +287,7 @@ class SpotlightScrollHeroContractTest {
         // card already held bumped the token and restarted the two seconds.
         assertTrue(
             "the host's effect is keyed on the held card, not on the live snapshot",
-            section().contains("LaunchedEffect(heldNode, expandDelayMs, menuOpen)")
+            section().contains("LaunchedEffect(heldNode, expandDelayMs, menuOpen, heldSnapshotIdentity)")
         )
         assertFalse(
             "and not on the snapshot object, which is what restarted it",
