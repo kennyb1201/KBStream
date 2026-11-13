@@ -20,7 +20,7 @@ import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 internal data class ChannelGuideRow(
     val channelNumber: String?,
     val name: String,
-    /** Program title, "…" while the read is outstanding, or null = no guide. */
+    /** Program title, "Loading guide…" while unresolved, or null = no guide data. */
     val nowTitle: String?,
     val nowTime: String?,
     /** 0..1000 across the current program, or null when there is none. */
@@ -127,8 +127,10 @@ internal class ChannelGuideAdapter : RecyclerView.Adapter<ChannelGuideAdapter.Vi
             if (row.channelNumber.isNullOrBlank()) View.GONE else View.VISIBLE
         holder.name.text = row.name
 
-        // A channel with no guide match says so rather than leaving the line
-        // blank, which is indistinguishable from a program with no title.
+        // A channel with no program says so rather than leaving the line blank,
+        // which is indistinguishable from a program with no title. The activity
+        // supplies "Loading guide…" for the third state, so this null is only
+        // ever "the guide was queried and has nothing here".
         val nowTitle = row.nowTitle
         holder.now.text = nowTitle ?: "No guide data"
         holder.now.setTextColor(

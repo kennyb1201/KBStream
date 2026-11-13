@@ -237,6 +237,91 @@ class PlayerChromeContractTest {
         )
     }
 
+    // ── the scrub row on a session with nothing to scrub ─────────────────
+
+    @Test
+    fun `a session with no timeline has no scrub row at all`() {
+        val layer = inflateChrome()
+        val chrome = PlayerChrome(layer, FakeHost())
+        val row = layer.findViewById<View>(R.id.chrome_seekbar_row)
+
+        chrome.setSeekAvailable(false)
+        assertEquals(View.GONE, row.visibility)
+
+        // And showing the bar does not bring it back: a live channel's overlay
+        // rises and falls on every press, and an unconditional fade-in would
+        // put the dead control back up on the first one.
+        chrome.show()
+        assertEquals(View.GONE, row.visibility)
+    }
+
+    @Test
+    fun `a session with a timeline keeps the scrub row`() {
+        val layer = inflateChrome()
+        val chrome = PlayerChrome(layer, FakeHost())
+
+        chrome.setSeekAvailable(false)
+        chrome.setSeekAvailable(true)
+
+        assertEquals(
+            View.VISIBLE,
+            layer.findViewById<View>(R.id.chrome_seekbar_row).visibility
+        )
+    }
+
+    @Test
+    fun `no control aims UP at the hidden row`() {
+        val host = FakeHost().apply { focusUpTarget = R.id.chrome_btn_speed }
+        val layer = inflateChrome()
+        val chrome = PlayerChrome(layer, host)
+
+        chrome.setSeekAvailable(false)
+
+        val buttons = listOf(
+            R.id.chrome_btn_play_pause, R.id.chrome_btn_next, R.id.chrome_btn_source,
+            R.id.chrome_btn_episodes, R.id.chrome_btn_audio, R.id.chrome_btn_subtitle,
+            R.id.chrome_btn_speed, R.id.chrome_btn_aspect, R.id.chrome_btn_player_switch,
+            R.id.chrome_btn_player_external, R.id.chrome_btn_info, R.id.chrome_btn_settings
+        )
+        buttons.forEach { id ->
+            val button = layer.findViewById<View>(id)
+            assertEquals(
+                "focus must never be aimed at the GONE bar from " +
+                    context.resources.getResourceName(id),
+                R.id.chrome_btn_speed,
+                button.nextFocusUpId
+            )
+        }
+    }
+
+    @Test
+    fun `a session with a timeline aims UP at its scrub bar`() {
+        val layer = inflateChrome()
+        val chrome = PlayerChrome(layer, FakeHost())
+
+        chrome.setSeekAvailable(true)
+
+        assertEquals(
+            R.id.chrome_seekbar,
+            layer.findViewById<View>(R.id.chrome_btn_play_pause).nextFocusUpId
+        )
+    }
+
+    @Test
+    fun `the hidden row is not one of the controls that holds the bar open`() {
+        val layer = inflateChrome()
+        val chrome = PlayerChrome(layer, FakeHost())
+        chrome.setSeekAvailable(false)
+
+        // Focused controls restart the auto-hide; the bar is inside the hidden
+        // row, so it can never be the thing keeping the overlay up on live.
+        chrome.show()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        val bar = layer.findViewById<View>(R.id.chrome_seekbar)
+        assertTrue("a hidden bar cannot hold focus", !bar.isFocused)
+    }
+
     // ── test double ──────────────────────────────────────────────────────
 
     /**
@@ -249,6 +334,9 @@ class PlayerChromeContractTest {
         var playing = false
         var positionMs = 0L
         var durationMs = 0L
+
+        /** Where the host says UP goes; the layout's own answer by default. */
+        var focusUpTarget = R.id.chrome_seekbar
 
         override fun chromeIsPlaying() = playing
         override fun chromePositionMs() = positionMs
@@ -267,5 +355,6 @@ class PlayerChromeContractTest {
         override fun onChromeOpenExternal() { calls += "external" }
         override fun onChromeSkipIntro() { calls += "skipIntro" }
         override fun chromeTitleInfo() = ChromeTitleInfo()
+        override fun chromeFocusUpTargetId() = focusUpTarget
     }
 }

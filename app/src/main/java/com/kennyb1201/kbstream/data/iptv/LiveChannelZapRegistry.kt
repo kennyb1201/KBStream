@@ -123,6 +123,19 @@ object LiveChannelZapRegistry {
     private var activeGroupIndex: Int = 0
 
     /**
+     * Bumped on every publication, so a reader that took its own copy of the
+     * lineup can tell that the published one changed WITHOUT diffing it.
+     *
+     * The in-player guide needs exactly this: the Guide screen republishes the
+     * lineup as its batched matching fills each entry's `epgChannelId`, and that
+     * matching is not an import - it does not bump `GuideRevision` - so a watcher
+     * keyed only to imports never noticed the matches and left the overlay blank
+     * for the session (build 262, field-reported 2026-11-12).
+     */
+    @Volatile
+    private var publicationCount: Long = 0
+
+    /**
      * The guide group the lineup stands for ("All", "Favorites", "Recent", a
      * category…). Shown in the zap banner so it is obvious why UP/DOWN went
      * where it went.
@@ -161,8 +174,10 @@ object LiveChannelZapRegistry {
             channelNumbers = emptyList()
             browsingGroupLabel = null
             activeGroupIndex = 0
+            publicationCount++
             return
         }
+        publicationCount++
         val wanted = selected?.trim()?.takeIf { it.isNotBlank() }
         activeGroupIndex =
             usable.indexOfFirst { it.label.trim().equals(wanted, ignoreCase = true) }
@@ -216,6 +231,13 @@ object LiveChannelZapRegistry {
         applyActiveGroup()
         return true
     }
+
+    /**
+     * Monotonic count of lineup publications (see [publicationCount]). A reader
+     * that remembers the value it last read can ask whether the matches it
+     * needs have been filled in since.
+     */
+    fun publication(): Long = publicationCount
 
     /** Browsable group labels, in the order they are offered. */
     fun groupLabels(): List<String> = groups.map { it.label }
@@ -273,5 +295,6 @@ object LiveChannelZapRegistry {
         groups = emptyList()
         activeGroupIndex = 0
         browsingGroupLabel = null
+        publicationCount++
     }
 }

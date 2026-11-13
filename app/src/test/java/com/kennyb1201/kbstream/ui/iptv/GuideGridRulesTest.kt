@@ -191,8 +191,16 @@ class GuideGridRulesTest {
         assertEquals("B1840b", down!!.cell.title)
     }
 
+    /**
+     * REPOINTED (2026-11-12, build 262): this used to pin that an empty row is
+     * SKIPPED for the next one with programs, which is the field bug - two
+     * channels with no EPG data sat at the top of the guide, unreachable from
+     * below, and a UP that skipped them found nothing and ejected focus to the
+     * header. The empty row is drawn, has a channel and has a focusable gap
+     * cell, so it is a stop; the row beyond it is reached by pressing again.
+     */
     @Test
-    fun `an empty row is skipped for the next one that has programs`() {
+    fun `an empty row is a stop of its own, not a skip`() {
         val start = at(18)
         val focused = rowCells("a", listOf(program(start, 60, title = "A")), windowFrom(start))[0]
         val rows = listOf(
@@ -202,12 +210,68 @@ class GuideGridRulesTest {
         )
 
         val down = verticalTarget(rows, fromRow = 0, fromCell = focused, direction = 1)
-        assertNotNull(down)
-        assertEquals(2, down!!.rowIndex)
-        assertEquals("C", down.cell.title)
+        assertNotNull("the empty row must be landable", down)
+        assertEquals(1, down!!.rowIndex)
+        assertTrue("and the landing cell is its gap", down.cell.isGap)
+
+        // Pressing again continues past it, into the row that has programs.
+        val beyond = verticalTarget(rows, fromRow = 1, fromCell = down.cell, direction = 1)
+        assertNotNull(beyond)
+        assertEquals(2, beyond!!.rowIndex)
+        assertEquals("C", beyond.cell.title)
+
+        // And back up lands on the empty row again rather than skipping it.
+        val back = verticalTarget(rows, fromRow = 2, fromCell = rows[2][0], direction = -1)
+        assertNotNull(back)
+        assertEquals(1, back!!.rowIndex)
+        assertTrue(back.cell.isGap)
 
         // At the last row a Down has no target at all: a defined edge no-op.
         assertNull(verticalTarget(rows, fromRow = 2, fromCell = rows[2][0], direction = 1))
+    }
+
+    @Test
+    fun `up through empty rows never runs out of targets above the first row`() {
+        // S2: from a program row with nothing but gap-only rows above it, UP
+        // lands on the nearest one. Null here is what made the caller eject focus
+        // to the header from halfway down the guide.
+        val start = at(18)
+        val rows = listOf(
+            rowCells("a", emptyList(), windowFrom(start)),
+            rowCells("b", emptyList(), windowFrom(start)),
+            rowCells("c", listOf(program(start, 60, title = "C")), windowFrom(start)),
+        )
+
+        val up = verticalTarget(rows, fromRow = 2, fromCell = rows[2][0], direction = -1)
+        assertNotNull(up)
+        assertEquals(1, up!!.rowIndex)
+
+        // S4: only the FIRST row has nothing above it - that is the one case the
+        // caller turns into the header.
+        assertNull(verticalTarget(rows, fromRow = 0, fromCell = rows[0][0], direction = -1))
+    }
+
+    @Test
+    fun `a row with programs still picks the program, not its gaps`() {
+        val start = at(18)
+        val focused = rowCells("a", listOf(program(start, 60, title = "A")), windowFrom(start))[0]
+        val rows = listOf(
+            listOf(focused),
+            rowCells(
+                "b",
+                listOf(
+                    program(start, 20, title = "B0"),
+                    program(start + 40 * minute, 20, title = "B40"),
+                ),
+                windowFrom(start),
+            ),
+        )
+
+        // 18:50 on the row below is a gap between the two programs; the target
+        // must still be a program, exactly as before the empty-row fix.
+        val down = verticalTarget(rows, fromRow = 0, fromCell = focused, direction = 1)
+        assertNotNull(down)
+        assertFalse(down!!.cell.isGap)
     }
 
     @Test

@@ -141,6 +141,17 @@ interface PlayerChromeHost {
     fun chromeSeekBarScrubbable(): Boolean = true
 
     /**
+     * Where UP goes from the control bar.
+     *
+     * The layout names the scrub bar, which is right for a session with a
+     * timeline. A session that hides that row (live television) has to name
+     * another stop, because focusing a GONE view is how a press gets lost:
+     * the Exo engine answers with a control in the same row, since the live
+     * program block above the bar is display-only and cannot take focus.
+     */
+    fun chromeFocusUpTargetId(): Int = R.id.chrome_seekbar
+
+    /**
      * Parks the D-pad on the engine's primary control, for an engine whose first
      * stop is not play/pause (the Exo engine raises a live channel's CH up, or
      * the skip prompt while it is up). Returns true when it took focus; the
@@ -187,6 +198,13 @@ class PlayerChrome(
     private val clock: TextView? = root.findViewById(R.id.chrome_clock)
     private val endsAt: TextView? = root.findViewById(R.id.chrome_ends_at)
     private val seekRow: View? = root.findViewById(R.id.chrome_seekbar_row)
+
+    /**
+     * Whether this session has a timeline to scrub. Live television does not:
+     * the row is GONE there (see [setSeekAvailable]) and the bar is not one of
+     * the controls that hold the overlay open.
+     */
+    private var seekAvailable = true
     private val seekBar: ChapterSeekBar? = root.findViewById(R.id.chrome_seekbar)
     private val positionView: TextView? = root.findViewById(R.id.chrome_position)
     private val durationView: TextView? = root.findViewById(R.id.chrome_duration)
@@ -296,7 +314,9 @@ class PlayerChrome(
         KbViewMotion.fadeIn(overlay)
         // The seek row rides the overlay: it carries the bar both engines land
         // the D-pad on, so it is up exactly while the bar is.
-        KbViewMotion.fadeIn(seekRow)
+        // ...unless the session has nothing to scrub: live television keeps the
+        // row GONE, and a fade-in would bring it back (see setSeekAvailable).
+        if (seekAvailable) KbViewMotion.fadeIn(seekRow) else seekRow?.visibility = View.GONE
         // The clock rides the overlay's visibility, the way both activities kept
         // it: shown and ticking exactly while the bar is, gone otherwise.
         KbViewMotion.fadeIn(clock)
@@ -305,6 +325,10 @@ class PlayerChrome(
         // Fading it in unconditionally would bring a stale line back for the
         // frame before the next tick hides it again.
         if (endsAt?.visibility != View.GONE) KbViewMotion.fadeIn(endsAt)
+        // Which stop is above the bar can change between one raise and the next
+        // (the live program block appears only once the channel has a lineup),
+        // so the targets are re-applied on every show.
+        applyFocusUpTarget()
         focusControls()
         keepVisible()
     }
@@ -610,7 +634,7 @@ class PlayerChrome(
      * and this one surface, which is the one the rule was written for.
      */
     private fun controls(): List<View> = listOfNotNull(
-        seekBar,
+        if (seekAvailable) seekBar else null,
         playPauseButton,
         nextButton,
         sourceButton,
@@ -653,6 +677,61 @@ class PlayerChrome(
         val button = episodesButton ?: return
         val target = if (available) View.VISIBLE else View.GONE
         if (button.visibility != target) button.visibility = target
+    }
+
+    /**
+     * Shows or hides the scrub row - the bar and its elapsed / total readouts.
+     *
+     * Live television has no timeline to scrub: the bar was drawn but could not
+     * be dragged (the Exo engine answers false to
+     * [PlayerChromeHost.chromeSeekBarScrubbable] on a live channel), its
+     * "elapsed" readout was only time since tune-in and its "total" was blank -
+     * and it took the D-pad's first stop away from the control the viewer
+     * wanted (field report 2026-11-12). The live program block's own thin bar
+     * stays: that one is a read-only "how far into this show" indicator, not a
+     * scrub control.
+     *
+     * GONE rather than transparent, so it can neither take focus nor leave a
+     * gap. The layout names this row as every control's UP target, so the
+     * targets are re-pointed here ([applyFocusUpTarget]) - aiming UP at a GONE
+     * view is how a press end up lost.
+     */
+    fun setSeekAvailable(available: Boolean) {
+        seekAvailable = available
+        val row = seekRow
+        if (row != null) {
+            if (available) {
+                row.alpha = 1f
+                if (row.visibility != View.VISIBLE) row.visibility = View.VISIBLE
+            } else if (row.visibility != View.GONE) {
+                row.visibility = View.GONE
+            }
+        }
+        applyFocusUpTarget()
+    }
+
+    /**
+     * Points every control-bar button's UP at the bar's own top stop, as the
+     * host names it ([PlayerChromeHost.chromeFocusUpTargetId]).
+     */
+    private fun applyFocusUpTarget() {
+        val target = host.chromeFocusUpTargetId()
+        listOfNotNull(
+            playPauseButton,
+            nextButton,
+            sourceButton,
+            episodesButton,
+            audioButton,
+            subtitleButton,
+            speedButton,
+            aspectButton,
+            playerSwitchButton,
+            externalButton,
+            infoButton,
+            settingsButton
+        ).forEach { button ->
+            if (button.nextFocusUpId != target) button.nextFocusUpId = target
+        }
     }
 
     /** Restarts the auto-hide countdown. */

@@ -122,6 +122,26 @@ private val GRID_BAND_TEXT_HEIGHT: Dp = 128.dp
 private val GRID_PREVIEW_WIDTH: Dp = 240.dp
 private val GRID_PREVIEW_HEIGHT: Dp = 135.dp
 
+/**
+ * The most the corner preview's decode may cost (spec 2026-11-12, build 262).
+ *
+ * The preview is a 240x135dp box - at a TV's 2x density that is 480x270
+ * pixels - and it was decoding whatever the stream offered, usually 1080p.
+ * That is nine times the pixels the box can show, decoded on the same
+ * low-RAM box that is simultaneously scrolling the EPG (Compose cells, program
+ * data, logos), which is exactly the reported stutter on both sides: the grid
+ * lagged and the preview itself dropped frames.
+ *
+ * 640x360 is a clean picture at this size - it is above the box's own pixels at
+ * 2x density, so the scaler is downsampling rather than inventing detail - and
+ * 1.2 Mbps is a normal 360p live bitrate, so the network side gets cheaper too.
+ * A cap, not a fixed rendition: a stream that only offers 480p or 240p still
+ * plays, and the selector still picks the best track UNDER this ceiling.
+ */
+private const val PREVIEW_MAX_VIDEO_WIDTH_PX = 640
+private const val PREVIEW_MAX_VIDEO_HEIGHT_PX = 360
+private const val PREVIEW_MAX_VIDEO_BITRATE = 1_200_000
+
 // Density spec F2: 24dp, down from 30. One labelSmall day line and one
 // labelMedium hour label still clear it - the marks themselves are unchanged.
 private val GRID_TIME_HEADER_HEIGHT: Dp = 24.dp
@@ -790,9 +810,18 @@ internal fun GuideGridView(
                         target.cell,
                         if (direction < 0) "cell-up" else "cell-down",
                     )
-                } else if (direction < 0) {
-                    // Up out of the first row reaches the header (F3g); Down at
+                } else if (direction < 0 && rowIndex == 0) {
+                    // Up out of the FIRST ROW reaches the header (F3g); Down at
                     // the bottom is a defined no-op.
+                    //
+                    // F2 (2026-11-12): `rowIndex == 0` is now the only condition,
+                    // not merely the usual one. A row above that the search
+                    // skipped used to leave the press with no target, and the
+                    // ejection then carried focus to the top buttons from
+                    // halfway down the grid - the field report's "up jumps to
+                    // the header". With gap-only rows landing again (see
+                    // [verticalTarget]) there is always a target above a row
+                    // that is not the first.
                     runCatching { headerFocusRequester.requestFocus() }
                 }
                 return true
@@ -843,7 +872,16 @@ internal fun GuideGridView(
         }
         Key.DirectionRight -> {
             val row = rows.getOrNull(rowIndex) ?: return true
-            val first = row.cells.firstOrNull { !it.isGap } ?: return true
+            // F3 (2026-11-12): a row with NO programs still ENTERS the grid. It
+            // used to return here, so RIGHT on an empty channel's name was a
+            // dead press - the one path that could not reach the empty row the
+            // viewer was looking at. The gap cell under "now" is the landing
+            // point when there is one, else the row's first cell (a channel with
+            // no EPG has one gap covering the whole window).
+            val first = row.cells.firstOrNull { !it.isGap }
+                ?: row.cells.firstOrNull { nowMs >= it.startUtcMillis && nowMs < it.endUtcMillis }
+                ?: row.cells.firstOrNull()
+                ?: return true
             handoffFocus(rowIndex, first, "channel-right")
             true
         }
@@ -1607,9 +1645,15 @@ private fun GridPreview(channel: IptvChannel, modifier: Modifier = Modifier) {
             }
         }
         player.addListener(listener)
+        // F1 (2026-11-12): the preview decodes what its BOX can show, not what
+        // the stream offers. Without this ceiling a 1080p rendition was decoded
+        // behind a 480x270 corner while the grid scrolled - the contention that
+        // made both lag. Subtitles stay off the way live TV starts them.
         player.trackSelectionParameters = player.trackSelectionParameters
             .buildUpon()
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            .setMaxVideoSize(PREVIEW_MAX_VIDEO_WIDTH_PX, PREVIEW_MAX_VIDEO_HEIGHT_PX)
+            .setMaxVideoBitrate(PREVIEW_MAX_VIDEO_BITRATE)
             .build()
         player.setMediaItem(MediaItem.fromUri(channel.streamUrl))
         player.prepare()
@@ -1630,6 +1674,14 @@ private fun GridPreview(channel: IptvChannel, modifier: Modifier = Modifier) {
         contentAlignment = Alignment.Center
     ) {
         if (!failed && previewPlayer != null) {
+            // F2 (2026-11-12): the view is built ONCE, in the factory, with no
+            // `update` block - so a rendered frame never enters a Compose
+            // snapshot. PlayerView's default output is a SurfaceView, which is
+            // composited by the system outside the window's Compose layer, and
+            // the preview's own state (`failed`) is local to this composable:
+            // nothing per-frame reaches the grid's recomposition scope. The fix
+            // for the reported lag is therefore the decode cap above, not the
+            // preview's wiring.
             AndroidView(
                 factory = { ctx ->
                     PlayerView(ctx).apply {

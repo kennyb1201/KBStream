@@ -442,10 +442,20 @@ internal data class GridFocusTarget(val rowIndex: Int, val cell: GridCell)
  * The cell an UP/DOWN press lands on (F3a), or null at the edge of the grid.
  *
  * Walks outward from [fromRow] one row at a time and answers with the first row
- * that HAS a program in the window. Inside that row the target is the program
+ * that has any CELL in the window. Inside that row the target is the program
  * whose interval contains [fromCell]'s start time; failing that - the arrows
  * were on a gap, or the row's schedule is staggered - it is the program with the
  * greatest overlap with the focused cell, ties broken toward the earlier start.
+ *
+ * A GAP-ONLY ROW IS A STOP, NOT A VOID (spec 2026-11-12, build 262). It used to
+ * be skipped for having no program in the window, and that skip is what the
+ * field report is: two channels at the top of the guide with no EPG data were
+ * unreachable from below, and pressing UP from the first program row found
+ * nothing above it and ejected focus to the header. The row is real - it is
+ * drawn, it has a channel, and its gap cell is focusable horizontally - so the
+ * vertical search stops there and lands on the gap cell under the cell being
+ * left. The same pick rule decides it: the gap containing the focused cell's
+ * start, else the one with the greatest overlap.
  *
  * The target is computed from the loaded program lists, never from the positions
  * of composed nodes: that is the difference between this and the geometric
@@ -461,11 +471,21 @@ internal fun verticalTarget(
     if (direction == 0) return null
     var row = fromRow + direction
     while (row in rows.indices) {
-        val programs = rows[row].filterNot { it.isGap }
-        if (programs.isNotEmpty()) {
-            return GridFocusTarget(rowIndex = row, cell = verticalPick(programs, fromCell))
+        val cells = rows[row]
+        // An empty ROW cannot happen (rowCells fills the window with a gap), but
+        // a skipped one is honest: there is nothing to land on.
+        if (cells.isEmpty()) {
+            row += direction
+            continue
         }
-        row += direction
+        val programs = cells.filterNot { it.isGap }
+        // A gap-only row is a valid stop (F1, 2026-11-12): pick its gap cell by
+        // the same rule the programs use, so the landing point is under the cell
+        // the viewer left.
+        return GridFocusTarget(
+            rowIndex = row,
+            cell = verticalPick(if (programs.isEmpty()) cells else programs, fromCell),
+        )
     }
     return null
 }

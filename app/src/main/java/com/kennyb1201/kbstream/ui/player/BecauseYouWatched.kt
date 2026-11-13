@@ -454,6 +454,51 @@ internal fun themedGuideRowBackground(context: Context, accent: Int): Drawable {
 }
 
 /**
+ * The control bar button's background, built from the CURRENT theme.
+ *
+ * @drawable/mpv_control_bg is the background of every control-bar button in both
+ * engines, and it is a selector over three STATIC resources: @color/kb_surface
+ * and @color/kb_surface_raised (which never follow the AMOLED toggle) and
+ * @color/kb_accent (the brass default, not the viewer's accent).
+ *
+ * The chrome walk rebuilds that selector for the shared bar - but the live
+ * overlay's CH / GUIDE buttons live in a block inflated AFTER the walk, so they
+ * kept #141A24 plates and a brass focus ring while the shared buttons beside them
+ * went pure black and green (field report 2026-11-12). This is the same
+ * selector, resolved from the same AMOLED-aware fills the Compose tokens use and
+ * the viewer's accent on the ring, so the two read as one bar.
+ *
+ * Built fresh rather than patched in place: the focused state's 2dp ring is a
+ * shape STROKE, and the platform exposes no getter for one to read back.
+ */
+internal fun themedControlBackground(context: Context): Drawable {
+    val density = context.resources.displayMetrics.density
+
+    fun plate(fill: Int, strokeWidthDp: Float, stroke: Int): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(fill)
+            setStroke((strokeWidthDp * density).toInt().coerceAtLeast(1), stroke)
+            cornerRadius = 10f * density
+        }
+
+    return StateListDrawable().apply {
+        addState(
+            intArrayOf(android.R.attr.state_focused),
+            plate(playerPanelRaisedColor(context), 2f, themeAccentColor(context))
+        )
+        addState(
+            intArrayOf(),
+            plate(
+                playerPanelSurfaceColor(context),
+                1f,
+                ContextCompat.getColor(context, R.color.kb_overlay_gradient_mid)
+            )
+        )
+    }
+}
+
+/**
  * The accent button's background (the player's SKIP INTRO / recap control):
  * the accent fill with an optional focus ring, resolved from the CURRENT
  * theme.

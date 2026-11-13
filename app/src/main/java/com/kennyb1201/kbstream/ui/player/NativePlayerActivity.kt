@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.player
 
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
+import android.content.res.ColorStateList
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -417,6 +418,15 @@ private const val CHANNEL_GUIDE_ROWS_PER_CHANNEL = 2
  * mid-view fills in before the viewer gives up on it.
  */
 private const val CHANNEL_GUIDE_WATCH_MS = 2_500L
+
+/**
+ * The row text while the guide is still being matched or read, as opposed to a
+ * channel the guide was queried for and has nothing on. The Guide screen has
+ * made this distinction since it was written; the overlay called both "No
+ * guide data", which is why an overlay opened early looked like a permanent
+ * loss (build 262, F3).
+ */
+private const val CHANNEL_GUIDE_LOADING = "Loading guide…"
 
 class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
@@ -1883,6 +1893,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private var btnGuide: TextView? = null
 
     /**
+     * True once the live-only chrome has been painted from the current theme.
+     *
+     * The live block and its buttons are inflated AFTER the activity's chrome
+     * walk, so they need their own pass; remembering that the pass ran is what
+     * lets it re-run (and put the default palette back) if the toggles move
+     * while the player is up.
+     */
+    private var liveChromeThemed = false
+
+    /**
      * The in-player channel guide: a browsable overlay of the zap lineup with
      * each channel's now/next. A side panel like the picker, so it shares the
      * picker's scrim and its focus hand-back on close.
@@ -1916,9 +1936,28 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      */
     private val guideResolvedChannelIds = HashMap<String, String>()
 
-    /** Lineup channels already resolved at [guideResolveRevision]. */
+    /**
+     * Lineup channels already resolved at [guideResolveRevision].
+     *
+     * A DEDUPE within one resolution pass, not a verdict: a pass that ran before
+     * the imported guide landed resolves nothing, and the watcher's fills clear
+     * this before each retry so that attempt is not taken as final (F2).
+     */
     private val guideMatchAttempted = HashSet<String>()
     private var guideResolveRevision = -1L
+
+    /** The last NOW/NEXT read, repainted when the fill budget runs out (S3). */
+    private var channelGuidePrograms: Map<String, ChannelNowNext> = emptyMap()
+
+    /** Fills the watcher has spent on this overlay; reset when it opens or data lands. */
+    private var channelGuideFillTicks = 0
+
+    /**
+     * True once the fill budget is spent: a row still without a match then reads
+     * "No guide data" rather than "Loading guide…", and the watcher stops
+     * re-reading it.
+     */
+    private var channelGuideSettled = false
 
     /**
      * Used to resolve a missing guide match; reads the guide database and the
@@ -4552,6 +4591,41 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         btnChannelUp = channelBar.findViewById(R.id.btn_channel_up)
         btnChannelDown = channelBar.findViewById(R.id.btn_channel_down)
         btnGuide = channelBar.findViewById(R.id.btn_guide)
+        // The chrome walk ran in bindViews(), BEFORE either block existed: it
+        // could not see the status line, the program bar or these buttons, so
+        // they kept the XML's brass accent and #141A24 plates while the rest of
+        // the bar followed the theme (field report 2026-11-12).
+        themeLiveChrome()
+    }
+
+    /**
+     * Paints the live-only chrome from the CURRENT theme: the "LIVE • group"
+     * status line and the programme bar take the viewer's accent, and the CH /
+     * GUIDE plates take the AMOLED-aware fills with the accent focus ring.
+     *
+     * Called when those views are inflated (after the activity's chrome walk,
+     * which is why they were missed) and again whenever the overlay is shown, so
+     * an accent or AMOLED change made while the player is up reaches it without
+     * restarting. A no-op on the untouched default palette - the XML already IS
+     * that theme, and re-applying would only redraw identical plates (S4).
+     */
+    private fun themeLiveChrome() {
+        val moved = chromeThemeMoved(this)
+        if (!moved && !liveChromeThemed) return
+        val accent = themeAccentColor(this)
+        // The two accent-coloured elements of the live block.
+        liveProgramStatus?.setTextColor(accent)
+        liveProgramProgress?.progressTintList = ColorStateList.valueOf(accent)
+        // The shared seek bar is themed by the walk; it is re-pinned here
+        // because this pass also runs on every show (S3).
+        seekbar.progressTintList = ColorStateList.valueOf(accent)
+        seekbar.thumbTintList = ColorStateList.valueOf(accent)
+        // @drawable/mpv_control_bg's fills never follow AMOLED and its ring is
+        // the brass default; built fresh so both follow the theme.
+        listOfNotNull(btnChannelUp, btnChannelDown, btnGuide).forEach { button ->
+            button.background = themedControlBackground(this)
+        }
+        liveChromeThemed = true
     }
 
     @SuppressLint("GestureBackNavigation")
@@ -9918,10 +9992,18 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 View.GONE
             }
         if (isLiveChannel) {
+            // The live chrome is repainted on every show, so a theme changed
+            // while the player is up is reflected the next time it appears.
+            themeLiveChrome()
             refreshLiveProgramBlock()
         } else {
             liveProgramBlock?.visibility = View.GONE
         }
+        // Live television has no timeline to scrub, so the shared scrub row goes
+        // and the controls' UP target follows it (field report 2026-11-12). VOD
+        // keeps the bar, its chapter marks and its times exactly as they were;
+        // the live program block's own read-only bar is untouched.
+        chrome.setSeekAvailable(!isLiveChannel)
     }
 
     private fun applyPillBackground(view: TextView, selected: Boolean, focused: Boolean) {
@@ -12191,6 +12273,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             24f * resources.displayMetrics.density
         )
         removeAutoHide()
+        // A fresh open starts a fresh fill budget: the overlay that just closed
+        // may have spent the last one, and this open may be the one that lands
+        // after the matching.
+        channelGuideFillTicks = 0
+        channelGuideSettled = false
         publishChannelGuideRows(programs = emptyMap(), loading = true)
         focusChannelGuideCurrent()
         loadChannelGuidePrograms()
@@ -12281,9 +12368,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     /**
-     * Paints the rows. [loading] is the identity-only first pass: the NOW line
-     * reads "…" rather than "No guide data", which is the difference between
-     * "not read yet" and "this channel has no guide at all".
+     * Paints the rows. Three states, as the Guide screen has:
+     *  - [loading]: no read has produced this paint yet (the identity pass on
+     *    open) - "Loading guide…",
+     *  - a row whose guide match has not resolved while the fill budget is
+     *    still live - "Loading guide…" (F3),
+     *  - everything else, including a channel the guide was queried for and has
+     *    nothing on - "No guide data".
      */
     private fun publishChannelGuideRows(
         programs: Map<String, ChannelNowNext>,
@@ -12329,7 +12420,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 name = channel.name,
                 nowTitle = when {
                     nowProgram != null -> nowProgram.title
-                    loading -> "…"
+                    loading -> CHANNEL_GUIDE_LOADING
+                    !channelGuideSettled && stillResolvingGuide(channel) ->
+                        CHANNEL_GUIDE_LOADING
                     else -> null
                 },
                 nowTime = nowProgram?.let {
@@ -12387,7 +12480,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * window, so pulling every synopsis of every channel in the lineup would be
      * the largest read the app makes for text it never draws.
      */
-    private fun loadChannelGuidePrograms() {
+    private fun loadChannelGuidePrograms(retryStalled: Boolean = false) {
         channelGuideJob?.cancel()
         channelGuideJob = scope?.launch {
             val channels = lineupChannels()
@@ -12396,7 +12489,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // no imported guide to match against) carries a null epgChannelId,
             // and [planGuideQueries] skips those channels outright - which is
             // why the overlay read nothing and stayed blank.
-            resolveMissingGuideMatches(channels)
+            resolveMissingGuideMatches(channels, retryStalled = retryStalled)
             // The resolved ids are handed over as a lookup rather than copied
             // onto every entry: that copy was one more full-lineup allocation
             // per pass on the guide's open path.
@@ -12406,10 +12499,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             )
             if (queries.isEmpty()) {
                 // Nothing to read for any row (no guide configured, or nothing
-                // matched yet): end the identity "…" pass rather than leaving
-                // every row looking like it is still loading for good. A guide
-                // import that lands later re-runs this (see the watcher).
-                if (isGuideShowing) publishChannelGuideRows(programs = emptyMap(), loading = false)
+                // matched yet). Say which it is: while the fill budget is live
+                // the rows stay "Loading guide…", and once it is spent they are
+                // "No guide data" (F3/S3). A guide import or a fresh lineup
+                // publication that lands later re-runs this (see the watcher).
+                if (isGuideShowing) {
+                    publishChannelGuideRows(
+                        programs = emptyMap(),
+                        loading = !channelGuideSettled
+                    )
+                }
                 return@launch
             }
             val now = System.currentTimeMillis()
@@ -12432,6 +12531,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 }
                 programs.putAll(nowNextByChannel(rows, now))
             }
+            channelGuidePrograms = programs
             // A slow read must not repaint a guide the viewer already closed.
             if (isGuideShowing) publishChannelGuideRows(programs, loading = false)
         }
@@ -12452,12 +12552,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * [IptvRepository.resolveGuideChannelIds]).
      *
      * The whole set is re-attempted whenever a successful import bumps
-     * [GuideRevision] - the imported guide is exactly what matching was
-     * missing - and each channel is attempted once per revision, so an overlay
-     * left open does not re-run the match for the same entries every tick.
+     * [GuideRevision] - the imported guide is exactly what matching was missing.
+     *
+     * [retryStalled] is the watcher's fill: it re-attempts entries this
+     * revision already attempted, so a match that ran BEFORE the guide data
+     * landed (and therefore found nothing) is not taken as final for the
+     * session (F2). It still dedupes within one pass, and the watcher bounds it
+     * to [CHANNEL_GUIDE_FILL_TICKS] passes.
      */
     private suspend fun resolveMissingGuideMatches(
-        channels: List<LiveChannelZapRegistry.ZapChannel>
+        channels: List<LiveChannelZapRegistry.ZapChannel>,
+        retryStalled: Boolean = false
     ) {
         val revision = GuideRevision.total()
         if (revision != guideResolveRevision) {
@@ -12471,7 +12576,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             guideResolveRevision = revision
         }
         val pending = channels.filter { channel ->
-            needsGuideMatch(channel) && channel.channelId !in guideMatchAttempted
+            needsGuideMatch(channel) &&
+                (retryStalled || channel.channelId !in guideMatchAttempted)
         }
         if (pending.isEmpty()) return
 
@@ -12516,25 +12622,93 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     /**
-     * Re-reads the guide whenever the imported guide changes while the overlay
-     * is open, so a viewer who opened it before an in-flight import finished
-     * gets the rows filled in without closing and reopening the guide.
+     * Re-reads the guide while the overlay is open and any row is still blank.
+     *
+     * F1 (2026-11-12): a revision-only trigger is not enough. [GuideRevision] is
+     * bumped by a successful IMPORT, but the Guide screen's batch MATCHING -
+     * resolving playlist channels to guide channels, in batches as the viewer
+     * scrolls - is not an import. An overlay opened before that matching
+     * finished therefore never re-read and stayed blank for good (build 262).
+     * Three things trigger a read now:
+     *  - a new import ([GuideRevision] changed),
+     *  - a new lineup publication ([LiveChannelZapRegistry.publication]) -
+     *    how the guide screen's matching lands, and
+     *  - blank rows, until [CHANNEL_GUIDE_FILL_TICKS] fills are spent (S1, S2).
+     *
+     * The blank-row tick stops once every row has data or the budget is spent,
+     * so a channel that genuinely has no guide is not re-resolved every tick
+     * (S4); at that point its row is repainted "No guide data" (S3).
      */
     private fun startChannelGuideWatcher() {
         channelGuideWatchJob?.cancel()
         channelGuideWatchJob = scope?.launch {
             var lastRevision = GuideRevision.total()
+            var lastPublication = LiveChannelZapRegistry.publication()
             while (isGuideShowing) {
                 delay(CHANNEL_GUIDE_WATCH_MS)
                 if (!isGuideShowing) break
+                // A read still in flight is judged by the NEXT tick, and a
+                // change that lands meanwhile must not be swallowed - both
+                // signals stay untouched until one is actually compared. Firing
+                // over a running read would cancel it (loadChannelGuidePrograms
+                // replaces the job), and on a slow box the resolve plus read can
+                // outlast one tick, so a busy overlay would never finish one.
+                if (channelGuideJob?.isActive == true) continue
                 val revision = GuideRevision.total()
-                if (revision != lastRevision) {
-                    lastRevision = revision
-                    loadChannelGuidePrograms()
+                val publication = LiveChannelZapRegistry.publication()
+                val changed = revision != lastRevision || publication != lastPublication
+                lastRevision = revision
+                lastPublication = publication
+                // The budget's rules are pure and tested separately (see
+                // channelGuideFillPlan): new data buys a fresh one, blank rows
+                // spend it, and a spent budget settles the blanks as final.
+                val plan = channelGuideFillPlan(
+                    changed = changed,
+                    incomplete = channelGuideStillBlank(),
+                    ticksSpent = channelGuideFillTicks,
+                    settled = channelGuideSettled
+                )
+                channelGuideFillTicks = plan.ticksSpent
+                channelGuideSettled = plan.settled
+                if (plan.read) {
+                    // retryStalled: an attempt that ran before the data landed
+                    // must not strand the channel (F2).
+                    loadChannelGuidePrograms(retryStalled = true)
+                } else if (plan.repaint) {
+                    // Budget spent and rows are still blank: the guide really
+                    // has nothing for them. Stop saying "Loading guide…" (S3).
+                    publishChannelGuideRows(channelGuidePrograms, loading = false)
                 }
             }
         }
     }
+
+    /**
+     * Whether any row still has nothing to show: an entry whose guide match is
+     * unresolved, or a matched channel with neither a NOW nor a NEXT program in
+     * the last read.
+     */
+    private fun channelGuideStillBlank(): Boolean {
+        val channels = lineupChannels()
+        if (channels.isEmpty()) return false
+        for (channel in channels) {
+            val id = guideChannelIdFor(channel)
+            if (id == null) {
+                if (needsGuideMatch(channel)) return true
+                continue
+            }
+            val entry = channelGuidePrograms[epgProgramChannelKey(id)]
+            if (entry?.now == null && entry?.next == null) return true
+        }
+        return false
+    }
+
+    /**
+     * A row that is empty because its guide match has not resolved yet, as
+     * opposed to one the guide was queried for and has nothing on (F3).
+     */
+    private fun stillResolvingGuide(channel: LiveChannelZapRegistry.ZapChannel): Boolean =
+        needsGuideMatch(channel) && guideChannelIdFor(channel) == null
 
     /**
      * Parks focus on the channel playing now, scrolled into view, so the guide
@@ -16151,6 +16325,20 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         infoPanel.visibility != View.VISIBLE && !showSettingsPanel && !isPickerShowing
 
     override fun chromeSeekBarScrubbable(): Boolean = !isLiveChannel
+
+    /**
+     * UP from the control bar. A VOD session lands on the scrub bar, which is
+     * what the layout names. Live has no scrub row at all, so it stays inside
+     * the control row: the CH up button (a no-op on itself, and the first
+     * control of the row) when the zapping controls are there, play/pause when
+     * they are not. The live program block above the bar is display-only - it
+     * cannot take focus - so naming it would drop the press, not land on it.
+     */
+    override fun chromeFocusUpTargetId(): Int = when {
+        !isLiveChannel -> R.id.chrome_seekbar
+        btnChannelUp?.visibility == View.VISIBLE -> R.id.btn_channel_up
+        else -> R.id.chrome_btn_play_pause
+    }
 
     override fun chromeFocusPrimary(): Boolean {
         focusControlsPrimary()

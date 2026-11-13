@@ -126,6 +126,79 @@ internal fun guideSourcesOf(
         .distinct()
 
 /**
+ * Watcher fills spent on an incomplete guide before its blanks are accepted as
+ * real, ~30s at the watcher's 2.5s tick. Bounded so a channel that genuinely
+ * has no guide is not re-matched and re-read on every tick forever - the tick
+ * exists to catch data that is still landing, not to poll.
+ */
+internal const val CHANNEL_GUIDE_FILL_TICKS = 12
+
+/**
+ * What one watcher tick should do, from the state it observed.
+ *
+ * Pure so the fill budget is testable: the overlay opened early (field report
+ * 2026-11-12) has to keep trying while the guide screen is still matching the
+ * lineup - matching does not bump `GuideRevision` - and then stop, so a channel
+ * that genuinely has no guide is not re-resolved twice a second forever.
+ */
+internal data class ChannelGuideFillPlan(
+    /** Re-resolve missing matches and re-read the programs now. */
+    val read: Boolean,
+    /** No read, but the rows must be repainted: the budget just ran out. */
+    val repaint: Boolean,
+    /** The blanks are final; rows read "No guide data" rather than "Loading". */
+    val settled: Boolean,
+    /** The fill budget as it stands after this tick. */
+    val ticksSpent: Int
+)
+
+/**
+ * One tick of the overlay's fill budget.
+ *
+ * [changed] means new data has landed since the last tick (a guide import or a
+ * new lineup publication - the guide screen's matching fills the lineup's
+ * `epgChannelId`s and republishes). New data gets a FRESH budget and a read:
+ * the earlier attempts failed only because the data was not there yet, and
+ * that attempt must not be treated as final (F2).
+ *
+ * While rows are blank ([incomplete]) the overlay keeps reading until the
+ * budget is spent, then repaints ONCE as settled (S3) and reads nothing more
+ * (S4). A complete guide reads nothing and keeps the budget it has.
+ */
+internal fun channelGuideFillPlan(
+    changed: Boolean,
+    incomplete: Boolean,
+    ticksSpent: Int,
+    settled: Boolean,
+    tickBudget: Int = CHANNEL_GUIDE_FILL_TICKS
+): ChannelGuideFillPlan = when {
+    changed -> ChannelGuideFillPlan(
+        read = true,
+        repaint = false,
+        settled = false,
+        ticksSpent = if (incomplete) 1 else 0
+    )
+    incomplete && ticksSpent < tickBudget -> ChannelGuideFillPlan(
+        read = true,
+        repaint = false,
+        settled = false,
+        ticksSpent = ticksSpent + 1
+    )
+    incomplete && !settled -> ChannelGuideFillPlan(
+        read = false,
+        repaint = true,
+        settled = true,
+        ticksSpent = ticksSpent
+    )
+    else -> ChannelGuideFillPlan(
+        read = false,
+        repaint = false,
+        settled = settled,
+        ticksSpent = ticksSpent
+    )
+}
+
+/**
  * Whether an entry still needs its guide match resolved before it can be
  * queried: it carries no guide channel id, and it has the identity (source URL
  * plus an id or name) to resolve one.
