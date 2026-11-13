@@ -1410,6 +1410,34 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * Across plays the same proof comes from [SubtitleBitmapProofs] instead.
      */
     private val provenBitmapTrackPositions = mutableSetOf<Int>()
+
+    /**
+     * Whether the subtitle track armed RIGHT NOW was armed by the AUTO-PICK
+     * this session - the latched initial pass
+     * ([autoSelectPreferredLanguages]) or the panel's language pass
+     * ([applyChosenSubtitleLanguage]) - rather than by a manual pick in the
+     * picker or by a signature remembered from a previous session.
+     *
+     * F1's same-session re-pick only ever moves a track this flag says the
+     * player itself put there: a remembered signature (PlayerTrackBridge
+     * `subtitleTrackSignature`, loaded in [PlayerTrackBridge.loadFor]) leaves
+     * it false, and a manual pick clears it, so neither can be overridden by
+     * the proof. Reset with [provenBitmapTrackPositions] on every player build
+     * and source switch, because the override lives on one player instance.
+     */
+    private var subtitleArmedByAutoPick = false
+
+    /**
+     * Set once F1's re-pick has run - or decided to stay on the bitmap - for the
+     * current source.
+     *
+     * One answer per track list, not one per bitmap line: a PGS track sends a
+     * cue group for every line, so without this the rule would retry on each of
+     * them and could take down a manual pick made moments after the first
+     * switch. Reset with [subtitleArmedByAutoPick].
+     */
+    private var bitmapRePickAttempted = false
+
     // Parsed cues of the user-loaded external subtitle file. When present
     // with a negative offset, rendering switches to position-driven mode
     // (SubtitleCueHandler.updateFromPosition) so subs can appear early.
@@ -4085,6 +4113,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             applySubtitleOffset = { ms ->
                 bridgeSelf.get()?.applyChosenSubtitleOffset(ms)
             },
+            // A manual track pick wins over everything this session (I1): it
+            // drops the auto-pick marker, so F1's re-pick cannot move the
+            // caption the viewer chose by hand - including the bitmap itself.
+            onManualSubtitlePick = {
+                bridgeSelf.get()?.subtitleArmedByAutoPick = false
+            },
             // Lets the panel list the file's real audio tracks and override
             // directly; resolved lazily because the player is built later.
             playerProvider = { bridgeSelf.get()?.exoPlayer }
@@ -4470,12 +4504,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // in front of the text track of the same kind.
         val textGroups = exoPlayer?.currentTracks?.groups.orEmpty()
             .filter { it.type == C.TRACK_TYPE_TEXT }
-        PlayerTrackBridge.applyLanguage(
+        val armed = PlayerTrackBridge.applyLanguage(
             exoPlayer,
             C.TRACK_TYPE_TEXT,
             code,
             provenBitmapPositionsForTextGroups(textGroups)
         )
+        // This pass is an auto-pick too - it names a track by language with the
+        // same ranking - so F1's marker follows its verdict. A blank code is
+        // subtitles off, which arms nothing and clears the marker with it.
+        subtitleArmedByAutoPick = armed && code.isNotBlank()
     }
 
     /** Subtitle offset chosen in the panel: same path as the +/- buttons. */
@@ -6889,8 +6927,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             playerView.subtitleView?.setCues(null)
             playerView.subtitleView?.visibility = View.GONE
             // Track positions belong to one track list: a rebuilt player may
-            // have a different one.
+            // have a different one. The same goes for the auto-pick marker and
+            // F1's once-per-source attempt - a fresh instance has its own
+            // captions armed, by its own pass.
             provenBitmapTrackPositions.clear()
+            subtitleArmedByAutoPick = false
+            bitmapRePickAttempted = false
             subtitleCueHandler = SubtitleCueHandler().also { player.addListener(it) }
             // An ASS sidecar outlives the player it was loaded against - only
             // the native instance was released with the old one - so the tick
@@ -9629,6 +9671,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         )
                         .build()
                     changed = true
+                    // This is an AUTO pick: the only marker F1's re-pick reads
+                    // before moving a proven bitmap track to the text beside it.
+                    // A remembered signature does NOT count: the bridge re-arms
+                    // that track right after this pass (its listener is
+                    // registered later), so what ends up armed is the viewer's
+                    // previous pick, not this one - and F1 must not touch it.
+                    subtitleArmedByAutoPick = PlayerTrackBridge.subtitleTrackSignature.isBlank()
                     // The language alone cannot answer "which one did it pick?"
                     // on a file that ships EN SDH, EN regular and EN forced -
                     // every one of the three logs "en". The track index, its
@@ -10594,6 +10643,92 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     /**
+     * F1: when the track that JUST drew a bitmap cue was armed by the auto-pick,
+     * move to a text track in the same language bucket - in this session, on the
+     * first bitmap line.
+     *
+     * This is the only moment the file provides evidence. The bitmap carries no
+     * readable signal (its mime is the generic `application/x-media3-cues` and
+     * its label names no format), so [SubtitleTrackRules.choose] ranked it as a
+     * regular text track and file order put it in front of the real text tracks.
+     * Once it draws, [recordProvenBitmapTrack] has put its position in this
+     * session's proof set, so the ordinary ranking now sees it as a bitmap and
+     * prefers the text track beside it.
+     *
+     * All five gates are deliberate; see the spec (F1a): the armed track is the
+     * proven one, it was armed by the auto-pick (not a manual pick, not a
+     * remembered signature), no attempt has run for this source (I5), this is
+     * VOD (I4), and there is a language bucket to move inside at all. Anything
+     * else stays on the bitmap (I2) - the rule can never disable subtitles or
+     * change their language.
+     */
+    private fun rePickProvenBitmapTrack() {
+        if (bitmapRePickAttempted || !subtitleArmedByAutoPick || isLiveChannel) return
+        if (preferredSubtitleLang.isBlank()) return
+        val player = exoPlayer ?: return
+        val groups = player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+        if (groups.isEmpty()) return
+        val armedPosition = selectedTextTrackPosition() ?: return
+        if (armedPosition !in provenBitmapTrackPositions) return
+        // One answer per track list, set before the decision so a stay is as
+        // final as a switch: later lines of the same PGS track must not retry.
+        bitmapRePickAttempted = true
+
+        // The same flattening the latched pass and the re-assert use: flat
+        // positions are what a proven record is addressed by.
+        val prefixes = groups.runningFold(0) { sum, group -> sum + group.length }
+        val candidates = mutableListOf<SubtitleTrackRules.Candidate>()
+        val locations = mutableListOf<Pair<Tracks.Group, Int>>()
+        groups.forEachIndexed { groupIdx, group ->
+            for (i in 0 until group.length) {
+                val format = group.getTrackFormat(i)
+                candidates += SubtitleTrackRules.Candidate(
+                    language = format.language,
+                    mimeType = format.sampleMimeType,
+                    forced = format.selectionFlags and C.SELECTION_FLAG_FORCED != 0,
+                    supported = group.isTrackSupported(i),
+                    title = format.label,
+                    position = prefixes[groupIdx] + i
+                )
+                locations += group to i
+            }
+        }
+        val armedLabel = candidates.firstOrNull { it.position == armedPosition }
+            ?.title ?: "none"
+        val target = SubtitleTrackRules.sameSessionProofRePick(
+            candidates = candidates,
+            armedPosition = armedPosition,
+            preferredLanguage = preferredSubtitleLang,
+            // Read AFTER the record: the position that just drew is what makes
+            // the armed track a bitmap in this computation.
+            provenBitmapPositions = provenBitmapPositionsForTextGroups(groups)
+        )
+        if (target == null) {
+            Log.i(
+                "PLAYER_LANG",
+                "same-session bitmap re-pick: $preferredSubtitleLang bitmap " +
+                    "track=$armedPosition label=$armedLabel, " +
+                    "no text track in bucket; staying on bitmap"
+            )
+            return
+        }
+        val (group, index) = locations[target]
+        player.trackSelectionParameters = player.trackSelectionParameters
+            .buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            .setOverrideForType(
+                TrackSelectionOverride(group.mediaTrackGroup, index)
+            )
+            .build()
+        Log.i(
+            "PLAYER_LANG",
+            "same-session bitmap re-pick: $preferredSubtitleLang bitmap " +
+                "track=$armedPosition label=$armedLabel -> text track=$target " +
+                "label=${group.getTrackFormat(index).label ?: "none"}"
+        )
+    }
+
+    /**
      * Renders text cues into [subtitleText] instead of Media3's built-in
      * SubtitleView. That view cannot take the pill background (its
      * exo_subtitle child is a SubtitleView container, not a TextView, so the
@@ -10826,6 +10961,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // Proof for the picker/INFO and for the next play's auto-pick: this
             // track just drew an image, whatever its mime says.
             recordProvenBitmapTrack()
+            // ... and with the proof in hand, F1 moves off the bitmap now, in
+            // this session, instead of waiting for a replay the remembered
+            // subtitle signature would short-circuit anyway.
+            rePickProvenBitmapTrack()
             view.visibility = View.VISIBLE
             if (!bitmapCuesDrawn) {
                 bitmapCuesDrawn = true
@@ -15931,6 +16070,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         rebufferDownshift.reset()
         rebufferDownshiftGivenUp = false
         retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceTextureViewFallback = false; languagesAutoSelected = false
+        // A new source is a new auto-pick and a new once-per-source re-pick.
+        subtitleArmedByAutoPick = false
+        bitmapRePickAttempted = false
         dvStripRetryDone = false; forceDvStripForSession = false
         // The black-video ladder is per ZAP, not per attempt: a channel change
         // starts a fresh ladder, so the surface stage, the one progress re-arm
@@ -16076,6 +16218,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // Same track list? Not necessarily: a live zap can land on a channel
         // whose file numbers its tracks differently.
         provenBitmapTrackPositions.clear()
+        subtitleArmedByAutoPick = false
+        bitmapRePickAttempted = false
         subtitleCueHandler = SubtitleCueHandler().also { player.addListener(it) }
         // The same MediaItem createPlayer() would have built for this URL,
         // handed to the running player. prepare() restarts the load; the Surface

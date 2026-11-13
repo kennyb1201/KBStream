@@ -681,6 +681,59 @@ internal object SubtitleTrackRules {
     }
 
     /**
+     * F1's same-session proof re-pick: the FLAT text position to switch to when
+     * the armed track has just been proven a bitmap by drawing one, or null to
+     * stay where it is.
+     *
+     * The ranking is [bestLanguageMatchIndex] over the armed track's own
+     * language bucket - the same ranking [PlayerTrackBridge.matchingOverride]
+     * re-arms with on every READY and rebuffer - with this session's proven
+     * positions handed in, so the track that just drew an image reads as a
+     * bitmap even though neither its mime nor its label says so. That is the
+     * whole point of the rule: before the first bitmap line there is no
+     * evidence in the file, and the first line IS the evidence.
+     *
+     * Fail-soft by construction (I2): a blank preference, an armed track that
+     * is not proven a bitmap, an armed track in neither the preferred nor the
+     * untagged bucket, and a winner that is still a bitmap (or the armed track
+     * itself) all return null. Nothing here can turn subtitles off or move to a
+     * track tagged for another language - it can only name a different position
+     * inside the bucket the armed track already belongs to.
+     */
+    fun sameSessionProofRePick(
+        candidates: List<Candidate>,
+        armedPosition: Int,
+        preferredLanguage: String,
+        provenBitmapPositions: Set<Int>
+    ): Int? {
+        val preferred = normalize(preferredLanguage) ?: return null
+        val armed = candidates.firstOrNull { it.position == armedPosition } ?: return null
+        if (!isBitmapTrack(armed, armedPosition, provenBitmapPositions)) return null
+        val armedPreferred = LanguageMatch.matches(preferred, armed.language)
+        val armedUntagged =
+            !armedPreferred && LanguageMatch.canonical(armed.language) == null
+        if (!armedPreferred && !armedUntagged) return null
+        // The same drawable filter and the same two language buckets as
+        // [PlayerTrackBridge.matchingOverride]: the tagged block first, the
+        // untagged one when the armed track itself is untagged.
+        val bucket = candidates.filter { candidate ->
+            cannotDrawNote(candidate.mimeType, candidate.supported) == null &&
+                if (armedPreferred) {
+                    LanguageMatch.matches(preferred, candidate.language)
+                } else {
+                    !LanguageMatch.matches(preferred, candidate.language) &&
+                        LanguageMatch.canonical(candidate.language) == null
+                }
+        }
+        val best = bestLanguageMatchIndex(bucket, provenBitmapPositions) ?: return null
+        val winner = bucket[best]
+        val winnerPosition = winner.position.takeIf { it >= 0 } ?: best
+        if (winnerPosition == armedPosition) return null
+        if (isBitmapTrack(winner, best, provenBitmapPositions)) return null
+        return winnerPosition
+    }
+
+    /**
      * Decide the subtitle track for [candidates] under the viewer's [mode]
      * (see [SubtitleModeRules]). [ON] is the language rules in [choose]; [OFF]
      * is always off; [FORCED] only ever shows a forced track.

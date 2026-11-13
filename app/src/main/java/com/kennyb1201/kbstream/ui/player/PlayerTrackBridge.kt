@@ -201,6 +201,18 @@ internal object PlayerTrackBridge {
      */
     private var playerProvider: (() -> Player?)? = null
 
+    /**
+     * Called the moment the viewer arms a subtitle track from the picker.
+     *
+     * The activity keeps an "armed by the auto-pick" marker that F1's
+     * same-session bitmap re-pick reads before it may move a proven bitmap
+     * track ([PlayerTrackBridge.chooseSubtitleTrack] is the one path a manual
+     * track pick takes). A hand-picked caption must win over that rule for the
+     * rest of the session (audit E-F1 latch discipline), so the marker is
+     * dropped here rather than guessed from the selected track afterwards.
+     */
+    var onManualSubtitlePick: (() -> Unit)? = null
+
     /** One application per player instance; see [onPlayerAttached]. */
     @Volatile
     private var rememberedTrackApplied = false
@@ -229,13 +241,15 @@ internal object PlayerTrackBridge {
         applySubtitleLanguage: (String) -> Unit,
         applyAudioDelay: (Int) -> Unit,
         applySubtitleOffset: (Int) -> Unit,
-        playerProvider: () -> Player?
+        playerProvider: () -> Player?,
+        onManualSubtitlePick: (() -> Unit)? = null
     ) {
         this.applyAudioLanguage = applyAudioLanguage
         this.applySubtitleLanguage = applySubtitleLanguage
         this.applyAudioDelay = applyAudioDelay
         this.applySubtitleOffset = applySubtitleOffset
         this.playerProvider = playerProvider
+        this.onManualSubtitlePick = onManualSubtitlePick
     }
 
     /**
@@ -1027,6 +1041,7 @@ internal object PlayerTrackBridge {
      * preferred language (the "my subtitle pick reverted" report).
      */
     fun chooseSubtitleTrack(context: Context, signature: String) {
+        onManualSubtitlePick?.invoke()
         val player = playerProvider?.invoke()
         subtitlesOff = false
         subtitleTrackSignature = signature
