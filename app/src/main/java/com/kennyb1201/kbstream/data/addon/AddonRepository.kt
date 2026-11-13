@@ -788,8 +788,19 @@ class AddonRepository private constructor() {
                 baseUrl
             )
 
+        // The number a source is asked for is the number the viewer sees. Inside
+        // a show whose alternate episode order is chosen, an id carrying TMDB's
+        // S/E is translated to the order's S/E HERE and nowhere else: watched
+        // state, resume points, history rows and tracker writes keep the id they
+        // were given (spec 2026-11-13, F3). The cache key follows the translated
+        // id, so two orders never share a stream list.
+        val queryId =
+            orderTranslatedId(
+                id
+            )
+
         val cacheKey =
-            "$base|$type|$id"
+            "$base|$type|$queryId"
 
         val now =
             System.currentTimeMillis()
@@ -846,7 +857,7 @@ class AddonRepository private constructor() {
 
         try {
             val url =
-                "$base/stream/$type/$id.json"
+                "$base/stream/$type/$queryId.json"
 
             val streams =
                 fetchStreamsWithRetry(
@@ -1095,6 +1106,47 @@ class AddonRepository private constructor() {
                 "?"
             )
         }
+    }
+
+    /**
+     * [id] as the show's chosen episode order spells it, or [id] unchanged.
+     *
+     * Only an episodic id (`<root>:<season>:<episode>`) with an IMDb root can
+     * carry a stored order, because that is the key the order store is filed
+     * under (see EpisodeSchemeStore.stableShowId). No order, no catalogue, an id
+     * that does not parse and a failed lookup all answer the input untouched -
+     * the translation is never a reason for a source lookup to behave differently
+     * than it did before this feature.
+     */
+    private fun orderTranslatedId(id: String): String {
+        val parts =
+            id.split(
+                ':'
+            )
+
+        if (parts.size != 3) return id
+
+        val context =
+            AppContextHolder.appContext ?: return id
+
+        val stableShowId =
+            com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
+                .stableShowId(parts[0], null)
+                ?: return id
+
+        val catalogue =
+            runCatching {
+                com.kennyb1201.kbstream.data.tvdb.TvdbOrderStore.catalogue(
+                    context,
+                    stableShowId
+                )
+            }.getOrNull()
+                ?: return id
+
+        return com.kennyb1201.kbstream.data.tvdb.TvdbOrders.translatedStreamId(
+            id,
+            catalogue
+        )
     }
 
     companion object {

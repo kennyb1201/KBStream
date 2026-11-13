@@ -134,8 +134,14 @@ class PlayerEpisodePickerContractTest {
             adapter.contains("onError = { _, _ -> holder.thumb.visibility = View.GONE }")
         )
         assertTrue(
+            // The numbers are the chosen episode order's when the show has one,
+            // TMDB's otherwise - the row reads what a source is asked for
+            // (spec 2026-11-13, F3). The name still follows them.
             "F2: the row's title is S<n>E<n> plus the episode's name",
-            rows.contains("append(episodeLabel(listedSeason ?: selectedSeason ?: 0, episode.episodeNumber))") &&
+            rows.contains("val season = listedSeason ?: selectedSeason ?: 0") &&
+                rows.contains(
+                    "append(episodeLabel(episode.shownSeason(season), episode.shownEpisode(season)))"
+                ) &&
                 rows.contains("append(name)")
         )
         assertTrue(

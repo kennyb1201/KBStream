@@ -17,6 +17,9 @@ import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.evictOldest
 import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
 import com.kennyb1201.kbstream.data.player.fileEpisodeStreamId
+import com.kennyb1201.kbstream.data.tvdb.TvdbCatalogue
+import com.kennyb1201.kbstream.data.tvdb.TvdbOrderStore
+import com.kennyb1201.kbstream.data.tvdb.withOrderNumbers
 import com.kennyb1201.kbstream.data.sync.KidsMode
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.squareup.moshi.JsonAdapter
@@ -223,7 +226,21 @@ data class ResolvedEpisode(
     val thumbnail: String?,
     val runtimeMinutes: Int?,
     val airDate: String?,
-    val voteAverage: Double?
+    val voteAverage: Double?,
+    /**
+     * The season number in the show's CHOSEN alternate order, for display, or
+     * null when the show has no order chosen or this episode has no counterpart
+     * in it (see data/tvdb/TvdbOrders).
+     *
+     * A DISPLAY number, never an identity: [episodeNumber] and [streamId] stay
+     * TMDB's, which is what watched marks, resume points and every tracker write
+     * are keyed on. Added with a default so a season list cached by an earlier
+     * build (the twelve-hour memory and seven-day disk entries) still parses, and
+     * so a show with no order is byte-identical to before.
+     */
+    val displaySeason: Int? = null,
+    /** The episode number in the chosen order, for display. Null = see [displaySeason]. */
+    val displayEpisode: Int? = null
 )
 
 /**
@@ -2190,6 +2207,20 @@ class TmdbRepository private constructor(context: Context) :
         // outlive the first successful lookup.
         val key = "$tvId:$season:$streamRootId:${episodeSchemeTag(streamRootId, tvId)}"
         val now = System.currentTimeMillis()
+
+        // The show's chosen alternate order, read once per call. It is a local
+        // store read (memory-cached after the first) and it is deliberately NOT
+        // part of the cache key: the caches below hold TMDB identity only, and
+        // the display numbers are applied on the way out by
+        // [seasonWithOrderNumbers], so switching the order never serves a list
+        // that was numbered under the previous one.
+        val orderCatalogue = TvdbOrderStore.catalogue(
+            appContext,
+            // Keyed on the RESOLVED root, the same key the add-on request is
+            // translated under: a route id of `tmdb:<n>` and the `tt...` root it
+            // resolves to must read the same show's choice.
+            EpisodeSchemeStore.stableShowId(streamRootId, tvId)
+        )
         pruneMemoryCaches()
         val cached = seasonEpisodesCache[key]
 
@@ -2199,7 +2230,7 @@ class TmdbRepository private constructor(context: Context) :
         if (cached != null && now - cached.first < seasonEpisodesCacheTtlMs) {
             val named = cached.second.namedEpisodesOnly()
             if (seasonEpisodesAreAnAnswer(named)) {
-                return named
+                return seasonWithOrderNumbers(named, season, orderCatalogue)
             }
         }
 
@@ -2215,7 +2246,7 @@ class TmdbRepository private constructor(context: Context) :
             val named = parsed?.namedEpisodesOnly()
             if (named != null && seasonEpisodesAreAnAnswer(named)) {
                 seasonEpisodesCache[key] = now to named
-                return named
+                return seasonWithOrderNumbers(named, season, orderCatalogue)
             }
         }
 
@@ -2259,8 +2290,21 @@ class TmdbRepository private constructor(context: Context) :
             seasonEpisodesCache[key] = now to episodes
             cacheJson(diskKey, seasonEpisodesJsonAdapter.toJson(episodes), now)
         }
-        return episodes
+        return seasonWithOrderNumbers(episodes, season, orderCatalogue)
     }
+
+    /**
+     * [episodes] with the show's chosen-order numbers stamped on, for display.
+     *
+     * Applied on every read path rather than stored, so the cached lists keep
+     * TMDB identity only and a catalogue rebuilt for a new order is picked up by
+     * the very next read instead of aging out (see [TvdbOrderStore]).
+     */
+    private fun seasonWithOrderNumbers(
+        episodes: List<ResolvedEpisode>,
+        season: Int,
+        catalogue: TvdbCatalogue?
+    ): List<ResolvedEpisode> = episodes.withOrderNumbers(catalogue, season)
 
     /**
      * The show's detected episode scheme as a cache-key part: `1:1` when there

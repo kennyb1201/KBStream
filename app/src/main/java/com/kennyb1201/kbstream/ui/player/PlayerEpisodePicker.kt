@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream.ui.player
 
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
+import com.kennyb1201.kbstream.data.tvdb.shownEpisode
+import com.kennyb1201.kbstream.data.tvdb.shownSeason
 import com.kennyb1201.kbstream.ui.detail.formatEpisodeAirDate
 import com.kennyb1201.kbstream.ui.detail.isEpisodeUnavailable
 
@@ -139,7 +141,12 @@ internal object PlayerEpisodePicker {
                 playingEpisode == episode.episodeNumber
             PickerItem(
                 label = buildString {
-                    append(episodeLabel(listedSeason ?: selectedSeason ?: 0, episode.episodeNumber))
+                    // The chosen order's numbers, else TMDB's: the number the
+                    // viewer reads here is the number a source is asked for
+                    // (spec 2026-11-13, F3). The watched check below stays on
+                    // the TMDB number - watched state is never re-keyed.
+                    val season = listedSeason ?: selectedSeason ?: 0
+                    append(episodeLabel(episode.shownSeason(season), episode.shownEpisode(season)))
                     episode.name?.takeIf { it.isNotBlank() }?.let { name ->
                         append(" · ")
                         append(name)

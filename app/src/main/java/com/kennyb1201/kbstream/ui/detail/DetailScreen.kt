@@ -115,6 +115,7 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.data.player.fileEpisodeStreamId
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
+import com.kennyb1201.kbstream.data.tvdb.shownEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
@@ -1525,6 +1526,11 @@ fun DetailScreen(
     val vmTargetEpisode by viewModel.targetEpisode.collectAsStateWithLifecycle()
     val vmLoadedSeason by viewModel.loadedSeason.collectAsStateWithLifecycle()
     val vmPlayButtonText by viewModel.playButtonText.collectAsStateWithLifecycle()
+    // The alternate episode order (spec 2026-11-13): empty until TVDB confirms
+    // the show HAS one, and then one chip per order the series lists.
+    val episodeOrders by viewModel.episodeOrders.collectAsStateWithLifecycle()
+    val episodeOrder by viewModel.episodeOrder.collectAsStateWithLifecycle()
+    val episodeOrderBusy by viewModel.episodeOrderBusy.collectAsStateWithLifecycle()
 
     // The id this title's stream requests are named by: the IMDB id TMDB's own
     // record maps to, not the catalog id this screen was opened with (see
@@ -6056,6 +6062,24 @@ fun DetailScreen(
                             normalizedType == "series" &&
                             seasons.isNotEmpty()
                         ) {
+                            // Beside the season pills and above the episode
+                            // cards: the row that says which numbering they
+                            // are in. Draws nothing unless the show really
+                            // has an alternate order.
+                            if (episodeOrders.size > 1) {
+                                item(key = "episode-order", contentType = "section-row") {
+                                    EpisodeOrderSection(
+                                        options = episodeOrders,
+                                        selected = episodeOrder,
+                                        busy = episodeOrderBusy,
+                                        onSelect = { type ->
+                                            viewModel.selectEpisodeOrder(type)
+                                        },
+                                        modifier = Modifier.padding(top = 10.dp)
+                                    )
+                                }
+                            }
+
                             item(key = "episodesheader", contentType = "section-header") {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -6410,6 +6434,8 @@ fun DetailScreen(
 
                                                     EpisodeCard(
                                                         ep = ep,
+                                                        listedSeason =
+                                                            effectiveSeason,
                                                         isWatched =
                                                             isEpisodeWatched,
                                                         airDatesTrusted =
@@ -9060,6 +9086,8 @@ private fun PeopleSeparatorCard() {
 @Composable
 private fun EpisodeCard(
     ep: ResolvedEpisode,
+    /** The season the rail was loaded for - the fallback when no order renumbers this card. */
+    listedSeason: Int,
     isWatched: Boolean,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
@@ -9107,7 +9135,8 @@ private fun EpisodeCard(
     val listedTitle = if (hidesSpoiler) {
         SpoilerFree.episodeLabel(
             hidden = true,
-            episodeNumber = ep.episodeNumber,
+            // The chosen order's number, else TMDB's (spec 2026-11-13, F3).
+            episodeNumber = ep.shownEpisode(listedSeason),
             realTitle = ep.name
         )
     } else {
@@ -9254,7 +9283,7 @@ private fun EpisodeCard(
                             ) {
                                 Text(
                                     text =
-                                        "EPISODE ${ep.episodeNumber}",
+                                        "EPISODE ${ep.shownEpisode(listedSeason)}",
                                     style =
                                         MaterialTheme.typography.labelSmall,
                                     color = KBTextHi

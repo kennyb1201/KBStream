@@ -74,8 +74,17 @@ to identify the service they belong to:
   menu send each title to its own page,
   `https://simkl.com/{movies|tv}/<simkl id>[/<slug>]`.
 
-TMDB's mark is a trademark of TMDB, and Simkl's of Simkl; neither is covered by
-this project's GPL-3.0-or-later licence.
+- **TheTVDB** - no logo ships. TheTVDB's API licensing requires "attribution
+  with a direct link to TheTVDB.com ... to end users viewing metadata from our
+  API" unless approved otherwise (thetvdb.com/api-information, read
+  2026-11-13), so the Detail screen's `Episode order` row - the one surface that
+  shows TVDB-sourced data - draws the line "Metadata provided by TheTVDB" as a
+  link to `https://thetvdb.com`. The app's TVDB project key is a public
+  identifier compiled into the APK, the same tradeoff as TMDB's key; no client
+  secret exists.
+
+TMDB's mark is a trademark of TMDB, Simkl's of Simkl, and TheTVDB's of TheTVDB;
+none is covered by this project's GPL-3.0-or-later licence.
 
 ## How to regenerate this inventory
 

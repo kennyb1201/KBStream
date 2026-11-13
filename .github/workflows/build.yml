@@ -37,6 +37,11 @@ jobs:
       # the TMDB key above. A build without the secret compiles it blank, and
       # fanart is then silently off (TMDB-only, no error, no log spam).
       FANART_API_KEY: ${{ secrets.FANART_API_KEY }}
+      # TheTVDB's PROJECT key - the same tradeoff as the two above: it is the
+      # `apikey` in every /v4/login call, so it is in every APK by construction.
+      # A build without the secret compiles it blank and the episode-order row is
+      # then not offered, which is exactly how the app behaved before it existed.
+      TVDB_API_KEY: ${{ secrets.TVDB_API_KEY }}
       # Client id only: Simkl auth is the PIN (device) flow, which is a
       # public-client flow and never sends a secret. There is no
       # SIMKL_CLIENT_SECRET secret to pass, and no buildConfigField to receive

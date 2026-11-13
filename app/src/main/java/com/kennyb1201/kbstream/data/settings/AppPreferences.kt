@@ -172,6 +172,15 @@ object AppPreferences {
     // its own example id is published as heavily throttled - so it is only ever
     // the one the viewer registered.
     private const val KEY_ANIME_SKIP_CLIENT_ID = "anime_skip_client_id"
+    // TheTVDB's optional SUBSCRIBER PIN (spec 2026-11-13). Only a viewer with a
+    // TVDB subscription ($11.99/yr) has one, and only then does `/v4/login`
+    // carry it: the docs say to remove the field entirely otherwise. The PROJECT
+    // key, which the app does ship, is what makes orders work with no PIN at all,
+    // and the spec leaves the PIN row optional - so nothing in this build sets
+    // it. It lives in the same encrypted, profile-scoped key store as the rest
+    // (never in the APK, never logged); it is NOT in [SYNCED_API_KEYS] yet,
+    // because a value with no row to paste it into has nothing to sync.
+    private const val KEY_TVDB_PIN = "tvdb_pin"
 
     /**
      * The viewer's own fanart.tv key (`client_key`). Optional, and unlike the
@@ -2490,6 +2499,22 @@ object AppPreferences {
         val remembered =
             apiKeyPrefs(context).getString(KEY_TORBOX_VERIFIED_FOR, "").orEmpty()
         return remembered.isNotEmpty() && remembered == torboxKeyFingerprint(key)
+    }
+
+    // ── TheTVDB subscriber PIN (alternate episode orders) ────────────
+    // Optional, and blank is the normal state: the app's project key needs no
+    // PIN, and a PIN only personalises the login for a viewer who pays for a
+    // TVDB subscription. Encrypted and profile-scoped like every credential
+    // here, and synced (it is in [SYNCED_API_KEYS]) so it is pasted once.
+    fun getTvdbPin(context: Context): String =
+        apiKeyPrefs(context).getString(KEY_TVDB_PIN, "")?.trim().orEmpty()
+
+    fun setTvdbPin(context: Context, pin: String) {
+        apiKeyPrefs(context).edit().putString(KEY_TVDB_PIN, pin.trim()).apply()
+        // Never leave a plaintext copy behind.
+        prefs(context).edit().remove(KEY_TVDB_PIN).apply()
+        stampApiKeyEdit(context, KEY_TVDB_PIN, System.currentTimeMillis())
+        pushApiKeysBlob()
     }
 
     // ── OMDb API key (awards text on the Detail screen) ──────────────

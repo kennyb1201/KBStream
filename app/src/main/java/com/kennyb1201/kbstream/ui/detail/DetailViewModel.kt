@@ -31,6 +31,7 @@ import com.kennyb1201.kbstream.data.simkl.simklItemUrl
 import com.kennyb1201.kbstream.data.sync.KidsMode
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
+import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
 import com.kennyb1201.kbstream.data.player.fileEpisodeStreamId
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionDetail
@@ -51,6 +52,9 @@ import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.mdblist.MdbListRatings
 import com.kennyb1201.kbstream.data.omdb.OmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbSeasonSummary
+import com.kennyb1201.kbstream.data.tvdb.TvdbConfig
+import com.kennyb1201.kbstream.data.tvdb.TvdbOrderOption
+import com.kennyb1201.kbstream.data.tvdb.TvdbOrderRepository
 import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
@@ -489,6 +493,28 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val _loadedSeason = MutableStateFlow<Int?>(null)
     val loadedSeason: StateFlow<Int?> = _loadedSeason.asStateFlow()
+
+    /**
+     * The alternate episode orders this show offers, aired order first - empty
+     * when there is no picker to draw (spec 2026-11-13, F2).
+     *
+     * Empty covers every honest reason: no TVDB key in the build, no TVDB id for
+     * the show, a series with no alternate order, and TVDB being unreachable.
+     * The viewer is meant to see the same thing in all of them - no row at all
+     * (F4).
+     */
+    private val _episodeOrders = MutableStateFlow<List<TvdbOrderOption>>(emptyList())
+    // Internal: TvdbOrderOption is a module-private type, and the row it feeds
+    // is a screen in this same module.
+    internal val episodeOrders: StateFlow<List<TvdbOrderOption>> = _episodeOrders.asStateFlow()
+
+    /** The chosen season type, or null for the aired order. */
+    private val _episodeOrder = MutableStateFlow<String?>(null)
+    internal val episodeOrder: StateFlow<String?> = _episodeOrder.asStateFlow()
+
+    /** True while a pick is being fetched and joined. */
+    private val _episodeOrderBusy = MutableStateFlow(false)
+    internal val episodeOrderBusy: StateFlow<Boolean> = _episodeOrderBusy.asStateFlow()
 
     private val _playButtonText = MutableStateFlow("Play")
     val playButtonText: StateFlow<String> = _playButtonText.asStateFlow()
@@ -2125,6 +2151,10 @@ for ((metaAddon, response, error) in probeResults) {
                         }
 
                     _tmdbDetail.value = shownDetail
+                    // The alternate-order row, once the page is up: its whole
+                    // worth is "this show has more than one numbering", and a
+                    // show with one must not pay for the question.
+                    loadEpisodeOrders()
                     Log.e(
                         "KBStream",
                         "tmdbDetail populated type=$normalizedType id=${detail?.id} " +
@@ -2495,6 +2525,102 @@ for ((metaAddon, response, error) in probeResults) {
         type: String,
         tmdbId: Int?
     ): WatchHistoryEntity? = DetailPlaybackResume.trakt(this, id, type, tmdbId)
+
+    /**
+     * Asks TVDB which orders this show has and refreshes a chosen one's join.
+     *
+     * Lazy by construction: it runs when a Detail page for a TV show has painted,
+     * never for a movie, never on a library sweep, and never twice for the same
+     * show while its answers are cached. A failure leaves the picker empty and
+     * the screens exactly as they were.
+     */
+    private fun loadEpisodeOrders() {
+        if (!TvdbConfig.isConfigured) return
+        // Movies have no episodes; a synthetic (addon-videos) detail has no TMDB
+        // season list to join to, so it has no order to offer either.
+        if (_isSyntheticDetail.value || mediaType != "series") return
+
+        val detail = _tmdbDetail.value ?: return
+        val tmdbId = detail.id.takeIf { it > 0 } ?: return
+        val seasons = detail.seasons.map { it.seasonNumber }.filter { it > 0 }
+
+        viewModelScope.launch {
+            // The store key must be the RESOLVED stream root (`tt...`), not the
+            // route id: the add-on request is named by that root, so that is the
+            // root the translation looks the catalogue up under (see
+            // AddonRepository.orderTranslatedId).
+            val rootId = runCatching { awaitStreamRootId(imdbId) }
+                .getOrDefault(imdbId)
+                .ifBlank { imdbId }
+            val stable = EpisodeSchemeStore.stableShowId(rootId, tmdbId) ?: return@launch
+
+            _episodeOrder.value = TvdbOrderRepository.chosen(getApplication(), stable)
+
+            val tvdbId = runCatching {
+                tmdbRepository.resolveTvdbId(tmdbId, "series")
+            }.getOrNull()?.takeIf { it > 0 } ?: return@launch
+
+            _episodeOrders.value = TvdbOrderRepository.options(getApplication(), stable, tvdbId)
+
+            val chosen = TvdbOrderRepository.chosen(getApplication(), stable)
+            // A choice older than its cached join is rebuilt here rather than on
+            // the read path: a season list must never wait on TVDB.
+            TvdbOrderRepository.ensureCatalogue(getApplication(), stable, tvdbId, tmdbId, seasons)
+            if (chosen != null) {
+                _episodeOrder.value = chosen
+                // The join may be NEW (this call just built it), and the list on
+                // screen was numbered before it existed. One reload is the
+                // difference between "the order applies" and "the order applies
+                // the next time you open the show".
+                _loadedSeason.value?.let { season -> loadEpisodesForSeason(season) }
+            }
+        }
+    }
+
+    /**
+     * Applies [seasonType] to this show (null = the aired order) and re-resolves
+     * the season on screen.
+     *
+     * No restart and no reimport (F2): the season in view is fetched again the
+     * moment the join is stored, so the numbers change under the viewer's eyes.
+     * A pick that cannot be built changes NOTHING - the previous order stays, and
+     * the screens keep the numbers they had.
+     */
+    fun selectEpisodeOrder(seasonType: String?) {
+        val detail = _tmdbDetail.value ?: return
+        val tmdbId = detail.id.takeIf { it > 0 } ?: return
+        val seasons = detail.seasons.map { it.seasonNumber }.filter { it > 0 }
+        if (_episodeOrderBusy.value) return
+
+        _episodeOrderBusy.value = true
+        viewModelScope.launch {
+            try {
+                val rootId = runCatching { awaitStreamRootId(imdbId) }
+                    .getOrDefault(imdbId)
+                    .ifBlank { imdbId }
+                val stable = EpisodeSchemeStore.stableShowId(rootId, tmdbId) ?: return@launch
+
+                val tvdbId = runCatching {
+                    tmdbRepository.resolveTvdbId(tmdbId, "series")
+                }.getOrNull()?.takeIf { it > 0 }
+
+                val ok = TvdbOrderRepository.select(
+                    context = getApplication(),
+                    stableShowId = stable,
+                    tvdbId = tvdbId,
+                    tmdbId = tmdbId,
+                    seasons = seasons,
+                    seasonType = seasonType
+                )
+                if (!ok) return@launch
+
+                _episodeOrder.value = TvdbOrderRepository.chosen(getApplication(), stable)
+                _loadedSeason.value?.let { season -> loadEpisodesForSeason(season) }
+            } finally {
+                _episodeOrderBusy.value = false
+            }
+        }
+    }
 
     fun loadEpisodesForSeason(season: Int) {
         // Synthetic (addon-videos) detail: build the episode list from the

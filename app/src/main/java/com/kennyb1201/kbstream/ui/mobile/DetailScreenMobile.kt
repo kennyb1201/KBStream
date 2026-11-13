@@ -81,6 +81,8 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
+import com.kennyb1201.kbstream.data.tvdb.shownEpisode
+import com.kennyb1201.kbstream.data.tvdb.shownSeason
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
 import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionPart
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
@@ -132,6 +134,7 @@ import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.touch.TouchChoiceChip
 import com.kennyb1201.kbstream.ui.components.touch.TouchLinkChip
 import com.kennyb1201.kbstream.ui.detail.DetailMediaRow
+import com.kennyb1201.kbstream.ui.detail.EpisodeOrderSection
 import com.kennyb1201.kbstream.data.youtube.HeroTrailerResumeVerdict
 import com.kennyb1201.kbstream.data.youtube.InnerTubeExtractor
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
@@ -635,6 +638,12 @@ fun DetailScreenMobile(
             MobileDetailRules.seasonsInChipOrder(tmdbDetail?.seasons.orEmpty())
         }
         val currentSeason = season ?: loadedSeason ?: seasons.firstOrNull()?.seasonNumber ?: 1
+
+        // The alternate episode order (spec 2026-11-13): empty until TVDB
+        // confirms the show HAS more than one order.
+        val episodeOrders by viewModel.episodeOrders.collectAsStateWithLifecycle()
+        val episodeOrder by viewModel.episodeOrder.collectAsStateWithLifecycle()
+        val episodeOrderBusy by viewModel.episodeOrderBusy.collectAsStateWithLifecycle()
 
         // ---- the watched-state arithmetic the menus share ----
         val staleSeasons = remember(tmdbDetail) {
@@ -2143,6 +2152,24 @@ fun DetailScreenMobile(
                         }
                     }
 
+                    // The numbering the cards below are in, beside the season
+                    // chips and above the episodes - the TV page's own row.
+                    // Draws nothing unless the show really has an alternate
+                    // order (F2).
+                    if (episodeOrders.size > 1) {
+                        item(key = "episode-order") {
+                            EpisodeOrderSection(
+                                options = episodeOrders,
+                                selected = episodeOrder,
+                                busy = episodeOrderBusy,
+                                onSelect = { type ->
+                                    viewModel.selectEpisodeOrder(type)
+                                },
+                                modifier = Modifier.padding(top = 8.dp)
+                            )
+                        }
+                    }
+
                     // M3 (release-readiness audit, 2026-11-10): the TV page's
                     // three episode statuses, which this page never rendered.
                     // A failed season load painted NOTHING under the
@@ -2225,6 +2252,7 @@ fun DetailScreenMobile(
                             // belong instead of the page cutting.
                             EpisodeRow(
                                 episode = episode,
+                                listedSeason = currentSeason,
                                 hiddenTitle = visual.hiddenTitle,
                                 isWatched = visual.isWatched,
                                 unavailable = visual.unavailable,
@@ -2760,15 +2788,21 @@ fun DetailScreenMobile(
                     title = if (hidesTitle) {
                         SpoilerFree.episodeLabel(
                             hidden = true,
-                            episodeNumber = episode.episodeNumber,
+                            episodeNumber = episode.shownEpisode(target.season),
                             realTitle = null
                         )
                     } else {
                         episode.name?.takeIf { it.isNotBlank() }
-                            ?: "Episode ${episode.episodeNumber}"
+                            ?: "Episode ${episode.shownEpisode(target.season)}"
                     },
-                    subtitle = "S${target.season.toString().padStart(2, '0')} · " +
-                        "E${episode.episodeNumber.toString().padStart(2, '0')}",
+                    // The order's numbers when the show has one chosen: the
+                    // menu describes the card that was long-pressed, and that
+                    // card reads in the chosen order (spec 2026-11-13, F3).
+                    // Everything the actions DO still speaks TMDB.
+                    subtitle = "S" +
+                        episode.shownSeason(target.season).toString().padStart(2, '0') +
+                        " · E" +
+                        episode.shownEpisode(target.season).toString().padStart(2, '0'),
                     actions = buildList {
                         add(
                             PosterContextAction(
@@ -3174,6 +3208,8 @@ private fun MobileDetailHeader(
 @Composable
 private fun EpisodeRow(
     episode: ResolvedEpisode,
+    /** The season the list was loaded for - the fallback when no order renumbers this row. */
+    listedSeason: Int,
     hiddenTitle: Boolean,
     isWatched: Boolean,
     unavailable: Boolean,
@@ -3252,10 +3288,12 @@ private fun EpisodeRow(
         ) {
             Text(
                 text = buildString {
-                    append(episode.episodeNumber)
+                    // The chosen order's number, else TMDB's (spec 2026-11-13,
+                    // F3): the number shown is the number a source is asked for.
+                    append(episode.shownEpisode(listedSeason))
                     val name = SpoilerFree.episodeLabel(
                         hidden = hiddenTitle,
-                        episodeNumber = episode.episodeNumber,
+                        episodeNumber = episode.shownEpisode(listedSeason),
                         realTitle = episode.name
                     )
                     if (name.isNotBlank()) append(". ").append(name)

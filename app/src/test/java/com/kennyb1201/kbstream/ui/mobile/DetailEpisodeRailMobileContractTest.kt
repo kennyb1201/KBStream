@@ -139,7 +139,10 @@ class DetailEpisodeRailMobileContractTest {
             "both layouts must read ONE derivation of an episode's state",
             mobile.contains("fun episodeVisual(episode: ResolvedEpisode): EpisodeVisual") &&
                 mobile.contains(
-                    "EpisodeRow( episode = episode, hiddenTitle = visual.hiddenTitle"
+                    // listedSeason joined the call with the alternate-order row:
+                    // the row needs the season it was loaded for to fall back on.
+                    "EpisodeRow( episode = episode, listedSeason = currentSeason, " +
+                        "hiddenTitle = visual.hiddenTitle"
                 ) &&
                 mobile.contains(
                     "KBEpisodeRailCardTouch( episode = episode, " +

@@ -64,6 +64,15 @@ val fanartApiKey = localProps.getProperty("FANART_API_KEY")
     ?: System.getenv("FANART_API_KEY")
     ?: ""
 
+// TheTVDB's PROJECT key: one key for the app, never per user, and public by
+// construction - it is the `apikey` in every /v4/login call and therefore in
+// every build that talks to TVDB. Wired exactly like TMDB's and fanart's, and
+// never named as a secret. Blank in a build without it, which is a working
+// build: the episode-order row is simply not offered (see data/tvdb).
+val tvdbApiKey = localProps.getProperty("TVDB_API_KEY")
+    ?: System.getenv("TVDB_API_KEY")
+    ?: ""
+
 val simklClientId = localProps.getProperty("SIMKL_CLIENT_ID")
     ?: System.getenv("SIMKL_CLIENT_ID")
     ?: ""
@@ -279,6 +288,7 @@ android {
         buildConfigField("Boolean", "PLAY_BUILD", playBuild.toString())
         buildConfigField("String", "TMDB_API_KEY", "\"$tmdbApiKey\"")
         buildConfigField("String", "FANART_API_KEY", "\"$fanartApiKey\"")
+        buildConfigField("String", "TVDB_API_KEY", "\"$tvdbApiKey\"")
         buildConfigField("String", "SIMKL_CLIENT_ID", "\"$simklClientId\"")
         buildConfigField("String", "TRAKT_CLIENT_ID", "\"$traktClientId\"")
         buildConfigField("String", "MAL_CLIENT_ID", "\"$malClientId\"")
