@@ -19,7 +19,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  * Receives a query handed over by the system's search surface — the TV remote's
  * mic on Fire TV / Google TV, or an assistant — and forwards it into the app.
  *
- * Two actions arrive here, and they mean different things:
+ * Actions arrive here, and they mean different things:
  *
  *  - **`ACTION_SEARCH`** ("search KBStream for …") opens the Search screen with
  *    the query already submitted. Declared in the manifest with
@@ -32,7 +32,9 @@ import kotlinx.coroutines.withTimeoutOrNull
  *    difference — every way it can fail (no API key, no network, nothing
  *    matching, an answer that takes too long) falls through to the Search
  *    screen with the query applied, which is where the plain action would have
- *    gone anyway.
+ *    gone anyway. The Assistant's "play <title>" custom intent is fulfilled
+ *    with this app's own action and lands in exactly the same place (see
+ *    `AssistantLaunch.ACTION_PLAY_TITLE`).
  *
  * The query is both stashed in [SearchSeed] (so a warm Search screen picks it up
  * through its view model) and passed to [MainActivity] as an extra (so a cold
@@ -73,7 +75,15 @@ class VoiceSearchActivity : ComponentActivity() {
         // nothing to open.
         SearchSeed.set(query)
 
-        if (intent?.action == ACTION_MEDIA_PLAY_FROM_SEARCH) {
+        // Two doors, one resolver (spec 2026-11-13, F1): the platform's media
+        // action, and the app's own action the Assistant "play <title>" custom
+        // intent is fulfilled with (see AssistantLaunch.ACTION_PLAY_TITLE and
+        // res/xml/shortcuts.xml). The second exists because the first is an
+        // implicit filter any installed media app may also declare.
+        if (
+            intent?.action == ACTION_MEDIA_PLAY_FROM_SEARCH ||
+            intent?.action == com.kennyb1201.kbstream.ui.assistant.AssistantLaunch.ACTION_PLAY_TITLE
+        ) {
             openSpokenTitle(query)
         } else {
             openSearch(query)

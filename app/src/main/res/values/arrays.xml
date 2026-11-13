@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  String arrays the Assistant wiring needs (spec 2026-11-13). Their only readers
+  are res/xml/shortcuts.xml's `app:queryPatterns` and the inline-inventory
+  `parameter-binding` references, both of which take string resources and cannot
+  be written inline - the same "the API demands a resource" exception
+  res/values/strings.xml already documents.
+
+  The query patterns are the part of the query AFTER the invocation phrase
+  ("open KBStream and ..."), matched exactly and only in en-US: custom intents
+  are en-US only. `$title` is the parameter name declared in the capability.
+-->
+<resources>
+
+    <!-- "open KBStream and play Landman" / "... and watch Severance". -->
+    <string-array name="assistant_play_title_queries">
+        <item>play $title</item>
+        <item>start $title</item>
+        <item>watch $title</item>
+        <item>resume $title</item>
+        <item>continue $title</item>
+        <item>play the show $title</item>
+        <item>play the movie $title</item>
+    </string-array>
+
+    <!-- Inline inventory: every phrase that names this feature. Assistant
+         replaces the matched phrase with the shortcut's id ("continue_watching")
+         before fulfilling, so the app only ever sees ids. -->
+    <string-array name="assistant_feature_continue_watching">
+        <item>Continue Watching</item>
+        <item>continue watching</item>
+        <item>my Continue Watching</item>
+        <item>resume watching</item>
+        <item>keep watching</item>
+        <item>pick up where I left off</item>
+    </string-array>
+
+    <string-array name="assistant_feature_search">
+        <item>Search</item>
+        <item>search</item>
+        <item>the search page</item>
+    </string-array>
+
+    <string-array name="assistant_feature_library">
+        <item>Library</item>
+        <item>library</item>
+        <item>my Library</item>
+        <item>my lists</item>
+    </string-array>
+</resources>

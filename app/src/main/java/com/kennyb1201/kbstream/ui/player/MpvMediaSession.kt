@@ -69,6 +69,16 @@ internal class MpvMediaSession(
     private var lastMetadata: String? = null
     private var lastState: String? = null
 
+    /**
+     * The newest playhead, for the relative transport commands.
+     *
+     * `onFastForward` / `onRewind` are relative by the platform's definition -
+     * they carry no position - so they are answered from here rather than from
+     * the player, which every other command reaches through its own callback.
+     * Updated on every tick, including one that publishes nothing.
+     */
+    private var lastPositionMs = 0L
+
     private val tick = object : Runnable {
         override fun run() {
             refresh()
@@ -94,6 +104,13 @@ internal class MpvMediaSession(
                     override fun onSkipToNext() = onSkipNext()
                     override fun onSkipToPrevious() = onSkipPrevious()
                     override fun onSeekTo(pos: Long) = this@MpvMediaSession.onSeek(pos)
+                    // "Skip ahead 30 seconds" reaches an assistant-driven
+                    // session as a seek on some surfaces and as a fast-forward
+                    // on others (Google Assistant uses the transport command
+                    // when the session advertises it), so both are answered
+                    // with the same step - see [seekBy].
+                    override fun onFastForward() = seekBy(SKIP_STEP_MS)
+                    override fun onRewind() = seekBy(-SKIP_STEP_MS)
                 })
                 runCatching { setSessionActivity(pendingIntent()) }
                 isActive = true
@@ -113,6 +130,7 @@ internal class MpvMediaSession(
     fun refresh() {
         val session = session ?: return
         val snapshot = runCatching { now() }.getOrNull() ?: return
+        lastPositionMs = snapshot.positionMs.coerceAtLeast(0L)
 
         val state = when {
             snapshot.buffering -> PlaybackState.STATE_BUFFERING
@@ -137,6 +155,8 @@ internal class MpvMediaSession(
                         PlaybackState.ACTION_PAUSE or
                         PlaybackState.ACTION_PLAY_PAUSE or
                         PlaybackState.ACTION_SEEK_TO or
+                        PlaybackState.ACTION_FAST_FORWARD or
+                        PlaybackState.ACTION_REWIND or
                         PlaybackState.ACTION_SKIP_TO_NEXT or
                         PlaybackState.ACTION_SKIP_TO_PREVIOUS
                 )
@@ -157,6 +177,19 @@ internal class MpvMediaSession(
             lastMetadata = metadataKey
             runCatching { session.setMetadata(made) }
         }
+    }
+
+    /**
+     * Moves the playhead by [deltaMs] from the last published position.
+     *
+     * Clamped at zero rather than at the end: seeking past the end is the
+     * player's own decision (it ends the episode), and guessing the duration
+     * here would disagree with it by a tick. 30 seconds is the step the
+     * assistant's "skip ahead 30 seconds" asks for, and the one the platform's
+     * own transport buttons use.
+     */
+    private fun seekBy(deltaMs: Long) {
+        onSeek((lastPositionMs + deltaMs).coerceAtLeast(0L))
     }
 
     /**
@@ -205,5 +238,8 @@ internal class MpvMediaSession(
          * immediate, slow enough that the tick is invisible in a battery trace.
          */
         const val TICK_MS = 1_000L
+
+        /** One fast-forward / rewind step, in milliseconds. */
+        const val SKIP_STEP_MS = 30_000L
     }
 }

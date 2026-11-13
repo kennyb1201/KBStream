@@ -5469,6 +5469,26 @@ fun HomeScreen(
         mutableStateOf(0)
     }
 
+    // "Open Continue Watching" (Google Assistant app action / launcher
+    // shortcut, spec 2026-11-13, F1 and F3): land the rail on its head through
+    // the same signal the card menus raise, so the request gets the verified
+    // landing (column scroll + a focus ask that is checked) instead of a scroll
+    // this screen invented. Read as state, so the warm case - the app already on
+    // Home when the request arrives - recomposes and lands too, which a one-shot
+    // flag checked once would have dropped.
+    //
+    // Keyed on whether the rail has cards as well: a request that arrives with
+    // the cold launch, before history has loaded, is not spent on an empty row -
+    // the effect re-runs when the cards appear and lands then. A viewer with
+    // nothing in progress has no rail to land on, so there is nothing to do
+    // (and the next Home that has cards lands on its head, which is where a
+    // fresh entry goes anyway).
+    val cwRequestSignal = HomeContinueWatchingRequest.signal
+    LaunchedEffect(cwRequestSignal, upNext.isNotEmpty()) {
+        if (cwRequestSignal == 0 || !upNext.isNotEmpty()) return@LaunchedEffect
+        if (HomeContinueWatchingRequest.consume()) continueWatchingLandOnHeadSignal++
+    }
+
     // Seed hero = first focusable card: the first Continue Watching item
     // when that rail exists, else the first catalog poster. Keeps the hero
     // in sync with where D-pad focus lands on entry (the topmost card);

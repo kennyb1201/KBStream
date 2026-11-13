@@ -2011,6 +2011,43 @@ fun AppRoot(
             return true
         }
 
+        // Google Assistant / launcher shortcut destination (spec 2026-11-13, F1
+        // and F3). One vocabulary, two carriers - the matched inline-inventory
+        // shortcut id arrives as an extra from `OPEN_APP_FEATURE`, and a
+        // long-press shortcut arrives as a `kbstream://assistant/...` link - so
+        // both are read through the same parser. Read before the launcher route
+        // below: a "play <title>" hand-off from VoiceSearchActivity carries
+        // launcher extras too, and this arm never names them.
+        when (
+            com.kennyb1201.kbstream.ui.assistant.AssistantLaunch.destination(
+                feature = intent?.getStringExtra(
+                    com.kennyb1201.kbstream.ui.assistant.AssistantLaunch.EXTRA_FEATURE
+                ),
+                link = intent?.dataString
+            )
+        ) {
+            com.kennyb1201.kbstream.ui.assistant.AssistantLaunch.CONTINUE_WATCHING -> {
+                // Home's own rail, with the landing the card menus use: the
+                // request survives `singleTop` because Home reads its signal as
+                // Compose state (see HomeContinueWatchingRequest).
+                com.kennyb1201.kbstream.ui.home.HomeContinueWatchingRequest.request()
+                screen = Screen.Home
+                return true
+            }
+
+            com.kennyb1201.kbstream.ui.assistant.AssistantLaunch.SEARCH -> {
+                screen = Screen.Search
+                return true
+            }
+
+            com.kennyb1201.kbstream.ui.assistant.AssistantLaunch.LIBRARY -> {
+                screen = Screen.Library
+                return true
+            }
+
+            null -> Unit
+        }
+
         val launcherType = intent?.getStringExtra(TvLauncherPublisher.EXTRA_TYPE)
         val launcherId = intent?.getStringExtra(TvLauncherPublisher.EXTRA_ID)
         val reminderChannelId =

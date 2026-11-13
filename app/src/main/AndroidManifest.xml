@@ -238,6 +238,28 @@
                 <category android:name="android.intent.category.LAUNCHER" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
+            <!-- The launcher shortcuts (Continue Watching, Search, Library) and
+                 the Assistant capabilities, including "play <title>" (spec
+                 2026-11-13, F1 and F3). `shortcuts.xml` is the file Google
+                 moved App Actions to; `actions.xml` is deprecated.
+
+                 The shortcut and feature intents are resolved through THIS
+                 filter rather than by package name: shortcuts.xml is a resource
+                 file, so it cannot carry the `${packageName}` placeholder, and
+                 a hardcoded package would aim the debug install's shortcuts at
+                 the release app (two installs side by side, see
+                 DebugSideBySideContractTest). destination = the path segment:
+                 continue_watching / search / library, read by AssistantLaunch. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data
+                    android:scheme="kbstream"
+                    android:host="assistant" />
+            </intent-filter>
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
 
         <!-- System / voice search target: the TV remote's mic (and assistant
@@ -261,6 +283,17 @@
             </intent-filter>
             <intent-filter>
                 <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <!-- The Assistant's "play <title>" custom intent (spec 2026-11-13,
+                 F1; see res/xml/shortcuts.xml). Same handler as the media
+                 action above - the activity routes both into
+                 resolveSpokenTitle - but under this app's OWN action, so the
+                 fulfillment cannot land in another installed media app that
+                 also declares the platform's media filter. Named in
+                 AssistantLaunch.ACTION_PLAY_TITLE. -->
+            <intent-filter>
+                <action android:name="com.kennyb1201.kbstream.action.PLAY_TITLE" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
             <!-- A picked global-search suggestion: the row's own

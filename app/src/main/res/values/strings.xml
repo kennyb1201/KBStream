@@ -28,4 +28,13 @@
     <string name="cw_widget_refresh">Refresh</string>
     <string name="cw_widget_empty">Nothing in progress</string>
     <string name="cw_widget_empty_hint">Open the app to refresh</string>
+
+    <!-- Launcher shortcuts / Assistant app features (spec 2026-11-13, F3).
+         A static shortcut's labels are @StringRes by schema, so these cannot be
+         inline Kotlin either. Continue Watching reuses the widget's own title. -->
+    <string name="shortcut_continue_watching_long">Resume what you are part-way through</string>
+    <string name="shortcut_search_short">Search</string>
+    <string name="shortcut_search_long">Search KBStream</string>
+    <string name="shortcut_library_short">Library</string>
+    <string name="shortcut_library_long">Open your Library</string>
 </resources>

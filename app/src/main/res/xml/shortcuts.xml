@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Google Assistant wiring for KBStream (spec 2026-11-13, "Google Assistant
+  control spec", F1 and F3).
+
+  Why this file and not actions.xml: Google deprecated App Actions declared in
+  `res/xml/actions.xml` ("Google is ending support for App Actions implemented
+  using the actions.xml resource file", developer.android.com/guide/app-actions)
+  and moved the same capabilities into the Android Shortcuts framework's
+  `shortcuts.xml`, referenced from the manifest by an `android.app.shortcuts`
+  meta-data entry. The BII names below were checked against the current
+  reference on 2026-11-13:
+  https://developer.android.com/reference/app-actions/built-in-intents/common/open-app-feature
+
+  Three things live here:
+
+  1. "Play <title> on KBStream" as a CUSTOM intent. Google has no built-in
+     intent for "play this title in that app" - the media intents are for apps
+     that publish a catalog (a MediaBrowserService, explicitly out of scope in
+     this spec) - so the supported route is a custom intent, or the platform's
+     `android.media.action.MEDIA_PLAY_FROM_SEARCH` filter VoiceSearchActivity
+     already declares. Both end in the SAME handler: the query lands in
+     VoiceSearchActivity, `resolveSpokenTitle` resolves it, and the title's
+     Detail opens ready to play. There is no second resolver.
+
+     Custom intents are en-US only and match the part of the query after the
+     invocation phrase ("open KBStream and play ..."), which is why the query
+     patterns below read that way.
+
+  2. "Open Continue Watching / Search / Library on KBStream" as
+     `actions.intent.OPEN_APP_FEATURE`, the built-in intent for opening a named
+     app feature. It REQUIRES inline inventory of the feature names, so each
+     feature is a static shortcut below bound to the `feature` parameter; the
+     matched shortcut's id is what Assistant passes to the app, and the ids are
+     `AssistantLaunch`'s destination constants. The second intent is the
+     parameter-less fallback the schema requires - it opens the app as normal.
+
+  3. F3's launcher long-press shortcuts: the same three shortcuts surface in
+     the launcher's menu and carry their destination as a
+     `kbstream://assistant/<id>` link, which is the link `AssistantLaunch` also
+     reads. No new screens: MainActivity routes the three ids onto Screen.Home
+     (at the rail), Screen.Search and Screen.Library.
+
+  Every intent here is resolved through an intent-filter in AndroidManifest.xml
+  rather than naming a package. A package name cannot be written here - this is
+  a resource file, so no `${packageName}` placeholder - and this app ships a
+  debug build BESIDE the release one (`applicationIdSuffix = ".debug"`, see
+  DebugSideBySideContractTest), where a hardcoded
+  `com.kennyb1201.kbstream.MainActivity` would aim the debug install's shortcuts
+  at the release app. The filtered links resolve inside whichever installed
+  package declared them. The cost is the dev-only case where BOTH installs are
+  present: the launcher may offer both for one of these links, which is still
+  better than a shortcut that silently opens the wrong build.
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <!-- "Play <title> on KBStream": the existing voice-search handler, under
+         this app's own action (filtered by VoiceSearchActivity). A custom
+         action rather than the platform's MEDIA_PLAY_FROM_SEARCH for the crisp
+         reason that one is implicit - another installed media app can declare
+         the same filter, and the Assistant's fulfillment would then be a
+         chooser. The activity routes BOTH actions into the one resolver.
+         The parameter key is `query` because that is exactly the extra
+         VoiceSearchActivity.extractQuery already reads (SearchManager.QUERY),
+         so the title arrives where a TV remote's spoken title arrives. -->
+    <capability android:name="custom.actions.intent.PLAY_TITLE" app:queryPatterns="@array/assistant_play_title_queries">
+        <intent android:action="com.kennyb1201.kbstream.action.PLAY_TITLE">
+            <parameter
+                android:name="title"
+                android:key="query"
+                android:mimeType="https://schema.org/Text" />
+        </intent>
+    </capability>
+
+    <!-- "Open Continue Watching on KBStream" and the other two features.
+         The fulfillment intent passes the matched inline-inventory shortcut id
+         under the `feature` extra (AssistantLaunch.EXTRA_FEATURE). -->
+    <capability android:name="actions.intent.OPEN_APP_FEATURE">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="kbstream://assistant/open">
+            <parameter
+                android:name="feature"
+                android:key="feature" />
+        </intent>
+        <!-- Required fallback: a query with no recognisable feature name still
+             opens the app (Home), which is what the launcher icon does. -->
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="kbstream://assistant/home" />
+    </capability>
+
+    <!-- Continue Watching: the launcher shortcut AND the inline inventory entry
+         for "open Continue Watching". The intent's link is what a long-press
+         launch delivers; the capability-binding is what makes the phrase
+         something Assistant will match at all. -->
+    <shortcut
+        android:shortcutId="continue_watching"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/cw_widget_title"
+        android:shortcutLongLabel="@string/shortcut_continue_watching_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="kbstream://assistant/continue_watching" />
+        <capability-binding android:key="actions.intent.OPEN_APP_FEATURE">
+            <parameter-binding
+                android:key="feature"
+                android:value="@array/assistant_feature_continue_watching" />
+        </capability-binding>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="search"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_search_short"
+        android:shortcutLongLabel="@string/shortcut_search_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="kbstream://assistant/search" />
+        <capability-binding android:key="actions.intent.OPEN_APP_FEATURE">
+            <parameter-binding
+                android:key="feature"
+                android:value="@array/assistant_feature_search" />
+        </capability-binding>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="library"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_library_short"
+        android:shortcutLongLabel="@string/shortcut_library_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="kbstream://assistant/library" />
+        <capability-binding android:key="actions.intent.OPEN_APP_FEATURE">
+            <parameter-binding
+                android:key="feature"
+                android:value="@array/assistant_feature_library" />
+        </capability-binding>
+    </shortcut>
+</shortcuts>

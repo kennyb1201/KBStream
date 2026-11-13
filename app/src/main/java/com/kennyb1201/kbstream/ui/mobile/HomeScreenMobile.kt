@@ -181,6 +181,7 @@ import com.kennyb1201.kbstream.ui.home.billboardChosenFeed
 import com.kennyb1201.kbstream.ui.home.billboardSegmentFill
 import com.kennyb1201.kbstream.ui.home.billboardSweep
 import com.kennyb1201.kbstream.ui.home.catalogRailKey
+import com.kennyb1201.kbstream.ui.home.HomeContinueWatchingRequest
 import com.kennyb1201.kbstream.ui.home.UpNextBadge
 import com.kennyb1201.kbstream.ui.home.UpNextItem
 import com.kennyb1201.kbstream.ui.home.UpcomingEpisode
@@ -411,6 +412,23 @@ fun HomeScreenMobile(
                 .filterNot { (_, decision) -> decision.hidden || decision.dropped }
                 .map { (item, _) -> item }
         }
+        // "Open Continue Watching" (Google Assistant app action / launcher
+        // shortcut, spec 2026-11-13, F1 and F3).
+        //
+        // The phone has no focus-landing pipeline to hand a rail to: Continue
+        // Watching is a plain item of this one column, and the rail that opens
+        // here is the FIRST section under the billboard, so "at the rail" is the
+        // top of Home. Read as state so a request that arrives while the app is
+        // already on Home still moves this screen - `singleTop` never recreates
+        // it - which a flag checked once would have lost.
+        LaunchedEffect(HomeContinueWatchingRequest.signal, upNext.isNotEmpty()) {
+            val signal = HomeContinueWatchingRequest.signal
+            // A request that arrives with the cold launch, before history has
+            // loaded, waits for the cards instead of being spent on an empty row.
+            if (signal == 0 || !upNext.isNotEmpty()) return@LaunchedEffect
+            if (HomeContinueWatchingRequest.consume()) listState.animateScrollToItem(0)
+        }
+
         // For COPY DIAGNOSTICS, after composition (spec F2, see CwFilterTrace).
         val cwFilterLines = remember(cwFilterPass) {
             cwFilterPass.map { (_, decision) -> decision.line }
