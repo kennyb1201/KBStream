@@ -1257,7 +1257,14 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
             // The build has taken them in (the local slice is in `built`), so
             // they are no longer "in flight".
             watchedKeyAddsInFlight.clear()
-            watchedKeyRemovalsInFlight.clear()
+            // A REMOVAL IS NOT TAKEN IN HERE (F1, 2026-11-12). "Every tracker
+            // leg has answered" is a statement about READS, and the reads this
+            // rebuild just unioned can predate the un-watch's own writes - so
+            // clearing the fence on them is what put the key back: A un-watched,
+            // B un-watched a moment later, and A's marker returned from a
+            // snapshot that still had it. A removal is settled by its own
+            // fan-out returning (settleRemovedKeys), never by a rebuild that
+            // merely happened to run.
         }
     }
 
@@ -1315,6 +1322,56 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         watchedKeyAddsInFlight -= keys
         watchedKeyRemovalsInFlight += keys
     }
+
+    /**
+     * Forgets a removal once every write it started has returned (F1,
+     * 2026-11-12).
+     *
+     * The fence is what keeps a rebuild from resurrecting an un-watch whose
+     * delete / tracker fan-out is still in flight, so it has to outlive the
+     * rebuilds it fences - the field bug was exactly a rebuild that consumed it
+     * while a tracker snapshot still listed the episode. It is dropped here, at
+     * the end of the marking coroutine, because by then the local row is gone
+     * and Simkl / MDBList / Trakt / BingeCat have all answered: a rebuild from
+     * that point reads the removal, not a pre-removal snapshot.
+     *
+     * A re-watch of the same key already dropped it ([noteAddedKeys]), so this
+     * can never un-do the viewer's newer mark.
+     */
+    private fun settleRemovedKeys(keys: Set<String>) {
+        if (keys.isEmpty()) return
+        watchedKeyRemovalsInFlight -= keys
+    }
+
+    /**
+     * Drops [pairs] from every in-memory tracker slice (F1, 2026-11-12).
+     *
+     * The local keys were the only slice an un-watch brought in line: Simkl's
+     * pairs were removed by hand while MDBList's and Trakt's kept the episode,
+     * so the very next rebuild unioned it straight back as watched. All three
+     * are cleaned here, together, before anything consults them.
+     */
+    private fun forgetTrackerPairs(pairs: Set<Pair<Int, Int>>) {
+        if (pairs.isEmpty()) return
+        _simklWatchedEpisodes.value = _simklWatchedEpisodes.value - pairs
+        _simklSeriesWatched.value = _simklWatchedEpisodes.value.isNotEmpty()
+        mdbListWatchedEpisodes = mdbListWatchedEpisodes - pairs
+        traktWatchedEpisodes = traktWatchedEpisodes - pairs
+    }
+
+    /** The watched-episode keys of [episodes] in one season (F1, 2026-11-12). */
+    private fun watchedKeysFor(
+        parentId: String,
+        season: Int,
+        episodes: List<Int>
+    ): Set<String> =
+        episodes.mapNotNull { episode ->
+            WatchedEpisodeState.buildEpisodeKey(
+                parentId = parentId,
+                season = season,
+                episode = episode
+            )
+        }.toSet()
 
     fun load(
         type: String,
@@ -3001,6 +3058,14 @@ for ((metaAddon, response, error) in probeResults) {
             episodeNumbers.filter { it > 0 }.distinct()
         if (validEpisodes.isEmpty()) return
 
+        // The keys this un-watch clears, taken out and fenced BEFORE the first
+        // write starts (F1, 2026-11-12): the delete below lands on another
+        // thread and its collector rebuilds the set the moment it does, so a
+        // fence raised afterwards loses the race it has to win.
+        val removeKeys = watchedKeysFor(parentId, season, validEpisodes)
+        _watchedEpisodeKeys.value = _watchedEpisodeKeys.value - removeKeys
+        noteRemovedKeys(removeKeys)
+
         viewModelScope.launch {
             val showName =
                 _meta.value?.name?.ifBlank {
@@ -3031,28 +3096,17 @@ for ((metaAddon, response, error) in probeResults) {
                 )
             }
 
-            // 2. Optimistic in-memory state so badges clear instantly.
-            val removeKeys =
-                validEpisodes.mapNotNull { episode ->
-                    WatchedEpisodeState.buildEpisodeKey(
-                        parentId = parentId,
-                        season = season,
-                        episode = episode
-                    )
-                }.toSet()
-            _watchedEpisodeKeys.value =
-                _watchedEpisodeKeys.value - removeKeys
-            // F2: an un-watch must survive a rebuild in flight too.
-            noteRemovedKeys(removeKeys)
+            // 2. The keys are already out of the set and fenced (the caller
+            // did that before the first write, F1 2026-11-12); what is still
+            // stale here is the tracker slices, and a rebuild would read them
+            // straight back as watched. Bring them in line with the same
+            // removal below.
 
             val removePairs =
                 validEpisodes.map { episode ->
                     season to episode
                 }.toSet()
-            _simklWatchedEpisodes.value =
-                _simklWatchedEpisodes.value - removePairs
-            _simklSeriesWatched.value =
-                _simklWatchedEpisodes.value.isNotEmpty()
+            forgetTrackerPairs(removePairs)
 
             // 3. A manual whole-show mark cannot be cleared episode by
             // episode, so a series carrying that override gets its tracker
@@ -3103,6 +3157,9 @@ for ((metaAddon, response, error) in probeResults) {
                         season to episode
                     }.toSet()
                 )
+                // The rewrite carried the removal to the trackers, so this
+                // exit is confirmed just like the full fan-out below (F1).
+                settleRemovedKeys(removeKeys)
                 return@launch
             }
 
@@ -3186,6 +3243,13 @@ for ((metaAddon, response, error) in probeResults) {
                     e
                 )
             }
+
+            // Confirmed (F1, 2026-11-12): the local rows are gone and every
+            // tracker this season un-watch touched has answered, so a rebuild
+            // from here reads the removal rather than a snapshot from before
+            // it. Un-fencing earlier is what let the NEXT un-watch resurrect
+            // this one.
+            settleRemovedKeys(removeKeys)
         }
     }
 
@@ -3825,6 +3889,16 @@ for ((metaAddon, response, error) in probeResults) {
         val parentId = imdbId
         if (parentId.isBlank()) return
 
+        // Fenced before the first delete, for the same reason as the per-episode
+        // and per-season paths (F1, 2026-11-12).
+        val removedSeriesKeys =
+            _watchedEpisodeKeys.value
+                .filter { key -> key.startsWith("$parentId:") }
+                .toSet()
+        _watchedEpisodeKeys.value =
+            _watchedEpisodeKeys.value - removedSeriesKeys
+        noteRemovedKeys(removedSeriesKeys)
+
         viewModelScope.launch {
             // 1. Local: every completed row for this show, whatever season or
             // episode numbers they were written with.
@@ -3840,19 +3914,18 @@ for ((metaAddon, response, error) in probeResults) {
                 )
             }
 
-            // 2. Optimistic in-memory state so badges clear instantly.
-            val removedSeriesKeys =
-                _watchedEpisodeKeys.value
-                    .filter { key -> key.startsWith("$parentId:") }
-                    .toSet()
-            _watchedEpisodeKeys.value =
-                _watchedEpisodeKeys.value - removedSeriesKeys
-            noteRemovedKeys(removedSeriesKeys)
+            // 2. The keys are already out and fenced (the caller did that
+            // before the delete); the slices the rebuild unions still hold the
+            // show, so they go too (F1, 2026-11-12).
             _completedEpisodeIds.value =
                 emptySet()
             _simklWatchedEpisodes.value =
                 emptySet()
             _simklSeriesWatched.value = false
+            mdbListWatchedEpisodes =
+                emptySet()
+            traktWatchedEpisodes =
+                emptySet()
 
             // 3. Whole-show unmark: override removed + SIMKL history delete +
             // MDBList removal.
@@ -3870,6 +3943,9 @@ for ((metaAddon, response, error) in probeResults) {
             }
 
             refreshPostersAfterWatchedChange()
+
+            // Confirmed (F1, 2026-11-12).
+            settleRemovedKeys(removedSeriesKeys)
         }
     }
 
@@ -3952,6 +4028,13 @@ for ((metaAddon, response, error) in probeResults) {
             episodeNumbers.filter { it > 0 }.distinct()
         if (validEpisodes.isEmpty()) return
 
+        // Out of the set and fenced BEFORE the first write (F1, 2026-11-12):
+        // the deletes below land on another thread, and the collector that
+        // rebuilds the set fires the moment the first one does.
+        val removeKeys = watchedKeysFor(parentId, season, validEpisodes)
+        _watchedEpisodeKeys.value = _watchedEpisodeKeys.value - removeKeys
+        noteRemovedKeys(removeKeys)
+
         viewModelScope.launch {
             val showName =
                 _meta.value?.name?.ifBlank {
@@ -3983,28 +4066,17 @@ for ((metaAddon, response, error) in probeResults) {
                 }
             }
 
-            // 2. Optimistic in-memory state so badges clear instantly.
-            val removeKeys =
-                validEpisodes.mapNotNull { episode ->
-                    WatchedEpisodeState.buildEpisodeKey(
-                        parentId = parentId,
-                        season = season,
-                        episode = episode
-                    )
-                }.toSet()
-            _watchedEpisodeKeys.value =
-                _watchedEpisodeKeys.value - removeKeys
-            // F2: an un-watch must survive a rebuild in flight too.
-            noteRemovedKeys(removeKeys)
+            // 2. The keys are already out of the set and fenced (the caller
+            // did that before the first write, F1 2026-11-12); what is still
+            // stale here is the tracker slices, and a rebuild would read them
+            // straight back as watched. Bring them in line with the same
+            // removal below.
 
             val removePairs =
                 validEpisodes.map { episode ->
                     season to episode
                 }.toSet()
-            _simklWatchedEpisodes.value =
-                _simklWatchedEpisodes.value - removePairs
-            _simklSeriesWatched.value =
-                _simklWatchedEpisodes.value.isNotEmpty()
+            forgetTrackerPairs(removePairs)
 
             // 3. Same whole-show repair as the season path: a manual
             // whole-show mark on the trackers cannot be cleared episode by
@@ -4050,6 +4122,9 @@ for ((metaAddon, response, error) in probeResults) {
                         season to episode
                     }.toSet()
                 )
+                // The rewrite carried the removal to the trackers, so this
+                // exit is confirmed just like the full fan-out below (F1).
+                settleRemovedKeys(removeKeys)
                 return@launch
             }
 
@@ -4141,6 +4216,10 @@ for ((metaAddon, response, error) in probeResults) {
             // the title must return to Continue Watching promptly rather than
             // minutes later.
             ContinueWatchingRefreshBus.requestRefresh()
+
+            // Confirmed (F1, 2026-11-12): the local row is gone and every
+            // tracker this un-watch started has answered.
+            settleRemovedKeys(removeKeys)
         }
     }
 
