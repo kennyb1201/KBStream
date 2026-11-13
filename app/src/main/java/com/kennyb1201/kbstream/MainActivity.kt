@@ -71,6 +71,8 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.mal.MalAuth
+import com.kennyb1201.kbstream.data.mal.MalLinks
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.debrid.CloudMatch
 import com.kennyb1201.kbstream.data.debrid.TorBoxCloudPicker
@@ -2005,6 +2007,24 @@ fun AppRoot(
             !launcherId.isNullOrBlank()
     }
 
+    // MyAnimeList's OAuth links (spec 2026-11-13, F1). Two shapes, both on
+    // kbstream://oauth/mal: the CALLBACK from the browser after the viewer
+    // approves, and ?connect=1 - what a TV shows as a QR code, because MAL has
+    // no device flow and a TV has no usable browser for this one. Handled before
+    // the launch-extras routing below, because neither is a destination.
+    LaunchedEffect(incomingIntent) {
+        val link = incomingIntent?.data?.toString() ?: return@LaunchedEffect
+        when {
+            MalLinks.isCallback(link) -> {
+                val result = MalAuth.completeConnect(context, link)
+                if (result is MalAuth.ConnectResult.Failed) {
+                    android.util.Log.w("MalLinks", "MAL connect failed: ${result.reason}")
+                }
+            }
+            MalLinks.isStart(link) -> MalLinks.openAuthorize(context)
+        }
+    }
+
     // Warm deep links: an intent delivered to the already-running activity.
     // `singleTop` means the user never sees a re-created activity here, and the
     // compose tree never re-reads `activity.intent`, so without this the
@@ -2023,6 +2043,14 @@ fun AppRoot(
     // reconciling the TV launcher's Continue Watching rail with the in-app
     // watch history (self-healing, cheap).
     LaunchedEffect(Unit) {
+        // A MAL link that arrived with the cold launch (the browser started us).
+        hostActivity?.intent?.data?.toString()?.let { link ->
+            when {
+                MalLinks.isCallback(link) -> MalAuth.completeConnect(context, link)
+                MalLinks.isStart(link) -> MalLinks.openAuthorize(context)
+            }
+        }
+
         val handledByExtras =
             applyLaunchIntentExtras(hostActivity?.intent)
 

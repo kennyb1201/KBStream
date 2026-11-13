@@ -8488,6 +8488,13 @@ Log.d(
                 },
                 "kitsu" to suspend {
                     AnimeTrackerLegs.readKitsu(AppPreferences.getKitsuUsername(getApplication()))
+                },
+                // MAL is the third anime leg and the only one that needs an
+                // account (its list read is OAuth-only): connected, it feeds the
+                // same caught-up candidates; not connected, it contributes
+                // nothing and every other leg is unaffected.
+                "mal" to suspend {
+                    com.kennyb1201.kbstream.data.mal.MalLegs.readMyList(getApplication())
                 }
             )
 

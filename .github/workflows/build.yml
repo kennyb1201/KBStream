@@ -41,6 +41,11 @@ jobs:
       # no client secret may be compiled into the APK (SimklClientConfigTest
       # fails the build on any *SECRET* BuildConfig field).
       TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
+      # MyAnimeList's android app: a client id and NO secret (PKCE, plain
+      # challenge). Public by construction - it rides the authorize URL and the
+      # X-MAL-CLIENT-ID header - and pinned to the id only for the same reason
+      # as the two above.
+      MAL_CLIENT_ID: ${{ secrets.MAL_CLIENT_ID }}
       # BingeCat's public API app. The id only, for the same reason: the
       # contract defines bingecat-api-key as the application client_id, and the
       # device flow is a public-client flow (see app/build.gradle.kts).

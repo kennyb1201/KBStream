@@ -5405,6 +5405,15 @@ fun DetailScreen(
                                 com.kennyb1201.kbstream.data.anime.aniListScoreLabel(
                                     animeIdentity.averageScore
                                 ),
+                                // MAL's own score and rank, labelled so three
+                                // scores on one line can never be confused
+                                // (spec 2026-11-13, F4). Both are absent for a
+                                // title MAL does not score - and for every
+                                // live-action title, which has no MAL id at all.
+                                com.kennyb1201.kbstream.data.anime.malScoreLabel(
+                                    mean = animeIdentity.malScore,
+                                    rank = animeIdentity.malRank
+                                ),
                                 // AniList's next airing episode, and ONLY when
                                 // TMDB has none: one next-episode line, never two.
                                 com.kennyb1201.kbstream.data.anime.aniListNextAiringLabel(

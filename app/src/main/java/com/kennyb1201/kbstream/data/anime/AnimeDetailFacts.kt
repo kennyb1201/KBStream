@@ -31,6 +31,30 @@ internal fun aniListScoreLabel(averageScore: Int?): String? {
 }
 
 /**
+ * MAL's community score and rank as one header part (`MAL 8.4 · #12`), or null.
+ *
+ * MAL's `mean` is already the 0-10 figure viewers know, so unlike AniList's
+ * 0-100 `averageScore` it is formatted rather than divided - and formatted with
+ * one decimal only when it has one, so 8.0 reads `8.0` (MAL shows it that way)
+ * and 8.5 reads `8.5`.
+ *
+ * The rank is MAL's own `#rank`, which is a POSITION in its ranking and
+ * meaningless without the label. Absent facts are omitted, never shown as zero:
+ * an unscored title has no score, and `MAL 0.0` would read as a verdict.
+ */
+internal fun malScoreLabel(mean: Double?, rank: Int?): String? {
+    val score = mean?.takeIf { it > 0.0 }?.let { String.format(java.util.Locale.US, "%.1f", it) }
+    val position = rank?.takeIf { it > 0 }
+    if (score == null && position == null) return null
+
+    return when {
+        score != null && position != null -> "MAL $score \u00b7 #$position"
+        score != null -> "MAL $score"
+        else -> "MAL #$position"
+    }
+}
+
+/**
  * AniList's next airing episode as a header part (`Next E9 · 2026-11-20`), or
  * null.
  *

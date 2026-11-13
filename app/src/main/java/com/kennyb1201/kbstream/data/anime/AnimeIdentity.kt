@@ -18,7 +18,15 @@ internal data class AnimeIdentity(
     /** The next episode AniList knows about, when it knows one. */
     val nextAiringEpisode: Int? = null,
     /** Epoch SECONDS (AniList's `airingAt`), or null. */
-    val nextAiringAtSeconds: Long? = null
+    val nextAiringAtSeconds: Long? = null,
+    /**
+     * MAL's community score (`mean`, 0-10, one decimal) and its rank, when MAL
+     * has them. Fetched with the same call that resolves the MAL id (spec
+     * 2026-11-13, F4) - never a second MAL request - and absent, not zero, for a
+     * title MAL has not scored.
+     */
+    val malScore: Double? = null,
+    val malRank: Int? = null
 ) {
     val hasAnyId: Boolean
         get() = anilistId != null || malId != null || kitsuId != null

@@ -85,6 +85,15 @@ val traktClientId = localProps.getProperty("TRAKT_CLIENT_ID")
     ?: System.getenv("TRAKT_CLIENT_ID")
     ?: ""
 
+// MyAnimeList, by client id only. MAL's android app type is issued a client id
+// and NO client secret, and its OAuth flow is PKCE (Authorization Code with a
+// plain challenge), so the id travels in the authorize URL and in the
+// X-MAL-CLIENT-ID header on public reads - public by construction, exactly like
+// Trakt's. Never a secret: there is none to have.
+val malClientId = localProps.getProperty("MAL_CLIENT_ID")
+    ?: System.getenv("MAL_CLIENT_ID")
+    ?: ""
+
 // BingeCat, by client id only - the same rule as Trakt and Simkl above, and for
 // the same reason. The BingeCat contract defines the `bingecat-api-key` header
 // as the application's `client_id` ("must match the JSON client_id where a body
@@ -252,6 +261,7 @@ android {
         buildConfigField("String", "TMDB_API_KEY", "\"$tmdbApiKey\"")
         buildConfigField("String", "SIMKL_CLIENT_ID", "\"$simklClientId\"")
         buildConfigField("String", "TRAKT_CLIENT_ID", "\"$traktClientId\"")
+        buildConfigField("String", "MAL_CLIENT_ID", "\"$malClientId\"")
         buildConfigField("String", "BINGECAT_CLIENT_ID", "\"$bingecatClientId\"")
         buildConfigField("String", "SENTRY_DSN", "\"$sentryDsn\"")
         buildConfigField("String", "MDBLIST_API_KEY", "\"$mdbListApiKey\"")

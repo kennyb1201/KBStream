@@ -123,6 +123,12 @@ class LibraryCalendarViewModel(
                 },
                 "kitsu" to suspend {
                     AnimeTrackerLegs.readKitsu(AppPreferences.getKitsuUsername(getApplication()))
+                },
+                // The MAL leg beside the other two (spec 2026-11-13, F2): the
+                // calendar sees the same shows Home's Upcoming rail does, or
+                // neither would agree about an anime's next airdate.
+                "mal" to suspend {
+                    com.kennyb1201.kbstream.data.mal.MalLegs.readMyList(getApplication())
                 }
             )
 

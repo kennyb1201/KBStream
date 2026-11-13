@@ -264,6 +264,23 @@
                     android:scheme="kbstream"
                     android:host="title" />
             </intent-filter>
+            <!-- MyAnimeList's OAuth callback (spec 2026-11-13, F1):
+                 kbstream://oauth/mal?code=...&state=... after the viewer approves
+                 on the web. The redirect_uri registered on MAL's app page is this
+                 exact scheme+host+path (MalConfig.REDIRECT_URI), and MAL refuses
+                 an authorize request that names anything else. The same filter
+                 receives ?connect=1, which a TV shows as a QR code so the PHONE
+                 can run the flow. BROWSABLE is what lets a browser hand the
+                 redirect back; DEFAULT is what makes the link resolvable at all. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="kbstream"
+                    android:host="oauth"
+                    android:pathPrefix="/mal" />
+            </intent-filter>
             <meta-data
                 android:name="android.app.searchable"
                 android:resource="@xml/searchable" />

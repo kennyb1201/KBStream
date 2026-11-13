@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.anime
 
 import com.kennyb1201.kbstream.BuildConfig
+import com.kennyb1201.kbstream.data.mal.MalApiClient
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -22,6 +23,12 @@ import org.json.JSONObject
  *
  * The chain, first hit per id, never mixing services inside one id:
  *
+ *  0. **MyAnimeList by title** (spec 2026-11-13, F4). MAL is the authoritative
+ *     MAL-id source: it returns its own `id`, and its search costs the app's
+ *     client id rather than an account, so it answers for every user before
+ *     anyone connects anything. The same detail call carries the score and rank
+ *     the Detail header shows (`mean`, `rank`), which is why this step is first
+ *     and not merely another fallback.
  *  1. **AniList by title.** The single most valuable call here: one `Media`
  *     query returns BOTH the AniList id and `idMal`. Accepted only when the
  *     result's title matches - `romaji` or `english` (or `native`) after
@@ -89,6 +96,16 @@ internal object AnimeIdHub {
         var averageScore: Int? = null
         var nextEpisode: Int? = null
         var nextAt: Long? = null
+        var malScore: Double? = null
+        var malRank: Int? = null
+
+        // 0. MyAnimeList by title - the authoritative MAL id, plus the two facts
+        // only MAL carries (F4). Public read: the app's client id, no account.
+        MalApiClient.resolveTitle(showTitle)?.let { mal ->
+            malId = mal.id
+            malScore = mal.mean
+            malRank = mal.rank
+        }
 
         // 1. AniList by title - the one call that can answer both ids.
         AniListClient.mediaByTitle(showTitle)?.let { media ->
@@ -153,7 +170,9 @@ internal object AnimeIdHub {
             kitsuId = kitsuId,
             averageScore = averageScore,
             nextAiringEpisode = nextEpisode,
-            nextAiringAtSeconds = nextAt
+            nextAiringAtSeconds = nextAt,
+            malScore = malScore,
+            malRank = malRank
         )
     }
 
