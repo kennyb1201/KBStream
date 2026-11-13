@@ -232,6 +232,13 @@ internal object PlayerTrackBridge {
     @Volatile
     private var rememberedSubtitleTrackApplied = false
 
+    /**
+     * One fall-through to the auto-pick per player instance, taken when a
+     * remembered subtitle pick missed this file (see [applySubtitleFallThrough]).
+     */
+    @Volatile
+    private var subtitleFallThroughApplied = false
+
     /** The player we already wired; [setPlayer] can repeat an instance. */
     @Volatile
     private var wiredPlayer: Player? = null
@@ -291,6 +298,7 @@ internal object PlayerTrackBridge {
         audioTracks = emptyList()
         rememberedTrackApplied = false
         rememberedSubtitleTrackApplied = false
+        subtitleFallThroughApplied = false
 
         // Resolve global + override into the live tuning the processor reads.
         publishAudioTuning(context)
@@ -498,18 +506,36 @@ internal object PlayerTrackBridge {
         // by hand survives through [applyRememberedSubtitleTrack], which runs
         // after this call and is deliberately not skipped.
         if (live) return
-        // 2. A remembered specific track is re-asserted by
+        // 3. A remembered specific track is re-asserted by
         //    [applyRememberedSubtitleTrack] instead; running the language pass
         //    as well would replace it with the first track in that language.
+        //    When this file does not carry it the re-assert misses, and
+        //    [applySubtitleFallThrough] runs this same pick for the file then.
         if (subtitleTrackSignature.isNotBlank()) return
-        // 3. The mode must be On. Off must arm nothing, and Forced has already
-        //    chosen its track - either one is undone by a language match here.
-        if (SubtitleModeRules.normalized(subtitleMode) != SubtitleModeRules.ON) return
-        // 4. Blank subtitle preference is "Auto" with nothing configured: leave
-        //    the file's own default in place (subtitles off stays off, an
-        //    always-on track keeps playing) instead of forcing the type disabled.
+        applySubtitleAutoPick(player)
+    }
+
+    /**
+     * The automatic subtitle pick, after the guards that belong to it: the mode
+     * and the blank-preference case. Both callers share this one function - the
+     * ordinary no-signature pass above and the fall-through after a remembered
+     * pick missed - so the two can never drift apart.
+     *
+     * False when the file's own default is deliberately left in charge (mode
+     * not On, or a blank preference, which is "Auto").
+     */
+    private fun applySubtitleAutoPick(player: Player): Boolean {
+        // The mode must be On. Off must arm nothing, and Forced has already
+        // chosen its track - either one is undone by a language match here.
+        if (SubtitleModeRules.normalized(subtitleMode) != SubtitleModeRules.ON) return false
+        // Blank subtitle preference is "Auto" with nothing configured: leave the
+        // file's own default in place (subtitles off stays off, an always-on
+        // track keeps playing) instead of forcing the type disabled. Never
+        // invent a language here.
         val subtitle = effectiveSubtitleLanguage()
-        if (subtitle.isNotBlank()) applyLanguage(player, C.TRACK_TYPE_TEXT, subtitle)
+        if (subtitle.isBlank()) return false
+        applyLanguage(player, C.TRACK_TYPE_TEXT, subtitle)
+        return true
     }
 
     /**
@@ -529,6 +555,7 @@ internal object PlayerTrackBridge {
         rememberedTrackApplied = false
         reportedAudioMissFor = null
         rememberedSubtitleTrackApplied = false
+        subtitleFallThroughApplied = false
         // The player may already be ready (rebuild after a source switch), in
         // which case a READY listener would never fire for this state.
         if (player.playbackState == Player.STATE_READY) applyOnReady(player)
@@ -548,7 +575,72 @@ internal object PlayerTrackBridge {
     private fun applyOnReady(player: Player) {
         reapplyLanguageSelection(player)
         applyRememberedAudioTrack(player)
-        applyRememberedSubtitleTrack(player)
+        // A remembered pick this file does not carry must not leave the file's
+        // own default track in charge (see [applySubtitleFallThrough]).
+        if (!applyRememberedSubtitleTrack(player)) applySubtitleFallThrough(player)
+    }
+
+    /**
+     * Falls through to the automatic pick when a remembered subtitle pick
+     * existed but did not resolve in THIS file.
+     *
+     * Field case (2026-11-13, phone, ExoPlayer): the stored pick is a positional
+     * fingerprint of the track in the file it was made on
+     * (`language|codecs|channels|index|trackCount`), and the episodes of one show
+     * do not all lay their subtitles out the same way. The re-assert was an exact
+     * match or nothing: it missed, armed nothing, and the player's own default
+     * took over - which is the file's default-flagged track, very often the
+     * bitmap that sits first in the list. A miss now falls through to the same
+     * auto-pick the no-signature path takes: a fresh decision from this file's
+     * own tracks, not a guess from a stale position.
+     *
+     * Every guard is load-bearing:
+     *  - only after a MISS with a non-blank stored signature. No signature is the
+     *    ordinary path, whose auto-pick already ran earlier in this same pass;
+     *  - only once per player instance: a rebuffer's READY must not re-run it,
+     *    while a new player (source switch, rebuild) gets its own pass;
+     *  - never over a hand pick this session: [chooseSubtitleTrack] marks the
+     *    re-assert as used, and that pick sticks (the E-F1 latch discipline);
+     *  - Off and live arm nothing here, a mode that is not On arms nothing, and
+     *    a blank preference stays "Auto" - the file's default left in place.
+     *
+     * The stored signature is NOT cleared on a miss: it is per show, and a miss
+     * in this file does not prove it wrong for the next one, which may share the
+     * layout it was written from. [rememberedSubtitleTrackApplied] also stays
+     * false, so a retry with late-arriving tracks can still apply it.
+     */
+    private fun applySubtitleFallThrough(player: Player) {
+        if (subtitleTrackSignature.isBlank()) return
+        if (subtitleFallThroughApplied) return
+        // A hand pick this session sets that latch without applying anything.
+        if (rememberedSubtitleTrackApplied) return
+        if (subtitlesOff) return
+        if (live) return
+        if (SubtitleModeRules.normalized(subtitleMode) != SubtitleModeRules.ON) return
+        if (effectiveSubtitleLanguage().isBlank()) return
+        subtitleFallThroughApplied = true
+        Log.i(
+            TAG,
+            "remembered subtitle track '${subtitleTrackSignature}' did not match this file's " +
+                "${textTrackLayout(player)}; fell through to auto-pick"
+        )
+        applySubtitleAutoPick(player)
+    }
+
+    /** This file's subtitle tracks as `language#position`, for the fall-through log. */
+    private fun textTrackLayout(player: Player): String {
+        val tracks = mutableListOf<String>()
+        for (group in player.currentTracks.groups) {
+            if (group.type != C.TRACK_TYPE_TEXT) continue
+            for (i in 0 until group.length) {
+                tracks += "${group.getTrackFormat(i).language ?: "untagged"}#${tracks.size}"
+            }
+        }
+        return if (tracks.isEmpty()) {
+            "no text tracks"
+        } else {
+            "${tracks.size} text tracks [${tracks.joinToString(", ")}]"
+        }
     }
 
     /** Log of what the file actually carries, for a language that missed. */
@@ -600,6 +692,11 @@ internal object PlayerTrackBridge {
      * applied. Mirrors [applyRememberedAudioTrack]: a hand-picked subtitle row
      * (SDH, forced, a second language) is not the first track the language pass
      * would pick, so it has to be re-stated once per player instance.
+     *
+     * False on a miss, deliberately without setting the latch: the caller falls
+     * through to the auto-pick for THIS file ([applySubtitleFallThrough]), and a
+     * later READY with tracks that arrived late can still apply the remembered
+     * one, which then wins.
      */
     private fun applyRememberedSubtitleTrack(player: Player?): Boolean {
         if (player == null) return false

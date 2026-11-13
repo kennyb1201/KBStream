@@ -4152,13 +4152,55 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         if (subtitlesOff) {
             view.clearSubtitles()
         } else if (subtitleTrackSignature.isNotBlank()) {
-            view.applyRememberedSubtitleTrack(subtitleTrackSignature)
+            // A remembered pick this file does not carry falls THROUGH to the
+            // auto-pick instead of leaving mpv's own choice in place - the same
+            // miss, on the same kind of stale signature, as the audio note
+            // above. The stored signature is kept, not cleared (see
+            // [fallThroughToSubtitleAutoPick]).
+            if (!view.applyRememberedSubtitleTrack(subtitleTrackSignature)) {
+                fallThroughToSubtitleAutoPick(view)
+            }
         } else if (SubtitleModeRules.normalized(AppPreferences.getSubtitleMode(this)) ==
             SubtitleModeRules.ON
         ) {
             view.selectSubtitleLanguage(effectiveSubtitleLanguage())
         }
         refreshSettings()
+    }
+
+    /**
+     * The automatic subtitle pick taken when a remembered subtitle pick does not
+     * resolve in the file that just opened.
+     *
+     * The stored signature is a positional fingerprint of the track in the file
+     * it was made on, and the episodes of one show do not all lay their
+     * subtitles out the same way; when it misses, mpv's own default is the
+     * muxer's DEFAULT track rather than a decision. This runs the same pick the
+     * no-signature path takes, so the two engines answer a stale signature the
+     * same way - a fresh decision from this file's own tracks.
+     *
+     * Only reaches here with a non-blank signature (the caller's branch), and
+     * arms nothing unless the mode is On and a preferred language is set: a
+     * blank preference is "Auto" and leaves the file's default in place. Runs
+     * once per file load ([applyRememberedTracks] is called from onFileLoaded),
+     * so a later track change cannot re-arm it. The signature is deliberately
+     * kept: a miss here does not prove it wrong for the next episode.
+     */
+    private fun fallThroughToSubtitleAutoPick(view: MpvPlayerView) {
+        if (SubtitleModeRules.normalized(AppPreferences.getSubtitleMode(this)) !=
+            SubtitleModeRules.ON
+        ) return
+        val language = effectiveSubtitleLanguage()
+        if (language.isBlank()) return
+        val layout = view.subtitleTracks()
+            .joinToString(", ") { "${it.language ?: "untagged"}#${it.id}" }
+            .ifBlank { "none" }
+        Log.i(
+            TAG,
+            "remembered subtitle track '$subtitleTrackSignature' did not match this file's " +
+                "subtitles [$layout]; fell through to auto-pick"
+        )
+        view.selectSubtitleLanguage(language)
     }
 
     // --- State the settings panel reads and writes --------------------------

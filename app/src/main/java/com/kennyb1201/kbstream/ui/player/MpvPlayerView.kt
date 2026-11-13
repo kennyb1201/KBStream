@@ -1172,7 +1172,9 @@ class MpvPlayerView @JvmOverloads constructor(
      * Applies a subtitle signature remembered for this title
      * ("language|codec|0"). Falls back to the signature's language when the
      * exact track is not in this episode's file, so a pick survives an encode
-     * change. False when neither matches, leaving mpv's own choice alone.
+     * change. False when neither matches, and the caller then falls through to
+     * the auto-pick rather than leaving mpv's own choice alone
+     * (MpvPlayerActivity's [fallThroughToSubtitleAutoPick]).
      *
      * The language fallback is KIND-RANKED, not first-wins: the picker writes
      * the track the viewer actually chose, and the next episode of the same

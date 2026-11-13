@@ -86,9 +86,18 @@ class PlayerRelayBatchAContractTest {
             "Off must be published with the global languages",
             readSource(BRIDGE).contains("fun setSubtitleMode(mode: Int)")
         )
+        // The guard lives in the shared pick the pass hands the subtitle half
+        // to, so the no-signature path and the stale-signature fall-through
+        // cannot drift apart (see SubtitleStaleSignatureFallThroughContractTest).
         assertTrue(
             "the mode must gate the language subtitles, not only ride along",
-            body.contains("if (SubtitleModeRules.normalized(subtitleMode) != SubtitleModeRules.ON) return")
+            body.contains("applySubtitleAutoPick(player)") &&
+                normalized(
+                    functionBody(
+                        BRIDGE,
+                        "private fun applySubtitleAutoPick(player: Player): Boolean {"
+                    )
+                ).contains("if (SubtitleModeRules.normalized(subtitleMode) != SubtitleModeRules.ON) return false")
         )
         assertTrue(
             "an explicit per-show Off must be a hard disable, since the " +
