@@ -479,8 +479,11 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
                 statusMessage = if (revoked) {
                     "Disconnected. The grant was revoked."
                 } else {
-                    "Disconnected on this device. BingeCat could not be reached to " +
-                        "revoke the grant."
+                    // Two honest reasons for no revoke: another profile still maps
+                    // this BingeCat account (the grant is theirs to keep, spec F4),
+                    // or the server could not be reached.
+                    "Disconnected on this device. The grant was not revoked - " +
+                        "other profiles still use it, or BingeCat could not be reached."
                 }
             )
         }

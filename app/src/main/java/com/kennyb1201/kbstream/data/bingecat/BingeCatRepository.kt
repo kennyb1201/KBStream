@@ -238,6 +238,10 @@ class BingeCatRepository private constructor(private val context: Context?) {
     /**
      * Whether this profile holds a session it can actually CALL with.
      *
+     * The session is the account's (spec F1): [store] answers from the shared
+     * account session first and falls back to this profile's own copy, so every
+     * profile of one BingeCat account reaches the profile list off ONE QR.
+     *
      * A stored pair the server has already refused is not a connection: it is
      * the state that produced `connected=yes ... last_error=no-token` while the
      * Library sat empty (field report, build 253). [store]'s refusal marker is
@@ -675,6 +679,12 @@ class BingeCatRepository private constructor(private val context: Context?) {
      * unmapped" nor a tracker - an orphan the viewer never chose (see
      * [com.kennyb1201.kbstream.data.sync.BingeCatProfileMapRules]).
      *
+     * What this does NOT do is end the ACCOUNT's session while a sibling still
+     * maps to it (spec F4): neither the revoke nor the account store's clear
+     * happens then, because both would take a working sibling's BingeCat away
+     * over a disconnect the person made on a different profile. The account token
+     * outlives the last mapping only when the last mapping is the one going.
+     *
      * Every step is pinned to the profile this call STARTED on. The revoke is a
      * network round-trip, and both stores resolve the ACTIVE profile per call:
      * a switch landing inside that round-trip used to tombstone the incoming
@@ -685,9 +695,15 @@ class BingeCatRepository private constructor(private val context: Context?) {
         val profileId = context?.let { ProfileStorage.activeProfileId(it) }
         val pinnedStore = BingeCatTokenStore(context, profileId)
         val pinnedMapping = BingeCatProfileMap(context, profileId)
+        // The session is the ACCOUNT's now (spec F1), so this profile's disconnect
+        // is only the account's too when no sibling still reads through it (F4).
+        // The revoke is what makes that difference matter: revoking a grant a
+        // sibling still maps would sign that sibling out of a connection nobody
+        // disconnected (S2).
+        val otherProfilesMapped = bingecatOtherProfilesKeepMapping(context, profileId)
         val token = pinnedStore.read()?.accessToken
         var revoked = false
-        if (!token.isNullOrBlank()) {
+        if (!otherProfilesMapped && !token.isNullOrBlank()) {
             val response = runCatchingCancellable {
                 service.revoke(
                     BingeCatRevokeRequest(token = token, clientId = BingeCatConfig.clientId)
@@ -697,6 +713,12 @@ class BingeCatRepository private constructor(private val context: Context?) {
         }
         val cleared = runCatching { pinnedStore.markSignedOut() }.getOrDefault(false)
         pinnedMapping.clear()
+        // The token goes only with the LAST mapping to the account. Dropping it
+        // while a sibling still maps would leave that sibling's reads with no
+        // session - the exact "reconnect for no reason" this spec removes.
+        if (BingeCatAccountRules.shouldClearAccountToken(otherProfilesMapped)) {
+            runCatching { BingeCatAccountStore(context).clear() }
+        }
         cached = null
         BingeCatTrace.recordSession(false)
         BingeCatTrace.recordNeedsReconnect(false)

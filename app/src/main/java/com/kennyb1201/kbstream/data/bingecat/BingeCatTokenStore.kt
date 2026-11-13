@@ -6,7 +6,15 @@ import com.kennyb1201.kbstream.data.security.SecureTokenStore
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 
 /**
- * This profile's BingeCat session, encrypted at rest.
+ * A KBStream profile's view of the BingeCat session, encrypted at rest.
+ *
+ * TWO layers since spec 2026-11-13 (F1): the session itself belongs to the
+ * ACCOUNT and lives in [BingeCatAccountStore] (device-wide), while this store
+ * keeps the profile's own copy plus the two facts that are genuinely this
+ * profile's - the deliberate-disconnect tombstone and the refused-grant marker.
+ * [read] answers from the account first, so one QR serves every profile; the
+ * per-profile pair remains as the bootstrap an install that connected before the
+ * account store existed is adopted from.
  *
  * The same three rules as the other trackers' stores, because the hazards are
  * identical: its **own** store name (`bingecat_auth` resolves to
@@ -62,7 +70,22 @@ internal class BingeCatTokenStore(
          * decision and signs the account out everywhere.
          */
         const val KEY_NEEDS_RECONNECT = "needs_reconnect"
+
+        /**
+         * The access token the refusal in [KEY_NEEDS_RECONNECT] was recorded
+         * against.
+         *
+         * The session is the account's now, so a reconnect on ANY profile replaces
+         * the pair every profile reads. Without this value a sibling would keep its
+         * own marker and ask for a second QR over a token that had already been
+         * replaced (settler S4), so the marker names its credential and stops
+         * applying once the account holds a different one.
+         */
+        const val KEY_REFUSED_ACCESS = "refused_access"
     }
+
+    /** The account's session, shared by every profile on this device. */
+    private val account = BingeCatAccountStore(context)
 
     private fun storeName(appContext: Context): String =
         profileId?.let { ProfileStorage.prefsName(it, PREFS_NAME) }
@@ -121,7 +144,15 @@ internal class BingeCatTokenStore(
             // and an adopted account session all land here, and the first three
             // are exactly the ways back out of "needs reconnect".
             .putBoolean(KEY_NEEDS_RECONNECT, false)
+            .remove(KEY_REFUSED_ACCESS)
             .apply()
+
+        // The account's copy, which is the one every OTHER profile reads. It is
+        // written after this profile's own, and its failure is not this save's:
+        // the profile that just connected works either way, and failing the
+        // connect over a second copy would report "could not keep the grant"
+        // about a grant that was kept.
+        runCatching { account.save(token) }
     }
 
     /**
@@ -136,12 +167,33 @@ internal class BingeCatTokenStore(
      * [needsReconnect].
      */
     fun markNeedsReconnect() {
-        prefs?.edit()?.putBoolean(KEY_NEEDS_RECONNECT, true)?.apply()
+        // Which pair was refused, so the answer stops applying once the account's
+        // session is replaced by a fresh grant on any profile (see
+        // [KEY_REFUSED_ACCESS]). The value comes through [read], because the
+        // refused pair is whichever one was actually sent.
+        val refused = read()?.accessToken ?: readLocal()?.accessToken
+        prefs?.edit()
+            ?.putBoolean(KEY_NEEDS_RECONNECT, true)
+            ?.putString(KEY_REFUSED_ACCESS, refused)
+            ?.apply()
     }
 
-    /** True when this device holds a grant the server has refused. */
-    fun needsReconnect(): Boolean =
-        prefs?.getBoolean(KEY_NEEDS_RECONNECT, false) == true
+    /**
+     * True when this device holds a grant the server has refused.
+     *
+     * A marker whose pair has been REPLACED no longer applies: one reconnect on
+     * one profile mints the account's new pair for every profile, and a sibling
+     * still reading its own old marker would ask for the QR the first profile just
+     * answered (S4). A marker that named no pair (nothing was stored when the 401
+     * landed) stays until a live session retires it.
+     */
+    fun needsReconnect(): Boolean {
+        if (prefs?.getBoolean(KEY_NEEDS_RECONNECT, false) != true) return false
+        val refused = prefs?.getString(KEY_REFUSED_ACCESS, null)?.takeIf { it.isNotBlank() }
+            ?: return true
+        val current = account.read()?.accessToken ?: readLocal()?.accessToken
+        return current == null || current == refused
+    }
 
     fun isSignedOut(): Boolean = prefs?.getBoolean(KEY_SIGNED_OUT, false) == true
 
@@ -164,6 +216,7 @@ internal class BingeCatTokenStore(
             // was asking for, so the marker goes with the session - otherwise a
             // reconnect prompt would survive the disconnect that resolved it.
             .putBoolean(KEY_NEEDS_RECONNECT, false)
+            .remove(KEY_REFUSED_ACCESS)
             .apply()
         return true
     }
@@ -173,7 +226,36 @@ internal class BingeCatTokenStore(
         if (isSignedOut()) prefs?.edit()?.putBoolean(KEY_SIGNED_OUT, false)?.apply()
     }
 
+    /**
+     * The session this profile reads with: the ACCOUNT's, else its own.
+     *
+     * A deliberate disconnect still ends that profile's answer even though the
+     * account's session is still present ([BingeCatAccountRules.resolve]) - the
+     * tombstone is the person's decision, and reading around it would make a
+     * disconnect look like it did nothing (F4). A sibling's working session is
+     * never touched by it.
+     *
+     * With no session anywhere, this also performs the MIGRATION: an install that
+     * connected before the account store existed has a live per-profile pair and
+     * an empty account store, and the first profile to ask adopts it, so nobody
+     * is signed out by this fix (F1). The scan of sibling stores runs once per
+     * device, because the adoption fills the account store.
+     */
     fun read(): BingeCatToken? {
+        val signedOut = isSignedOut()
+        val accountToken = account.read()
+        val local = readLocal()
+        BingeCatAccountRules.resolve(signedOut, local, accountToken)?.let { return it }
+        if (signedOut) return null
+        // No account session and this profile has none: adopt one.
+        local?.let { session ->
+            if (runCatching { account.save(session) }.isSuccess) return session
+        }
+        return adoptFromSiblingProfile()
+    }
+
+    /** This profile's OWN stored pair, with no account fallback - the adoption source. */
+    internal fun readLocal(): BingeCatToken? {
         val access = prefs?.getString(KEY_ACCESS_TOKEN, null)?.takeIf { it.isNotBlank() }
             ?: return null
         return BingeCatToken(
@@ -184,11 +266,55 @@ internal class BingeCatTokenStore(
         )
     }
 
+    /**
+     * The migration's last resort: another profile on this device already holds a
+     * session this one can adopt.
+     *
+     * Read off the profile-scoped stores that actually exist on disk, not off an
+     * in-memory profile list: the first BingeCat screen opened after an update may
+     * be a profile that has never connected, with no profile switch behind it.
+     * A sibling that deliberately disconnected is skipped - its tombstone must not
+     * be resurrected through the account.
+     */
+    private fun adoptFromSiblingProfile(): BingeCatToken? {
+        val appContext = context?.applicationContext ?: return null
+        val suffix = ".$PREFS_NAME"
+        val profileIds = runCatching {
+            ProfileStorage.namespaces(appContext)
+                .asSequence()
+                .filter { it.endsWith(suffix) }
+                .map { it.removeSuffix(suffix) }
+                .filter { it.isNotBlank() }
+                .toList()
+        }.getOrDefault(emptyList())
+
+        profileIds.forEach { siblingId ->
+            val sibling = BingeCatTokenStore(context, siblingId)
+            if (sibling.isSignedOut()) return@forEach
+            val session = sibling.readLocal() ?: return@forEach
+            if (runCatching { account.save(session) }.isSuccess) return session
+        }
+        return null
+    }
+
     fun accessToken(): String? = read()?.accessToken
 
-    fun scope(): String? = prefs?.getString(KEY_SCOPE, null)
+    /**
+     * The scope of the session this profile actually reads with.
+     *
+     * Read through [read], not off this profile's own copy: a profile serving the
+     * ACCOUNT's session must be judged by THAT grant's scopes, or a sibling whose
+     * own duplicate predates a write scope would report "writing is off" while its
+     * requests carry the account's fully-scoped token.
+     */
+    fun scope(): String? = read()?.scope
 
-    /** Drops the session. Local library and watch state are not ours to touch. */
+    /**
+     * Drops THIS profile's copy of the session. Local library and watch state are
+     * not ours to touch, and neither is the account's session: that one outlives a
+     * single profile's clear and is dropped only by a disconnect with no mapping
+     * left ([BingeCatAccountRules.shouldClearAccountToken]).
+     */
     fun clear() {
         prefs?.edit()
             ?.remove(KEY_ACCESS_TOKEN)
@@ -196,6 +322,7 @@ internal class BingeCatTokenStore(
             ?.remove(KEY_EXPIRES_AT)
             ?.remove(KEY_SCOPE)
             ?.remove(KEY_NEEDS_RECONNECT)
+            ?.remove(KEY_REFUSED_ACCESS)
             ?.apply()
     }
 }
