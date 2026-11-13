@@ -56,6 +56,14 @@ val tmdbApiKey = localProps.getProperty("TMDB_API_KEY")
     ?: System.getenv("TMDB_API_KEY")
     ?: ""
 
+// fanart.tv's PROJECT key: a public identifier by construction (it rides every
+// request URL and every published APK, exactly as TMDB's does), so it is wired
+// the same way and never named as a secret. Blank in a build without it - and a
+// blank value is what makes fanart silently off (see data/fanart/FanartTv).
+val fanartApiKey = localProps.getProperty("FANART_API_KEY")
+    ?: System.getenv("FANART_API_KEY")
+    ?: ""
+
 val simklClientId = localProps.getProperty("SIMKL_CLIENT_ID")
     ?: System.getenv("SIMKL_CLIENT_ID")
     ?: ""
@@ -270,6 +278,7 @@ android {
         // (see `playBuild` above).
         buildConfigField("Boolean", "PLAY_BUILD", playBuild.toString())
         buildConfigField("String", "TMDB_API_KEY", "\"$tmdbApiKey\"")
+        buildConfigField("String", "FANART_API_KEY", "\"$fanartApiKey\"")
         buildConfigField("String", "SIMKL_CLIENT_ID", "\"$simklClientId\"")
         buildConfigField("String", "TRAKT_CLIENT_ID", "\"$traktClientId\"")
         buildConfigField("String", "MAL_CLIENT_ID", "\"$malClientId\"")

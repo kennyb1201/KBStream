@@ -1025,6 +1025,18 @@ private fun IntegrationsPaneMobile(
             savedDescription = "Saved — anime episodes can now use Anime Skip " +
                 "(button only, never auto-skip)."
         )
+        // The artwork key. Optional, and the app's own project key ships in the
+        // build - this is the viewer's own fanart.tv key, which only shortens the
+        // artwork delay (2 days instead of 7). Synced like the keys around it.
+        KeyCardMobile(
+            title = "fanart.tv Personal Key",
+            description = "Your own fanart.tv key — new artwork appears in 2 days " +
+                "instead of 7. Optional; the app key covers everything otherwise.",
+            placeholder = "Paste key",
+            loadedValue = AppPreferences.getFanartClientKey(context),
+            onSave = { key -> AppPreferences.setFanartClientKey(context, key) },
+            savedDescription = "Saved — artwork now arrives on the 2-day tier."
+        )
         KeyCardMobile(
             title = "OpenSubtitles API Key",
             description = "Enables subtitle search in the player.",

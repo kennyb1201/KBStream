@@ -66,6 +66,46 @@ internal object PlayerEpisodePicker {
     }
 
     /**
+     * The selected season's own poster for the panel, or null (spec 2026-11-13,
+     * F3).
+     *
+     * One resolver for both engines, exactly as [seasonStrip] and [rows] are, so
+     * the TV and the phone cannot disagree about which season's art is on
+     * screen. The ladder is the shared one: fanart's `seasonposter` for this
+     * exact season, then TMDB's season poster, then nothing. It never answers
+     * with the show's own poster - a season request returns season art or
+     * nothing.
+     *
+     * Fail-soft throughout: an id that does not resolve, a season with no art,
+     * no fanart key in the build and an offline device all answer null, which is
+     * the panel drawing no poster at all (exactly what it did before this
+     * existed).
+     */
+    suspend fun seasonPoster(
+        context: android.content.Context,
+        parentId: String,
+        parentType: String,
+        season: Int?
+    ): String? {
+        val wanted = season?.takeIf { it >= 0 } ?: return null
+        if (parentId.isBlank()) return null
+        val appContext = context.applicationContext
+        val tmdbId = runCatching {
+            PlaybackHistoryIds.resolveTmdbId(appContext, parentId, parentType)
+        }.getOrNull() ?: return null
+        val repository = com.kennyb1201.kbstream.data.tmdb.TmdbRepository.getInstance(appContext)
+        val tvdbId = runCatching { repository.resolveTvdbId(tmdbId, parentType) }.getOrNull()
+        return com.kennyb1201.kbstream.data.fanart.FanartArtRepository
+            .getInstance(appContext)
+            .seasonPoster(
+                tvdbId = tvdbId,
+                tmdbTvId = tmdbId,
+                season = wanted,
+                wantFullSize = false
+            )
+    }
+
+    /**
      * The panel's episode rows for one season.
      *
      * [selectedSeason] is the season chip the viewer is on; [listedSeason] is

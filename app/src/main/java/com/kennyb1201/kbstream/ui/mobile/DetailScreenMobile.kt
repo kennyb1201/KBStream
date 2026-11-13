@@ -161,6 +161,7 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBShapePill
+import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -514,7 +515,36 @@ fun DetailScreenMobile(
         // English clearlogo or nothing (the add-on `logo` is a bare URL with no
         // language, so a localized catalog's wordmark could reach this header
         // and the splash it feeds).
-        val clearLogoUrl = tmdbImage(tmdbDetail?.bestLogoPath(), "w500")
+        // The same fanart step the TV page takes (F4): reached ONLY when TMDB
+        // has no wordmark, so no logo is ever re-ranked or swapped.
+        var fanartLogoUrl by remember { mutableStateOf<String?>(null) }
+        val tmdbLogoUrl = tmdbImage(tmdbDetail?.bestLogoPath(), "w500")
+        LaunchedEffect(tmdbLogoUrl, tmdbDetail?.id, normalizedType) {
+            val artId = tmdbDetail?.id
+            if (tmdbLogoUrl != null || artId == null) {
+                if (tmdbLogoUrl != null) fanartLogoUrl = null
+                return@LaunchedEffect
+            }
+            val isMovie = normalizedType == "movie"
+            val fanartTwin = if (isMovie) {
+                artId
+            } else {
+                runCatching {
+                    TmdbRepository.getInstance(context).resolveTvdbId(artId, "series")
+                }.getOrNull()
+            }
+            fanartLogoUrl = com.kennyb1201.kbstream.data.fanart.FanartArtRepository
+                .getInstance(context)
+                .clearlogo(
+                    kind = if (isMovie) {
+                        com.kennyb1201.kbstream.data.fanart.FanartKind.Movie
+                    } else {
+                        com.kennyb1201.kbstream.data.fanart.FanartKind.Tv
+                    },
+                    id = fanartTwin
+                )
+        }
+        val clearLogoUrl = tmdbLogoUrl ?: fanartLogoUrl
         LaunchedEffect(clearLogoUrl) {
             clearLogoUrl?.takeIf { it.isNotBlank() }?.let(onClearLogoResolved)
         }
@@ -530,7 +560,36 @@ fun DetailScreenMobile(
         LaunchedEffect(backdropArtUrl) {
             backdropArtUrl?.takeIf { it.isNotBlank() }?.let(onBackdropResolved)
         }
+        // fanart's background ONLY where nothing above answered (F5) - the
+        // same TMDB-first ladder, one rung lower. Written when a lookup
+        // answers; a failed one leaves the ladder falling through to the
+        // poster rungs exactly as before.
+        var fanartBackdropUrl by remember { mutableStateOf<String?>(null) }
+        LaunchedEffect(backdropArtUrl, tmdbDetail?.id, normalizedType) {
+            val artId = tmdbDetail?.id
+            if (backdropArtUrl == null && artId != null) {
+                val isMovie = normalizedType == "movie"
+                val fanartTwin = if (isMovie) {
+                    artId
+                } else {
+                    runCatching {
+                        TmdbRepository.getInstance(context).resolveTvdbId(artId, "series")
+                    }.getOrNull()
+                }
+                fanartBackdropUrl = com.kennyb1201.kbstream.data.fanart.FanartArtRepository
+                    .getInstance(context)
+                    .backdrop(
+                        kind = if (isMovie) {
+                            com.kennyb1201.kbstream.data.fanart.FanartKind.Movie
+                        } else {
+                            com.kennyb1201.kbstream.data.fanart.FanartKind.Tv
+                        },
+                        id = fanartTwin
+                    )
+            }
+        }
         val backdropUrl = backdropArtUrl
+            ?: fanartBackdropUrl
             ?: meta?.poster
             ?: initialPoster
         val heroBackdropUrl = remember(backdropUrl, overridePaths, overrideTmdbId) {
@@ -628,6 +687,33 @@ fun DetailScreenMobile(
             MobileDetailRules.wholeSeriesWatched(wholeSeriesEpisodeNumbers) {
                 watchedSeasonSet(it)
             }
+        }
+
+        // ── the season's own poster (spec 2026-11-13, F3) ──────────────────
+        // The same resolution the TV page runs, through the same repository:
+        // fanart's seasonposter first, TMDB's season poster second, nothing
+        // third. Written only when a lookup ANSWERS, so the previous season's
+        // poster stays up while the next one loads.
+        val seasonPosterContext = LocalContext.current
+        var mobileSeasonPosterUrl by remember { mutableStateOf<String?>(null) }
+        LaunchedEffect(normalizedType, tmdbDetail?.id, currentSeason) {
+            val showId = tmdbDetail?.id
+            if (normalizedType == "movie" || showId == null) {
+                mobileSeasonPosterUrl = null
+                return@LaunchedEffect
+            }
+            val fanart = com.kennyb1201.kbstream.data.fanart.FanartArtRepository
+                .getInstance(seasonPosterContext)
+            val tvdbId = runCatching {
+                com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+                    .getInstance(seasonPosterContext)
+                    .resolveTvdbId(showId, "series")
+            }.getOrNull()
+            mobileSeasonPosterUrl = fanart.seasonPoster(
+                tvdbId = tvdbId,
+                tmdbTvId = showId,
+                season = currentSeason
+            )
         }
 
         // The episodes of the season on screen this profile has watched: Simkl,
@@ -1997,7 +2083,30 @@ fun DetailScreenMobile(
                 if (normalizedType != "movie" && seasons.isNotEmpty()) {
                     item(key = "seasons") {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            MobileSectionTitle(if (episodesLoading) "Episodes…" else "Episodes")
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                MobileSectionHeader(
+                                    if (episodesLoading) "Episodes…" else "Episodes",
+                                    modifier = Modifier.weight(1f)
+                                )
+                                // The season's own poster beside the heading
+                                // that already follows the chips. No poster of
+                                // its own = nothing drawn here, never the show's.
+                                mobileSeasonPosterUrl?.let { poster ->
+                                    AsyncImage(
+                                        model = poster,
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .padding(end = 16.dp)
+                                            .width(48.dp)
+                                            .aspectRatio(2f / 3f)
+                                            .clip(KBShapeSmall)
+                                    )
+                                }
+                            }
                             // The season chips own the row now. The episode
                             // area's LIST/RAIL choice is a Settings row
                             // (Settings → Posters & Browsing), not a control

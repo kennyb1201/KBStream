@@ -1768,6 +1768,85 @@ fun SettingsScreen(
                     }
                 }
 
+                // ── FANART.TV PERSONAL KEY (artwork: 2-day delay instead of 7) ──
+                //
+                // Optional, and the only fanart credential a viewer ever holds:
+                // the app's own project key ships in the build (a public
+                // identifier, like TMDB's), and this row is the user's own key
+                // beside it. It buys the Personal tier's 2-day artwork delay
+                // instead of the project tier's 7 days - nothing else. Synced
+                // with the other account keys, so it is pasted once for the whole
+                // account (spec 2026-11-13, F2).
+                Spacer(modifier = Modifier.height(12.dp))
+                val fanartFocusRequester = remember { FocusRequester() }
+                var fanartKeyInput by remember {
+                    mutableStateOf(AppPreferences.getFanartClientKey(context))
+                }
+                var fanartKeySaved by remember { mutableStateOf(false) }
+                val commitFanartKey: (String) -> Unit = { value ->
+                    val key = value.trim()
+                    fanartKeyInput = key
+                    AppPreferences.setFanartClientKey(context, key)
+                    fanartKeySaved = key.isNotBlank()
+                }
+                KBCard(
+                    onClick = { fanartFocusRequester.requestFocus() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(KBSurfaceRaised, KBShapeSmall)
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        Text(
+                            text = "fanart.tv Personal Key",
+                            color = KBTextHi,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "Your own fanart.tv key — new artwork appears in 2 days " +
+                                "instead of 7. Optional; the app key covers everything " +
+                                "otherwise.",
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .padding(top = 6.dp)
+                                .fillMaxWidth()
+                        ) {
+                            KBSecretField(
+                                value = fanartKeyInput,
+                                revealable = !kidsKeysHidden,
+                                onValueChange = {
+                                    fanartKeyInput = it.trim()
+                                    fanartKeySaved = false
+                                },
+                                placeholder = "Paste key",
+                                modifier = Modifier.weight(1f),
+                                focusRequester = fanartFocusRequester,
+                                onDone = { commitFanartKey(fanartKeyInput) },
+                                onFocusChanged = { focusedNow ->
+                                    if (!focusedNow) commitFanartKey(fanartKeyInput)
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            KBPasteChip(onPaste = { pasted -> commitFanartKey(pasted) })
+                        }
+                        if (fanartKeySaved) {
+                            Text(
+                                text = "Saved — artwork now arrives on the 2-day tier.",
+                                color = KBAccent,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(top = 5.dp)
+                            )
+                        }
+                    }
+                }
+
                 // Auto-fetch Subtitles moved to the Subtitles pane (settings reorg
                 // §7.1, §3.5): it is subtitle behaviour, not an account or an API
                 // key, and it reads the language row that now sits beside it.

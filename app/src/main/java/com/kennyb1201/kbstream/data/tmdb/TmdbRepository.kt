@@ -2115,6 +2115,48 @@ class TmdbRepository private constructor(context: Context) :
         }
     }
 
+    // Season posters, the TMDB half of the resolution (see
+    // data/fanart/FanartArtRepository.seasonPoster): fanart's seasonposter is
+    // asked first, and this is what a show with no fanart season art answers.
+    // Small memo, one entry per season: a season's poster does not change.
+    private val seasonPosterMemo = ConcurrentHashMap<String, Pair<Long, String?>>()
+
+    /**
+     * The season's own poster URL, or null when TMDB holds none.
+     *
+     * One `/tv/{id}/season/{n}` request, memoised for the session - the same
+     * response the episode list already needs, so a screen that loads a season
+     * pays for it at most once. A failure is a null answer (never an exception):
+     * the season header then draws no poster, which is what it did before this
+     * existed.
+     */
+    suspend fun seasonPosterPath(tvId: Int?, season: Int?): String? {
+        val id = tvId?.takeIf { it > 0 } ?: return null
+        val number = season?.takeIf { it >= 0 } ?: return null
+        if (apiKey.isBlank()) return null
+
+        val key = "$id:$number"
+        seasonPosterMemo[key]?.let { (at, url) ->
+            if (System.currentTimeMillis() - at < SEASON_POSTER_TTL_MS) return url
+            seasonPosterMemo.remove(key)
+        }
+
+        val path = runCatchingCancellable {
+            api.getSeasonDetail(id, number, apiKey).posterPath
+        }.getOrNull()
+
+        // A blank path is still an answer (this season has no poster of its
+        // own) and is remembered; a failed call is not remembered at all, so the
+        // next open tries again.
+        if (path != null) {
+            seasonPosterMemo[key] = System.currentTimeMillis() to path
+        }
+        return path?.takeIf { it.isNotBlank() }
+            ?.let { "$POSTER_BASE$it" }
+    }
+
+    private val SEASON_POSTER_TTL_MS = 12L * 60L * 60L * 1000L
+
     suspend fun getSeasonEpisodes(
         tvId: Int,
         season: Int,

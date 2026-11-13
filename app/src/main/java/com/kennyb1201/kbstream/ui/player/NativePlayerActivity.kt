@@ -4813,6 +4813,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         settingsSpeedAspect = findViewById(R.id.settings_speed_aspect)
         pickerList = findViewById(R.id.picker_list)
         pickerSeasons = findViewById(R.id.picker_seasons)
+        pickerSeasonPoster = findViewById(R.id.picker_season_poster)
         btnSubSmall = findViewById(R.id.btn_sub_small)
         btnSubNormal = findViewById(R.id.btn_sub_normal)
         btnSubLarge = findViewById(R.id.btn_sub_large)
@@ -12192,6 +12193,15 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private var episodePickerRequest = 0
 
     /**
+     * The selected season's own poster in the episode panel (spec 2026-11-13,
+     * F3), and what it is currently showing. Replaced only when a lookup
+     * ANSWERS, which is what keeps the previous season's poster up while the
+     * next one loads (see [bindEpisodeSeasonPoster]).
+     */
+    private var pickerSeasonPoster: ImageView? = null
+    private var episodePickerPosterUrl: String? = null
+
+    /**
      * Opens the season/episode list, on the season playing now.
      *
      * The panel goes up in the same frame as the press with a loading row - the
@@ -12247,6 +12257,19 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         episodePickerLoading = true
         bindEpisodePicker()
         val request = ++episodePickerRequest
+        lifecycleScope.launch {
+            // The season's own poster, through the shared resolver and
+            // superseded by a chip press exactly as the episode list is.
+            val poster = PlayerEpisodePicker.seasonPoster(
+                this@NativePlayerActivity,
+                parentId,
+                parentType,
+                wanted
+            )
+            if (request != episodePickerRequest || !isPickerShowing) return@launch
+            episodePickerPosterUrl = poster
+            bindEpisodeSeasonPoster()
+        }
         lifecycleScope.launch {
             val episodes = PlayerEpisodes.season(this@NativePlayerActivity, parentId, parentType, wanted)
             val watched = PlayerEpisodes.watchedEpisodes(this@NativePlayerActivity, parentId, wanted)
@@ -12322,6 +12345,27 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             )
         )
         pickerSeasons.visibility = View.VISIBLE
+        bindEpisodeSeasonPoster()
+    }
+
+    /**
+     * Draws the selected season's poster at the head of the panel (F3).
+     *
+     * A blank URL is a season with no poster of its own - fanart has none and
+     * TMDB has none - and the slot then disappears rather than borrowing the
+     * show's poster. While a NEW season is loading its art the URL still holds
+     * the previous season's, so the panel never flashes empty.
+     */
+    private fun bindEpisodeSeasonPoster() {
+        val view = pickerSeasonPoster ?: return
+        val url = episodePickerPosterUrl
+        if (url.isNullOrBlank()) {
+            view.visibility = View.GONE
+            view.setImageDrawable(null)
+        } else {
+            view.visibility = View.VISIBLE
+            view.load(url)
+        }
     }
 
     /**

@@ -22,6 +22,8 @@ import com.kennyb1201.kbstream.data.anime.AnimeTrackerRead
 import com.kennyb1201.kbstream.data.anime.AnimeTrackerStatus
 import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.bingecat.BingeCatWriteRules
+import com.kennyb1201.kbstream.data.fanart.FanartArtRepository
+import com.kennyb1201.kbstream.data.fanart.FanartKind
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
@@ -166,6 +168,11 @@ class HomeViewModel(
 
     private val tmdbHeroArtworkRepository =
         TmdbHeroArtworkRepository(application)
+
+    // The artwork gap-filler (spec 2026-11-13): only ever asked AFTER TMDB
+    // answered nothing, cached per title, and silent in a build with no key.
+    private val fanartArtRepository =
+        FanartArtRepository.getInstance(application)
 
     private val watchedStatusRepository =
         WatchedStatusRepository(application)
@@ -8789,6 +8796,53 @@ Log.d(
         )
     }
 
+    /**
+     * A wordmark for a Simkl card whose tracker carried none (F4).
+     *
+     * fanart's id spaces differ by kind - movies by TMDB id, shows by TVDB id -
+     * and a show's TVDB twin is already resolvable off the same `/external_ids`
+     * answer the IMDb resolution uses, so this costs no new id work. Entirely
+     * fail-soft: no key, no twin, no art, offline all answer null, which is the
+     * card drawing its title text exactly as it did before.
+     */
+    /**
+     * A backdrop for a Simkl card whose tracker and TMDB lookups both left one
+     * empty (F5). Same one-call, same cache, same fail-soft answer as
+     * [fanartClearlogoFallback] - and the same TMDB-first rule: a card that has
+     * a backdrop never reaches it.
+     */
+    private suspend fun fanartBackdropFallback(
+        tmdbId: Int?,
+        mediaType: String
+    ): String? {
+        val isMovie = TmdbRepository.normalizeMediaType(mediaType) != "series"
+        val id = if (isMovie) {
+            tmdbId
+        } else {
+            tmdbId?.let { runCatchingCancellable { tmdbRepository.resolveTvdbId(it, "series") }.getOrNull() }
+        }
+        return fanartArtRepository.backdrop(
+            kind = if (isMovie) FanartKind.Movie else FanartKind.Tv,
+            id = id
+        )
+    }
+
+    private suspend fun fanartClearlogoFallback(
+        tmdbId: Int?,
+        mediaType: String
+    ): String? {
+        val isMovie = TmdbRepository.normalizeMediaType(mediaType) != "series"
+        val id = if (isMovie) {
+            tmdbId
+        } else {
+            tmdbId?.let { runCatchingCancellable { tmdbRepository.resolveTvdbId(it, "series") }.getOrNull() }
+        }
+        return fanartArtRepository.clearlogo(
+            kind = if (isMovie) FanartKind.Movie else FanartKind.Tv,
+            id = id
+        )
+    }
+
     private suspend fun buildSimklUpNextItem(
         item: SimklContinueWatchingItem
     ): UpNextItem? {
@@ -9199,13 +9253,25 @@ episodesTotal =
                 episodeRating,
 
             episodeThumbnail =
-                episodeThumbnail,            backdrop = backdropUrl,
+                episodeThumbnail,
+            backdrop =
+                backdropUrl
+                    ?: fanartBackdropFallback(
+                        tmdbId = capturedTmdbId ?: item.tmdbId,
+                        mediaType = item.mediaType
+                    ),
 
-            // Simkl items carry no clear-logo artwork; TMDB lookups above
-            // only resolve posters/backdrops. Keep it null so the card
-            // falls back to the title text.
+            // Simkl items carry no clear-logo artwork of their own, and the
+            // TMDB lookups above resolve posters/backdrops only. fanart fills
+            // exactly that gap (F4): TMDB has nothing here to override, so this
+            // is the fallback step and never a competing source. Cached per
+            // title, one call at most, and null in a build with no key - which
+            // is the card falling back to its title text, as before.
             clearLogo =
-                null,
+                fanartClearlogoFallback(
+                    tmdbId = capturedTmdbId ?: item.tmdbId,
+                    mediaType = item.mediaType
+                ),
 
 
             runtimeMinutes =

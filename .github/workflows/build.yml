@@ -32,6 +32,11 @@ jobs:
 
     env:
       TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+      # fanart.tv's PROJECT key - a public identifier, not a credential: it
+      # rides in every request URL and inside every published APK, exactly like
+      # the TMDB key above. A build without the secret compiles it blank, and
+      # fanart is then silently off (TMDB-only, no error, no log spam).
+      FANART_API_KEY: ${{ secrets.FANART_API_KEY }}
       # Client id only: Simkl auth is the PIN (device) flow, which is a
       # public-client flow and never sends a secret. There is no
       # SIMKL_CLIENT_SECRET secret to pass, and no buildConfigField to receive

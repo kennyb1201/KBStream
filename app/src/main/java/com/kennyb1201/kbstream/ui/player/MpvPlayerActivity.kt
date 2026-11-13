@@ -324,6 +324,15 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     /** The episode picker's pinned season strip (see [bindEpisodeSeasonStrip]). */
     private var pickerSeasons: RecyclerView? = null
 
+    /**
+     * The selected season's own poster in the episode panel (spec 2026-11-13,
+     * F3), and what it is currently showing. The URL is only replaced when a
+     * lookup ANSWERS, which is what keeps the previous season's poster up while
+     * the next one loads (see [bindEpisodeSeasonPoster]).
+     */
+    private var pickerSeasonPoster: ImageView? = null
+    private var episodePickerPosterUrl: String? = null
+
     // --- INFO: the main player's readout screen, on this engine -------------
     //
     // The same panel the main player's INFO button raises, with the same ids and
@@ -1953,6 +1962,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         pickerTitle = findViewById(R.id.mpv_picker_title)
         pickerList = findViewById(R.id.mpv_picker_list)
         pickerSeasons = findViewById(R.id.mpv_picker_seasons)
+        pickerSeasonPoster = findViewById(R.id.mpv_picker_season_poster)
         // The INFO panel: the same views the main player's panel has, plus its
         // own SUBTITLE row (see the layout). Its background is the shared
         // infoPanelDrawable - the XML fill is only the pre-theme fallback, and
@@ -3111,6 +3121,20 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         bindEpisodePicker()
         val request = ++episodePickerRequest
         lifecycleScope.launch {
+            // The season's own poster rides the same request: superseded by a
+            // chip press exactly as the episode list is, and applied only when
+            // it answers (see [bindEpisodeSeasonPoster]).
+            val poster = PlayerEpisodePicker.seasonPoster(
+                this@MpvPlayerActivity,
+                parentId,
+                parentType,
+                wanted
+            )
+            if (request != episodePickerRequest || !pickerOpen) return@launch
+            episodePickerPosterUrl = poster
+            bindEpisodeSeasonPoster()
+        }
+        lifecycleScope.launch {
             val episodes = PlayerEpisodes.season(this@MpvPlayerActivity, parentId, parentType, wanted)
             val watched = PlayerEpisodes.watchedEpisodes(this@MpvPlayerActivity, parentId, wanted)
             if (request != episodePickerRequest || !pickerOpen) return@launch
@@ -3177,6 +3201,27 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             )
         )
         pickerSeasons?.visibility = View.VISIBLE
+        bindEpisodeSeasonPoster()
+    }
+
+    /**
+     * Draws the selected season's poster at the head of the panel (F3).
+     *
+     * A blank URL is a season with no poster of its own - fanart has none and
+     * TMDB has none - and the slot then disappears rather than borrowing the
+     * show's poster. While a NEW season is loading its art, the URL still holds
+     * the previous season's, so the panel never flashes empty.
+     */
+    private fun bindEpisodeSeasonPoster() {
+        val view = pickerSeasonPoster ?: return
+        val url = episodePickerPosterUrl
+        if (url.isNullOrBlank()) {
+            view.visibility = View.GONE
+            view.setImageDrawable(null)
+        } else {
+            view.visibility = View.VISIBLE
+            view.load(url)
+        }
     }
 
     /** Re-paints the open episode panel, parked on the playing episode. */

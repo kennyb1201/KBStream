@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -1451,7 +1452,44 @@ fun DetailScreen(
     // it, so a localized catalog's wordmark could reach this header and the
     // pre-playback splash it feeds. With no English TMDB mark the header shows
     // its plain title instead.
-    val clearLogoUrl = tmdbImage(tmdbDetail?.bestLogoPath(), "w500")
+    //
+    // fanart is the step BELOW that (F4), never beside it: a title with a TMDB
+    // wordmark never reaches this call, so no logo is ever re-ranked or swapped.
+    // A title with neither keeps the plain title it draws today. Collections
+    // answer nothing here by construction - fanart has no collection endpoint -
+    // which is the same "backdrop and nothing else" they have now.
+    var fanartLogoUrl by remember { mutableStateOf<String?>(null) }
+    val fanartLogoContext = androidx.compose.ui.platform.LocalContext.current
+    val tmdbLogoUrl = tmdbImage(tmdbDetail?.bestLogoPath(), "w500")
+    LaunchedEffect(tmdbLogoUrl, tmdbDetail?.id, type) {
+        val artId = tmdbDetail?.id
+        if (tmdbLogoUrl != null || artId == null) {
+            if (tmdbLogoUrl != null) fanartLogoUrl = null
+            return@LaunchedEffect
+        }
+        val isMovie =
+            com.kennyb1201.kbstream.data.tmdb.TmdbRepository.normalizeMediaType(type) != "series"
+        val fanartTwin = if (isMovie) {
+            artId
+        } else {
+            runCatching {
+                com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+                    .getInstance(fanartLogoContext)
+                    .resolveTvdbId(artId, "series")
+            }.getOrNull()
+        }
+        fanartLogoUrl = com.kennyb1201.kbstream.data.fanart.FanartArtRepository
+            .getInstance(fanartLogoContext)
+            .clearlogo(
+                kind = if (isMovie) {
+                    com.kennyb1201.kbstream.data.fanart.FanartKind.Movie
+                } else {
+                    com.kennyb1201.kbstream.data.fanart.FanartKind.Tv
+                },
+                id = fanartTwin
+            )
+    }
+    val clearLogoUrl = tmdbLogoUrl ?: fanartLogoUrl
     // Hand the resolved logo up as soon as it exists.
     LaunchedEffect(clearLogoUrl) {
         clearLogoUrl?.takeIf { it.isNotBlank() }?.let(onClearLogoResolved)
@@ -2065,6 +2103,40 @@ fun DetailScreen(
             ?.let { season -> tmdbDetail?.displaySeasonName(season) }
             ?.uppercase(Locale.US)
             ?: "EPISODES"
+    }
+
+    // ── the season's own poster (spec 2026-11-13, F3) ──────────────────────
+    //
+    // Resolution is deliberately NOT remember-ed into the composition: it is one
+    // network hop (fanart first, TMDB's season poster second) and the poster has
+    // to follow the chips as they move. Because the new value is only written
+    // when the lookup ANSWERS, the previous season's poster stays up while the
+    // next one loads - the header never flashes empty, and a season with neither
+    // source clears it on answer rather than on press.
+    //
+    // It follows the selection and nothing else: no focus move, no episode-list
+    // change, no effect on which season loads.
+    val seasonPosterContext = androidx.compose.ui.platform.LocalContext.current
+    var seasonPosterUrl by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(normalizedType, tmdbDetail?.id, effectiveSeason) {
+        val showId = tmdbDetail?.id
+        val seasonNumber = effectiveSeason
+        if (normalizedType != "series" || showId == null || seasonNumber == null) {
+            seasonPosterUrl = null
+            return@LaunchedEffect
+        }
+        val fanart = com.kennyb1201.kbstream.data.fanart.FanartArtRepository
+            .getInstance(seasonPosterContext)
+        val tvdbId = runCatching {
+            com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+                .getInstance(seasonPosterContext)
+                .resolveTvdbId(showId, "series")
+        }.getOrNull()
+        seasonPosterUrl = fanart.seasonPoster(
+            tvdbId = tvdbId,
+            tmdbTvId = showId,
+            season = seasonNumber
+        )
     }
 
     val hasExplicitSeasonSource = normalizedType == "series" && (
@@ -4087,8 +4159,49 @@ fun DetailScreen(
                     ?: m.background
             }
 
-            val backdropUrl = remember(backdropArtUrl, m, initialPoster) {
+            // fanart's background, ONLY where nothing above answered (F5): the
+            // same TMDB-first ladder, one rung lower. TMDB-first is the
+            // invariant - a title with a TMDB backdrop never reaches this call at
+            // all, so it cannot change what a title with art looks like. A
+            // failed lookup is a null answer and the ladder falls straight
+            // through to the poster rungs, exactly as before.
+            var fanartBackdropUrl by remember { mutableStateOf<String?>(null) }
+            val fanartBackdropContext = androidx.compose.ui.platform.LocalContext.current
+            LaunchedEffect(backdropArtUrl, tmdbDetail?.id, normalizedType) {
+                if (backdropArtUrl != null) {
+                    fanartBackdropUrl = null
+                    return@LaunchedEffect
+                }
+                val artId = tmdbDetail?.id
+                if (artId == null) return@LaunchedEffect
+                val isMovie = normalizedType == "movie"
+                val fanartTwin = if (isMovie) {
+                    artId
+                } else {
+                    runCatching {
+                        com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+                            .getInstance(fanartBackdropContext)
+                            .resolveTvdbId(artId, "series")
+                    }.getOrNull()
+                }
+                fanartBackdropUrl = com.kennyb1201.kbstream.data.fanart.FanartArtRepository
+                    .getInstance(fanartBackdropContext)
+                    .backdrop(
+                        kind = if (isMovie) {
+                            com.kennyb1201.kbstream.data.fanart.FanartKind.Movie
+                        } else {
+                            com.kennyb1201.kbstream.data.fanart.FanartKind.Tv
+                        },
+                        id = fanartTwin,
+                        // The hero is the whole screen: ask for the 4K set,
+                        // and take a 1080p one when that is all fanart has.
+                        want4k = true
+                    )
+            }
+
+            val backdropUrl = remember(backdropArtUrl, fanartBackdropUrl, m, initialPoster) {
                 backdropArtUrl
+                    ?: fanartBackdropUrl
                     ?: m.poster
                     ?: initialPoster
             }
@@ -5944,13 +6057,41 @@ fun DetailScreen(
                             seasons.isNotEmpty()
                         ) {
                             item(key = "episodesheader", contentType = "section-header") {
-                                KBSectionHeader(
-                                    title = episodesHeader,
-                                    modifier = Modifier.padding(
-                                        start = KBScreenEdge,
-                                        top = 14.dp
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    KBSectionHeader(
+                                        title = episodesHeader,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .padding(
+                                                start = KBScreenEdge,
+                                                top = 14.dp
+                                            )
                                     )
-                                )
+                                    // The season's own poster, beside the heading
+                                    // that already follows the chips (F3). A
+                                    // season with no poster of its own draws
+                                    // nothing here - never the show's poster.
+                                    seasonPosterUrl?.let { poster ->
+                                        AsyncImage(
+                                            model = ImageRequest.Builder(
+                                                androidx.compose.ui.platform.LocalContext.current
+                                            )
+                                                .data(poster)
+                                                .size(Size(300, 450))
+                                                .build(),
+                                            contentDescription = null,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier
+                                                .padding(end = KBScreenEdge, top = 14.dp)
+                                                .width(54.dp)
+                                                .aspectRatio(2f / 3f)
+                                                .clip(KBShapeSmall)
+                                        )
+                                    }
+                                }
                             }
 
                             item(key = SEASON_ROW_KEY, contentType = "section-row") {

@@ -324,6 +324,20 @@
             android:clipToPadding="false"
             android:visibility="gone" />
 
+        <!-- The selected season's own poster (spec 2026-11-13, F3): under the
+             strip, above the rows. GONE whenever the season has no poster of
+             its own - a season request answers season art or nothing, never
+             the show's poster. -->
+        <ImageView
+            android:id="@+id/picker_season_poster"
+            android:layout_width="96dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:adjustViewBounds="true"
+            android:scaleType="fitCenter"
+            android:contentDescription="@null"
+            android:visibility="gone" />
+
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/picker_list"
             android:layout_width="match_parent"

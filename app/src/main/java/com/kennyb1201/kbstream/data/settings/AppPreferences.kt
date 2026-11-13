@@ -172,6 +172,14 @@ object AppPreferences {
     // its own example id is published as heavily throttled - so it is only ever
     // the one the viewer registered.
     private const val KEY_ANIME_SKIP_CLIENT_ID = "anime_skip_client_id"
+
+    /**
+     * The viewer's own fanart.tv key (`client_key`). Optional, and unlike the
+     * project key it is a credential: it is what buys the 2-day artwork delay
+     * instead of 7, and it lives here - encrypted, profile-scoped, synced - for
+     * the same reason every other account key does (spec 2026-11-13, F2).
+     */
+    private const val KEY_FANART_CLIENT_KEY = "fanart_client_key"
     private const val KEY_OPENSUBTITLES_API_KEY = "opensubtitles_api_key"
     private const val KEY_TORBOX_API_KEY = "torbox_api_key"
     private const val KEY_TORBOX_LIBRARY_SYNC = "torbox_library_sync"
@@ -2229,7 +2237,8 @@ object AppPreferences {
         KEY_OPENSUBTITLES_API_KEY,
         KEY_MDBLIST_API_KEY,
         KEY_OMDB_API_KEY,
-        KEY_ANIME_SKIP_CLIENT_ID
+        KEY_ANIME_SKIP_CLIENT_ID,
+        KEY_FANART_CLIENT_KEY
     )
 
     private fun apiKeySyncStampKey(keyName: String) = "__sync_ts__$keyName"
@@ -2376,6 +2385,27 @@ object AppPreferences {
         // Never leave a plaintext copy behind.
         prefs(context).edit().remove(KEY_ANIME_SKIP_CLIENT_ID).apply()
         stampApiKeyEdit(context, KEY_ANIME_SKIP_CLIENT_ID, System.currentTimeMillis())
+        pushApiKeysBlob()
+    }
+
+    /**
+     * The viewer's fanart.tv personal key (`client_key`), or blank when they have
+     * none.
+     *
+     * Sent beside the build's project key on every fanart request (see
+     * data/fanart/FanartRules); a blank answer simply sends the project key
+     * alone, which is the 7-day tier. The key never reaches the build, a log
+     * line, or the app's own diagnostics - and it is synced like every other
+     * account credential here, so it is pasted once for the whole account.
+     */
+    fun getFanartClientKey(context: Context): String =
+        apiKeyPrefs(context).getString(KEY_FANART_CLIENT_KEY, "")?.trim().orEmpty()
+
+    fun setFanartClientKey(context: Context, key: String) {
+        apiKeyPrefs(context).edit().putString(KEY_FANART_CLIENT_KEY, key.trim()).apply()
+        // Never leave a plaintext copy behind.
+        prefs(context).edit().remove(KEY_FANART_CLIENT_KEY).apply()
+        stampApiKeyEdit(context, KEY_FANART_CLIENT_KEY, System.currentTimeMillis())
         pushApiKeysBlob()
     }
 

@@ -488,7 +488,16 @@ data class TmdbEpisode(
 
 @JsonClass(generateAdapter = true)
 data class TmdbSeasonDetail(
-    val episodes: List<TmdbEpisode> = emptyList()
+    val episodes: List<TmdbEpisode> = emptyList(),
+    /**
+     * The season's own poster, when TMDB holds one. Read as the SECOND step of
+     * the season-poster resolution - fanart's `seasonposter` answers first (see
+     * data/fanart/FanartArtRepository.seasonPoster), and this is what a show
+     * with no fanart season art draws instead. Absent means the season has no
+     * poster of its own, and the surface then draws none: the show's poster is
+     * never substituted for a season.
+     */
+    @Json(name = "poster_path") val posterPath: String? = null
 )
 
 @JsonClass(generateAdapter = true)
