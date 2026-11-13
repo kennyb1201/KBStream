@@ -8,6 +8,10 @@ import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.Meta
+import com.kennyb1201.kbstream.data.animethemes.AnimeTheme
+import com.kennyb1201.kbstream.data.animethemes.AnimeThemeRules
+import com.kennyb1201.kbstream.data.animethemes.AnimeThemesClient
+import com.kennyb1201.kbstream.ui.player.resolveMalId
 import com.kennyb1201.kbstream.data.addon.VideoEntry
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrections
@@ -52,6 +56,7 @@ import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.watched.WatchedKeysRebuild
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -66,6 +71,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
@@ -269,6 +275,68 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     private val _isSyntheticDetail = MutableStateFlow(false)
     val isSyntheticDetail: StateFlow<Boolean> = _isSyntheticDetail
     val tmdbDetail: StateFlow<TmdbDetail?> = _tmdbDetail.asStateFlow()
+
+    /**
+     * The title's AnimeThemes openings and endings, for the Media row's fourth
+     * page (see [loadAnimeThemes]).
+     *
+     * Empty is the ordinary answer and always a no-op: the Themes tab is only
+     * offered when there is something on it (see
+     * [com.kennyb1201.kbstream.ui.detail.DetailMediaRow.tabs]), so a non-anime
+     * title, an unresolved MyAnimeList id and an empty archive all look the
+     * same - three tabs and no error.
+     */
+    private val _animeThemes = MutableStateFlow<List<AnimeTheme>>(emptyList())
+    val animeThemes: StateFlow<List<AnimeTheme>> = _animeThemes.asStateFlow()
+
+    /**
+     * Whether this ViewModel has already asked for the themes.
+     *
+     * One lookup per Detail open, never one per recomposition or per tab switch
+     * (the row's page swaps by tab, and the screen asks from a `LaunchedEffect`
+     * that re-runs whenever the detail payload re-emits). Kept on the ViewModel
+     * rather than keyed on the title: the instance is the title.
+     */
+    private var animeThemesRequested = false
+
+    /**
+     * Fetches the themes for this title, once, in the background.
+     *
+     * Gated on TMDB's Animation genre - AnimeThemes is keyed by MyAnimeList id,
+     * and finding one costs a Jikan search before the theme query, so a
+     * live-action title must not pay for either. The MAL id comes from the same
+     * cached resolver the intro-skip chain uses, so a show whose anime episode
+     * already resolved one pays no second Jikan call.
+     *
+     * Nothing here is awaited by the screen: the row fills its fourth page when
+     * the answer lands, and a failure at any step (no genre, no MAL id, a 429, an
+     * empty archive) simply leaves the page off.
+     */
+    fun loadAnimeThemes() {
+        if (animeThemesRequested) return
+        val detail = _tmdbDetail.value ?: return
+
+        // A title that is not animation has nothing to ask for, and saying so
+        // once is what keeps a viewer walking in and out of a live-action page
+        // from re-testing the genre every time.
+        if (!AnimeThemeRules.isAnime(detail.genres.map { genre -> genre.id })) {
+            animeThemesRequested = true
+            return
+        }
+
+        animeThemesRequested = true
+
+        val title = listOfNotNull(detail.name, detail.title, _meta.value?.name)
+            .firstOrNull { it.isNotBlank() }
+
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                val malId = resolveMalId(title) ?: return@withContext
+                val themes = AnimeThemesClient.fetchThemes(malId, title)
+                if (themes.isNotEmpty()) _animeThemes.value = themes
+            }
+        }
+    }
 
     /**
      * Air dates a second metadata source has that disagree with TMDB's - see

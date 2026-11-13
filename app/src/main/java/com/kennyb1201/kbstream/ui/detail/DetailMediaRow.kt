@@ -1,5 +1,7 @@
 package com.kennyb1201.kbstream.ui.detail
 
+import com.kennyb1201.kbstream.data.animethemes.AnimeTheme
+import com.kennyb1201.kbstream.data.animethemes.AnimeThemeRules
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.tmdb.TmdbImageAsset
 import com.kennyb1201.kbstream.data.tmdb.TmdbVideo
@@ -22,7 +24,17 @@ internal enum class MediaTab(val label: String) {
     BACKDROPS("Backdrops"),
 
     /** Every poster TMDB lists for the title, in TMDB's own order. */
-    POSTERS("Posters")
+    POSTERS("Posters"),
+
+    /**
+     * AnimeThemes' openings and endings for the title, OPs first, then EDs (see
+     * [AnimeThemeRules.ordered]).
+     *
+     * Last, after the artwork: it is the one page whose content comes from
+     * somewhere other than TMDB, and the one that only exists for a title TMDB
+     * calls animation (see [com.kennyb1201.kbstream.data.animethemes.TMDB_GENRE_ANIMATION]).
+     */
+    THEMES("Themes")
 }
 
 /**
@@ -72,7 +84,27 @@ internal data class MediaCardItem(
      * built for THIS card's size, and the surfaces that will draw the choice
      * want their own sizes, so the path is what travels.
      */
-    val imagePath: String? = null
+    val imagePath: String? = null,
+    /**
+     * What a Themes card plays: the direct video URL picked for it (see
+     * [AnimeThemeRules.bestVideo]), or null when no video could be picked.
+     *
+     * A theme is not a [TmdbVideo] - it is a plain WebM file, already resolved,
+     * with no site and no key - so it cannot ride the trailer card's field.
+     */
+    val themeVideoUrl: String? = null,
+    /**
+     * True on every card of the Themes page, including one with no video: the
+     * press has to know a theme card is a theme card before it can decide that
+     * an unplayable one says so instead of opening artwork.
+     */
+    val isThemeCard: Boolean = false,
+    /**
+     * The card's second line, where the layout draws one: a theme's artist and
+     * episode range (`Artist · Eps 1–13`). Null on every other page, whose
+     * badge and picture already say everything they have.
+     */
+    val subtitle: String? = null
 )
 
 /**
@@ -119,11 +151,18 @@ internal object DetailMediaRow {
     fun tabs(
         videoCount: Int,
         backdropCount: Int,
-        posterCount: Int
+        posterCount: Int,
+        /**
+         * The title's AnimeThemes count. Zero for every non-anime title and for
+         * an anime AnimeThemes has nothing on, which is what keeps the page off
+         * those titles entirely (an empty tab is a press that does nothing).
+         */
+        themeCount: Int = 0
     ): List<MediaTab> = buildList {
         if (videoCount > 0) add(MediaTab.TRAILERS)
         if (backdropCount > 0) add(MediaTab.BACKDROPS)
         if (posterCount > 0) add(MediaTab.POSTERS)
+        if (themeCount > 0) add(MediaTab.THEMES)
     }
 
     /**
@@ -248,7 +287,9 @@ internal object DetailMediaRow {
                     )
                 ) + resetRow(hasOverride)
             }
-            MediaTab.TRAILERS, null -> emptyList()
+            // A theme is a video too: there is no surface its still could stand
+            // in for, and no row to offer.
+            MediaTab.TRAILERS, MediaTab.THEMES, null -> emptyList()
         }
 
     private fun resetRow(hasOverride: Boolean): List<ImageOverrideMenuItem> =
@@ -286,6 +327,35 @@ internal object DetailMediaRow {
                 fullImageUrl = tmdbImage(path, "w780"),
                 portrait = true,
                 imagePath = path
+            )
+        }
+
+    /**
+     * The themes page: one card per theme (OP1, OP2, ED1...), in the order
+     * [AnimeThemeRules.ordered] gives them.
+     *
+     * The card's image is the TITLE's backdrop, not a frame of the theme:
+     * AnimeThemes serves no poster or still for a theme, and extracting one from
+     * a several-megabyte WebM to fill a thumbnail would cost more than the tab
+     * is worth. [backdropUrl] is the one the hero already shows.
+     *
+     * [AnimeThemeRules] decides the badge, the song title, the artist/episode
+     * line and whether a video was picked; a theme with no playable video is
+     * drawn unplayable, exactly as a video the trailer player cannot open is.
+     */
+    fun themes(themes: List<AnimeTheme>, backdropUrl: String?): List<MediaCardItem> =
+        AnimeThemeRules.ordered(themes).map { theme ->
+            MediaCardItem(
+                id = "theme:" + theme.slug,
+                imageUrl = backdropUrl,
+                badge = AnimeThemeRules.badge(theme.type, theme.sequence, theme.version),
+                title = AnimeThemeRules.title(theme.songTitle),
+                themeVideoUrl = theme.videoUrl,
+                isThemeCard = true,
+                playable = !theme.videoUrl.isNullOrBlank(),
+                // The card's second line, where the layout has one: who performs
+                // the theme and which episodes it covers.
+                subtitle = AnimeThemeRules.subtitle(theme.artists, theme.episodes)
             )
         }
 

@@ -228,11 +228,13 @@ class DetailMediaRowWiringContractTest {
             screen.contains("tmdbDetail?.images?.posters.orEmpty()")
         )
         assertTrue(
-            "the pages are derived from those three lists, so a page with " +
-                "nothing on it is never offered",
+            // The fourth list is AnimeThemes' themes (spec 2026-11-13), and it
+            // follows the same rule: no list, no page.
+            "the pages are derived from those lists, so a page with nothing on " +
+                "it is never offered",
             screen.contains(
                 "DetailMediaRow.tabs( mediaVideos.size, mediaBackdrops.size, " +
-                    "mediaPosters.size )"
+                    "mediaPosters.size, animeThemes.size )"
             )
         )
         assertTrue(
@@ -273,8 +275,13 @@ class DetailMediaRowWiringContractTest {
     @Test
     fun `a trailer the player cannot open says so instead of swallowing the press`() {
         assertTrue(
+            // A Themes card that chose no video is marked the same way (spec
+            // 2026-11-13): it has no `video` at all, so the video test alone
+            // would leave it unmarked and its press unexplained.
             "the row's verdict reaches the card",
-            screen.contains("unplayable = card.video != null && !card.playable")
+            screen.contains("unplayable = if (card.isThemeCard) {") &&
+                screen.contains("!card.playable") &&
+                screen.contains("card.video != null && !card.playable")
         )
         assertTrue(
             "and only a playable video reaches the player - a Vimeo key used to be " +

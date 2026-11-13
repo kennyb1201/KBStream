@@ -101,6 +101,31 @@ object DetailTrailerLaunch {
         }
 
     /**
+     * Plays [url] as a one-off video - a theme video, already resolved.
+     *
+     * The same session shape as [intent], with the resolve taken out: a theme
+     * link is a direct progressive WebM file, so there is no YouTube key, no
+     * IMDb leg and nothing to look up.
+     *
+     * Like a trailer, and for the same reason, this session carries NO
+     * `parent_id`: every write the player makes - history, the resume point, the
+     * Continue Watching merge, the tracker scrobbles - returns early on a blank
+     * parent, so a theme is a viewing rather than a playback session. It is not
+     * filed under the title, cannot mark an episode watched and cannot move a
+     * card. [title] is what the player's own overlay calls it.
+     */
+    fun playUrl(context: Context, url: String?, title: String?) {
+        val link = url?.trim()?.takeIf { it.isNotEmpty() } ?: return
+
+        val intent = Intent(context, NativePlayerActivity::class.java).apply {
+            putExtra("stream_url", link)
+            putExtra("item_name", title?.trim()?.takeIf { it.isNotEmpty() } ?: "Theme")
+        }
+
+        context.startActivity(intent)
+    }
+
+    /**
      * Resolves and plays [video], or does nothing when there is no key to
      * resolve.
      *

@@ -1395,6 +1395,14 @@ fun DetailScreen(
     val awards by viewModel.awards.collectAsStateWithLifecycle()
     val allReviews by viewModel.allReviews.collectAsStateWithLifecycle()
     val tmdbDetail by viewModel.tmdbDetail.collectAsStateWithLifecycle()
+
+    // AnimeThemes' openings and endings for the Media row's fourth page (spec
+    // 2026-11-13). One lookup per Detail open, gated on TMDB's Animation genre
+    // and keyed on the MAL id the intro-skip chain already resolves, so this
+    // costs a non-anime title nothing and an anime two cached calls at most.
+    // Nothing waits for it: the row grows a Themes page when the answer lands.
+    val animeThemes by viewModel.animeThemes.collectAsStateWithLifecycle()
+    LaunchedEffect(tmdbDetail?.id) { viewModel.loadAnimeThemes() }
     // The app's transient message channel, used where a press has nowhere to
     // go (a poster TMDB cannot resolve to an IMDb id): silence there reads as a
     // broken remote, not as a title with no destination.
@@ -1742,11 +1750,20 @@ fun DetailScreen(
      * landing on a card: the row is only painted when one of the three lists is
      * non-empty, and each tab then has content under it.
      */
-    val mediaTabs = remember(mediaVideos, mediaBackdrops, mediaPosters) {
+    // The themes page draws the title's own backdrop - AnimeThemes serves no
+    // still for a theme - at the same size the Backdrops page draws its cards.
+    val mediaThemeArt = remember(tmdbDetail, initialBackdrop) {
+        tmdbDetail?.backdropPath?.takeIf { it.isNotBlank() }
+            ?.let { path -> tmdbImage(path, "w780") }
+            ?: initialBackdrop
+    }
+
+    val mediaTabs = remember(mediaVideos, mediaBackdrops, mediaPosters, animeThemes) {
         DetailMediaRow.tabs(
             mediaVideos.size,
             mediaBackdrops.size,
-            mediaPosters.size
+            mediaPosters.size,
+            animeThemes.size
         )
     }
     // Remembered for the LIFE of the title, not keyed on the tab list: the list
@@ -1767,11 +1784,12 @@ fun DetailScreen(
     // recomposition of a screen that recomposes constantly (position ticks,
     // badge updates, focus moves): which URL a card shows, what its badge says,
     // what shape it draws and which video it plays are [DetailMediaRow]'s rules.
-    val mediaCards = remember(mediaTab, mediaVideos, mediaBackdrops, mediaPosters) {
+    val mediaCards = remember(mediaTab, mediaVideos, mediaBackdrops, mediaPosters, animeThemes, mediaThemeArt) {
         when (mediaTab) {
             MediaTab.TRAILERS -> DetailMediaRow.trailers(mediaVideos)
             MediaTab.BACKDROPS -> DetailMediaRow.backdrops(mediaBackdrops)
             MediaTab.POSTERS -> DetailMediaRow.posters(mediaPosters)
+            MediaTab.THEMES -> DetailMediaRow.themes(animeThemes, mediaThemeArt)
             null -> emptyList()
         }
     }
@@ -3913,6 +3931,18 @@ fun DetailScreen(
     /** The header button's trailer: the one pick its label was built from. */
     fun playTrailer(context: Context) {
         playTrailer(context, trailerVideo)
+    }
+
+    /**
+     * Plays a Themes card's video (spec 2026-11-13).
+     *
+     * No resolve: the URL AnimeThemes gave is the file. It goes through the
+     * shared one-off launch, which carries no title identity into the player, so
+     * a theme is a viewing rather than a playback session - no history row, no
+     * resume point, no Continue Watching card (S4).
+     */
+    fun playTheme(context: Context, card: MediaCardItem) {
+        DetailTrailerLaunch.playUrl(context, card.themeVideoUrl, card.title)
     }
 
     val loadedMeta = meta
@@ -7542,12 +7572,33 @@ fun DetailScreen(
                                             // A video the player cannot speak
                                             // says so on the card (see
                                             // MediaThumbCard), so the press is
-                                            // never a guess.
-                                            unplayable = card.video != null &&
-                                                !card.playable,
+                                            // never a guess. A Themes card with
+                                            // no chosen video is marked the same
+                                            // way (see MediaCardItem.isThemeCard).
+                                            unplayable = if (card.isThemeCard) {
+                                                !card.playable
+                                            } else {
+                                                card.video != null && !card.playable
+                                            },
+                                            // The Themes page's cards are
+                                            // backdrops behind a song, so the song
+                                            // and its artist/range are drawn ON
+                                            // the card - every card would
+                                            // otherwise look the same.
+                                            caption = card.title.takeIf { card.isThemeCard },
+                                            subtitle = card.subtitle.takeIf { card.isThemeCard },
                                             onClick = {
                                                 val video = card.video
                                                 when {
+                                                    // A theme: played straight from
+                                                    // its own URL, and a card with
+                                                    // none says so rather than
+                                                    // opening its backdrop.
+                                                    card.isThemeCard -> {
+                                                        if (card.playable) {
+                                                            playTheme(context, card)
+                                                        }
+                                                    }
                                                     // A video the trailer player
                                                     // cannot open: the card
                                                     // carries the mark, and the
@@ -10075,6 +10126,15 @@ private fun MediaThumbCard(
      * nothing.
      */
     unplayable: Boolean = false,
+    /**
+     * A card whose face has to say WHAT it is, because its picture cannot: every
+     * Themes card draws the title's backdrop, so without a caption the page is a
+     * row of identical stills under OP1/OP2 badges. Null on every other page,
+     * whose images are the thing being chosen.
+     */
+    caption: String? = null,
+    /** The line under [caption] - a theme's artist and episode range. */
+    subtitle: String? = null,
     onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -10141,6 +10201,41 @@ private fun MediaThumbCard(
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1
                     )
+                }
+            }
+
+            // The caption a Themes card needs (see the parameter): the song on a
+            // scrim, the artist and range under it. Scrim rather than a plain
+            // Text because the backdrop behind it is arbitrary art.
+            caption?.takeIf { it.isNotBlank() }?.let { line ->
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color.Transparent, KBVoid.copy(alpha = 0.92f))
+                            )
+                        )
+                        .padding(start = 10.dp, end = 10.dp, top = 18.dp, bottom = 8.dp)
+                ) {
+                    Text(
+                        text = line,
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    subtitle?.takeIf { it.isNotBlank() }?.let { sub ->
+                        Text(
+                            text = sub,
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
 
