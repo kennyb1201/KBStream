@@ -214,6 +214,52 @@ class WorkPoliciesTest {
     }
 
     @Test
+    fun `an empty guide is imported however young its marker is`() {
+        // Field 2026-11-12, Fire TV Stick: channels present, `programsInWindow=0`,
+        // `newestProgramEnd=none`. The marker says a pass LANDED; it cannot say
+        // the guide has anything to draw, so a young marker must not be allowed
+        // to end the attempt while the guide is empty.
+        assertEquals(
+            WorkPolicies.EpgRefreshDecision.IMPORT,
+            WorkPolicies.epgRefreshDecision(
+                lastImportMs = now - hour,
+                nowMs = now,
+                playbackActive = false,
+                guideHasPrograms = false
+            )
+        )
+        assertEquals(
+            "playback still defers: that half of the gate protects the decoder",
+            WorkPolicies.EpgRefreshDecision.DEFER,
+            WorkPolicies.epgRefreshDecision(
+                lastImportMs = now - hour,
+                nowMs = now,
+                playbackActive = true,
+                guideHasPrograms = false
+            )
+        )
+        assertEquals(
+            "and null is 'not asked', which keeps the age rule exactly as it was",
+            WorkPolicies.EpgRefreshDecision.FRESH,
+            WorkPolicies.epgRefreshDecision(
+                lastImportMs = now - hour,
+                nowMs = now,
+                playbackActive = false
+            )
+        )
+        assertEquals(
+            "a guide that HAS programs still answers FRESH on a young marker",
+            WorkPolicies.EpgRefreshDecision.FRESH,
+            WorkPolicies.epgRefreshDecision(
+                lastImportMs = now - hour,
+                nowMs = now,
+                playbackActive = false,
+                guideHasPrograms = true
+            )
+        )
+    }
+
+    @Test
     fun `a stale guide with nothing playing is imported`() {
         assertEquals(
             WorkPolicies.EpgRefreshDecision.IMPORT,

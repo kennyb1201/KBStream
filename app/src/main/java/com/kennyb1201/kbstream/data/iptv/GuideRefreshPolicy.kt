@@ -38,6 +38,33 @@ internal object GuideRefreshPolicy {
      */
     const val LEAD_MS = EpgWindow.READ_FUTURE_MS + EpgWindow.REFRESH_INTERVAL_MS
 
+    /**
+     * How old the freshness marker has to be before age alone means "stale".
+     *
+     * The guide screen's own gate (`IptvViewModel.EPG_REFRESH_MS`) aliases this
+     * value, and the diagnostics line reads it too, so the three cannot disagree
+     * about what the entry check counted as stale. Twelve hours: one refresh
+     * cadence doubled - long enough that a healthy guide is never re-imported for
+     * being old, short enough that a marker which stopped moving is noticed
+     * inside a day.
+     */
+    const val AGE_STALE_MS = 12L * 60L * 60L * 1000L
+
+    /**
+     * How long an EMPTY guide may stand untouched before an entry imports it
+     * again, whatever the freshness marker says.
+     *
+     * The watchdog's own "don't hammer a provider" interval
+     * ([EPG_ENTRY_RETRY_COOLDOWN_MS]), reused rather than invented: it is the
+     * wait this app already established between automatic entry imports of a
+     * guide that is not getting better. A broken guide therefore heals on the
+     * next entry after a failure instead of a whole cadence later, and the
+     * empty-guide rule cannot become an import on every open - which is what the
+     * old "never urgent while the marker is young" rule was really protecting
+     * against, at the cost of leaving a blank guide blank until the marker aged.
+     */
+    const val EMPTY_GUIDE_RETRY_MS = EPG_ENTRY_RETRY_COOLDOWN_MS
+
     /** How badly the guide needs an import, if at all. */
     enum class Urgency {
         /** The window still reaches past [LEAD_MS] and nothing says otherwise. */
@@ -62,23 +89,52 @@ internal object GuideRefreshPolicy {
      * What to do on entry, given where the stored guide stops.
      *
      * [endsAtMs] is the newest program end the guide holds — null when it holds
-     * no programs, which is NOT treated as an emergency: a feed that is empty
-     * on purpose (an `EmptyFeedKeptLive` pass) would otherwise start an import
-     * on every single entry, and that is the loop the stall cooldown exists to
-     * prevent. An empty guide therefore falls back to [ageStale], exactly as
-     * before.
+     * no programs at all, which is the BLANK GUIDE itself (field 2026-11-12, Fire
+     * Stick: channels 15,425, `programsInWindow=0`, `newestProgramEnd=none`, and
+     * nothing imported until a manual press). That state used to fall back to
+     * [ageStale] alone, so a guide could stand empty behind a marker younger than
+     * twelve hours and no entry would touch it — with the background worker
+     * throttled on the same box, "repeatedly blank, only a manual reimport
+     * fixes it" is exactly that pair.
      *
-     * [ageStale] is the old age rule (`EPG_REFRESH_MS`, the file-moved marker
+     * An empty guide is therefore URGENT, but not on every entry: once per
+     * [EMPTY_GUIDE_RETRY_MS] ([lastAttemptMs] is when the last pass actually
+     * STARTED, whoever started it). A feed that is empty on purpose is
+     * re-attempted no more often than a broken one, and a blank guide is
+     * repaired on the next entry instead of a day later.
+     *
+     * [ageStale] is the old age rule ([AGE_STALE_MS], the file-moved marker
      * included) and still applies when the window reaches past [LEAD_MS]: a
      * partial pass leaves the freshness marker alone, so the source that failed
      * is retried even though its healthy siblings keep the window far ahead.
      */
-    fun urgency(endsAtMs: Long?, nowMs: Long, ageStale: Boolean): Urgency = when {
-        endsAtMs == null || endsAtMs <= 0L -> if (ageStale) Urgency.DUE else Urgency.NONE
+    fun urgency(
+        endsAtMs: Long?,
+        nowMs: Long,
+        ageStale: Boolean,
+        lastAttemptMs: Long = 0L
+    ): Urgency = when {
+        endsAtMs == null || endsAtMs <= 0L ->
+            if (ageStale || attemptOverdue(nowMs, lastAttemptMs)) Urgency.URGENT else Urgency.NONE
         endsAtMs < nowMs + EpgWindow.READ_FUTURE_MS -> Urgency.URGENT
         endsAtMs < nowMs + LEAD_MS -> Urgency.DUE
         ageStale -> Urgency.DUE
         else -> Urgency.NONE
+    }
+
+    /**
+     * Whether an empty guide has gone a whole cadence without an attempt.
+     *
+     * A stamp of 0 (never attempted, and nothing recorded because no import ever
+     * ran here) is overdue by definition: the guide is empty and nobody has
+     * tried. A stamp in the future is a clock that was put back, and is treated
+     * as "just now" rather than silencing the retry for as long as the clock is
+     * behind.
+     */
+    private fun attemptOverdue(nowMs: Long, lastAttemptMs: Long): Boolean {
+        if (lastAttemptMs <= 0L) return true
+        if (lastAttemptMs > nowMs) return false
+        return nowMs - lastAttemptMs >= EMPTY_GUIDE_RETRY_MS
     }
 
     /** Whether [urgency] wants an import at all. */

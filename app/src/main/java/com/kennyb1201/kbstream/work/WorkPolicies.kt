@@ -156,12 +156,27 @@ internal object WorkPolicies {
      * [EpgRefreshDecision.DEFER] maps to `Result.retry()` at the call site and
      * never to `Result.failure()` — failure cancels the periodic work outright,
      * so a film would silently cost the install its guide refreshes.
+     *
+     * [guideHasPrograms] is the empty-guide override: `false` (the guide holds
+     * nothing to draw) answers IMPORT even inside the age floor. Playback still
+     * defers, because that half of the gate is about the decoder, not the guide,
+     * and WorkManager's backoff lands the run as soon as the box is idle again.
      */
     fun epgRefreshDecision(
         lastImportMs: Long,
         nowMs: Long,
-        playbackActive: Boolean
+        playbackActive: Boolean,
+        guideHasPrograms: Boolean? = null
     ): EpgRefreshDecision = when {
+        // A guide holding no programs is never fresh, however young its marker
+        // is: the marker says a pass LANDED, not that the guide can draw
+        // anything. Field 2026-11-12 (Fire Stick): `programsInWindow=0`,
+        // `newestProgramEnd=none`, and the worker answering FRESH on the
+        // marker's age until the marker too aged out - on a box whose entry path
+        // rarely runs, the background pass was the only healer and it declined.
+        // `null` is "not asked": the age rule alone, as before.
+        guideHasPrograms == false ->
+            if (playbackActive) EpgRefreshDecision.DEFER else EpgRefreshDecision.IMPORT
         nowMs - lastImportMs < EPG_MIN_AGE_MS -> EpgRefreshDecision.FRESH
         playbackActive -> EpgRefreshDecision.DEFER
         else -> EpgRefreshDecision.IMPORT

@@ -2229,7 +2229,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         val guideUrgency = GuideRefreshPolicy.urgency(
             endsAtMs = guideEndsAtMs,
             nowMs = System.currentTimeMillis(),
-            ageStale = isStale(KEY_EPG_UPDATED_AT, EPG_REFRESH_MS) || guideFileMoved()
+            ageStale = isStale(KEY_EPG_UPDATED_AT, EPG_REFRESH_MS) || guideFileMoved(),
+            // The blank-guide half of the rule: an empty guide imports on entry
+            // even with a young marker, so a box whose background worker is
+            // throttled still heals when the Guide is opened. Spaced off the
+            // last pass that STARTED, whoever ran it, by the same interval the
+            // stall cooldown uses - so an empty guide is not re-downloaded on
+            // every open, and a failed pass does not silence it for a day.
+            lastAttemptMs = prefs.getLong(KEY_EPG_ATTEMPT_AT, 0L)
         )
         // forceGuide: a NEW source line was just written and this profile has
         // not imported since, so the list it would match against has changed
@@ -2358,6 +2365,11 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         if (epgUrl.isBlank()) return
         _guideError.value = null
         val urls = allEpgUrls()
+        // The pass records that it STARTED before it fetches anything: the entry
+        // check spaces an empty guide's retries off this stamp, so a pass that
+        // fails every source still counts as an attempt (the freshness marker is
+        // the other thing, and it stays untouched by a pass that stored nothing).
+        markUpdated(KEY_EPG_ATTEMPT_AT)
         // The pass opens FIRST and the flag mirrors it, so "an import is running"
         // and "here is how far it has got" are one fact rather than two that can
         // drift (see the field note on [isImportingGuide]).
@@ -2465,6 +2477,13 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             if (lastError == null) {
                 markUpdated(KEY_EPG_UPDATED_AT)
                 markGuideFile()
+                // A landed in-app import is the recovery the failing flag names,
+                // so it clears that state. The worker writes these two keys and
+                // used to be the only writer: a manual reimport left the guide
+                // marked failing until a background pass happened to land, which
+                // on a box whose worker never runs is never - the flag then read
+                // "failing" over a guide the viewer had already fixed.
+                clearRefreshFailure()
             } else {
                 Log.w(
                     TAG,
@@ -2761,6 +2780,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         return updatedAt == 0L || System.currentTimeMillis() - updatedAt >= maxAgeMs
     }
 
+    /** The worker's "refresh failing / N empty runs" state, cleared by a landed pass. */
+    private fun clearRefreshFailure() {
+        prefs.edit()
+            .putBoolean(KEY_EPG_REFRESH_FAILING, false)
+            .putInt(KEY_EPG_EMPTY_RUNS, 0)
+            .apply()
+    }
+
     private fun markUpdated(key: String) {
         prefs.edit().putLong(key, System.currentTimeMillis()).apply()
     }
@@ -2912,6 +2939,22 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
          * a viewer can act on rather than a silent stop.
          */
         const val KEY_EPG_REFRESH_FAILING = "epg_refresh_failing"
+
+        /**
+         * Consecutive all-sources-failed background passes, written by
+         * `EpgRefreshWorker` and cleared by a landed pass from EITHER path (see
+         * [clearRefreshFailure]). Only the count reaches the diagnostics; the
+         * failing flag is what the setup screen shows.
+         */
+        const val KEY_EPG_EMPTY_RUNS = "epg_empty_runs"
+
+        /**
+         * When a guide pass last STARTED, whichever path ran it. Read by the
+         * entry check to space an empty guide's retries
+         * ([GuideRefreshPolicy.EMPTY_GUIDE_RETRY_MS]) instead of importing on
+         * every entry.
+         */
+        const val KEY_EPG_ATTEMPT_AT = "epg_attempt_at"
         const val STOP_TIMEOUT_MS = 5_000L
         const val INITIAL_GUIDE_WINDOW_SIZE = 80
         const val MAX_GUIDE_CHANNELS_PER_REQUEST = 80
@@ -2955,7 +2998,9 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
          * all, and a partial pass that left one source behind while its
          * siblings kept the window ahead.
          */
-        const val EPG_REFRESH_MS = 12 * 60 * 60 * 1000L
+        // The age rule's value lives with the rest of the entry policy, so the
+        // diagnostics line and this gate cannot disagree about what "stale" is.
+        const val EPG_REFRESH_MS = GuideRefreshPolicy.AGE_STALE_MS
 
         // First catch-up refresh after the guide pipeline starts, and the
         // recurring cadence for recomputing now/next with a fresh clock.

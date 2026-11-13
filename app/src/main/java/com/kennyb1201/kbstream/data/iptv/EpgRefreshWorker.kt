@@ -64,7 +64,27 @@ class EpgRefreshWorker(
         // install its guide refreshes rather than merely postponing one.
         val now = System.currentTimeMillis()
         val lastImport = prefs.getLong(KEY_EPG_UPDATED_AT, 0L)
-        when (WorkPolicies.epgRefreshDecision(lastImport, now, EpgWriteGate.isPlayerActive)) {
+        // Whether the guide holds ANYTHING to draw, read before the gate: the
+        // freshness marker is about a pass landing, and a pass that landed a
+        // window which has since aged out leaves a marker that is still young.
+        // Asking the guide itself is what turns "FRESH" into an import for the
+        // field state (channels, zero programs, no newest end).
+        //
+        // The shared instance, so a refresh that lands while the guide screen (or
+        // the player) is holding the snapshot updates the caches that are
+        // actually being read instead of a private copy of them.
+        val repository = IptvRepository.shared(applicationContext)
+        val guideHasPrograms = runCatchingCancellable { repository.newestGuideProgramEndMs() }
+            .getOrNull()
+            ?.let { endsAt -> endsAt > 0L }
+        when (
+            WorkPolicies.epgRefreshDecision(
+                lastImport,
+                now,
+                EpgWriteGate.isPlayerActive,
+                guideHasPrograms
+            )
+        ) {
             WorkPolicies.EpgRefreshDecision.FRESH -> {
                 Log.i(TAG, "EPG refresh skipped: data fresh (age=${(now - lastImport) / 60_000}min)")
                 return Result.success()
@@ -78,10 +98,14 @@ class EpgRefreshWorker(
             WorkPolicies.EpgRefreshDecision.IMPORT -> Unit
         }
 
-        // The shared instance, so a refresh that lands while the guide screen
-        // (or the player) is holding the snapshot updates the caches that are
-        // actually being read instead of a private copy of them.
-        val repository = IptvRepository.shared(applicationContext)
+        // Recorded when the pass STARTS, before any source is fetched: the entry
+        // check spaces its own empty-guide retries off this stamp
+        // (GuideRefreshPolicy.EMPTY_GUIDE_RETRY_MS), and a pass that then fails
+        // every source must still count as "we tried", or the two paths would
+        // each retry on their own clock. Written by the in-app import too, with
+        // the same key.
+        prefs.edit().putLong(KEY_EPG_ATTEMPT_AT, now).apply()
+
         var imported = 0
         epgUrls.forEach { url ->
             // Bounded per source, so one wedged source cannot spend the pass's
@@ -289,5 +313,15 @@ class EpgRefreshWorker(
          * worker runs outside any screen - the two keys must stay identical.
          */
         const val KEY_EPG_REFRESH_FAILING = "epg_refresh_failing"
+
+        /**
+         * When a guide pass last STARTED, whichever path ran it.
+         *
+         * Shared with `IptvViewModel`, which spaces its empty-guide entry retries
+         * off it. Not a success marker - [KEY_EPG_UPDATED_AT] is that - so a
+         * failing pass stamps this and nothing else, and the guide stays stale
+         * for every decision that is about what the guide HOLDS.
+         */
+        const val KEY_EPG_ATTEMPT_AT = "epg_attempt_at"
     }
 }

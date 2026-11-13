@@ -12,8 +12,14 @@ import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.bingecat.BingeCatTrace
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.iptv.EpgRefreshScheduler
+import com.kennyb1201.kbstream.data.iptv.GuideFiles
+import com.kennyb1201.kbstream.data.iptv.GuideRefreshPolicy
+import com.kennyb1201.kbstream.data.iptv.GuideSourceStamps
+import com.kennyb1201.kbstream.data.iptv.IptvDatabase
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
 import com.kennyb1201.kbstream.data.iptv.guideMatchSectionLines
+import com.kennyb1201.kbstream.data.iptv.markerMatchesGuideFile
 import com.kennyb1201.kbstream.data.library.TasteRatingSubmission
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
@@ -123,6 +129,14 @@ object Diagnostics {
         // states a "No program data" report could not be told apart from a
         // healthy guide without this line (see IptvRepository.guideStateRows).
         guideLine(app)?.let { report.appendLine(it) }
+        // ...and WHY the last refresh left it in that state. The guide line
+        // above proves the programs are gone; it cannot say whether the
+        // background worker is even scheduled (Fire OS, Doze, a cancelled
+        // request), whether the refresh is failing, or whether the entry check
+        // would import on the next open. Those are the three causes the field
+        // report (2026-11-12, Fire Stick) had to be guessed at between - see
+        // [guideRefreshLine].
+        guideRefreshLine(app)?.let { report.appendLine(it) }
         // ...and which playlist channels those sources actually resolve. The
         // guide lines above are per SOURCE, so they cannot answer "what are we
         // missing?" - a capture of blank rows had to be turned into a
@@ -837,6 +851,116 @@ object Diagnostics {
     }
 
     /**
+     * The guide REFRESH's own outcome - the half of a blank guide the state line
+     * cannot see.
+     *
+     * Field 2026-11-12 (Fire TV Stick, 0.9.253): `guide: 1 source(s)
+     * channels=15425 programsInWindow=0 newestProgramEnd=none`, a 23 MB EPG
+     * database against 194 MB on the TCL, and a guide that went blank
+     * repeatedly until a manual reimport. Nothing in the paste could tell three
+     * different mechanisms apart:
+     *
+     *  - the periodic refresh never RUNS on this box (Fire OS/Doze/constraints,
+     *    or a request that was cancelled - `WORKER`),
+     *  - the refresh runs and FAILS (download, parse or write - `failing`,
+     *    `emptyRuns`, `stall`),
+     *  - the stored window simply expired and nothing on the path noticed (the
+     *    entry check's own answer - `endsAt`, `ageStale`, `entry`).
+     *
+     * Every field is state an existing writer already keeps: the freshness
+     * marker the worker and the in-app import both write, the failing/empty-run
+     * pair the worker records, the stall stamp the watchdog writes, the
+     * per-source stamps, and WorkManager's own view of the job. Nothing here is
+     * computed for the report's benefit; `entry` is the same
+     * [GuideRefreshPolicy.urgency] the Guide screen decides with, so the paste
+     * says what the NEXT open of the Guide will do, not what it ought to do.
+     *
+     * Counts and timestamps only - no URLs (the guide line's per-source rows are
+     * already redacted) and never key material.
+     */
+    private suspend fun guideRefreshLine(context: Context): String? = withContext(Dispatchers.IO) {
+        val prefs = runCatching {
+            context.getSharedPreferences(
+                ProfileStorage.prefsName(context, EPG_PREFS_NAME),
+                Context.MODE_PRIVATE
+            )
+        }.getOrNull() ?: return@withContext null
+        val now = System.currentTimeMillis()
+        val lastImport = prefs.getLong(KEY_EPG_UPDATED_AT, 0L)
+        val attempt = prefs.getLong(KEY_EPG_ATTEMPT_AT, 0L)
+        val stall = prefs.getLong(KEY_EPG_LAST_STALL_AT, 0L)
+        // The entry check's two inputs beyond the marker: where the window
+        // actually ends, and whether the marker was written about the file this
+        // install would open now.
+        val endsAt = runCatching { IptvRepository.shared(context).newestGuideProgramEndMs() }
+            .getOrNull()
+        // The same comparison the Guide screen's own check makes, through the same
+        // function, so the reported input is the decision's input.
+        val fileMoved = runCatching {
+            val activeFile = IptvDatabase.activeFileName(context)
+            !markerMatchesGuideFile(
+                recordedName = prefs.getString(KEY_EPG_DB_NAME, null),
+                activeName = activeFile,
+                profileId = ProfileStorage.activeProfileId(context)
+            )
+        }.getOrDefault(false)
+        val ageStale = lastImport == 0L ||
+            now - lastImport >= GuideRefreshPolicy.AGE_STALE_MS ||
+            fileMoved
+        val urgency = GuideRefreshPolicy.urgency(endsAt, now, ageStale, attempt)
+        val sources = runCatching { GuideFiles.guideUrls(context).size }.getOrDefault(0)
+        val work = EpgRefreshScheduler.scheduledWork(context)
+        buildString {
+            append("guide: refresh lastImport=")
+            append(timeOrNone(lastImport))
+            append(" age=").append(elapsed(now, lastImport))
+            append(" failing=")
+            append(if (prefs.getBoolean(KEY_EPG_REFRESH_FAILING, false)) "yes" else "no")
+            append(" emptyRuns=").append(prefs.getInt(KEY_EPG_EMPTY_RUNS, 0))
+            append(" attempt=").append(elapsed(now, attempt))
+            append(" stall=").append(elapsed(now, stall))
+            append(" sources=").append(sources)
+            append(" stamped=").append(GuideSourceStamps.read(prefs).size)
+            append(" endsAt=").append(timeOrNone(endsAt ?: 0L))
+            append(" ageStale=").append(if (ageStale) "yes" else "no")
+            append(" fileMoved=").append(if (fileMoved) "yes" else "no")
+            append(" entry=").append(urgency.name)
+            append(" worker=").append(work.state)
+            append(" next=").append(until(now, work.nextRunAtMs ?: 0L))
+            append(" attempts=").append(work.attempts)
+        }
+    }
+
+    private fun timeOrNone(epochMs: Long): String =
+        if (epochMs <= 0L) "none" else DateFormats.time(epochMs, DateFormats.DATE_TIME_SECONDS)
+
+    /** A past stamp as an age: `none`, `12m`, `5h 20m`, `1d 3h`. */
+    private fun elapsed(nowMs: Long, atMs: Long): String {
+        if (atMs <= 0L) return "none"
+        val delta = nowMs - atMs
+        // A stamp in the future is a clock that was put back, not an age.
+        if (delta <= 0L) return "now"
+        val minutes = delta / 60_000
+        val hours = minutes / 60
+        val days = hours / 24
+        return when {
+            days > 0 -> "${days}d ${hours % 24}h"
+            hours > 0 -> "${hours}h ${minutes % 60}m"
+            else -> "${minutes}m"
+        }
+    }
+
+    /** A FUTURE stamp as a countdown: `none`, `in 12m`, `in 5h 20m`. */
+    private fun until(nowMs: Long, atMs: Long): String {
+        if (atMs <= 0L) return "none"
+        val delta = atMs - nowMs
+        if (delta <= 0L) return "due"
+        val minutes = delta / 60_000
+        val hours = minutes / 60
+        return if (hours > 0) "in ${hours}h ${minutes % 60}m" else "in ${minutes}m"
+    }
+
+    /**
      * Which guide source resolved each playlist channel, and which channels
      * nothing resolved.
      *
@@ -955,4 +1079,15 @@ object Diagnostics {
 
     private fun absoluteOrNever(ms: Long): String =
         if (ms <= 0L) "never" else DateFormats.time(ms, DateFormats.DATE_TIME_SECONDS)
+
+    // The profile-scoped "iptv_prefs" keys `EpgRefreshWorker` and
+    // `IptvViewModel` write. Spelled out here because diagnostics run outside
+    // both, exactly as the worker spells out the ViewModel's.
+    private const val EPG_PREFS_NAME = "iptv_prefs"
+    private const val KEY_EPG_UPDATED_AT = "epg_updated_at"
+    private const val KEY_EPG_ATTEMPT_AT = "epg_attempt_at"
+    private const val KEY_EPG_LAST_STALL_AT = "epg_last_stall_at"
+    private const val KEY_EPG_DB_NAME = "epg_db_name"
+    private const val KEY_EPG_REFRESH_FAILING = "epg_refresh_failing"
+    private const val KEY_EPG_EMPTY_RUNS = "epg_empty_runs"
 }

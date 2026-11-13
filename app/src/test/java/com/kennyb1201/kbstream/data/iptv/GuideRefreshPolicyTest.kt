@@ -19,6 +19,7 @@ class GuideRefreshPolicyTest {
 
     private val now = 1_700_000_000_000L
     private fun hours(h: Long): Long = now + h * 60L * 60L * 1000L
+    private val hour = 60L * 60L * 1000L
 
     @Test
     fun `a window that reaches past the lead is left alone`() {
@@ -66,31 +67,103 @@ class GuideRefreshPolicyTest {
     }
 
     @Test
-    fun `an empty guide falls back to the age rule`() {
-        // An empty guide holds no programs, so its window says nothing: treating
-        // "no window" as urgent would start an import on every single entry, and
-        // that is the loop the stall cooldown exists to prevent.
-        //
-        // The fallback is also the RECOVERY half of the blank-guide fix, now
-        // that markers are honest: a refused empty feed no longer stamps, so a
-        // blank guide ages to `ageStale = true` and this rule turns the next
-        // entry into a DUE import (the first case below is the fresh-marker
-        // case, which stays NONE on purpose - nobody "fixes" this into an entry
-        // loop).
+    fun `an empty guide is urgent, retried at the refresh cadence`() {
+        // Field 2026-11-12, Fire TV Stick, 0.9.253: 15,425 channels, zero
+        // programs in the window, no newest program end - and nothing imported
+        // until Kenny pressed reimport. This rule used to answer NONE for that
+        // state whenever the freshness marker was under twelve hours old, so an
+        // empty guide could stand behind a young marker while the background
+        // worker was throttled on the same box. The empty state IS the blank
+        // guide, and it has to heal on entry.
         assertEquals(
-            "nothing to thin, and the marker is fresh: leave it alone",
-            GuideRefreshPolicy.Urgency.NONE,
+            "nothing to draw, and nobody has tried: import now",
+            GuideRefreshPolicy.Urgency.URGENT,
             GuideRefreshPolicy.urgency(null, now, ageStale = false)
         )
         assertEquals(
-            "a guide that has never been imported is due by age, as before",
-            GuideRefreshPolicy.Urgency.DUE,
+            "and a stale marker still reads as urgent, as it did",
+            GuideRefreshPolicy.Urgency.URGENT,
             GuideRefreshPolicy.urgency(null, now, ageStale = true)
         )
         assertEquals(
-            "and a zero end is the same as none",
-            GuideRefreshPolicy.Urgency.DUE,
+            "a zero end is the same as none",
+            GuideRefreshPolicy.Urgency.URGENT,
             GuideRefreshPolicy.urgency(0L, now, ageStale = true)
+        )
+    }
+
+    @Test
+    fun `an empty guide is not re-imported on every entry`() {
+        // The loop guard: the retry is spaced off the last pass that STARTED,
+        // whoever ran it, at the same "don't hammer a provider" interval the
+        // watchdog's entry cooldown already uses. A feed that is empty on
+        // purpose (an EmptyFeedKeptLive pass) is therefore not re-downloaded on
+        // every open - but a failed pass does not silence the guide for a whole
+        // cadence either, which is what "only a manual reimport fixes it" was.
+        assertEquals(
+            "a pass started ten minutes ago is still recent for an empty guide",
+            GuideRefreshPolicy.Urgency.NONE,
+            GuideRefreshPolicy.urgency(
+                endsAtMs = null,
+                nowMs = now,
+                ageStale = false,
+                lastAttemptMs = now - 10 * 60_000L
+            )
+        )
+        assertEquals(
+            "twenty-nine minutes is still inside the cooldown",
+            GuideRefreshPolicy.Urgency.NONE,
+            GuideRefreshPolicy.urgency(
+                endsAtMs = null,
+                nowMs = now,
+                ageStale = false,
+                lastAttemptMs = now - GuideRefreshPolicy.EMPTY_GUIDE_RETRY_MS + 1
+            )
+        )
+        assertEquals(
+            "a whole cooldown without an attempt is the retry",
+            GuideRefreshPolicy.Urgency.URGENT,
+            GuideRefreshPolicy.urgency(
+                endsAtMs = null,
+                nowMs = now,
+                ageStale = false,
+                lastAttemptMs = now - GuideRefreshPolicy.EMPTY_GUIDE_RETRY_MS
+            )
+        )
+        assertEquals(
+            "a clock put back must not silence the retry",
+            GuideRefreshPolicy.Urgency.NONE,
+            GuideRefreshPolicy.urgency(
+                endsAtMs = null,
+                nowMs = now,
+                ageStale = false,
+                lastAttemptMs = now + hour
+            )
+        )
+    }
+
+    @Test
+    fun `the empty-guide rule does not touch a guide that has a window`() {
+        // The attempt stamp only spaces the EMPTY case: a guide with a schedule
+        // is still judged by where that schedule ends, or a pass every few
+        // minutes would re-import a perfectly healthy guide.
+        assertEquals(
+            GuideRefreshPolicy.Urgency.NONE,
+            GuideRefreshPolicy.urgency(
+                endsAtMs = hours(15),
+                nowMs = now,
+                ageStale = false,
+                lastAttemptMs = now - hour
+            )
+        )
+        assertEquals(
+            GuideRefreshPolicy.Urgency.DUE,
+            GuideRefreshPolicy.urgency(
+                endsAtMs = hours(13),
+                nowMs = now,
+                ageStale = false,
+                lastAttemptMs = now - hour
+            )
         )
     }
 

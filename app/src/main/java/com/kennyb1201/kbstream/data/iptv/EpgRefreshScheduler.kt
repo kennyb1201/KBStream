@@ -28,7 +28,12 @@ import java.util.concurrent.TimeUnit
  */
 object EpgRefreshScheduler {
 
-    private const val WORK_NAME = "iptv_epg_refresh"
+    /**
+     * Public because diagnostics name the same job: "is the periodic refresh
+     * even scheduled on this box" is one of the three causes of a blank guide,
+     * and it used to be answerable only by guessing.
+     */
+    const val WORK_NAME = "iptv_epg_refresh"
 
     /**
      * How often the guide is re-imported in the background. WorkManager's
@@ -68,4 +73,35 @@ object EpgRefreshScheduler {
             request
         )
     }
+
+    /** What WorkManager currently says about the scheduled refresh. */
+    data class ScheduledWork(
+        /** `ENQUEUED`, `RUNNING`, `BLOCKED`, `CANCELLED`, `none` or `unavailable`. */
+        val state: String,
+        /** When the next periodic run is due, or null when it is not scheduled. */
+        val nextRunAtMs: Long?,
+        /** How many attempts WorkManager has made at the current run. */
+        val attempts: Int
+    )
+
+    /**
+     * Reads the scheduled job's own state, for the diagnostics line.
+     *
+     * Blocking (a `ListenableFuture` with a short timeout) and therefore called
+     * from a background dispatcher only. `none` is a real answer: it means the
+     * job is not in WorkManager at all, which is the difference between "Fire
+     * OS never let it run" and "it ran and its own gate declined".
+     */
+    fun scheduledWork(context: Context): ScheduledWork = runCatching {
+        val infos = WorkManager.getInstance(context)
+            .getWorkInfosForUniqueWork(WORK_NAME)
+            .get(2, TimeUnit.SECONDS)
+        val info = infos.firstOrNull()
+            ?: return@runCatching ScheduledWork("none", null, 0)
+        ScheduledWork(
+            state = info.state.name,
+            nextRunAtMs = info.nextScheduleTimeMillis.takeIf { it > 0L },
+            attempts = info.runAttemptCount
+        )
+    }.getOrElse { ScheduledWork("unavailable", null, 0) }
 }

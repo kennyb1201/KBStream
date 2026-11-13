@@ -35,11 +35,21 @@ class GuideMatchDiagnosticsContractTest {
 
         val after = diagnostics.substring(guideLine).lineSequence()
             .drop(1)
-            // Past the explanation comment: the first code after the comment.
-            .first { it.isNotBlank() && !it.trim().startsWith("//") }
+            // Past the explanation comments: the first code lines after them.
+            .filter { it.isNotBlank() && !it.trim().startsWith("//") }
+            .take(2)
+            .toList()
         assertTrue(
-            "the match section must follow the guide line, got: $after",
-            after.trim() == "guideMatchLines(app).forEach { report.appendLine(it) }"
+            "the guide REFRESH outcome comes first: the state line and the match " +
+                "section between them could not say why the guide was empty " +
+                "(spec 2026-11-12), got: $after",
+            after.isNotEmpty() &&
+                after[0].trim() == "guideRefreshLine(app)?.let { report.appendLine(it) }"
+        )
+        assertTrue(
+            "the match section must follow, got: $after",
+            after.size == 2 &&
+                after[1].trim() == "guideMatchLines(app).forEach { report.appendLine(it) }"
         )
     }
 
