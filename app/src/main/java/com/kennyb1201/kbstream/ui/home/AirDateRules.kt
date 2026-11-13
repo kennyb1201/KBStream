@@ -146,3 +146,42 @@ internal fun formatAirDateLabel(raw: String?): String {
         "Date TBA"
     }
 }
+
+/**
+ * Whether an episode identity is PROVEN unaired by an air record.
+ *
+ * The clean form of [trackerCardNamesUnairedEpisode]'s test, with the card and
+ * the air record taken apart into their own fields so the rule can be read and
+ * tested on its own.
+ *
+ * The proof is deliberately narrow. The air record must name the SAME episode
+ * the card does, and that date must be today or later: an episode that has not
+ * aired cannot have been completed, so no completion the viewer has can be for
+ * it. A record for a different episode proves nothing about this one - which is
+ * the whole point, because a show's "next episode to air" is a fact about the
+ * SHOW, and a card for an episode the viewer already finished carries it too.
+ *
+ * A missing or unparseable date is not a proof either: [today] is the caller's,
+ * so the answer does not drift with the clock inside one pass.
+ */
+internal fun episodeProvablyUnaired(
+    cardSeason: Int?,
+    cardEpisode: Int?,
+    airSeason: Int?,
+    airEpisode: Int?,
+    airDate: String?,
+    today: LocalDate
+): Boolean {
+    val season = cardSeason?.takeIf { it > 0 } ?: return false
+    val episode = cardEpisode?.takeIf { it > 0 } ?: return false
+
+    if (airSeason?.takeIf { it > 0 } != season) return false
+    if (airEpisode?.takeIf { it > 0 } != episode) return false
+
+    val date =
+        runCatching {
+            LocalDate.parse(airDate?.trim())
+        }.getOrNull() ?: return false
+
+    return !date.isBefore(today)
+}

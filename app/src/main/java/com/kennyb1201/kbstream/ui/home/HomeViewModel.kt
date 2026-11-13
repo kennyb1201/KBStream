@@ -3243,7 +3243,27 @@ Log.d(
      * from, and that mismatch is what let a removed show come back.
      */
     private suspend fun applyContinueWatchingDismissals(
-        items: List<UpNextItem>
+        items: List<UpNextItem>,
+        /**
+         * True for an Upcoming-only list: a card that by construction points at
+         * an UNAIRED episode.
+         *
+         * The just-completed drop is a Continue Watching rule - "never offer a
+         * locally-watched episode" - and it cannot be true of an episode that
+         * has not aired. Applied to Upcoming it was not merely redundant: the
+         * caught-up card is the only route to Upcoming for a show whose last
+         * aired episode is finished (finishing it removes the local resume row),
+         * so dropping it took the show off both rails at once. Reported
+         * 2026-11-12: MobLand, Tulsa King, Eternally Yours and The Unbelievable
+         * with Dan Aykroyd, each with a next episode airing the following day,
+         * all gone from Upcoming on build 253 - the 48 caught-up candidates
+         * became 23 cards here.
+         *
+         * The other gates stay: Kids Mode and title ownership are safety rules
+         * about what may appear, not about what was watched, and the rail's own
+         * dismissals are the viewer's explicit instruction.
+         */
+        upcoming: Boolean = false
     ): List<UpNextItem> {
 
         // Kids Mode gate runs before dismissal filtering: the Simkl feed
@@ -3262,7 +3282,7 @@ Log.d(
             dismissedContinueWatching.isEmpty() ||
             profileSafe.isEmpty()
         ) {
-            return dropJustCompletedTrackerCards(profileSafe)
+            return if (upcoming) profileSafe else dropJustCompletedTrackerCards(profileSafe)
         }
 
         var changed =
@@ -3303,8 +3323,9 @@ Log.d(
         }
 
         // Last: a title this profile just finished comes off the rail however
-        // the feed still describes it.
-        return dropJustCompletedTrackerCards(filtered)
+        // the feed still describes it. Upcoming lists skip it - they are cards
+        // for episodes that have not aired (see [upcoming]).
+        return if (upcoming) filtered else dropJustCompletedTrackerCards(filtered)
     }
 
     /**
@@ -3641,7 +3662,16 @@ Log.d(
         }
 
         val upcomingCards =
-            applyContinueWatchingDismissals(built)
+            applyContinueWatchingDismissals(
+                // F2: the card names the episode it advertises. A tracker
+                // caught-up card's pair is whatever the tracker last resolved -
+                // often the episode just finished, or nothing - while its air
+                // info is the episode coming. The schedule already reads the
+                // air, so this changes no visible episode; it is what lets the
+                // completed-target rule and the diagnostics read the card.
+                built.map { item -> upcomingCardWithNextEpisodePair(item) },
+                upcoming = true
+            )
 
         if (
             UPCOMING_DIAGNOSTICS
@@ -3752,13 +3782,14 @@ Log.d(
         // from being spent on a duplicate.
         val cards =
             applyContinueWatchingDismissals(
-                built.distinctBy {
+                items = built.distinctBy {
                     upNextShowParentKeys(
                         it.parentId,
                         it.parentType,
                         it.tmdbId
                     )
-                }
+                },
+                upcoming = true
             )
 
         if (

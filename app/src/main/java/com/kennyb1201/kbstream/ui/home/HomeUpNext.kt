@@ -9,6 +9,8 @@ import com.kennyb1201.kbstream.data.settings.ResumeAuthority
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetailLookup
 import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
 import com.kennyb1201.kbstream.data.tmdb.namesNoTitle
+import java.time.LocalDate
+import java.time.ZoneId
 import kotlinx.coroutines.flow.map
 
 // The rail and up-next models, and the pure helpers that key, group and
@@ -1153,6 +1155,75 @@ internal fun completedTitleMark(
 }
 
 /**
+ * True when the card PROVES that the episode it points at has not aired yet.
+ *
+ * Reported (2026-11-12, build 253): a show finished its last aired episode and
+ * vanished from Upcoming - MobLand, Tulsa King, Eternally Yours and The
+ * Unbelievable with Dan Aykroyd, each with a next episode airing the following
+ * day. The caught-up Upcoming card is the ONLY route to that rail for such a
+ * show (finishing the last aired episode removes the local resume row, so the
+ * Continue Watching leg has nothing to offer), and [trackerCardJustCompletedByProfile]
+ * dropped it: its target pair was null, and a card naming no episode was
+ * assumed to be the episode just finished.
+ *
+ * The proof has to be exact, because [UpNextItem.nextEpisodeAir] is the SHOW's
+ * next airing, not the card's own episode: a stale Continue Watching card for
+ * the episode just finished carries the same field, and exempting every
+ * future-dated card would put it back on the rail (the stall this rule exists
+ * to prevent). So the air info must name this card's own (season, episode), and
+ * that date must be today or later - an episode that has not aired cannot have
+ * been completed, whatever the completed rows say.
+ *
+ * A card that fails the proof is not evidence of anything: it is decided by the
+ * rule as before.
+ */
+internal fun trackerCardNamesUnairedEpisode(
+    item: UpNextItem,
+    today: LocalDate = LocalDate.now(ZoneId.systemDefault())
+): Boolean {
+    val air = item.nextEpisodeAir ?: return false
+
+    return episodeProvablyUnaired(
+        cardSeason = item.season,
+        cardEpisode = item.episode,
+        airSeason = air.seasonNumber,
+        airEpisode = air.episodeNumber,
+        airDate = air.airDate,
+        today = today
+    )
+}
+
+/**
+ * The card an Upcoming-only caught-up leg advertises, naming the episode it
+ * shows (spec 2026-11-12, F2).
+ *
+ * A tracker caught-up card's pair is whatever the tracker last resolved - the
+ * episode just finished, or nothing at all - while [UpNextItem.nextEpisodeAir]
+ * is the episode the card is actually advertising. The schedule builder reads
+ * the air, so the rail is right either way; the pair is what makes the card
+ * legible to [trackerCardJustCompletedByProfile]'s exact-match branch ("a card
+ * for a LATER episode is deliberately kept") and to the diagnostics, which
+ * print `S<season>E<episode>`.
+ *
+ * Only for cards that are Upcoming-only (never published to Continue Watching),
+ * and only when the air names a real pair - a card with nothing dated keeps its
+ * nulls, exactly as [buildSimklUpNextItem] builds it.
+ */
+internal fun upcomingCardWithNextEpisodePair(item: UpNextItem): UpNextItem {
+    val air = item.nextEpisodeAir ?: return item
+
+    val season = namedEpisodeNumber(air.seasonNumber) ?: return item
+    val episode = namedEpisodeNumber(air.episodeNumber) ?: return item
+
+    if (item.season == season && item.episode == episode) return item
+
+    return item.copy(
+        season = season,
+        episode = episode
+    )
+}
+
+/**
  * True when a TRACKER card must be hidden because this profile has already
  * watched what the card still points at.
  *
@@ -1182,6 +1253,13 @@ internal fun trackerCardJustCompletedByProfile(
 ): Boolean {
     if (completed.isEmpty()) return false
     if (!isTrackerSourcedCard(item)) return false
+
+    // An episode that has not aired cannot be the one just finished, and
+    // Upcoming's caught-up cards are exactly that shape: a card naming a future
+    // episode was being dropped for the finished episode behind it, which took
+    // four reported shows off Upcoming entirely (see
+    // [trackerCardNamesUnairedEpisode]).
+    if (trackerCardNamesUnairedEpisode(item)) return false
 
     // The title key is carried alongside the id keys on purpose: a local row
     // filed under "tt123" and a tracker card carrying "tmdb:123" meet on

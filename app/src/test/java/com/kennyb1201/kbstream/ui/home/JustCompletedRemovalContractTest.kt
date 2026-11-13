@@ -96,8 +96,15 @@ class JustCompletedRemovalContractTest {
         )
         assertTrue(
             "the drop must cover the no-dismissals early return too",
-            body.contains("return $DROP(") &&
-                body.windowed(DROP.length).count { it == DROP } >= 2
+            body.windowed(DROP.length).count { it == DROP } >= 2 &&
+                body.contains("profileSafe else $DROP(profileSafe)") &&
+                body.contains("filtered else $DROP(filtered)")
+        )
+        assertTrue(
+            "and it must be skippable for an Upcoming list, whose cards point at " +
+                "episodes that have not aired (see UpcomingCaughtUpExemptionContractTest)",
+            body.contains("upcoming: Boolean = false") &&
+                body.contains("if (upcoming) profileSafe else")
         )
     }
 
