@@ -307,7 +307,16 @@ internal fun SpotlightPreviewPanel(
                 mode = trailerMode,
                 heroTrailerAutoplay = heroTrailerAutoplay,
                 delayMs = trailerDelayMs,
-                stillUrl = snapshot.stillUrl ?: meta?.background ?: meta?.poster,
+                // THE SAME PICTURE the empty-state check above chose (spec
+                // 2026-11-13, F1 follow-up). F3 fixed `stillNow` but left this
+                // argument on the old order, and this is the one that DRAWS:
+                // [SpotlightPanelTrailer] paints it under the surface until the
+                // trailer's first frame, and keeps painting it whenever no
+                // trailer plays. Handing it the rail's small image first is what
+                // kept the expanded panel fuzzy on 0.9.285. Passing the single
+                // computed value rather than repeating the chain is what stops
+                // the two from drifting apart a third time.
+                stillUrl = stillNow,
                 title = snapshot.title,
                 onPlayingChange = onTrailerPlayingChange
             )

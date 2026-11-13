@@ -168,6 +168,19 @@ class SpotlightEntryPanelContractTest {
             "and a title with no art still gets the text tile",
             preview.contains("if (stillNow.isNullOrBlank()) {")
         )
+        // F3 fixed the EMPTY-STATE value only, and the trailer's still - the one
+        // the panel actually DRAWS (SpotlightPanelTrailer paints it under the
+        // surface until the first frame, and whenever no trailer plays) - was
+        // left on the old rail-image-first order. 0.9.285 was still fuzzy
+        // because of exactly that (spec 2026-11-13, F1 follow-up).
+        assertTrue(
+            "the panel's drawn still is the one computed above, full-resolution first",
+            preview.contains("stillUrl = stillNow,")
+        )
+        assertFalse(
+            "no visible panel image may keep the rail image first",
+            preview.contains("stillUrl = snapshot.stillUrl ?: meta?.background")
+        )
     }
 
     @Test
