@@ -185,7 +185,7 @@ import com.kennyb1201.kbstream.ui.home.UpNextBadge
 import com.kennyb1201.kbstream.ui.home.UpNextItem
 import com.kennyb1201.kbstream.ui.home.UpcomingEpisode
 import com.kennyb1201.kbstream.ui.home.formatTimeLeft
-import com.kennyb1201.kbstream.ui.home.hiddenDecision
+import com.kennyb1201.kbstream.ui.home.upNextContinueWatchingDecision
 import com.kennyb1201.kbstream.ui.home.hiddenIdentity
 import com.kennyb1201.kbstream.ui.home.upNextEpisodeLabel as tvUpNextEpisodeLabel
 import com.kennyb1201.kbstream.ui.home.upNextPlayerDisplayName
