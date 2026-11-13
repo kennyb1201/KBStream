@@ -587,6 +587,45 @@ fun StreamsScreen(
             runCatching { refreshFocusRequester.requestFocus() }.getOrDefault(false)
     }
 
+    // ── LEFT/RIGHT on a link switches the tab (spec 2026-11-12) ──────────
+    // The tab row is a sibling ABOVE the list, and the hand is in the list:
+    // LEFT/RIGHT on a source was a dead key. It now walks the ring the row
+    // draws - All, then each add-on in row order, wrapping at both ends - by
+    // setting the selection exactly the way a chip press does: the add-on's
+    // NAME, or null for All, never an index (the groups can reorder or shrink
+    // under a reload - see selectedAddonName). The list then swaps to that
+    // tab's sources. REFRESH is a control, not a tab, so it is never a stop on
+    // this ring; with one add-on answering there is no ring at all and the keys
+    // stay dead, which is what cycleAddonTab answers.
+    //
+    // Answers whether the key was acted on: the handler below consumes the
+    // press only when it was, so a single-add-on picker keeps its own keys.
+    val cycleScope = rememberCoroutineScope()
+    val cycleTab: (Int) -> Boolean = cycle@{ direction ->
+        val next = cycleAddonTab(selectedAddonTab, direction, addonGroups.size)
+        if (next == selectedAddonTab) return@cycle false
+        selectedAddonName =
+            if (next == ALL_ADDONS_TAB) null
+            else addonGroups.getOrNull(next)?.addonName ?: return@cycle false
+        // The row under the hand left the composition with the list it belonged
+        // to, so the new tab's first source is claimed explicitly. Same
+        // retry-until-it-lands shape as the entry focus above: the request's
+        // RETURN VALUE is the test (an unattached requester answers false, not
+        // an exception), because the new row is one or two frames from existing.
+        cycleScope.launch {
+            var landed = false
+            var attempts = 0
+            while (!landed && attempts < 8) {
+                awaitFrame()
+                landed = runCatching {
+                    firstStreamFocusRequester.requestFocus()
+                }.getOrDefault(false)
+                attempts++
+            }
+        }
+        true
+    }
+
     // The one case where auto-play deliberately starts nothing: every playable
     // source declares another episode of this season. Said in words, because a
     // picker that opens for no visible reason reads as a bug of its own.
@@ -745,6 +784,20 @@ fun StreamsScreen(
                     .weight(1f)
                     .fillMaxWidth()
                     .focusGroup()
+                    // LEFT/RIGHT switch the add-on tab (spec 2026-11-12). On the
+                    // COLUMN, not the rows: this list holds links and nothing
+                    // else focusable, so a direction key only reaches this
+                    // preview pass while focus is on a link - the tab row and
+                    // REFRESH are siblings above it and keep their own keys.
+                    // Consumed only when a tab was actually switched.
+                    .onPreviewKeyEvent { event ->
+                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        when (event.key) {
+                            Key.DirectionRight -> cycleTab(1)
+                            Key.DirectionLeft -> cycleTab(-1)
+                            else -> false
+                        }
+                    }
             ) {
                 when {
                     // Rows render as each add-on answers, not only once the
@@ -1369,6 +1422,14 @@ private fun StreamTabChip(
                 }
             }
     ) {
+        // A chip selected by the LEFT/RIGHT cycle never takes focus - the hand
+        // stays in the list, on the new tab's first source - so the observer
+        // above never runs for it (spec 2026-11-12). The SELECTION keeps the
+        // chip visible then, by the same rule: a selection the viewer cannot
+        // find is the same loss as a ring they cannot find.
+        LaunchedEffect(selected) {
+            if (selected) runCatching { bringIntoView.bringIntoView() }
+        }
         Box(
             modifier = Modifier
                 .background(
