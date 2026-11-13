@@ -138,8 +138,19 @@ class ContinueWatchingTrackerLegsTest {
     private fun traktLaunch() =
         slice(viewModel(), "// Trakt arrives ONCE", "// BingeCat's watched history")
 
+    /**
+     * Just BingeCat's launch, up to the anime legs the 2026-11-13 spec added
+     * beside it. The old end bound was "// MDBList arrives ONCE", which the anime
+     * legs were inserted BEFORE - so this slice grew three launches and four
+     * arrives that are not BingeCat's, and the single-writer count below read
+     * them as BingeCat writing its slot repeatedly.
+     */
     private fun bingeCatLaunch() =
-        slice(viewModel(), "// BingeCat's watched history", "// MDBList arrives ONCE")
+        slice(
+            viewModel(),
+            "// BingeCat's watched history",
+            "// The anime legs (spec 2026-11-13, F2)"
+        )
 
     private fun bingeCatLoader() =
         slice(viewModel(), "private suspend fun loadBingeCatUpNextItems()", "\n    /**")

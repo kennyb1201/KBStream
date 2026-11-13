@@ -30,12 +30,17 @@ class KeyFieldMaskingContractTest {
     @Test
     fun `the four credential fields render masked`() {
         assertEquals(
-            "MDBList, OpenSubtitles, TorBox and OMDb are the key rows",
-            4,
+            // ...and Anime Skip's client id, added with the anime leg.
+            "MDBList, OpenSubtitles, TorBox, OMDb and Anime Skip are the key rows",
+            5,
             Regex("KBSecretField\\(").findAll(settings).count()
         )
         listOf(
-            "mdbListKeyInput", "subsKeyInput", "torboxKeyInput", "omdbKeyInput"
+            "mdbListKeyInput",
+            "subsKeyInput",
+            "torboxKeyInput",
+            "omdbKeyInput",
+            "animeSkipKeyInput"
         ).forEach { input ->
             assertTrue(
                 "$input must go through the masked field, not a plain KBTextField",
@@ -188,8 +193,8 @@ class KeyFieldMaskingContractTest {
         // attached to nothing), while the eye chip - the only press that would
         // unmask a stored value - is suppressed for the same profiles.
         assertEquals(
-            "all four secret fields keep the kids rule",
-            4,
+            "all five secret fields keep the kids rule",
+            5,
             Regex("revealable = !kidsKeysHidden").findAll(settings).count()
         )
         assertFalse(

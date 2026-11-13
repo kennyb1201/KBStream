@@ -505,8 +505,11 @@ class SettingsScreenMobileContractTest {
                 mobile.contains("val keysHidden = activeProfile?.kidsMaxAge != null")
         )
         assertTrue(
+            // MDBList, OMDb, Anime Skip's client id, OpenSubtitles and TorBox:
+            // one card per credential, and the kids rule keeps every one of them
+            // composed (the 2026-11-13 anime leg added the fifth).
             "the key cards are composed, one per credential",
-            4 == keyCardCalls(mobile) // was: Regex("KeyCardMobile\\(\\s*\\n\\s*title =").findAll(mobile).count()
+            5 == keyCardCalls(mobile)
         )
         listOf(
             "API keys are hidden on a kids profile",

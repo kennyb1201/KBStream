@@ -202,7 +202,11 @@ class SpotlightPanelReworkContractTest {
         assertTrue(
             "the entry also puts the list back to the hero if anything moves it, " +
                 "until the viewer presses anything",
-            home.contains("if (!spotlightActive || !isFreshEntry) return@LaunchedEffect") &&
+            // The guard widened on 2026-11-13 (F1): every entry without a card to
+            // restore starts at the hero, not just the first of the process.
+            home.contains(
+                "if (!spotlightActive || entryHasRestoreTarget) return@LaunchedEffect"
+            ) &&
                 home.contains("runCatching { railListState.scrollToItem(0) }") &&
                 home.contains("if (viewerMovedFocusSinceEntry) return@LaunchedEffect")
         )

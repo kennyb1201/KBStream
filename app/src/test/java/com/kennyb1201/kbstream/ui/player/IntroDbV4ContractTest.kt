@@ -93,9 +93,13 @@ class IntroDbV4ContractTest {
             src.contains("newCall(introDbRequest(url))")
         )
         assertEquals(
-            "one request builder, so every IntroDB call carries the header",
-            1,
-            Regex("Request\\.Builder\\(").findAll(src).count()
+            // Anime Skip joined the file with its own builder (a POST body has
+            // no GET equivalent), so the invariant is no longer "exactly one
+            // builder" but "every builder names the app": each one is followed
+            // by the same User-Agent header, and none can slip out as okhttp/5.
+            "every request builder in the file names the app",
+            Regex("Request\\.Builder\\(").findAll(src).count(),
+            Regex("\\.header\\(\"User-Agent\"").findAll(src).count()
         )
     }
 

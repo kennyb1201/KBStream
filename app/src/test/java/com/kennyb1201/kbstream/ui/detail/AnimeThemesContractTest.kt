@@ -200,8 +200,11 @@ class AnimeThemesContractTest {
                 load.contains("withContext(Dispatchers.IO) {")
         )
         assertTrue(
+            // The MAL id comes from the anime identity hub since the 2026-11-13
+            // anime spec: one answer per Detail open, which is also the score and
+            // next-airing the header shows (see the hub test below).
             "and a missing MAL id or an empty archive leaves the page off",
-            load.contains("val malId = resolveMalId(title) ?: return@withContext") &&
+            load.contains("val malId = identity.malId ?: return@withContext") &&
                 load.contains("if (themes.isNotEmpty()) _animeThemes.value = themes")
         )
     }
@@ -209,13 +212,21 @@ class AnimeThemesContractTest {
     @Test
     fun `the MAL id is the one the intro-skip chain already resolves`() {
         assertTrue(
+            // The hub is now the one resolver: Detail asks it, and the
+            // intro-skip chain's resolveMalId is a thin call into the same hub
+            // (see IntroDbHelpers), so neither side pays a second Jikan call.
             "one resolver, one cache - not a second Jikan call for the same title",
-            viewModel.contains("import com.kennyb1201.kbstream.ui.player.resolveMalId") &&
-                load2(viewModel).contains("resolveMalId(title)")
+            viewModel.contains("AnimeIdHub.resolve(") &&
+                load2(viewModel).contains("AnimeIdHub.resolve(title)")
         )
         assertFalse(
             "and no second Jikan client is written here",
             viewModel.contains("api.jikan.moe") || viewModel.contains("jikanSearchUrl")
+        )
+        assertTrue(
+            "the intro-skip leg keeps using that same hub",
+            source("com/kennyb1201/kbstream/ui/player/IntroDbHelpers.kt")
+                .contains("AnimeIdHub.resolve(showTitle).malId")
         )
     }
 

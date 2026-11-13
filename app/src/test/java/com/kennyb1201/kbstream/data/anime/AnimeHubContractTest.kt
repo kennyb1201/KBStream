@@ -102,9 +102,14 @@ class AnimeHubContractTest {
     @Test
     fun `Kitsu reads on kitsu app, one request a second, with the anime included`() {
         assertTrue(
+            // The literal moved into KitsuConfig so the WRITE rules can be
+            // tested without OkHttp (2026-11-13 phase 2); the read client points
+            // back at it, so there is still exactly one host string.
             "the API's current host - kitsu.io only still answers, it did not stay",
-            kitsu.contains("const val BASE_URL = \"https://kitsu.app/api/edge\"") &&
-                !kitsu.contains("https://kitsu.io")
+            kitsu.contains("const val BASE_URL = com.kennyb1201.kbstream.data.kitsu.KitsuConfig.API_BASE") &&
+                !kitsu.contains("https://kitsu.io") &&
+                source("com/kennyb1201/kbstream/data/kitsu/KitsuConfig.kt")
+                    .contains("const val API_BASE = \"https://kitsu.app/api/edge\"")
         )
         assertTrue(
             "JSON:API's media type is named",
