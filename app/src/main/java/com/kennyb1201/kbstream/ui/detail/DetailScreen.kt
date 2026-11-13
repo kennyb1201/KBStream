@@ -6435,7 +6435,7 @@ fun DetailScreen(
                                                     EpisodeCard(
                                                         ep = ep,
                                                         listedSeason =
-                                                            effectiveSeason,
+                                                            effectiveSeason ?: 0,
                                                         isWatched =
                                                             isEpisodeWatched,
                                                         airDatesTrusted =

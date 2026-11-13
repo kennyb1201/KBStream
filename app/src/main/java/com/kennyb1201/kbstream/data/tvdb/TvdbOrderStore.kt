@@ -208,7 +208,8 @@ internal object TvdbOrderStore {
     ): Boolean {
         val key = keyFor(stableShowId) ?: return false
         val at = runCatching { prefs(context)?.getLong(KEY_FAILURE_PREFIX + key, 0L) }
-            .getOrDefault(0L)
+            .getOrNull()
+            ?: 0L
         return at > 0L && nowMs - at < FAILURE_TTL_MS
     }
 
