@@ -29,6 +29,16 @@ import com.kennyb1201.kbstream.ui.mobile.MobileBillboard
 import kotlinx.coroutines.delay
 
 /**
+ * How many frames the first-pill claim is retried for before it gives up (F3).
+ *
+ * 12 frames is ~200 ms at 60 Hz - the same short hand-back window the app's
+ * other focus landings use, and long enough for the pill's node to attach after
+ * the page that drew it. It is deliberately bounded: a claim that cannot land in
+ * this window is not going to, and retrying longer would fight the viewer.
+ */
+private const val SPOTLIGHT_CLAIM_RETRY_FRAMES = 12
+
+/**
  * Spotlight's top section: the phone's billboard, TV-sized.
  *
  * This is the same component the phone Home draws (MobileBillboard: the pager,
@@ -88,6 +98,14 @@ internal fun SpotlightHeroSection(
     pillFocusRequester: FocusRequester,
     /** Called once the pill request has been taken, so the latch closes. */
     onEntryFocusClaimed: () -> Unit = {},
+    /**
+     * Called when the claim has given up after its bounded retries (F3).
+     *
+     * The latch still has to close: a claim left armed is the gate-hole that made
+     * every later re-deal yank focus off whatever card the viewer was on. A
+     * given-up claim is a given-up claim, and the trace says which it was.
+     */
+    onEntryFocusClaimGivenUp: () -> Unit = {},
     /** True while a card is expanded: the hero shows its still and nothing else. */
     cardExpanded: Boolean,
     onPlay: (MetaPreview) -> Unit,
@@ -162,19 +180,36 @@ internal fun SpotlightHeroSection(
     // composition when the viewer comes back up; asking for the pill again then
     // would yank focus off whichever card they were on (and, on a return from
     // Detail, race the restore that already owns the landing).
+    //
+    // BOUNDED RETRY, NOT ONE SHOT (spec 2026-11-13, F3). requestFocus() answers
+    // false for a node that is not attached yet rather than throwing, so a single
+    // attempt on a cold start was a coin flip: the field paste reads
+    // `lastClaim=none` and the viewer reports the buttons as unfocusable. The pill
+    // is a few frames behind the page that drew it, so the request is retried for
+    // a bounded window - and then GIVEN UP, calling back so the latch closes
+    // instead of staying armed to steal focus on a later re-deal.
+    //
+    // The effect lives in this section on purpose: it can only run while the hero
+    // item is composed, and F1's hold is what keeps the list at item 0 until the
+    // pages settle - so the retry always happens with the hero on screen, and a
+    // scrolled-away hero never gets a bare requestFocus() into a disposed node.
     LaunchedEffect(pages.isNotEmpty(), claimEntryFocus) {
         // The latch itself, which is what keeps the entry focus live across
         // re-deals when a claim failed (F3).
         SpotlightDiagTrace.spotlightClaimGate(claimEntryFocus)
         if (!claimEntryFocus || pages.isEmpty()) return@LaunchedEffect
-        // One frame, so the pill has a node to take focus.
-        withFrameNanos { }
-        val taken = runCatching { firstPillFocus.requestFocus() }.getOrDefault(false)
-        // The gate-hole case, recorded because it looks identical on screen: a
-        // claim that failed leaves claimEntryFocus true, so every re-deal yanks
-        // focus again from whatever the viewer is on.
+        var taken = false
+        var frames = 0
+        // One frame first, so the pill has a node to take focus.
+        while (!taken && frames < SPOTLIGHT_CLAIM_RETRY_FRAMES) {
+            frames++
+            withFrameNanos { }
+            taken = runCatching { firstPillFocus.requestFocus() }.getOrDefault(false)
+        }
+        // Either outcome closes the latch through the Home; the trace records
+        // which, so a claim that gave up is visible rather than silent.
         SpotlightDiagTrace.spotlightClaim(taken)
-        if (taken) onEntryFocusClaimed()
+        if (taken) onEntryFocusClaimed() else onEntryFocusClaimGivenUp()
     }
 
     MobileBillboard(

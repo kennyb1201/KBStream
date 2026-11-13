@@ -54,8 +54,9 @@ class SpotlightEntryPanelContractTest {
 
     @Test
     fun `the scroll-to-top restore runs on every entry without a restore target`() {
-        val effect = home.substringAfter("LaunchedEffect(spotlightActive, entryHasRestoreTarget, mergedEntries) {")
-            .substringBefore("// The other half of the restore")
+        val effect = home.substringAfter(
+            "LaunchedEffect(spotlightActive, entryHasRestoreTarget, mergedEntries, billboardEnabledForDiag) {"
+        ).substringBefore("// The other half of the restore")
 
         assertTrue("the effect is keyed on the entry gate", effect.isNotBlank())
         assertTrue(
@@ -67,10 +68,121 @@ class SpotlightEntryPanelContractTest {
             effect.contains("spotlightEntryFocusClaimed = false")
         )
         assertTrue(
-            "still bounded to the entry window and still dead once the viewer presses anything",
-            effect.contains("repeat(SPOTLIGHT_ENTRY_TOP_FRAMES)") &&
-                effect.contains("if (viewerMovedFocusSinceEntry) return@LaunchedEffect") &&
-                effect.contains("railListState.scrollToItem(0)")
+            "still dead once the viewer presses anything",
+            effect.contains("if (viewerMovedFocusSinceEntry) return@LaunchedEffect")
+        )
+        assertTrue(
+            "and the list is still put back at the hero",
+            effect.contains("railListState.scrollToItem(0)")
+        )
+    }
+
+    // ── F1 (2026-11-13): the hold is data-bounded ──────────
+
+    @Test
+    fun `the entry hold is gated on the billboard settling, not on a frame count`() {
+        val effect = home.substringAfter(
+            "LaunchedEffect(spotlightActive, entryHasRestoreTarget, mergedEntries, billboardEnabledForDiag) {"
+        ).substringBefore("// The other half of the restore")
+
+        assertTrue(
+            "the hold waits for the billboard's own answer",
+            effect.contains("viewModel.billboardReady.value")
+        )
+        assertFalse(
+            "the 90-frame window is gone: ~1.5 s against the field's 8641 ms cold start",
+            home.contains("SPOTLIGHT_ENTRY_TOP_FRAMES")
+        )
+        assertTrue(
+            "and it is bounded by a cap chosen from that evidence",
+            home.contains("private const val SPOTLIGHT_ENTRY_HOLD_CAP_MS = 15_000L") &&
+                effect.contains("SPOTLIGHT_ENTRY_HOLD_CAP_MS")
+        )
+        assertTrue(
+            "a billboard that is off is nothing to hold for",
+            effect.contains("!billboardEnabledForDiag")
+        )
+
+        val model = source(VIEW_MODEL)
+        assertTrue(
+            "the model answers 'settled or empty', so the hold can end either way",
+            model.contains("val billboardReady: StateFlow<Boolean>") &&
+                model.contains("_billboardReady.value = true") &&
+                model.contains("_billboardReady.value = false")
+        )
+        assertTrue(
+            "a cleared billboard is an answer, not a settle that never comes",
+            model.substringAfter("fun clearBillboard(reason: String) {").contains(
+                "_billboardReady.value = true"
+            )
+        )
+        assertTrue(
+            "and an empty deal is one too",
+            model.substringAfter("if (dealt.isEmpty()) {").contains("_billboardReady.value = true")
+        )
+    }
+
+    // ── F2 (2026-11-13): the built-ins take the shared Up hook ─────────
+
+    @Test
+    fun `the built-in rails go through the shared Up hook`() {
+        val builtins = home.substringAfter("val drawBuiltinRail:")
+            .substringBefore("fun topRailUpHook(")
+
+        assertFalse(
+            "the built-ins no longer hardwire the top bar: that skipped the Spotlight carve-out",
+            builtins.contains("openTopBar(requester)")
+        )
+        assertTrue(
+            "they take the hook the other rails take",
+            builtins.contains("upHook: ((FocusRequester) -> Unit)?")
+        )
+        assertTrue(
+            "handed the shared hook from their position in the merged order",
+            home.split("topRailUpHook(index)").size - 1 >= 2
+        )
+
+        val hook = home.substringAfter("fun topRailUpHook(entryIndex: Int)")
+            .substringBefore("One pinned Library list")
+        assertTrue(
+            "and the hook still opens the bar when Spotlight is not active (Modern, S4)",
+            hook.contains("else -> { requester: FocusRequester -> openTopBar(requester) }")
+        )
+    }
+
+    // ── F3 (2026-11-13): the claim retries, then gives up ─
+
+    @Test
+    fun `a failed pill claim retries bounded, then gives up for the visit`() {
+        val claim = section.substringAfter("LaunchedEffect(pages.isNotEmpty(), claimEntryFocus) {")
+            .substringBefore("MobileBillboard(")
+
+        assertTrue(
+            "the attempt is retried instead of losing the visit to one miss",
+            claim.contains("while (!taken && frames < SPOTLIGHT_CLAIM_RETRY_FRAMES)")
+        )
+        assertTrue(
+            "one frame first, so the pill has a node to take focus",
+            claim.contains("withFrameNanos { }")
+        )
+        assertTrue(
+            "the outcome is still traced",
+            claim.contains("SpotlightDiagTrace.spotlightClaim(taken)")
+        )
+        assertTrue("a taken claim closes the latch", claim.contains("if (taken) onEntryFocusClaimed()"))
+        assertTrue(
+            "a given-up claim closes it too - it must not re-fire on a re-deal",
+            claim.contains("else onEntryFocusClaimGivenUp()")
+        )
+        assertTrue(
+            "and the window is a named, bounded constant",
+            section.contains("private const val SPOTLIGHT_CLAIM_RETRY_FRAMES = 12")
+        )
+
+        val latch = home.substringAfter("onEntryFocusClaimGivenUp = {").substringBefore("},")
+        assertTrue(
+            "the Home latches the give-up exactly as it latches a claim",
+            latch.contains("spotlightEntryFocusClaimed = true")
         )
     }
 
@@ -246,6 +358,7 @@ class SpotlightEntryPanelContractTest {
         const val SPOTLIGHT_HOME = "${ROOT}SpotlightHome.kt"
         const val SPOTLIGHT_PREVIEW = "${ROOT}SpotlightPreview.kt"
         const val LAYOUT_RULES = "${ROOT}HomeLayoutRules.kt"
+        const val VIEW_MODEL = "${ROOT}HomeViewModel.kt"
         const val POSTER_CARD = "com/kennyb1201/kbstream/ui/components/PosterCard.kt"
     }
 }

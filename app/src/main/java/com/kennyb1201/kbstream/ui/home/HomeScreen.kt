@@ -247,13 +247,19 @@ private val HomeRailGap = 12.dp
 private const val HERO_RESOLVE_DEBOUNCE_MS = 150L
 
 /**
- * How many frames a Spotlight entry keeps the rails list at the hero (F5).
+ * How long a Spotlight entry may keep the rails list at the hero (spec 2026-11-13, F1).
  *
- * ~1.5 s at the panel's 60 Hz: long enough to outlast the entry landing and the
- * first frames of a feed arriving, short enough that it is over before a viewer
- * scrolling rail by rail has gone anywhere.
+ * It is a CAP, not the gate: the hold ends when the billboard has settled, when
+ * the viewer presses anything, or here - whichever comes first. It replaces the
+ * old 90-frame window (~1.5 s), which was the TCL bug: the billboard settles on
+ * DATA time, and the field paste from a cold start showed
+ * `home.railsReady = 8641ms` - seven seconds after the hold was already over, so
+ * focus fell to a rail card, the hero item scrolled out and was disposed, and
+ * the claim inside it could never run. 15 s is that measurement plus headroom
+ * for the first page to resolve with its art after the rails are ready; it is
+ * only ever reached when the feed genuinely has nothing to show yet.
  */
-private const val SPOTLIGHT_ENTRY_TOP_FRAMES = 90
+private const val SPOTLIGHT_ENTRY_HOLD_CAP_MS = 15_000L
 
 /**
  * This screen's log tag.
@@ -5677,17 +5683,39 @@ fun HomeScreen(
     // (spec 2026-11-13, F1): a return with a card to come back to keeps its own
     // landing, and every entry without one starts at the hero - not just the
     // first entry of the process.
-    LaunchedEffect(spotlightActive, entryHasRestoreTarget, mergedEntries) {
+    //
+    // GATED ON DATA, NOT ON FRAMES (spec 2026-11-13, F1). The frame count was the
+    // bug: 90 frames is ~1.5 s, while a cold start's first page settles on data
+    // time (the field paste: `home.railsReady = 8641ms`). The hold expired, focus
+    // fell to a rail card, the framework scrolled the hero item off the top,
+    // LazyColumn disposed it - and the claim effect inside it could never run.
+    // So the list is held at item 0 until the billboard has an answer
+    // ([HomeViewModel.billboardReady]: a settled page, or a deal that came up
+    // empty), the viewer takes the D-pad, the billboard is off, or the cap is
+    // reached.
+    // The cap's clock is the ENTRY's, not the effect's: `mergedEntries` is a key
+    // (the hold restarts as rails arrive), and restarting a per-effect clock
+    // would let a slow rail build extend the cap indefinitely - an unbounded hold
+    // in all but name.
+    val spotlightHoldStartedAtMs = remember(spotlightActive, entryHasRestoreTarget) {
+        SystemClock.uptimeMillis()
+    }
+    LaunchedEffect(spotlightActive, entryHasRestoreTarget, mergedEntries, billboardEnabledForDiag) {
         if (!spotlightActive || entryHasRestoreTarget) return@LaunchedEffect
         // A fresh entry re-arms the hero's one-shot claim, so the billboard can
         // take focus on each such entry rather than only the first.
         spotlightEntryFocusClaimed = false
-        repeat(SPOTLIGHT_ENTRY_TOP_FRAMES) {
-            awaitFrame()
+        while (true) {
             if (viewerMovedFocusSinceEntry) return@LaunchedEffect
             if (railListState.firstVisibleItemIndex != 0) {
                 runCatching { railListState.scrollToItem(0) }
             }
+            val released = !billboardEnabledForDiag ||
+                viewModel.billboardReady.value ||
+                SystemClock.uptimeMillis() - spotlightHoldStartedAtMs >=
+                SPOTLIGHT_ENTRY_HOLD_CAP_MS
+            if (released) return@LaunchedEffect
+            awaitFrame()
         }
     }
 
@@ -6529,19 +6557,23 @@ fun HomeScreen(
     // rail built at all - base drew them there for exactly that reason, at
     // column scope above the loading and retry cards, and the arrangement only
     // moved WHERE they are drawn. One lambda so the two paths cannot drift.
-    val drawBuiltinRail: @Composable (key: String, isTopRail: Boolean) -> Unit =
-        { key, isTopRail ->
+    // The UP hook is handed IN now, instead of the built-ins hardwiring
+    // `openTopBar` for their top row (spec 2026-11-13, F2). That hardwire was the
+    // second half of the field bug: Continue Watching is the top rail on Kenny's
+    // Home, so UP from it opened the top bar and never ran the Spotlight
+    // carve-out in [topRailUpHook] - the hero was never scrolled back and the
+    // pills stayed unreachable from the one rail the viewer was actually on.
+    // The callers pass `topRailUpHook(index)`, which is the same lambda the
+    // catalog, Library, Browse and Collection rails receive: null off the top
+    // rail, the Spotlight scroll-back in Spotlight, and `openTopBar` in Modern.
+    val drawBuiltinRail: @Composable (key: String, upHook: ((FocusRequester) -> Unit)?) -> Unit =
+        { key, upHook ->
             val title = builtinRailTitle(
                 key,
                 com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
                     .builtinDefaultTitle(key)
                     ?: "Upcoming"
             )
-            val upHook = if (isTopRail) {
-                { requester: FocusRequester -> openTopBar(requester) }
-            } else {
-                null
-            }
             if (
                 key ==
                 com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
@@ -6742,7 +6774,7 @@ fun HomeScreen(
                     item(key = "builtin|" + entry.key.removePrefix("builtin:")) {
                         drawBuiltinRail(
                             entry.key,
-                            com.kennyb1201.kbstream.ui.kb.isTopRailEntry(index)
+                            topRailUpHook(index)
                         )
                     }
 
@@ -6963,6 +6995,13 @@ fun HomeScreen(
                                         !viewerMovedFocusSinceEntry &&
                                         !entryHasRestoreTarget,
                                     onEntryFocusClaimed = { spotlightEntryFocusClaimed = true },
+                                    // F3: a claim that gave up after its bounded
+                                    // retries still closes the latch, so a later
+                                    // re-deal cannot yank focus off whatever the
+                                    // viewer is on.
+                                    onEntryFocusClaimGivenUp = {
+                                        spotlightEntryFocusClaimed = true
+                                    },
                                     cardExpanded = spotlightCardExpanded,
                                     onPlay = onItemClick,
                                     onDetails = onItemClick,
@@ -7213,8 +7252,7 @@ fun HomeScreen(
                                     is com.kennyb1201.kbstream.ui.kb.HomeEntry.BuiltinRail ->
                                         drawBuiltinRail(
                                             e.key,
-                                            com.kennyb1201.kbstream.ui.kb
-                                                .isTopRailEntry(entryIndex)
+                                            topRailUpHook(entryIndex)
                                         )
 
                                     // A pinned Library list, in the slot the

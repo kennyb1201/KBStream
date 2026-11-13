@@ -1831,6 +1831,26 @@ Log.d(
         _billboardPages.asStateFlow()
 
     /**
+     * Whether the CURRENT deal has reached its answer: at least one page settled,
+     * or the pool dealt nothing (the empty-feed path).
+     *
+     * It exists for the entry hold (spec 2026-11-13, F1). The hold used to be a
+     * frame count - 90 frames, about 1.5 s - while the billboard settles on DATA
+     * time: the field paste from a cold TCL had `home.railsReady = 8641ms`, so
+     * the hold was over seven seconds before the first page landed, focus fell to
+     * a rail card, and the hero item was scrolled out and disposed. This is the
+     * one signal that says "the hero has something to show" without the Home
+     * having to collect the page list and recompose on every art resolve.
+     *
+     * False before a deal and while it resolves; true once it settles or comes up
+     * empty, so a hold can never outlive a billboard that is not coming.
+     */
+    private val _billboardReady = MutableStateFlow(false)
+
+    val billboardReady: StateFlow<Boolean> =
+        _billboardReady.asStateFlow()
+
+    /**
      * The default feed: TMDB trending of the day, movie and TV interleaved by
      * rank (see [billboardInterleaveFeeds]).
      *
@@ -1889,6 +1909,9 @@ Log.d(
         billboardPoolJob?.cancel()
         billboardPoolJob = null
         _billboardPages.value = emptyList()
+        // A cleared billboard is an ANSWER for the entry hold (F1): nothing is
+        // coming, so the list must not keep sitting at the hero for it.
+        _billboardReady.value = true
         // Why the slot went empty is one of the two things the paste must be
         // able to tell apart (spec 2026-11-12, F2): a billboard hidden by the
         // toggle and one whose feed resolved to nothing look identical on screen.
@@ -2020,6 +2043,8 @@ Log.d(
 
         billboardResolveJob?.cancel()
         billboardResolveJob = null
+        // A new deal has no answer yet: the hold (F1) waits for this one.
+        _billboardReady.value = false
         _billboardPages.value = dealt.map { item ->
             BillboardPage(
                 key = billboardPageKey(item),
@@ -2036,7 +2061,9 @@ Log.d(
         SpotlightDiagTrace.billboardDealt(dealt.size, feed.size, dealEpoch)
         if (dealt.isEmpty()) {
             // A ceiling or a feed that kept nothing: the slot goes empty with a
-            // reason, not silently.
+            // reason, not silently - and that is an answer for the entry hold
+            // (F1) rather than a settle that never arrives.
+            _billboardReady.value = true
             SpotlightDiagTrace.billboardCleared("empty feed", dealEpoch)
             return
         }
@@ -2062,6 +2089,9 @@ Log.d(
                                     if (page.key == key) resolved else page
                                 }
                             }
+                            // The first settled page is the moment the hold has
+                            // been waiting for (F1).
+                            _billboardReady.value = true
                             val tally = _billboardPages.value
                             SpotlightDiagTrace.billboardPageResolved(
                                 key = key,
