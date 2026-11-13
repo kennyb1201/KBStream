@@ -59,7 +59,7 @@ class SpotlightAuditFixesContractTest {
     // ── (a) a visible pill is never a silent dead press ────────────────────
 
     @Test
-    fun `the panel's pills act on the card's own identity, not on the resolve`() {
+    fun `the panel has no action pills left to act on the wrong identity`() {
         assertTrue(
             "the card hands its Detail identity to the snapshot (A4)",
             posterCard().contains("id = spotlightId") &&
@@ -70,14 +70,20 @@ class SpotlightAuditFixesContractTest {
             preview().contains("val id: String? = null") &&
                 preview().contains("val type: String? = null")
         )
+        // The 2026-11-12 panel rework removed the action row outright (F2): the
+        // pills were drawn at the card's own width, where they clipped and
+        // truncated, and the card itself is the action now (OK opens Details,
+        // DOWN moves on and collapses). A4's rule - a visible pill must never be
+        // a silent dead press - is therefore kept by having no pills at all, and
+        // this pins that, so the row cannot come back without the identity
+        // plumbing below that made it honest.
         val s = section()
-        assertTrue(
-            "PLAY and DETAILS are built from the snapshot's id, falling back to " +
-                "the meta rather than requiring it",
-            s.contains("val preview = (panel.id ?: meta?.id)?.let { id ->")
+        assertFalse(
+            "no PLAY / DETAILS pill is drawn in the panel",
+            s.contains("label = \"PLAY\"") || s.contains("label = \"DETAILS\"")
         )
         assertFalse(
-            "the pills are no longer gated on the resolved meta",
+            "and no pill is built from a resolved meta either",
             s.contains("val preview = meta?.let { detail ->")
         )
         // The rails have the id at the card: the catalog rows pass the item's
@@ -97,7 +103,7 @@ class SpotlightAuditFixesContractTest {
     }
 
     @Test
-    fun `the panel says it is loading and offers its own retry when the resolve fails`() {
+    fun `the panel says it is loading, and says so again when the resolve fails`() {
         val p = preview()
         assertTrue(
             "the meta line is a placeholder while resolving, not silence",
@@ -107,18 +113,32 @@ class SpotlightAuditFixesContractTest {
             "and a failed resolve says so",
             p.contains("metaFailed -> \"DETAILS UNAVAILABLE\"")
         )
+        // The RETRY pill went with the action row (2026-11-12 F2) and was not
+        // replaced: the failure now says so twice - the meta line and the
+        // synopsis line - and Details fetches its own metadata, so the retry
+        // was an affordance for a dead end the viewer never had.
         assertTrue(
-            "with a retry affordance in the panel itself",
-            p.contains("if (showRetry) {") && p.contains("label = \"RETRY\"")
+            "with the failure spelled out where the synopsis would be",
+            p.contains("metaFailed -> \"Could not fetch this title's details.\"")
+        )
+        assertFalse(
+            "and no RETRY pill is drawn",
+            p.contains("label = \"RETRY\"")
         )
         assertTrue(
             "the failure is a real state - \"not yet\" and \"never\" were both null",
             viewModel().contains("val heroMetaFailed: StateFlow<Boolean>") &&
                 viewModel().contains("_heroMetaFailed.value = true")
         )
+        // No retry pill means no retry callback to wire: the resolve is keyed
+        // on the focused card instead, so taking focus again - which is what a
+        // viewer does to try again - re-runs it. The failure stays visible
+        // until that lands.
+        val h = home()
         assertTrue(
-            "and the retry re-runs the resolve for the focused card",
-            home().contains("onRetryMeta = { viewModel.resolveHeroMeta(focusedItemState.value) }")
+            "and the resolve re-arms on the focused card, so re-focusing retries it",
+            h.contains("LaunchedEffect(focused?.id)") &&
+                h.contains("viewModel.resolveHeroMeta(focused)")
         )
     }
 

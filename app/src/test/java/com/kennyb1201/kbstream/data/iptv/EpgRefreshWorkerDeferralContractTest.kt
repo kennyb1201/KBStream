@@ -25,11 +25,18 @@ class EpgRefreshWorkerDeferralContractTest {
      * `doWork`'s gate, from the decision it makes up to the import it guards.
      * Bounded on the import side so the pass's own result handling — which has
      * nothing to do with this gate — is not read as part of it.
+     *
+     * The end bound had to move once: it used to stop at "// The shared
+     * instance", which the guide-database commit moved ABOVE the `when` (the
+     * repository is now resolved before the gate so the gate can ask it whether
+     * the guide holds anything). The substring then ended before the decision
+     * it exists to read, and all three assertions failed against code that was
+     * intact. The attempt stamp below the gate is what follows it now.
      */
     private val gate: String by lazy {
         worker.readText()
             .substringAfter("suspend fun doWork()")
-            .substringBefore("// The shared instance")
+            .substringBefore("// Recorded when the pass STARTS")
     }
 
     /**
