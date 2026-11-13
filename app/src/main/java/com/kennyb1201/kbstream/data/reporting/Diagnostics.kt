@@ -16,7 +16,7 @@ import com.kennyb1201.kbstream.data.iptv.EpgRefreshScheduler
 import com.kennyb1201.kbstream.data.iptv.GuideFiles
 import com.kennyb1201.kbstream.data.iptv.GuideRefreshPolicy
 import com.kennyb1201.kbstream.data.iptv.GuideSourceStamps
-import com.kennyb1201.kbstream.data.iptv.IptvDatabase
+import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
 import com.kennyb1201.kbstream.data.iptv.guideMatchSectionLines
 import com.kennyb1201.kbstream.data.iptv.markerMatchesGuideFile
