@@ -692,11 +692,24 @@ class ExternalPlayerActivity : ComponentActivity() {
             }
 
             showHandoffCard(prompt, playerName, skipped = null)
-            // Bounded, and bounded generously enough for the second source: a
-            // lookup that does not answer in time simply means the segment is
-            // not skipped rather than the hand-off never happening.
+            // Bounded, and bounded generously enough for the chain: a lookup
+            // that does not answer in time simply means the segment is not
+            // skipped rather than the hand-off never happening.
+            //
+            // The duration and the title go with it (spec 2026-11-13): the
+            // duration is what lets SkipDB shift a row onto this release instead
+            // of reporting a timestamp from another one, and the title is the
+            // only way to resolve an anime's MyAnimeList id. This engine is the
+            // one that needs them most - it gets no second chance at a segment
+            // once the other app owns the screen.
             val stamps = withTimeoutOrNull(SEGMENT_LOOKUP_TIMEOUT_MS) {
-                fetchIntroDbStamps(parentId, season, episode)
+                fetchIntroDbStamps(
+                    parentId,
+                    season,
+                    episode,
+                    durationMs.takeIf { it > 0L },
+                    itemName.takeIf { it.isNotBlank() }
+                )
             }.orEmpty()
             if (isFinishing || isDestroyed) return@launch
 

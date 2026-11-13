@@ -15623,7 +15623,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + handler)
         scope?.launch {
             if (!isLiveChannel) {
-                introDbStamps = withContext(Dispatchers.IO) { fetchIntroDbStamps(parentId, season, episode) }
+                // Read on the player's own thread, before the IO hop: ExoPlayer
+                // state is not ours to touch from a background dispatcher.
+                val knownDurationMs = exoPlayer?.duration?.takeIf { it > 0L }
+                val showTitle = itemName.takeIf { it.isNotBlank() }
+                introDbStamps = withContext(Dispatchers.IO) {
+                    fetchIntroDbStamps(parentId, season, episode, knownDurationMs, showTitle)
+                }
             }
         }
     }

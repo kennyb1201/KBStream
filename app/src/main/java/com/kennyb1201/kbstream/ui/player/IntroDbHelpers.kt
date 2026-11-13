@@ -7,39 +7,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import org.json.JSONObject
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
-internal enum class IntroDbMarkerType(val buttonLabel: String) {
-    Intro("SKIP INTRO"), Recap("SKIP RECAP"), Outro("SKIP OUTRO"),
-    Credits("SKIP CREDITS"), Preview("SKIP PREVIEW"),
-
-    /**
-     * The scene after the end credits. It is content, not filler — the button
-     * skips *past* it (to the end of the file), and auto-skip never touches it.
-     */
-    PostCredits("SKIP TO END")
-}
-
-internal data class IntroDbStamp(
-    val startMs: Long,
-    /**
-     * Where the segment stops, or null when the source only says where it
-     * starts. v4's credits and outro rows are commonly
-     * `{"start_ms": 8300000, "end_ms": null}` - a submitter marked where the
-     * credits begin and nobody marked where they stop - and the only end such a
-     * row can have is the end of the file. Resolving that against a duration is
-     * the player's job, since the player is the only part of the app that knows
-     * one: see [AutoSkipRules.segmentEndMs].
-     */
-    val endMs: Long?,
-    val type: IntroDbMarkerType,
-    /**
-     * Crowd-sourced confidence when the source reports one. Null means "not
-     * stated", which is treated as good enough — only a reported value below
-     * [AutoSkipRules.MIN_CONFIDENCE] blocks an automatic skip.
-     */
-    val confidence: Double? = null
-)
+// The stamp model and its source marker live in IntroDbModel.kt: they carry no
+// Android dependency, so the pure chain rules beside them can be tested on the
+// JVM without the app's BuildConfig and Uri.
 
 internal val introDbHttpClient = BaseHttpClient.derived {
     callTimeout(5, TimeUnit.SECONDS)
@@ -146,7 +120,10 @@ private fun JSONObject.readConfidence(): Double? = when (val raw = opt("confiden
  * an intro with no end is a skip with no target - so it is dropped, exactly as
  * a row with no start already was.
  */
-internal fun JSONObject.readIntroDbStamp(type: IntroDbMarkerType): IntroDbStamp? {
+internal fun JSONObject.readIntroDbStamp(
+    type: IntroDbMarkerType,
+    source: IntroDbSource = IntroDbSource.IntroDbApp
+): IntroDbStamp? {
     val startMs = readMillisField(this, "start_ms")
         ?: readSecondsField(this, "start_sec")
         ?: return null
@@ -155,10 +132,14 @@ internal fun JSONObject.readIntroDbStamp(type: IntroDbMarkerType): IntroDbStamp?
         ?: readSecondsField(this, "end_sec")
     if (endMs == null) {
         val openEnded = type == IntroDbMarkerType.Credits || type == IntroDbMarkerType.Outro
-        return if (openEnded) IntroDbStamp(startMs, null, type, readConfidence()) else null
+        return if (openEnded) {
+            IntroDbStamp(startMs, null, type, readConfidence(), source)
+        } else {
+            null
+        }
     }
     if (endMs <= startMs) return null
-    return IntroDbStamp(startMs, endMs, type, readConfidence())
+    return IntroDbStamp(startMs, endMs, type, readConfidence(), source)
 }
 
 /**
@@ -189,10 +170,12 @@ internal fun fetchIntroDbJson(url: String): JSONObject? = runCatching {
  */
 private fun readIntroDbSegments(root: JSONObject): List<IntroDbStamp> {
     fun one(key: String, type: IntroDbMarkerType): IntroDbStamp? =
-        root.optJSONObject(key)?.readIntroDbStamp(type)
+        root.optJSONObject(key)?.readIntroDbStamp(type, IntroDbSource.IntroDbApp)
             ?: root.optJSONArray(key)?.let { arr ->
                 (0 until arr.length())
-                    .mapNotNull { arr.optJSONObject(it)?.readIntroDbStamp(type) }
+                    .mapNotNull {
+                        arr.optJSONObject(it)?.readIntroDbStamp(type, IntroDbSource.IntroDbApp)
+                    }
                     .minByOrNull { it.startMs }
             }
 
@@ -211,21 +194,47 @@ private fun readIntroDbSegments(root: JSONObject): List<IntroDbStamp> {
  * Segments for one episode (season + episode present) or one movie (both null —
  * how the player represents a movie).
  *
- * Movie lookups need the explicit `is_movie=true` flag: without it the API
- * answers a TV query, which is why movies previously got no skip data at all.
- * Only an IMDb id can be sent there; a numeric TMDB id falls through to the
- * secondary source, which keys off `tmdb_id`.
+ * Four sources, in a fixed order, merged per segment KIND (F5, kinds combine):
+ * for each kind the first source in the chain that provides it wins and later
+ * sources' rows for that kind are ignored, because two services' timings for the
+ * same kind can come from different releases. The chain keeps going while any
+ * core kind is still missing, so a source that answers with only an intro no
+ * longer ends the lookup - that used to mean its credits were never asked for -
+ * and it stops as soon as every core kind is covered.
+ *
+ *  1. IntroDB.app - unchanged, first, IMDb ids only.
+ *  2. TheIntroDB v4 - unchanged, second: human-validated and the larger library,
+ *     so it outranks SkipDB.
+ *  3. SkipDB - general movies and TV, duration-aware, IMDb ids only.
+ *  4. AniSkip - anime TV episodes only, and last: narrowest (anime only) and the
+ *     most expensive (a Jikan title lookup before the skip-times call).
+ *
+ * Every leg fails on its own: a timeout, a 429 or an unreadable body contributes
+ * nothing and the chain moves on. Nothing here ever blocks playback, and nothing
+ * here writes to any service.
+ *
+ * [durationMs] and [showTitle] are optional so an older caller keeps compiling,
+ * but all three players pass both: the duration is what makes SkipDB shift its
+ * timestamps for a stream whose logo/scene length differs, and the title is the
+ * only way to find an anime's MyAnimeList id. A call with no title simply has no
+ * AniSkip leg.
  */
 internal suspend fun fetchIntroDbStamps(
     parentId: String,
     season: Int?,
-    episode: Int?
+    episode: Int?,
+    durationMs: Long? = null,
+    showTitle: String? = null
 ): List<IntroDbStamp> = withContext(Dispatchers.IO) {
     val normalizedId = parentId.trim()
-    val isImdbId = normalizedId.startsWith("tt") && normalizedId.drop(2).all { it.isDigit() }
+    val isImdbId = isSkipDbImdbId(normalizedId)
     val hasEpisode = season != null && episode != null
+    val episodeNumber = if (hasEpisode) episode else null
     val encodedId = Uri.encode(normalizedId)
 
+    var merged: List<IntroDbStamp> = emptyList()
+
+    // 1. IntroDB.app — IMDb ids only, and a movie needs the explicit flag.
     if (isImdbId) {
         val url = if (hasEpisode) {
             "https://api.introdb.app/segments?imdb_id=$encodedId&season=$season&episode=$episode"
@@ -233,21 +242,232 @@ internal suspend fun fetchIntroDbStamps(
             "https://api.introdb.app/segments?imdb_id=$encodedId&is_movie=true"
         }
         val markers = fetchIntroDbJson(url)?.let { readIntroDbSegments(it) }.orEmpty()
-        if (markers.isNotEmpty()) return@withContext markers
+        merged = mergeIntroDbStamps(merged, markers)
+        if (!introDbChainStillOpen(merged)) return@withContext merged
     }
 
+    // 2. TheIntroDB v4 — the id flavors it accepts, which are the ones this app
+    // has: an IMDb id, or a numeric TMDB id.
     val idQuery = when {
         isImdbId -> "imdb_id=$encodedId"
         normalizedId.toLongOrNull() != null -> "tmdb_id=$normalizedId"
-        else -> return@withContext emptyList()
+        else -> null
     }
-    val episodeQuery = if (hasEpisode) "&season=$season&episode=$episode" else ""
+    if (idQuery != null) {
+        val episodeQuery = if (hasEpisode) "&season=$season&episode=$episode" else ""
+        fetchIntroDbJson("$INTRO_DB_MEDIA_URL?$idQuery$episodeQuery")?.let { media ->
+            merged = mergeIntroDbStamps(merged, readIntroDbMedia(media))
+        }
+        if (!introDbChainStillOpen(merged)) return@withContext merged
+    }
 
-    val media = fetchIntroDbJson("$INTRO_DB_MEDIA_URL?$idQuery$episodeQuery")
-        ?: return@withContext emptyList()
+    // 3. SkipDB — IMDb ids only; it has no TMDB lookup.
+    if (isImdbId) {
+        merged = mergeIntroDbStamps(
+            merged,
+            fetchSkipDbStamps(normalizedId, season, episode, durationMs)
+        )
+        if (!introDbChainStillOpen(merged)) return@withContext merged
+    }
 
-    readIntroDbMedia(media)
+    // 4. AniSkip — episode-addressed, so a movie never reaches it. The Jikan
+    // title gate runs first and decides whether this title is anime at all.
+    if (hasEpisode && episodeNumber != null) {
+        merged = mergeIntroDbStamps(
+            merged,
+            fetchAniSkipStamps(showTitle, episodeNumber, durationMs)
+        )
+    }
+
+    merged
 }
+
+/**
+ * SkipDB's segments for one episode or movie.
+ *
+ * Duration-aware on purpose: with the stream's length in hand SkipDB matches the
+ * row to the viewer's release and shifts it EARLIER (never later, see
+ * [skipDbSegmentsUrl]) when the two differ by a logo. Its response reports the
+ * shift, the confidence and whether the row is `exact`, `shifted`, `agnostic` or
+ * `out-of-range`; the confidence is the only one of those this app acts on,
+ * through the existing [AutoSkipRules.MIN_CONFIDENCE] gate, so an `out-of-range`
+ * row still gets a button but is never skipped on its own.
+ *
+ * Read-only and keyless. Any failure is no data.
+ */
+internal suspend fun fetchSkipDbStamps(
+    parentId: String,
+    season: Int?,
+    episode: Int?,
+    durationMs: Long?
+): List<IntroDbStamp> {
+    if (!isSkipDbImdbId(parentId)) return emptyList()
+    val body = fetchIntroDbJson(skipDbSegmentsUrl(parentId, season, episode, durationMs))
+        ?: return emptyList()
+    return readSkipDbSegments(body)
+}
+
+/**
+ * Reads a SkipDB `/api/segments` body.
+ *
+ * `segments` always carries all four keys and a key is `null` when SkipDB has no
+ * approved row for that type, so an absent segment is the normal answer, not an
+ * error. SkipDB's `outro` IS the end-credits block - "SKIP CREDITS" is the label
+ * the viewer expects there, and `Credits` and `Outro` are gated by the same
+ * skip-credits pref, so mapping it to `Credits` changes a label and nothing
+ * else.
+ *
+ * The rows are the same `start_ms` / `end_ms` / `confidence` shape the other two
+ * readers already parse, so they go through [readIntroDbStamp]: a credits row
+ * with no end stays open-ended and the player resolves it against the file's
+ * duration, exactly as a TheIntroDB credits row does.
+ */
+internal fun readSkipDbSegments(root: JSONObject): List<IntroDbStamp> {
+    val segments = root.optJSONObject("segments") ?: return emptyList()
+
+    fun one(key: String, type: IntroDbMarkerType): IntroDbStamp? =
+        segments.optJSONObject(key)?.readIntroDbStamp(type, IntroDbSource.SkipDb)
+
+    return listOfNotNull(
+        one("intro", IntroDbMarkerType.Intro),
+        one("recap", IntroDbMarkerType.Recap),
+        one("outro", IntroDbMarkerType.Credits),
+        one("preview", IntroDbMarkerType.Preview)
+    )
+}
+
+/**
+ * AniSkip's skip times for one anime episode, after the MAL id is resolved.
+ *
+ * Anime TV episodes only: the endpoint is episode-addressed, so calling it with
+ * `episode=1` for an anime FILM would be a wrong lookup rather than a fallback,
+ * and a null episode means there is nothing to ask.
+ *
+ * The stamps it returns are marked [IntroDbSource.AniSkip], which is what keeps
+ * them button-only after the merge (see [AutoSkipRules.shouldAutoSkip]).
+ */
+internal suspend fun fetchAniSkipStamps(
+    showTitle: String?,
+    episode: Int?,
+    durationMs: Long?
+): List<IntroDbStamp> {
+    val episodeNumber = episode ?: return emptyList()
+    val malId = resolveMalId(showTitle) ?: return emptyList()
+    val body = fetchIntroDbJson(aniSkipTimesUrl(malId, episodeNumber, durationMs))
+        ?: return emptyList()
+    return readAniSkipResults(body)
+}
+
+/**
+ * Reads an AniSkip `/v2/skip-times` body.
+ *
+ * SECONDS, not milliseconds: AniSkip's `interval.startTime` / `endTime` are float
+ * seconds, and they are the one place in this chain where the unit differs. The
+ * conversion happens in [readSecondsField], which multiplies by 1000 - a reader
+ * that treated these as millis would put every anime skip 1000x too early, and a
+ * reader that divided instead would put it 1000x too late.
+ *
+ * `mixed-op` / `mixed-ed` are mapped alongside `op` / `ed` on the API docs'
+ * description of the mixed segments; if the service never returns them under the
+ * `types[]` this app asks for, those two rows simply never fire. Every other
+ * `skipType` (including `mixed`) is ignored: there is no kind the viewer could be
+ * offered for it.
+ *
+ * AniSkip reports no confidence, so these rows carry `null` ("not stated"). That
+ * is exactly why the source marker matters: the confidence gate cannot protect a
+ * row that has no confidence, so the button-only rule does it instead.
+ */
+internal fun readAniSkipResults(root: JSONObject): List<IntroDbStamp> {
+    val results = root.optJSONArray("results") ?: return emptyList()
+
+    return (0 until results.length()).mapNotNull { index ->
+        readAniSkipResult(results.optJSONObject(index))
+    }
+}
+
+private fun readAniSkipResult(row: JSONObject?): IntroDbStamp? {
+    val result = row ?: return null
+
+    val type = when (result.optString("skipType").trim().lowercase(Locale.ROOT)) {
+        "op", "mixed-op" -> IntroDbMarkerType.Intro
+        "ed", "mixed-ed" -> IntroDbMarkerType.Credits
+        "recap" -> IntroDbMarkerType.Recap
+        else -> return null
+    }
+
+    val interval = result.optJSONObject("interval") ?: return null
+
+    // Seconds in, milliseconds out - the chain's one unit change.
+    val startMs = readSecondsField(interval, "startTime") ?: return null
+    val endMs = readSecondsField(interval, "endTime") ?: return null
+
+    if (startMs < 0L || endMs <= startMs) return null
+
+    return IntroDbStamp(
+        startMs = startMs,
+        endMs = endMs,
+        type = type,
+        confidence = null,
+        source = IntroDbSource.AniSkip
+    )
+}
+
+/**
+ * The MyAnimeList id for [showTitle], remembered for the life of the process.
+ *
+ * Without the cache every episode of one anime would cost a Jikan call; with it,
+ * one call per show per session. A successful search that names no matching
+ * title is cached too - "this show is not that anime" is an answer, and asking
+ * again for the next episode would only repeat it. A FAILED call is not cached:
+ * a 429 or an outage must not become a permanent verdict for the session.
+ */
+internal suspend fun resolveMalId(showTitle: String?): Int? {
+    val normalized = normalizeAnimeTitle(showTitle)
+    if (normalized.isEmpty()) return null
+
+    malResolutions[normalized]?.let { remembered -> return remembered.malId }
+
+    val body = fetchIntroDbJson(jikanSearchUrl(showTitle ?: "")) ?: return null
+    val malId = readJikanMalId(body, showTitle)
+    malResolutions[normalized] = MalResolution(malId)
+    return malId
+}
+
+/**
+ * The first Jikan result's MAL id, and only when its title matches [showTitle].
+ *
+ * The title gate is the whole safety of this leg: Jikan answers a fuzzy search,
+ * so asking about a live-action show can return an anime with a similar name, and
+ * accepting it would give that live-action episode an anime's OP/ED times.
+ */
+internal fun readJikanMalId(root: JSONObject, showTitle: String?): Int? {
+    val first = root.optJSONArray("data")?.optJSONObject(0) ?: return null
+    val malId = first.optInt("mal_id", 0).takeIf { it > 0 } ?: return null
+
+    val titles = first.optJSONArray("titles")
+    val names = if (titles == null) {
+        emptyList()
+    } else {
+        (0 until titles.length()).mapNotNull { index ->
+            titles.optJSONObject(index)?.optString("title")
+        }
+    }
+
+    val matches = animeTitleMatches(
+        showTitle = showTitle,
+        title = first.optString("title"),
+        titleEnglish = first.optString("title_english"),
+        titles = names
+    )
+
+    return if (matches) malId else null
+}
+
+/** A remembered Jikan answer: an id, or a "not this anime" verdict. */
+private class MalResolution(val malId: Int?)
+
+/** Keyed by [normalizeAnimeTitle], so spacing and case cannot split the cache. */
+private val malResolutions = ConcurrentHashMap<String, MalResolution>()
 
 /**
  * Reads one `/media` body into stamps.
@@ -266,7 +486,9 @@ internal suspend fun fetchIntroDbStamps(
 internal fun readIntroDbMedia(media: JSONObject): List<IntroDbStamp> {
     fun readArray(key: String, type: IntroDbMarkerType): List<IntroDbStamp> {
         val arr = media.optJSONArray(key) ?: return emptyList()
-        return (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.readIntroDbStamp(type) }
+        return (0 until arr.length()).mapNotNull {
+            arr.optJSONObject(it)?.readIntroDbStamp(type, IntroDbSource.TheIntroDb)
+        }
     }
 
     return readArray("intro", IntroDbMarkerType.Intro) +

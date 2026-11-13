@@ -5144,8 +5144,21 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      */
     private fun setupIntroDb() {
         lifecycleScope.launch {
+            // Duration and title are handed to the chain (spec 2026-11-13):
+            // SkipDB only shifts a row onto this release when it knows the
+            // stream's length, and AniSkip can only be found through the title.
+            // mpv reports its duration once the file opens, so a session whose
+            // lookup beats the first frame simply has no duration to give.
             val stamps = withContext(Dispatchers.IO) {
-                runCatchingCancellable { fetchIntroDbStamps(parentId, season, episode) }
+                runCatchingCancellable {
+                    fetchIntroDbStamps(
+                        parentId,
+                        season,
+                        episode,
+                        durationMs.takeIf { it > 0L },
+                        itemName.takeIf { it.isNotBlank() }
+                    )
+                }
                     .getOrElse { error ->
                         Log.w(TAG, "IntroDB lookup failed", error)
                         emptyList()
