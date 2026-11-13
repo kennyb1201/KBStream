@@ -1971,6 +1971,29 @@ fun DetailScreenMobile(
                                 }
                             }
                         }
+                        // Play on TV (spec 2026-11-13, F3): browse here, watch
+                        // there. The phone sends the id and its type only; the TV
+                        // resolves the add-on, picks the source and resumes from
+                        // ITS stored playhead, through its own Continue Watching
+                        // path - this is not a second playback route.
+                        KBButton(
+                            label = "PLAY ON TV",
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            val sent = com.kennyb1201.kbstream.data.remote
+                                .RemoteClientProvider.get(context)
+                                .playOnTv(id, normalizedType)
+                            Toast.makeText(
+                                context,
+                                if (sent) {
+                                    "Playing on TV"
+                                } else {
+                                    "Connect to your TV first: Settings → Remote"
+                                },
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+
                         if (ratingDialog) {
                             TouchTitleRatingDialog(
                                 title = libraryTarget.title,

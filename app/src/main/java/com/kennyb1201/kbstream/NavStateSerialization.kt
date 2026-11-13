@@ -360,6 +360,10 @@ internal fun decodeScreen(
             "sports" -> Screen.Sports()
             "library" -> Screen.Library
             "settings" -> Screen.Settings
+            // The phone's remote is a live connection, not a place: restoring it
+            // without a socket would draw a keyboard with nothing on the other
+            // end, so a restored route starts discovery from scratch.
+            "remote" -> Screen.Remote
             "stats" -> Screen.Stats
             // The year's own numbers are cached per (profile, year) and are
             // cheap to rebuild, so only the route is restored - the year the
@@ -552,6 +556,7 @@ internal val Screen.navDepth: Int
         is Screen.CatalogBuilder -> 2
         // Reached through Settings, so it slides forward like the builder.
         is Screen.Stats -> 2
+        is Screen.Remote -> 2
         // Reached through Settings or Library, so it slides forward like the
         // stats page does.
         is Screen.YearReview -> 2
@@ -586,6 +591,7 @@ internal fun Screen.typeName(): String = when (this) {
     is Screen.Sports -> "sports"
     is Screen.Library -> "library"
     is Screen.Settings -> "settings"
+    is Screen.Remote -> "remote"
     is Screen.Stats -> "stats"
     is Screen.YearReview -> "yearReview"
     is Screen.Detail -> "detail"

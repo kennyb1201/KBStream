@@ -206,6 +206,12 @@ fun SettingsScreenMobile(
     onOpenCatalogManager: () -> Unit = {},
     onOpenCatalogBuilder: () -> Unit = {},
     onOpenStats: () -> Unit = {},
+    /**
+     * Opens the phone remote (spec 2026-11-13). A row here, in Settings - not on
+     * Home and not on the bottom bar: it is a tool you reach for, not a
+     * destination you live in.
+     */
+    onOpenRemote: () -> Unit = {},
     /** Opens the Year in review for one year (null = this year). */
     onOpenYearReview: (Int?) -> Unit = {},
     /**
@@ -299,6 +305,7 @@ fun SettingsScreenMobile(
                         AppPreferences.setLastSettingsPane(context, opened.name)
                     },
                     onOpenDownloads = { downloadsOpen = true },
+                    onOpenRemote = onOpenRemote,
                     onSearchJump = { entry ->
                         searchJump = entry
                         pane = entry.pane
@@ -376,6 +383,8 @@ fun SettingsScreenMobile(
 private fun SettingsHomeMobile(
     onOpen: (SettingsPane) -> Unit,
     onOpenDownloads: () -> Unit,
+    /** Opens the phone remote: the row is on this root list, not in a pane. */
+    onOpenRemote: () -> Unit,
     /**
      * A row result was tapped: switch to its pane and jump to the row. The
      * parent owns the jump because the panes compose there (settings reorg
@@ -440,6 +449,20 @@ private fun SettingsHomeMobile(
                     label = "Downloads",
                     blurb = downloadsSummary(context),
                     onClick = onOpenDownloads
+                )
+            }
+            // The phone's own section beside Downloads (spec 2026-11-13, F2):
+            // the Remote row lives on the Settings root - not on Home, not on
+            // the bottom bar - because it is a tool you reach for, not a
+            // destination you live in.
+            item(key = "remote_section") {
+                MobileEyebrow("Phone Remote")
+            }
+            item(key = "remote_row") {
+                SettingsHomeRowMobile(
+                    label = "Remote",
+                    blurb = "Use this phone as a remote for KBStream on your TV",
+                    onClick = onOpenRemote
                 )
             }
 

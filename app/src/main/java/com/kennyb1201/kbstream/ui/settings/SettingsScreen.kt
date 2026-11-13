@@ -347,6 +347,12 @@ fun SettingsScreen(
     onOpenCatalogBuilder: () -> Unit = {},
     /** Opens the read-only Viewing stats screen (finished watches). */
     onOpenStats: () -> Unit = {},
+    /**
+     * Opens the phone remote. Phone-only (the row lives in the phone's Settings,
+     * spec 2026-11-13); on the TV this Settings page owns the pairing code
+     * itself, so it never calls this.
+     */
+    onOpenRemote: () -> Unit = {},
     /** Opens the Year in review for one year (null = this year). */
     onOpenYearReview: (Int?) -> Unit = {},
     /**
@@ -381,6 +387,7 @@ fun SettingsScreen(
             onOpenCatalogManager = onOpenCatalogManager,
             onOpenCatalogBuilder = onOpenCatalogBuilder,
             onOpenStats = onOpenStats,
+            onOpenRemote = onOpenRemote,
             onOpenYearReview = onOpenYearReview,
             onOpenTorBoxFile = onOpenTorBoxFile
         )
@@ -2318,6 +2325,17 @@ fun SettingsScreen(
                     )
                 }
 
+                }
+
+                if (selectedPane == SettingsPane.INTEGRATIONS) {
+                    // The phone remote's TV half (spec 2026-11-13, F1): the
+                    // pairing code and the phones paired with this box. It sits
+                    // in Integrations because that is the pane of things
+                    // connected to this app, and the code has to be readable on
+                    // the TV to be usable at all.
+                    Spacer(modifier = Modifier.height(12.dp))
+                    SettingsSectionHeader("Phone Remote")
+                    RemoteSection()
                 }
 
                 if (selectedPane == SettingsPane.COLLECTIONS) {

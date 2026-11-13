@@ -5,6 +5,16 @@
          declares 24), so no tools:overrideLibrary is needed here. -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- The phone-as-a-remote channel (spec 2026-11-13). The TV advertises over
+         Android NSD and binds its socket to its own LAN address only; the phone
+         discovers on the current Wi-Fi and refuses to look on mobile data, which
+         is what needs the network-state permission. Nothing here reaches the
+         internet, and no account, token or cloud relay is involved. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- NSD advertises over multicast on some networks; declaring this lets the
+         device participate when the platform requires the lock, and costs
+         nothing when it does not. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <!-- No PICTURE_IN_PICTURE permission: it is not a platform permission. PiP
          is granted per activity by android:supportsPictureInPicture, which the
          two player activities already declare; the line here was dead weight

@@ -319,6 +319,17 @@ sealed class Screen {
     object Settings : Screen()
 
     /**
+     * The phone's remote control (spec 2026-11-13, F2).
+     *
+     * Reached from the phone's Settings row and nowhere else: not Home, not the
+     * bottom bar. It has no state of its own - which TV is connected, whether a
+     * PIN is wanted and whether the socket is up all live in the client the
+     * screen owns - so a navigation away and back starts from discovery again
+     * rather than restoring a stale connection.
+     */
+    object Remote : Screen()
+
+    /**
      * The viewing-stats page, opened from Settings' Data pane. A screen of its
      * own rather than a pane: its numbers are read from the profile's own
      * history and its list can be long, so it scrolls independently and Back
@@ -2175,6 +2186,38 @@ fun AppRoot(
         TvLauncherPublisher.sync(context, entries)
     }
 
+    // A "Play on TV" from the phone (spec 2026-11-13, F3). The TV is handed a
+    // title id, looks up its own resume row, and routes through the same
+    // Detail + pendingTarget path a Continue Watching card press uses - so the
+    // add-on resolution, source pick and resume point are the TV's own, not a
+    // second playback path. A title with no progress opens its Detail page.
+    LaunchedEffect(Unit) {
+        com.kennyb1201.kbstream.data.remote.RemotePlayBus.plans.collect { plan ->
+            if (plan == null) return@collect
+            com.kennyb1201.kbstream.data.remote.RemotePlayBus.consume(plan)
+            val resume = plan.resume
+            screen = if (resume != null) {
+                cwWidgetDetailScreen(
+                    parentType = plan.mediaType,
+                    parentId = plan.id,
+                    streamId = resume.streamId,
+                    showTitle = resume.title,
+                    episodeTitle = resume.episodeTitle,
+                    season = resume.season,
+                    episode = resume.episode,
+                    positionMs = resume.positionMs,
+                    poster = resume.poster
+                )
+            } else {
+                Screen.Detail(
+                    type = plan.mediaType,
+                    id = plan.id,
+                    returnTo = Screen.Home
+                )
+            }
+        }
+    }
+
     // "Back to exit" confirmation: on Home, Back opens an exit prompt instead
     // of finishing the Activity immediately, so an accidental press can't drop
     // the user out of the app. The profile picker gets the same treatment —
@@ -2745,6 +2788,12 @@ fun AppRoot(
             )
         }
 
+        is Screen.Remote -> {
+            com.kennyb1201.kbstream.ui.remote.RemoteScreen(
+                onBack = { screen = Screen.Settings }
+            )
+        }
+
         is Screen.Settings -> {
             // The Public lists section's BingeCat row opens the SAME browser
             // the connect page's BROWSE PUBLIC LISTS button opens. That
@@ -2823,6 +2872,9 @@ fun AppRoot(
                     }
                 },
                 onOpenStats = { screen = Screen.Stats },
+                // The phone's remote screen (spec 2026-11-13, F2). Present on the
+                // TV call too and harmless there: the TV never draws the row.
+                onOpenRemote = { screen = Screen.Remote },
                 onOpenYearReview = { year ->
                     screen = Screen.YearReview(year = year, returnTo = Screen.Settings)
                 },

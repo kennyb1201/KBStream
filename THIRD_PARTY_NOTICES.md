@@ -49,6 +49,8 @@ apart from attribution, impose no distribution obligations:
 - Supabase-kt — MIT
 - KSP — Apache-2.0
 - desugar_jdk_libs (`com.android.tools:desugar_jdk_libs_nio`) — Apache-2.0
+- NanoHTTPD (`org.nanohttpd:nanohttpd-websocket`, the TV's local server for the
+  phone-as-a-remote channel; nothing about it is cloud-side) — BSD-3-Clause
 
 ## Trademarks and data sources
 

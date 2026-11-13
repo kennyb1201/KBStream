@@ -640,6 +640,9 @@ dependencies {
     // reflection claim every model before the generated adapter is ever
     // looked up, and this dependency would be dead weight.
     implementation(libs.moshi.kotlin)
+    // The phone-as-a-remote channel: the TV runs a small WebSocket server on
+    // the Wi-Fi interface, the phone opens it with the OkHttp already here.
+    implementation(libs.nanohttpd.websocket)
     implementation(libs.zxing.core)
 
     // Baseline profiles, runtime half. The profile itself (a list of the

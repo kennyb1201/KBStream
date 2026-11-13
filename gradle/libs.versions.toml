@@ -53,6 +53,10 @@ newpipe-extractor = "43f8e6ebeef4"
 sentry = "8.62.0"
 supabase = "3.9.0"
 ktor = "3.6.1"
+# The TV's local remote-control server: a WebSocket server in ~100 KB. Ktor
+# server is not in the catalog (only ktor-client-okhttp), and a hand-rolled
+# RFC 6455 server is more code than this feature should own.
+nanohttpd = "2.3.1"
 kotlinx-serialization = "1.12.0"
 desugar = "2.1.5"
 
@@ -102,6 +106,7 @@ okhttp-core = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 okhttp-logging-interceptor = { module = "com.squareup.okhttp3:logging-interceptor", version.ref = "okhttp" }
 okhttp-brotli = { module = "com.squareup.okhttp3:okhttp-brotli", version.ref = "okhttp" }
 moshi-kotlin = { module = "com.squareup.moshi:moshi-kotlin", version.ref = "moshi" }
+nanohttpd-websocket = { module = "org.nanohttpd:nanohttpd-websocket", version.ref = "nanohttpd" }
 moshi-codegen = { module = "com.squareup.moshi:moshi-kotlin-codegen", version.ref = "moshi" }
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 

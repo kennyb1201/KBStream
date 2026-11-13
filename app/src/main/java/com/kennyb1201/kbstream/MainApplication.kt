@@ -90,6 +90,24 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         // them degrades a feature, but must never take down the launch.
         // runCatching catches Throwable, covering Error subclasses that the
         // inner try/catch(Exception) blocks cannot see.
+        // Phone-as-a-remote (spec 2026-11-13). The TV advertises itself over NSD
+        // and serves its own LAN address; a phone never starts a server, it only
+        // discovers. Both sides install the key injector, which is inert until an
+        // activity is in front. Off the launch path: enumerating interfaces and
+        // binding a socket is I/O, and nothing on the first frame needs it.
+        runCatching {
+            com.kennyb1201.kbstream.data.remote.RemoteKeyInjector.install(this)
+            if (FormFactor.isTv) {
+                startupScope.launch {
+                    com.kennyb1201.kbstream.data.remote.RemoteControlRuntime
+                        .start(this@MainApplication)
+                }
+            }
+        }.onFailure {
+            com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+                it, mapOf("source" to "app_create_remote_start")
+            )
+        }
         runCatching { com.kennyb1201.kbstream.data.sync.SupabaseSync.init(this) }
             .onFailure {
                 com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
