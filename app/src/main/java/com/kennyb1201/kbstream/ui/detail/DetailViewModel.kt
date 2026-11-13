@@ -288,7 +288,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
      * same - three tabs and no error.
      */
     private val _animeThemes = MutableStateFlow<List<AnimeTheme>>(emptyList())
-    val animeThemes: StateFlow<List<AnimeTheme>> = _animeThemes.asStateFlow()
+    internal val animeThemes: StateFlow<List<AnimeTheme>> = _animeThemes.asStateFlow()
 
     /**
      * The anime ID hub's answer for this title (spec 2026-11-13, F1/F3).
@@ -300,7 +300,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
      * Detail header simply draws nothing for it.
      */
     private val _animeIdentity = MutableStateFlow(AnimeIdentity())
-    val animeIdentity: StateFlow<AnimeIdentity> = _animeIdentity.asStateFlow()
+    internal val animeIdentity: StateFlow<AnimeIdentity> = _animeIdentity.asStateFlow()
 
     /**
      * Whether this ViewModel has already asked for the themes.
