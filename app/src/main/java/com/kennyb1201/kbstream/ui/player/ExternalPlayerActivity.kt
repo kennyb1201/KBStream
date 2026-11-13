@@ -972,6 +972,7 @@ class ExternalPlayerActivity : ComponentActivity() {
             saveProgress(forceCompleted = true)
             scrobble("stop", progressOverride = 100.0)
             scrobbleKitsu()
+            scrobbleAniList()
             showEndPanels()
         } else {
             // A mid-title return: record the position and hand the viewer back
@@ -1824,6 +1825,34 @@ class ExternalPlayerActivity : ComponentActivity() {
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             runCatching {
                 com.kennyb1201.kbstream.data.kitsu.KitsuWrites.markEpisodeWatched(
+                    context = applicationContext,
+                    showTitle = title,
+                    episode = episodeNumber,
+                    totalEpisodes = total,
+                    sessionProfileId = sessionProfileId
+                )
+            }
+        }
+    }
+
+    /**
+     * The AniList leg of a completion (spec 2026-11-13 phase 2, F3).
+     *
+     * The external player returns only a position, so "finished" is the same
+     * evidence the other legs use; the write itself is gated on the connection
+     * inside [AniListWrites], so nothing here decides whether AniList is
+     * configured.
+     */
+    private fun scrobbleAniList() {
+        if (isLiveChannel || parentId.isBlank()) return
+        if (!parentType.equals("series", ignoreCase = true)) return
+        val episodeNumber = episode?.takeIf { it > 0 } ?: return
+        val title = itemName.takeIf { it.isNotBlank() } ?: return
+        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return
+        val total = totalEpisodesInSeason
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching {
+                com.kennyb1201.kbstream.data.anime.AniListWrites.markEpisodeWatched(
                     context = applicationContext,
                     showTitle = title,
                     episode = episodeNumber,

@@ -52,6 +52,8 @@ internal object AniListClient {
 
     private val gate = Mutex()
     private val recentRequestsMs = ArrayDeque<Long>()
+
+    @Volatile
     private var parkedUntilMs = 0L
 
     /**
@@ -92,6 +94,87 @@ internal object AniListClient {
         return post(MEDIA_LIST_COLLECTION_QUERY, variables)?.optJSONObject("data")
             ?.optJSONObject("MediaListCollection")
     }
+
+    /**
+     * The authenticated viewer (`Viewer { id name }`), or null.
+     *
+     * The connect's own validation: a pasted token is kept only when AniList
+     * accepts it as a session, so the row never shows Connected for a value that
+     * every write would refuse.
+     */
+    suspend fun viewer(accessToken: String): JSONObject? =
+        when (val answer = authed(
+            query = AniListWriteRules.VIEWER_QUERY,
+            variables = JSONObject(),
+            accessToken = accessToken
+        )) {
+            is AniListAnswer.Ok -> answer.json.optJSONObject("data")?.optJSONObject("Viewer")
+            else -> null
+        }
+
+    /**
+     * One authenticated GraphQL POST (phase 2, F3).
+     *
+     * It shares the READ client's one-minute window and its 429 park, because the
+     * limit is per-token, not per-endpoint: a page of reads and a burst of writes
+     * draw on the same 30-a-minute budget, so two independent gates would let the
+     * app exceed it. The answer is classified rather than nulled, because a write
+     * needs to know a 401 from a 429 from a network failure - those three mean
+     * "reconnect", "wait" and "try again later" respectively.
+     */
+    suspend fun authed(
+        query: String,
+        variables: JSONObject,
+        accessToken: String
+    ): AniListAnswer =
+        withContext(Dispatchers.IO) {
+            if (accessToken.isBlank()) return@withContext AniListAnswer.Unauthorized
+            awaitSlot()
+
+            val body = JSONObject()
+                .put("query", query)
+                .put("variables", variables)
+                .toString()
+
+            val request =
+                Request.Builder()
+                    .url(GRAPHQL_URL)
+                    .header("User-Agent", USER_AGENT)
+                    .header("Accept", "application/json")
+                    .header("Authorization", "Bearer $accessToken")
+                    .post(body.toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
+
+            runCatching {
+                httpClient.newCall(request).execute().use { response ->
+                    when {
+                        response.code == 401 || response.code == 403 ->
+                            AniListAnswer.Unauthorized
+                        response.code == 429 -> {
+                            val until = AniListWriteRules.parkMs(
+                                response.header("Retry-After"),
+                                System.currentTimeMillis()
+                            )
+                            parkedUntilMs = until
+                            AniListAnswer.Parked(until)
+                        }
+                        !response.isSuccessful ->
+                            AniListAnswer.Failed("HTTP ${response.code}")
+                        else -> {
+                            val json = JSONObject(response.body?.string().orEmpty())
+                            if (json.has("errors") && !json.has("data")) {
+                                AniListAnswer.Failed("graphql error")
+                            } else {
+                                AniListAnswer.Ok(json)
+                            }
+                        }
+                    }
+                }
+            }.getOrElse { error -> AniListAnswer.Failed(error.javaClass.simpleName) }
+        }
+
+    /** True when a 429 parked every call until [nowMs] has passed. */
+    fun parked(nowMs: Long = System.currentTimeMillis()): Boolean = parkedUntilMs > nowMs
 
     /**
      * One GraphQL POST, rate-limited and parked on 429.
@@ -177,4 +260,22 @@ internal object AniListClient {
         recentRequestsMs.clear()
         parkedUntilMs = 0L
     }
+}
+
+/**
+ * What one authenticated GraphQL POST said (spec 2026-11-13 phase 2, F3).
+ *
+ * Four answers, because the caller acts differently on each: [Ok] carries the
+ * envelope, [Unauthorized] means "mark the connection needs-reconnect and stop"
+ * (AniList has no refresh to attempt), [Parked] means "wait out the window", and
+ * [Failed] means "this attempt failed, the next may not".
+ */
+internal sealed interface AniListAnswer {
+    data class Ok(val json: JSONObject) : AniListAnswer
+
+    data object Unauthorized : AniListAnswer
+
+    data class Parked(val untilMs: Long) : AniListAnswer
+
+    data class Failed(val reason: String) : AniListAnswer
 }

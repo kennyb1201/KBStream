@@ -6233,6 +6233,8 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             if (action == "stop" && progress >= 99.0) {
                 runCatchingCancellable { scrobbleKitsu() }
                     .onFailure { Log.w(TAG, "Kitsu scrobble/$action failed", it) }
+                runCatchingCancellable { scrobbleAniList() }
+                    .onFailure { Log.w(TAG, "AniList scrobble/$action failed", it) }
             }
         }
     }
@@ -6260,6 +6262,34 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             runCatching {
                 com.kennyb1201.kbstream.data.kitsu.KitsuWrites.markEpisodeWatched(
+                    context = applicationContext,
+                    showTitle = title,
+                    episode = episodeNumber,
+                    totalEpisodes = total,
+                    sessionProfileId = sessionProfileId
+                )
+            }
+        }
+    }
+
+    /**
+     * The AniList leg of a completion (spec 2026-11-13 phase 2, F3).
+     *
+     * Fire-and-forget beside Simkl/Trakt/MDBList/Kitsu, gated on the connection
+     * inside [AniListWrites], and only for a series episode - AniList's progress
+     * is "episodes watched". Its own scope, so a stop scrobble outlives this
+     * activity.
+     */
+    private fun scrobbleAniList() {
+        if (parentType == "channel" || parentId.isBlank()) return
+        if (!parentType.equals("series", ignoreCase = true)) return
+        val episodeNumber = episode?.takeIf { it > 0 } ?: return
+        val title = itemName.takeIf { it.isNotBlank() } ?: return
+        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return
+        val total = totalEpisodesInSeason
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching {
+                com.kennyb1201.kbstream.data.anime.AniListWrites.markEpisodeWatched(
                     context = applicationContext,
                     showTitle = title,
                     episode = episodeNumber,

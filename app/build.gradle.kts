@@ -122,6 +122,17 @@ val kitsuClientId = localProps.getProperty("KITSU_CLIENT_ID")
     ?: System.getenv("KITSU_CLIENT_ID")
     ?: ""
 
+// AniList, by client id only - and here that is not a preference but the whole
+// reason the connect works. AniList issues every app a client SECRET and its
+// Authorization Code grant needs it in the token exchange, but a secret compiled
+// into an APK is recoverable from every published build. AniList's own docs route
+// a client that cannot store one to the IMPLICIT grant, whose auth-pin page hands
+// the viewer a token to paste - so that is the flow, and only the id travels in
+// the authorize URL. A blank id is an inert row, not a broken build.
+val aniListClientId = localProps.getProperty("ANILIST_CLIENT_ID")
+    ?: System.getenv("ANILIST_CLIENT_ID")
+    ?: ""
+
 // BingeCat, by client id only - the same rule as Trakt and Simkl above, and for
 // the same reason. The BingeCat contract defines the `bingecat-api-key` header
 // as the application's `client_id` ("must match the JSON client_id where a body
@@ -293,6 +304,7 @@ android {
         buildConfigField("String", "TRAKT_CLIENT_ID", "\"$traktClientId\"")
         buildConfigField("String", "MAL_CLIENT_ID", "\"$malClientId\"")
         buildConfigField("String", "KITSU_CLIENT_ID", "\"$kitsuClientId\"")
+        buildConfigField("String", "ANILIST_CLIENT_ID", "\"$aniListClientId\"")
         buildConfigField("String", "BINGECAT_CLIENT_ID", "\"$bingecatClientId\"")
         buildConfigField("String", "SENTRY_DSN", "\"$sentryDsn\"")
         buildConfigField("String", "MDBLIST_API_KEY", "\"$mdbListApiKey\"")

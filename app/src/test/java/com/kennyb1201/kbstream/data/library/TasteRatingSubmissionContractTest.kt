@@ -214,14 +214,14 @@ class TasteRatingSubmissionContractTest {
         val src = source(SUBMISSION)
 
         assertEquals(
-            // Four legs since Kitsu joined Trakt, Simkl and MDBList.
+            // Five legs since AniList joined Trakt, Simkl, MDBList and Kitsu.
             "every leg answers PAUSED by sending nothing at all",
-            4,
+            5,
             count(src, "PAUSED -> Unit")
         )
         assertEquals(
             "and an attempt is recorded only where there was no usable answer",
-            4,
+            5,
             count(src, "TasteRatingQueue.markAttempt(")
         )
         assertTrue(
@@ -229,7 +229,8 @@ class TasteRatingSubmissionContractTest {
             src.contains("closeLeg(app, TasteRatingTracker.TRAKT)") &&
                 src.contains("closeLeg(app, TasteRatingTracker.SIMKL)") &&
                 src.contains("closeLeg(app, TasteRatingTracker.MDBLIST)") &&
-                src.contains("closeLeg(app, TasteRatingTracker.KITSU)")
+                src.contains("closeLeg(app, TasteRatingTracker.KITSU)") &&
+                src.contains("closeLeg(app, TasteRatingTracker.ANILIST)")
         )
         assertTrue(
             "and MDBList has no pause of its own for the drain to wait out",

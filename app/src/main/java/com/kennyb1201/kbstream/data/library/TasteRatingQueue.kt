@@ -29,7 +29,14 @@ enum class TasteRatingTracker(val label: String) {
      * purpose: a stored queue names its tracker by [name], so appending keeps
      * every existing entry readable by an older build's `from()`.
      */
-    KITSU("Kitsu");
+    KITSU("Kitsu"),
+
+    /**
+     * AniList (spec 2026-11-13 phase 2, F3). Appended for the same reason Kitsu
+     * was: a stored queue names its tracker by [name], so a new value goes at the
+     * end and every existing row stays readable.
+     */
+    ANILIST("AniList");
 
     companion object {
         /** The tracker a stored entry names, or null for a value this build does not know. */

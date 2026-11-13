@@ -193,21 +193,32 @@ class KitsuConnectContractTest {
         assertTrue(submission.contains("closeLeg(app, TasteRatingTracker.KITSU)"))
     }
 
-    // ── AniList: reported, not shipped ────────────────────────────────────
+    // ── AniList: the gate, and what cleared it ────────────────────────────
 
     @Test
-    fun `no AniList write path exists in this build`() {
-        // The spec's own gate: AniList's current terms prohibit use in competing
-        // list/tracker services, and permission cannot be confirmed from here, so
-        // the AniList leg stays read-only. This test fails the day someone adds a
-        // mutation without that decision being made.
-        assertFalse(File("$kitsu/AniListWrites.kt").exists())
-        assertFalse(File("$root/data/anilist/AniListWrites.kt").exists())
+    fun `the AniList writes ship only with a recorded terms reading and no secret`() {
+        // The spec's gate, decided 2026-11-13: AniList's terms prohibit use
+        // "within competing, non-complementary services of the same nature ...
+        // including ... anime and manga list or tracker services". KBStream is a
+        // player that MIRRORS the viewer's progress INTO AniList - complementary,
+        // not competing, and the use AniList's own auth docs invite - so the
+        // writes ship. This test keeps the two things that must stay true of
+        // that decision visible in the tree: the reading is recorded in the write
+        // path, and the connect still carries no client secret.
+        val writes = source("$root/data/anime/AniListWrites.kt")
+        assertTrue(
+            "the write path records the terms reading it ships under",
+            writes.contains("complementary") || writes.contains("competing")
+        )
 
         val buildGradle = File("build.gradle.kts").let {
             if (it.exists()) it.readText() else File("../app/build.gradle.kts").readText()
         }
+        // A secret in a published APK is recoverable from it; AniList's docs send
+        // a client that cannot store one to the implicit grant, which is the flow
+        // this app uses (see AniListWriteRules.PIN_REDIRECT_URI).
         assertFalse(buildGradle.contains("ANILIST_CLIENT_SECRET"))
+        assertTrue(buildGradle.contains("\"ANILIST_CLIENT_ID\""))
     }
 
     @Test

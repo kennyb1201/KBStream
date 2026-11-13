@@ -3,6 +3,10 @@ package com.kennyb1201.kbstream.data.library
 import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.data.BackgroundWork
+import com.kennyb1201.kbstream.data.anime.ANILIST_RATINGS_ENABLED
+import com.kennyb1201.kbstream.data.anime.AniListAuth
+import com.kennyb1201.kbstream.data.anime.AniListRatingOutcome
+import com.kennyb1201.kbstream.data.anime.submitAniListRating
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.kitsu.KITSU_RATINGS_ENABLED
 import com.kennyb1201.kbstream.data.kitsu.KitsuAuth
@@ -98,6 +102,7 @@ object TasteRatingSubmission {
         TasteRatingTracker.TRAKT -> TRAKT_RATINGS_ENABLED
         TasteRatingTracker.MDBLIST -> MDBLIST_RATINGS_ENABLED
         TasteRatingTracker.KITSU -> KITSU_RATINGS_ENABLED
+        TasteRatingTracker.ANILIST -> ANILIST_RATINGS_ENABLED
     }
 
     /** True when at least one leg is open, i.e. when queuing can lead anywhere. */
@@ -225,6 +230,7 @@ object TasteRatingSubmission {
                     TasteRatingTracker.SIMKL -> drainSimkl(app, entry, now)
                     TasteRatingTracker.MDBLIST -> drainMdbList(app, entry, now)
                     TasteRatingTracker.KITSU -> drainKitsu(app, entry, now)
+                    TasteRatingTracker.ANILIST -> drainAniList(app, entry, now)
                 }
                 if (paused) {
                     val waitMs = remainingPauseMs(app, tracker)
@@ -439,6 +445,56 @@ object TasteRatingSubmission {
     }
 
     /**
+     * One AniList attempt. True when the leg asked to be tried again shortly.
+     *
+     * The title is the only identity the queue carries that AniList can be asked
+     * about (AniList is addressed by its own media id), so the resolution goes
+     * through the phase-1 ID hub and is cached there.
+     */
+    private suspend fun drainAniList(
+        app: Context,
+        entry: TasteRatingQueueEntry,
+        now: Long
+    ): Boolean {
+        val outcome = submitAniListRating(
+            context = app,
+            title = entry.title,
+            rating = entry.rating,
+            removal = entry.removal
+        )
+        when (outcome) {
+            AniListRatingOutcome.LANDED -> TasteRatingQueue.removeEntry(app, entry)
+            AniListRatingOutcome.NO_IDS -> TasteRatingQueue.dropEntry(
+                app,
+                entry,
+                now,
+                "no AniList id or session for the title"
+            )
+            AniListRatingOutcome.NOT_FOUND -> {
+                Log.w(TAG, "AniList could not match ${entry.title.ifBlank { "a title" }}")
+                TasteRatingQueue.dropEntry(
+                    app,
+                    entry,
+                    now,
+                    "anilist.co could not match the title"
+                )
+            }
+            AniListRatingOutcome.AUTH -> {
+                TasteRatingQueue.dropEntry(app, entry, now, "the AniList session was refused")
+                closeLeg(app, TasteRatingTracker.ANILIST)
+            }
+            AniListRatingOutcome.PAUSED -> Unit
+            AniListRatingOutcome.NO_ANSWER -> TasteRatingQueue.markAttempt(
+                app,
+                entry,
+                now,
+                "anilist.co did not answer"
+            )
+        }
+        return outcome == AniListRatingOutcome.PAUSED
+    }
+
+    /**
      * The tracker ids an entry carries, read back out of the store's own key
      * spellings (see [TasteRatingMapping.imdbIdOf] / [tmdbIdOf]).
      *
@@ -510,6 +566,10 @@ object TasteRatingSubmission {
             // for this drain to wait out up front either. The drain's own
             // follow-up scheduling picks the entry up after that window.
             TasteRatingTracker.KITSU -> 0L
+            // AniList's 429 parks the shared client (see AniListWriteRules.parkMs):
+            // the leg answers PAUSED with its own deadline, so there is nothing for
+            // this drain to wait out up front either.
+            TasteRatingTracker.ANILIST -> 0L
         }
 
     /**
@@ -532,6 +592,10 @@ object TasteRatingSubmission {
             // reconnect - exactly the behaviour Trakt and Simkl get from their
             // own stores.
             TasteRatingTracker.KITSU -> KitsuAuth.accessTokenSnapshot(app)
+            // AniList's grant is its access token. A token pasted after a
+            // reconnect is a different grant, which re-opens the leg - and there
+            // is no refresh to produce one on its own.
+            TasteRatingTracker.ANILIST -> AniListAuth.accessTokenSnapshot(app)
         }
 
     /**

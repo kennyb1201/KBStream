@@ -280,8 +280,9 @@ class AnimeHubContractTest {
                 settings.contains("animeTrackerRowLabel(\"Kitsu\"")
         )
         assertTrue(
-            "each opens the username dialog and saves straight to the preference",
-            settings.contains("AnimeUsernameDialog(") &&
+            "each opens a dialog that saves the public username to its preference",
+            settings.contains("AniListConnectDialog(") &&
+                settings.contains("KitsuConnectDialog(") &&
                 settings.contains("AppPreferences.setAniListUsername(context, username)") &&
                 settings.contains("AppPreferences.setKitsuUsername(context, username)")
         )
@@ -302,24 +303,39 @@ class AnimeHubContractTest {
     }
 
     @Test
-    fun `nothing in the anime layer writes, authenticates or carries a key`() {
-        val all = hub + aniList + kitsu + legs + rules + rail
-
-        listOf(
-            "Authorization",
-            "Bearer",
-            "access_token",
-            "refresh_token",
-            "client_secret",
-            "api_key",
-            "apiKey"
-        ).forEach { forbidden ->
-            assertFalse("v1 is read-only: $forbidden appears in the anime layer", all.contains(forbidden))
+    fun `the readers stay tokenless and only the write client carries a token`() {
+        // Phase 1's READ-ONLY invariant, kept for everything phase 2 did not have
+        // to change: the hub, the Kitsu reader, the legs, the pure rules and the
+        // rail still carry no credential at all. Phase 2 adds exactly one place
+        // that does, and it is pinned below rather than allowed to spread.
+        listOf(hub, kitsu, legs, rules, rail).forEachIndexed { index, layer ->
+            listOf(
+                "Authorization",
+                "Bearer",
+                "access_token",
+                "refresh_token",
+                "client_secret",
+                "api_key",
+                "apiKey"
+            ).forEach { forbidden ->
+                assertFalse(
+                    "layer $index still has no credential: $forbidden appears in it",
+                    layer.contains(forbidden)
+                )
+            }
         }
 
         assertTrue(
-            "AniList's only mutation-shaped request is the one GraphQL POST",
-            aniList.windowed(".post(".length).count { it == ".post(" } == 1
+            "the one authenticated request is AniList's mutation POST, with the token in a header",
+            aniList.contains("header(\"Authorization\", \"Bearer \$accessToken\")")
+        )
+        assertFalse(
+            "no client secret is compiled in, sent or named anywhere in the layer",
+            aniList.contains("client_secret")
+        )
+        assertTrue(
+            "AniList's POSTs are the public read and the authenticated mutation, nothing else",
+            aniList.windowed(".post(".length).count { it == ".post(" } == 2
         )
         assertTrue(
             "and the settings row promises nothing is written",
