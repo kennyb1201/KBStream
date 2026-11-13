@@ -41,9 +41,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
@@ -528,6 +535,14 @@ fun StreamsScreen(
     // refresh that replaces the list leaves the viewer where they are.
     val firstStreamFocusRequester = remember { FocusRequester() }
     val refreshFocusRequester = remember { FocusRequester() }
+
+    // The way back up (spec 2026-11-12): the ACTIVE tab's chip, whichever that
+    // is. UP from the first source used to be left to Compose's spatial search,
+    // which landed on the last chip on the RIGHT - and the chips adopt on focus,
+    // so "go back to All" re-filtered the list to that add-on instead. One
+    // requester, attached to the selected chip only (see AddonTabs), so it
+    // follows the selection: move to another tab and the way back follows you.
+    val activeTabFocusRequester = remember { FocusRequester() }
     var entryFocusPlaced by remember { mutableStateOf(false) }
 
     // Set the moment focus lands anywhere inside this screen. The entry latch
@@ -560,6 +575,16 @@ fun StreamsScreen(
             attempts++
         }
         entryFocusPlaced = landed
+    }
+
+    // UP from the first source, answered on the requester rather than by
+    // guessing: the active tab if it has one attached, and REFRESH otherwise -
+    // a single-add-on picker has no tab chips at all, and `requestFocus`
+    // answers false for an unattached requester (see the entry focus), so the
+    // fallback costs nothing when the tabs are there.
+    val backToActiveTab: () -> Boolean = {
+        runCatching { activeTabFocusRequester.requestFocus() }.getOrDefault(false) ||
+            runCatching { refreshFocusRequester.requestFocus() }.getOrDefault(false)
     }
 
     // The one case where auto-play deliberately starts nothing: every playable
@@ -701,7 +726,10 @@ fun StreamsScreen(
                 },
                 // The entry-focus fallback: with no source to land on, this is
                 // the one actionable stop the picker has.
-                refreshFocusRequester = refreshFocusRequester
+                refreshFocusRequester = refreshFocusRequester,
+                // ...and the way back UP out of the list: the tab the viewer
+                // came from, never a neighbour chip.
+                activeTabFocusRequester = activeTabFocusRequester
             )
 
             LazyColumn(
@@ -801,7 +829,34 @@ fun StreamsScreen(
                                 // the rows fade and slide into their new places
                                 // instead of the list teleporting under the
                                 // D-pad hand-back.
-                                modifier = Modifier.animateItem(),
+                                modifier = Modifier
+                                    .animateItem()
+                                    .then(
+                                        // The way back up belongs to the row,
+                                        // not the column: UP from anywhere else
+                                        // in the list is ordinary list
+                                        // navigation and must stay that way
+                                        // (the framework's own focus move takes
+                                        // it to the row above). From the FIRST
+                                        // row there is no row above, so leaving
+                                        // it to the spatial search is what aimed
+                                        // at the wrong chip and re-filtered the
+                                        // list - see activeTabFocusRequester.
+                                        if (index == 0) {
+                                            Modifier.onPreviewKeyEvent { event ->
+                                                if (
+                                                    event.type == KeyEventType.KeyDown &&
+                                                    event.key == Key.DirectionUp
+                                                ) {
+                                                    backToActiveTab()
+                                                } else {
+                                                    false
+                                                }
+                                            }
+                                        } else {
+                                            Modifier
+                                        }
+                                    ),
                                 // Only the first row carries the entry requester:
                                 // it is the stop the picker opens on, and every
                                 // other card keeps the platform's own focus walk.
@@ -1142,7 +1197,11 @@ private fun AddonTabs(
     onSelect: (Int) -> Unit,
     // The requester the screen names the refresh chip by when the picker has no
     // source to open on (see StreamsScreen's entry focus).
-    refreshFocusRequester: FocusRequester? = null
+    refreshFocusRequester: FocusRequester? = null,
+    // The requester the screen names the SELECTED tab by, so UP out of the list
+    // returns to the tab the viewer came from (spec 2026-11-12). Attached to
+    // exactly one chip - the selected one - and moved with the selection.
+    activeTabFocusRequester: FocusRequester? = null
 ) {
     Row(
         modifier = Modifier
@@ -1162,13 +1221,16 @@ private fun AddonTabs(
             StreamTabChip(
                 label = "All",
                 selected = selectedIndex == ALL_ADDONS_TAB,
-                onSelect = { onSelect(ALL_ADDONS_TAB) }
+                onSelect = { onSelect(ALL_ADDONS_TAB) },
+                focusRequester = activeTabFocusRequester
+                    ?.takeIf { selectedIndex == ALL_ADDONS_TAB }
             )
             addonNames.forEachIndexed { index, name ->
                 StreamTabChip(
                     label = name,
                     selected = selectedIndex == index,
-                    onSelect = { onSelect(index) }
+                    onSelect = { onSelect(index) },
+                    focusRequester = activeTabFocusRequester?.takeIf { selectedIndex == index }
                 )
             }
         }
@@ -1269,14 +1331,43 @@ private fun rememberRefreshSpin(): State<Float> {
 private fun StreamTabChip(
     label: String,
     selected: Boolean,
-    onSelect: () -> Unit
+    onSelect: () -> Unit,
+    // Carried by the SELECTED chip only: the screen's way back up out of the
+    // list lands here (see StreamsScreen's activeTabFocusRequester).
+    focusRequester: FocusRequester? = null
 ) {
+    // The row scrolls horizontally, and the active chip can be scrolled out of
+    // it - a tab chosen with a long add-on list, then UP returning focus to it
+    // from the list. Focus on a node the viewer cannot see is a ring they cannot
+    // find, so a chip that takes focus scrolls its own row to itself. Each chip
+    // carries its own requester; sharing one would let a neighbour answer for it.
+    val bringIntoView = remember { BringIntoViewRequester() }
+    val scope = rememberCoroutineScope()
     KBCard(
         onClick = onSelect,
         // Focus on a KBCard lives on the Card's own focus target, so a
         // focus observer has to sit on the modifier handed to the Card - the
         // same shape the source cards below use to read their own focus.
-        modifier = Modifier.onFocusChanged { if (it.isFocused) onSelect() }
+        modifier = Modifier
+            .then(
+                if (focusRequester != null) {
+                    Modifier.focusRequester(focusRequester)
+                } else {
+                    Modifier
+                }
+            )
+            .bringIntoViewRequester(bringIntoView)
+            .onFocusChanged { state ->
+                if (state.isFocused) {
+                    // Adopting the tab is unchanged: the way back UP lands on
+                    // the tab that is already selected, so this fires for the
+                    // filter that is already showing and the list does not move.
+                    onSelect()
+                    scope.launch {
+                        runCatching { bringIntoView.bringIntoView() }
+                    }
+                }
+            }
     ) {
         Box(
             modifier = Modifier

@@ -21,9 +21,15 @@ class StreamsTabFocusContractTest {
     @Test
     fun `the chip adopts its tab on focus, not only on the press`() {
         val chip = body("private fun StreamTabChip(")
+        // Repointed by the 2026-11-12 UP spec: the observer now also scrolls
+        // the row to the chip that took focus (the active chip can be scrolled
+        // out of a long add-on row, and the way back UP returns to it), so the
+        // pin is the adoption itself rather than the old one-liner.
         assertTrue(
             "focus on a chip must select the tab the chip stands for",
-            chip.contains("onFocusChanged { if (it.isFocused) onSelect() }")
+            chip.contains("onFocusChanged {") &&
+                chip.contains("if (state.isFocused)") &&
+                chip.substringAfter("if (state.isFocused)").contains("onSelect()")
         )
         assertTrue(
             "and a press must still select it",
