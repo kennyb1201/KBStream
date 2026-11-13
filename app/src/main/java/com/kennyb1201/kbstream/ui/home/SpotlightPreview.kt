@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalDensity
@@ -37,9 +38,9 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.reporting.SpotlightDiagTrace
 import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
+import com.kennyb1201.kbstream.ui.components.posterEdgeShape
 import com.kennyb1201.kbstream.ui.detail.isEpisodeUnavailable
 import com.kennyb1201.kbstream.ui.theme.KBAccent
-import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -251,12 +252,23 @@ internal fun SpotlightPreviewPanel(
         label = "spotlightHeight"
     )
 
+    // The panel is a poster surface, so it draws the Poster Edge the viewer
+    // chose - the same shared shape the rail cards use, live (spec 2026-11-13).
+    //
+    // ONE clip on the container, not a shape on each layer: the backdrop, the
+    // trailer surface, the scrims and the pills are all painted inside this
+    // Column, so a single clip is what guarantees the artwork's square corners
+    // cannot poke past the curve. The shape object is the whole contract - no
+    // radius is copied here and no edge is special-cased.
+    val panelShape = posterEdgeShape()
+
     Column(
         modifier = modifier
             .offset { IntOffset(box.left, box.top) }
             .width(width.value)
             .height(height.value)
-            .background(KBVoid, KBShapeCard)
+            .clip(panelShape)
+            .background(KBVoid)
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
