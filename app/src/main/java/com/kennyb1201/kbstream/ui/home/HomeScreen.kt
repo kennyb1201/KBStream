@@ -4981,6 +4981,12 @@ fun HomeScreen(
     // raise that dialog itself - it is wired to the Add-ons view model - so the
     // press navigates there with a one-shot request behind it.
     onManageRails: () -> Unit = {},
+    /**
+     * Opens the year in review for one year (the seasonal card's own year; null
+     * means this year). Only the card below uses it - the review is a screen of
+     * its own, not a rail.
+     */
+    onOpenYearReview: (Int?) -> Unit = {},
     viewModel: HomeViewModel =
         viewModel()
 ) {
@@ -5008,6 +5014,7 @@ fun HomeScreen(
             onOpenKBFolder = onOpenKBFolder,
             onOpenBrowseShortcut = onOpenBrowseShortcut,
             onManageRails = onManageRails,
+            onOpenYearReview = onOpenYearReview,
             // The Upcoming header is the same door on both form factors: the
             // phone has no room for the TV's rail-a-year argument, but the
             // whole schedule still lives in Library's Calendar pane.
@@ -6956,6 +6963,22 @@ fun HomeScreen(
                                 .height(HeroToFirstRailGap)
                                 .background(Color.Black)
                         )
+                    }
+
+                    // The seasonal door (spec 2026-11-13, F1): December and
+                    // January only, so it is not a permanent fixture among the
+                    // rails - see [YearInReviewCard]. It sits right under the
+                    // hero, before the shelves, because it is about the year
+                    // just spent on them.
+                    if (YearInReviewCard.inSeason(LocalDate.now())) {
+                        item(key = "year_review", contentType = "status") {
+                            YearInReviewHomeCard(
+                                year = YearInReviewCard.yearFor(LocalDate.now()),
+                                onClick = {
+                                    onOpenYearReview(YearInReviewCard.yearFor(LocalDate.now()))
+                                }
+                            )
+                        }
                     }
 
 

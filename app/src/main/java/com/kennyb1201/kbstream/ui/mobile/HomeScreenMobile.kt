@@ -271,6 +271,8 @@ fun HomeScreenMobile(
     // callback the TV rail's header gets (see the shell's wiring). Nullable so
     // a host that cannot navigate leaves the heading a plain caption.
     onOpenCalendar: (() -> Unit)? = null,
+    /** Opens the year in review for one year (the seasonal card's own year). */
+    onOpenYearReview: (Int?) -> Unit = {},
     viewModel: HomeViewModel
 ) {
     MobileTheme {
@@ -704,6 +706,22 @@ fun HomeScreenMobile(
                             },
                             onDetails = { page -> onItemClick(page.preview) }
                         )
+                    }
+                }
+
+                // The seasonal door (spec 2026-11-13, F1): December and
+                // January only, the same window and the same card as the TV.
+                if (YearInReviewCard.inSeason(LocalDate.now())) {
+                    item(key = "year_review", contentType = "status") {
+                        Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                            YearInReviewHomeCard(
+                                year = YearInReviewCard.yearFor(LocalDate.now()),
+                                onClick = {
+                                    onOpenYearReview(YearInReviewCard.yearFor(LocalDate.now()))
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                     }
                 }
 

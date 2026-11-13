@@ -136,6 +136,8 @@ internal const val LIBRARY_BROWSE_SCREEN_KEY = "library"
 @Composable
 fun LibraryScreen(
     onItemClick: (mediaType: String, id: String) -> Unit,
+    /** Opens the year in review: the Library's year-round door beside the shelves. */
+    onOpenYearReview: () -> Unit = {},
     viewModel: LibraryViewModel =
         viewModel()
 ) {
@@ -145,6 +147,7 @@ fun LibraryScreen(
     if (!com.kennyb1201.kbstream.FormFactor.isTv) {
         LibraryScreenMobile(
             onItemClick = onItemClick,
+            onOpenYearReview = onOpenYearReview,
             viewModel = viewModel
         )
         return
@@ -360,6 +363,24 @@ fun LibraryScreen(
         ) {
             KBPageTitle(text = "LIBRARY", color = KBAccent)
             Spacer(modifier = Modifier.weight(1f))
+
+            // The permanent way into the year in review (spec 2026-11-13).
+            // Home's card only exists in December and January, and a review is
+            // the kind of thing someone opens in June; the header of the shelf
+            // it summarises is where they will look for it.
+            Surface(
+                onClick = onOpenYearReview,
+                shape = ClickableSurfaceDefaults.shape(shape = KBShapeCard),
+                colors = ClickableSurfaceDefaults.colors(containerColor = KBSurface)
+            ) {
+                Text(
+                    text = "YEAR IN REVIEW",
+                    color = KBAccent,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(14.dp))
             Text(
                 // Reading order: what the shelf always holds first, then the
                 // trackers, then the read-only feeds. This names the sources;

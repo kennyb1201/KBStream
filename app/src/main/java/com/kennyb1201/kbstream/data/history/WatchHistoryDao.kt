@@ -914,4 +914,67 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
         """
     )
     suspend fun topShows(): List<TopShow>
+
+    // ── Year in review (read-only) ──────────────────────────────────────
+    //
+    // The year is a RANGE, computed from the viewer's own zone at the call site
+    // (see YearInReview.yearStartMs) rather than a SQL `strftime('%Y', ...)`: a
+    // completion at 23:30 on Dec 31 is this year to the viewer and next year to
+    // UTC, and the review is the viewer's year. Same exclusions as the stats
+    // reads above (marked-watched rows are not measured watches).
+
+    /**
+     * The rows a year's review is computed from.
+     *
+     * A COMPLETED row is in the year by its completion stamp; a row still in
+     * progress is in it by its last update, which is the only stamp it has. Both
+     * kinds are needed: the completed ones are the finishes and the runtime, the
+     * open ones are the part the viewer started and did not finish.
+     */
+    @Query(
+        """
+        SELECT * FROM watch_history
+        WHERE markedWatched = 0
+          AND (
+              (isCompleted = 1 AND completedAt IS NOT NULL
+                 AND completedAt >= :fromMs AND completedAt < :toMs)
+              OR
+              (isCompleted = 0 AND positionMs > 0
+                 AND updatedAt >= :fromMs AND updatedAt < :toMs)
+          )
+        ORDER BY completedAt DESC, updatedAt DESC
+        """
+    )
+    suspend fun rowsForYear(fromMs: Long, toMs: Long): List<WatchHistoryEntity>
+
+    /**
+     * Every completed episode row's identity and stamp, ANY year.
+     *
+     * "This show is finished" is a statement about the show's LATEST episode, so
+     * the rule needs to see rows outside the year being reviewed: a rewatch of
+     * an early episode in 2026 must not claim a show finished in 2026 when its
+     * finale was finished in 2024. Four columns rather than whole rows because
+     * this is the only read that is not bounded by the year.
+     */
+    @Query(
+        """
+        SELECT parentId, season, episode, completedAt FROM watch_history
+        WHERE isCompleted = 1
+          AND markedWatched = 0
+          AND completedAt IS NOT NULL
+          AND lower(type) NOT IN ('movie', 'channel')
+        """
+    )
+    suspend fun completedEpisodeStamps(): List<EpisodeStamp>
+
+    /**
+     * The newest write to the profile's history, as a change token.
+     *
+     * The year's numbers are cached until this moves: one indexed aggregate is
+     * far cheaper than recomputing the review on every open, and it is exact -
+     * any write (a completion, a resume point, a mark) advances `updatedAt`,
+     * which is the column every writer sets.
+     */
+    @Query("SELECT COALESCE(MAX(updatedAt), 0) FROM watch_history")
+    suspend fun latestUpdateAt(): Long
 }

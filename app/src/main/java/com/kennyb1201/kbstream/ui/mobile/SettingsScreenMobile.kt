@@ -206,6 +206,8 @@ fun SettingsScreenMobile(
     onOpenCatalogManager: () -> Unit = {},
     onOpenCatalogBuilder: () -> Unit = {},
     onOpenStats: () -> Unit = {},
+    /** Opens the Year in review for one year (null = this year). */
+    onOpenYearReview: (Int?) -> Unit = {},
     /**
      * Plays a file found in the viewer's TorBox cloud, or opens the title it
      * belongs to. `file` is the tapped row's identity, attempted first.
@@ -344,7 +346,10 @@ fun SettingsScreenMobile(
 
                         SettingsPane.INTERFACE -> InterfacePaneMobile()
 
-                        SettingsPane.DATA -> DataPaneMobile(onOpenStats = onOpenStats)
+                        SettingsPane.DATA -> DataPaneMobile(
+                            onOpenStats = onOpenStats,
+                            onOpenYearReview = onOpenYearReview
+                        )
 
                         SettingsPane.ABOUT -> AboutPaneMobile()
 
@@ -3139,7 +3144,10 @@ private fun InterfacePaneMobile() {
 }
 
 @Composable
-private fun DataPaneMobile(onOpenStats: () -> Unit) {
+private fun DataPaneMobile(
+    onOpenStats: () -> Unit,
+    onOpenYearReview: (Int?) -> Unit
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var status by remember { mutableStateOf<String?>(null) }
@@ -3237,6 +3245,11 @@ private fun DataPaneMobile(onOpenStats: () -> Unit) {
             label = "Viewing stats",
             description = "Finished episodes, movies, runtime and your streak",
             onClick = onOpenStats
+        )
+        SettingsNavRowMobile(
+            label = "Year in review",
+            description = "This year, or any past year, with a card to share",
+            onClick = { onOpenYearReview(null) }
         )
 
         SettingsSectionMobile("History")

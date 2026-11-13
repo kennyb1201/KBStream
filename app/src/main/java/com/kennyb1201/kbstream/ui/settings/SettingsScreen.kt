@@ -347,6 +347,8 @@ fun SettingsScreen(
     onOpenCatalogBuilder: () -> Unit = {},
     /** Opens the read-only Viewing stats screen (finished watches). */
     onOpenStats: () -> Unit = {},
+    /** Opens the Year in review for one year (null = this year). */
+    onOpenYearReview: (Int?) -> Unit = {},
     /**
      * Plays a file found in the viewer's TorBox cloud - straight into the player
      * when auto-select is on, the picker when it is off - or opens the title
@@ -379,6 +381,7 @@ fun SettingsScreen(
             onOpenCatalogManager = onOpenCatalogManager,
             onOpenCatalogBuilder = onOpenCatalogBuilder,
             onOpenStats = onOpenStats,
+            onOpenYearReview = onOpenYearReview,
             onOpenTorBoxFile = onOpenTorBoxFile
         )
         return
@@ -2386,6 +2389,16 @@ fun SettingsScreen(
                     description = "Finished episodes, movies, runtime and your streak, " +
                         "counted from this profile's history",
                     onClick = onOpenStats
+                )
+
+                // The year-round way in. The Home card is seasonal (December to
+                // January) and a review someone wants to look back on in June
+                // must not depend on the calendar.
+                NavigationRow(
+                    label = "Year in review",
+                    description = "This year, or any past year, counted from this " +
+                        "profile's history - with a card to share",
+                    onClick = { onOpenYearReview(null) }
                 )
 
                 SettingsSectionHeader("History")

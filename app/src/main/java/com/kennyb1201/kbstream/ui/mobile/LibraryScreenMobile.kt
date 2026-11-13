@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -135,6 +136,8 @@ import kotlinx.coroutines.delay
 @Composable
 fun LibraryScreenMobile(
     onItemClick: (mediaType: String, id: String) -> Unit,
+    /** Opens the year in review: the Library's year-round door beside the shelves. */
+    onOpenYearReview: () -> Unit = {},
     viewModel: LibraryViewModel = viewModel()
 ) {
     MobileTheme {
@@ -411,6 +414,19 @@ fun LibraryScreenMobile(
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }
+                        // The permanent way into the year in review (spec
+                        // 2026-11-13), under the source line and inside the
+                        // header cell: a new grid item would shift every poster
+                        // index the return-from-Detail landing counts.
+                        Text(
+                            text = "YEAR IN REVIEW ›",
+                            color = KBAccent,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .clickable { onOpenYearReview() }
+                                .padding(vertical = 6.dp)
+                        )
                         notice?.let { text ->
                             Text(
                                 text = text,

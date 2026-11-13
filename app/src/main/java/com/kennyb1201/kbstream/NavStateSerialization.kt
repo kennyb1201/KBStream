@@ -182,6 +182,12 @@ internal fun encodeScreen(
                 put("returnTo", encodeScreen(screen.returnTo, depth + 1))
             }
         }
+        is Screen.YearReview -> {
+            screen.year?.let { put("year", it) }
+            if (depth < MAX_RETURN_DEPTH) {
+                put("returnTo", encodeScreen(screen.returnTo, depth + 1))
+            }
+        }
         // The public-lists browser carries its vendor as well as its return
         // destination: both are part of what the screen was.
         is Screen.PublicLists -> {
@@ -355,6 +361,13 @@ internal fun decodeScreen(
             "library" -> Screen.Library
             "settings" -> Screen.Settings
             "stats" -> Screen.Stats
+            // The year's own numbers are cached per (profile, year) and are
+            // cheap to rebuild, so only the route is restored - the year the
+            // viewer was looking at is part of what the screen was.
+            "yearReview" -> Screen.YearReview(
+                year = json.optNullableInt("year"),
+                returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
+            )
             "detail" -> Screen.Detail(
                 type = json.optString("type", "movie"),
                 id = json.optString("id"),
@@ -539,6 +552,9 @@ internal val Screen.navDepth: Int
         is Screen.CatalogBuilder -> 2
         // Reached through Settings, so it slides forward like the builder.
         is Screen.Stats -> 2
+        // Reached through Settings or Library, so it slides forward like the
+        // stats page does.
+        is Screen.YearReview -> 2
         // The public-lists browser is also reached through Settings (one row
         // per vendor), so it slides in from the trailing edge for the same
         // reason.
@@ -571,6 +587,7 @@ internal fun Screen.typeName(): String = when (this) {
     is Screen.Library -> "library"
     is Screen.Settings -> "settings"
     is Screen.Stats -> "stats"
+    is Screen.YearReview -> "yearReview"
     is Screen.Detail -> "detail"
     is Screen.Actor -> "actor"
     is Screen.Studio -> "studio"

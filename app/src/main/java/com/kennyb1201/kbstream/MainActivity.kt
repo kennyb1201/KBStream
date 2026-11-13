@@ -326,6 +326,19 @@ sealed class Screen {
      */
     object Stats : Screen()
 
+    /**
+     * The year in review: one profile's own year, counted from its history.
+     *
+     * Reached from Home's seasonal card (December and January), from the row
+     * under Library and from Settings, which is why it carries its own return
+     * destination. [year] is null for "this year" - the screen resolves it, so a
+     * route left behind in December does not pin December's year in June.
+     */
+    data class YearReview(
+        val year: Int? = null,
+        val returnTo: Screen = Home
+    ) : Screen()
+
     data class Detail(
         val type: String,
         val id: String,
@@ -2580,6 +2593,12 @@ fun AppRoot(
         is Screen.Home -> {
 
             HomeScreen(
+                // The seasonal card (December-January) opens the review for the
+                // year it names; the screen resolves a null year itself, so a
+                // restored route never pins December's year in June.
+                onOpenYearReview = { year ->
+                    screen = Screen.YearReview(year = year, returnTo = Screen.Home)
+                },
                 // The Upcoming rail's header: Library, on the Calendar pane,
                 // with the pane (not the chip) taking the D-pad. The request
                 // is a one-shot hand-off, so a later ordinary visit to
@@ -2804,6 +2823,9 @@ fun AppRoot(
                     }
                 },
                 onOpenStats = { screen = Screen.Stats },
+                onOpenYearReview = { year ->
+                    screen = Screen.YearReview(year = year, returnTo = Screen.Settings)
+                },
                 // A file in the viewer's TorBox cloud, tapped in Settings →
                 // TorBox. A file that named an episode (or is a film) PLAYS,
                 // through the same autoplay branch as a Play press: with
@@ -2892,6 +2914,13 @@ fun AppRoot(
         is Screen.Stats -> {
             com.kennyb1201.kbstream.ui.settings.StatsScreen(
                 onBack = { screen = Screen.Settings }
+            )
+        }
+
+        is Screen.YearReview -> {
+            com.kennyb1201.kbstream.ui.settings.YearReviewScreen(
+                onBack = { screen = current.returnTo },
+                year = current.year
             )
         }
 
@@ -3135,6 +3164,9 @@ fun AppRoot(
 
         is Screen.Library -> {
             LibraryScreen(
+                onOpenYearReview = {
+                    screen = Screen.YearReview(returnTo = Screen.Library)
+                },
                 onItemClick = { mediaType, id ->
                     screen = Screen.Detail(
                         mediaType,

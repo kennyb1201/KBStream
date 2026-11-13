@@ -5,4 +5,10 @@
     <cache-path
         name="updates"
         path="updates/" />
+    <!-- The Year in review share card (spec 2026-11-13, F2). Written on demand,
+         granted one URI at a time to whatever the viewer picks in the system
+         share sheet, and never offered anywhere else. -->
+    <cache-path
+        name="share"
+        path="share/" />
 </paths>
