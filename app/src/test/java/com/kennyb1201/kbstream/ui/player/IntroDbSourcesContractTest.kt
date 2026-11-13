@@ -112,44 +112,51 @@ class IntroDbSourcesContractTest {
     }
 
     @Test
-    fun `the MAL id is only accepted when the title matches`() {
-        val reader = helpers.substringAfter("internal fun readJikanMalId(")
-            .substringBefore("/** A remembered Jikan answer")
+    fun `the MAL id comes from the anime ID hub, not a Jikan-only search`() {
+        // Spec 2026-11-13 F1: Jikan is the hub's LAST resort now. The chain
+        // keeps asking for a MAL id here, and gets the hub's answer.
+        val resolver = helpers.substringAfter("internal suspend fun resolveMalId(")
 
-        assertTrue(reader.contains("""root.optJSONArray("data")?.optJSONObject(0)"""))
         assertTrue(
-            "every name the result carries is checked - romanized, English, and titles[]",
-            reader.contains("""first.optString("title")""") &&
-                reader.contains("""first.optString("title_english")""") &&
-                reader.contains("""titles.optJSONObject(index)?.optString("title")""")
+            "the intro-skip leg asks the hub",
+            resolver.contains("AnimeIdHub.resolve(showTitle).malId") &&
+                helpers.contains("import com.kennyb1201.kbstream.data.anime.AnimeIdHub")
         )
-        assertTrue(
-            "through the shared title gate",
-            reader.contains("animeTitleMatches(")
+        assertFalse(
+            "and no longer carries its own Jikan reader",
+            helpers.contains("internal fun readJikanMalId(")
         )
     }
 
     @Test
-    fun `the resolved id is cached per show, and a failed call is not cached`() {
-        val resolver = helpers.substringAfter("internal suspend fun resolveMalId(")
-            .substringBefore("/**\n * The first Jikan result's MAL id")
+    fun `the hub is one cached answer per title, and a failure is not cached`() {
+        val hub = source(HUB)
 
         assertTrue(
-            "a remembered answer - including 'not this anime' - is reused",
-            resolver.contains("malResolutions[normalized]?.let { remembered -> return remembered.malId }")
+            "a remembered answer - including 'no service knows this' - is reused",
+            hub.contains("identities[normalized]?.let { return it }")
         )
         assertTrue(
-            "a failed fetch returns without storing anything",
-            resolver.contains("""fetchIntroDbJson(jikanSearchUrl(showTitle ?: "")) ?: return null""")
-        )
-        assertTrue(
-            "and only a real answer is remembered",
-            resolver.contains("malResolutions[normalized] = MalResolution(malId)")
+            "a failure returns without storing anything, so the next reader retries",
+            hub.contains("return AnimeIdentity()") &&
+                hub.contains("// A failure is NOT remembered")
         )
         assertTrue(
             "keyed by the normalized title, so case and spacing cannot split it",
-            helpers.contains("""private val malResolutions = ConcurrentHashMap<String, MalResolution>()""") &&
-                resolver.contains("normalizeAnimeTitle(showTitle)")
+            hub.contains("private val identities = ConcurrentHashMap<String, AnimeIdentity>()") &&
+                hub.contains("normalizeAnimeTitle(showTitle)")
+        )
+        assertTrue(
+            "AniList first, Kitsu second, Jikan last",
+            hub.indexOf("AniListClient.mediaByTitle") in 0 until
+                hub.indexOf("KitsuClient.searchAnime") &&
+                hub.indexOf("KitsuClient.searchAnime") in 0 until
+                hub.indexOf("resolveMalIdViaJikan")
+        )
+        assertTrue(
+            "Kitsu fills whichever of the two ids AniList left open",
+            hub.contains("""mappings["myanimelist/anime"]""") &&
+                hub.contains("""mappings["anilist/anime"]""")
         )
     }
 
@@ -225,13 +232,14 @@ class IntroDbSourcesContractTest {
                 helpers.contains("callTimeout(5, TimeUnit.SECONDS)")
         )
         // Everything goes through the same two: no new OkHttp stack, no retry.
+        // The two new reader legs go through the same fetch, and the anime leg
+        // goes through the hub - which has its own clients and its own
+        // User-Agent, both asserted in the hub's contract test.
         val newCalls = listOf(
             "fetchSkipDbStamps",
-            "fetchAniSkipStamps",
-            "resolveMalId"
+            "fetchAniSkipStamps"
         ).all { name ->
-            helpers.substringAfter("internal suspend fun $name(").contains("fetchIntroDbJson(") ||
-                helpers.substringAfter("internal suspend fun $name(").contains("?: return null")
+            helpers.substringAfter("internal suspend fun $name(").contains("fetchIntroDbJson(")
         }
         assertTrue("each new leg reads through fetchIntroDbJson", newCalls)
         assertFalse("no retry/backoff was added", helpers.contains("retryOnConnectionFailure(true)"))
@@ -358,6 +366,7 @@ class IntroDbSourcesContractTest {
         const val MODEL = "${ROOT}IntroDbModel.kt"
         const val CHAIN_RULES = "${ROOT}IntroDbChainRules.kt"
         const val AUTO_SKIP = "${ROOT}AutoSkipRules.kt"
+        const val HUB = "com/kennyb1201/kbstream/data/anime/AnimeIdHub.kt"
         const val EXTERNAL = "${ROOT}ExternalPlayerActivity.kt"
         const val MPV = "${ROOT}MpvPlayerActivity.kt"
         const val NATIVE = "${ROOT}NativePlayerActivity.kt"

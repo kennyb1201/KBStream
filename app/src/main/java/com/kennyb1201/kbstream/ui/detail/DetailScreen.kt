@@ -1402,6 +1402,10 @@ fun DetailScreen(
     // costs a non-anime title nothing and an anime two cached calls at most.
     // Nothing waits for it: the row grows a Themes page when the answer lands.
     val animeThemes by viewModel.animeThemes.collectAsStateWithLifecycle()
+    // The anime ID hub's answer for this title: the Themes page's ids AND the
+    // header's AniList score / next-airing line (spec 2026-11-13, F3). Filled by
+    // the same one lookup the themes make, so the header costs no extra request.
+    val animeIdentity by viewModel.animeIdentity.collectAsStateWithLifecycle()
     LaunchedEffect(tmdbDetail?.id) { viewModel.loadAnimeThemes() }
     // The app's transient message channel, used where a press has nowhere to
     // go (a poster TMDB cannot resolve to an IMDb id): silence there reads as a
@@ -5339,7 +5343,8 @@ fun DetailScreen(
                             m,
                             tmdbDetail,
                             type,
-                            mdbListRatings
+                            mdbListRatings,
+                            animeIdentity
                         ) {
                             val yearInfo =
                                 if (normalizedType == "series") {
@@ -5393,7 +5398,20 @@ fun DetailScreen(
                                         ?.takeIf { it.isNotBlank() }
                                         ?: m.imdbRating
                                             ?.takeIf { it.isNotBlank() }
-                                    )?.let { "IMDb $it" }
+                                    )?.let { "IMDb $it" },
+                                // AniList's community score, labelled so the two
+                                // scores on this screen can never be confused
+                                // (F3). Absent when AniList has none.
+                                com.kennyb1201.kbstream.data.anime.aniListScoreLabel(
+                                    animeIdentity.averageScore
+                                ),
+                                // AniList's next airing episode, and ONLY when
+                                // TMDB has none: one next-episode line, never two.
+                                com.kennyb1201.kbstream.data.anime.aniListNextAiringLabel(
+                                    episode = animeIdentity.nextAiringEpisode,
+                                    airingAtSeconds = animeIdentity.nextAiringAtSeconds,
+                                    tmdbHasNextEpisode = tmdbDetail?.nextEpisodeToAir != null
+                                )
                             ).joinToString(" • ")
                         }
 

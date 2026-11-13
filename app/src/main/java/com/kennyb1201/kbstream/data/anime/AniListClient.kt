@@ -1,0 +1,180 @@
+package com.kennyb1201.kbstream.data.anime
+
+import com.kennyb1201.kbstream.BuildConfig
+import com.kennyb1201.kbstream.data.network.BaseHttpClient
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+
+/**
+ * AniList's read surface (spec 2026-11-13).
+ *
+ * GraphQL over POST, no key: public catalogue data and a public profile's list
+ * are both readable without an account, which is the whole of v1. Writes and
+ * private lists need OAuth and are the next phase - nothing here sends a token.
+ *
+ * RATE LIMITS are the constraint that shapes this client. AniList documents 90
+ * requests a minute, but live responses carry `x-ratelimit-limit: 30` (a degraded
+ * mode), so the client plans for 30. Over the limit AniList answers 429 with a
+ * `Retry-After` header and parks the caller for a minute; retrying inside that
+ * window only extends it. So the client owns a sliding one-minute window and a
+ * park, and every call goes through both - a caller can loop over titles as
+ * naturally as it likes.
+ *
+ * The User-Agent names the app and the build, so a report pins the release.
+ */
+internal object AniListClient {
+
+    const val USER_AGENT = "KBStream/" + BuildConfig.VERSION_NAME
+
+    const val GRAPHQL_URL = "https://graphql.anilist.co"
+
+    /** What the live API reports in degraded mode, not the documented 90. */
+    const val MAX_REQUESTS_PER_MINUTE = 30
+
+    private const val DEFAULT_TIMEOUT_MS = 8_000L
+
+    /** Used when a 429 carries no `Retry-After`; AniList's own window is a minute. */
+    private const val DEFAULT_PARK_MS = 60_000L
+
+    private val JSON_MEDIA_TYPE = "application/json".toMediaType()
+
+    private val httpClient = BaseHttpClient.derived {
+        callTimeout(DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+    }
+
+    private val gate = Mutex()
+    private val recentRequestsMs = ArrayDeque<Long>()
+    private var parkedUntilMs = 0L
+
+    /**
+     * The one query the ID hub and the Detail enrichment need.
+     *
+     * One call answers all of it - AniList id, MAL id, the community score and
+     * the next airing episode - so a title is never asked about twice for two of
+     * those facts.
+     */
+    const val MEDIA_BY_SEARCH_QUERY =
+        "query (\$search: String) { Media(search: \$search, type: ANIME, isAdult: false) " +
+            "{ id idMal averageScore title { romaji english native } " +
+            "nextAiringEpisode { episode airingAt } } }"
+
+    /**
+     * A public profile's anime list, by status.
+     *
+     * `MediaListCollection` is the documented read for a user's list. Without a
+     * token it answers only for a PUBLIC profile: a private one returns nothing,
+     * and the caller reports that rather than pretending the list is empty.
+     */
+    const val MEDIA_LIST_COLLECTION_QUERY =
+        "query (\$username: String) { MediaListCollection(userName: \$username, type: ANIME) " +
+            "{ lists { status entries { mediaId status progress score " +
+            "media { id idMal title { romaji english } format episodes " +
+            "nextAiringEpisode { episode airingAt } } } } } }"
+
+    /** The `Media` object for [showTitle], or null when AniList has no answer. */
+    suspend fun mediaByTitle(showTitle: String): JSONObject? {
+        val variables = JSONObject().put("search", showTitle.trim())
+        return post(MEDIA_BY_SEARCH_QUERY, variables)?.optJSONObject("data")
+            ?.optJSONObject("Media")
+    }
+
+    /** The whole `MediaListCollection` for [username], or null on any failure. */
+    suspend fun mediaListCollection(username: String): JSONObject? {
+        val variables = JSONObject().put("username", username.trim())
+        return post(MEDIA_LIST_COLLECTION_QUERY, variables)?.optJSONObject("data")
+            ?.optJSONObject("MediaListCollection")
+    }
+
+    /**
+     * One GraphQL POST, rate-limited and parked on 429.
+     *
+     * Null covers every kind of failure - a transport error, a non-2xx, a body
+     * that is not JSON, a GraphQL `errors` envelope - because every caller treats
+     * them the same way: this source has nothing to say about that title.
+     */
+    private suspend fun post(query: String, variables: JSONObject): JSONObject? =
+        withContext(Dispatchers.IO) {
+            awaitSlot()
+
+            val body = JSONObject()
+                .put("query", query)
+                .put("variables", variables)
+                .toString()
+
+            val request =
+                Request.Builder()
+                    .url(GRAPHQL_URL)
+                    .header("User-Agent", USER_AGENT)
+                    .header("Accept", "application/json")
+                    .post(body.toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
+
+            runCatching {
+                httpClient.newCall(request).execute().use { response ->
+                    if (response.code == 429) {
+                        park(response.header("Retry-After"))
+                        return@use null
+                    }
+                    if (!response.isSuccessful) return@use null
+                    val json = JSONObject(response.body?.string().orEmpty())
+                    // A GraphQL error envelope carries `errors` and no `data`;
+                    // treating it as "no answer" keeps a rate-limited or
+                    // malformed query from reading as a real absence.
+                    if (json.has("errors") && !json.has("data")) null else json
+                }
+            }.getOrNull()
+        }
+
+    /** Blocks until a request fits the sliding window and no park is in force. */
+    private suspend fun awaitSlot() {
+        gate.withLock {
+            while (true) {
+                val now = System.currentTimeMillis()
+
+                if (now < parkedUntilMs) {
+                    delay((parkedUntilMs - now).coerceAtMost(5_000L))
+                    continue
+                }
+
+                while (recentRequestsMs.isNotEmpty() && now - recentRequestsMs.first() >= 60_000L) {
+                    recentRequestsMs.removeFirst()
+                }
+
+                if (recentRequestsMs.size < MAX_REQUESTS_PER_MINUTE) {
+                    recentRequestsMs.addLast(now)
+                    return
+                }
+
+                // Full window: wait for the oldest request to age out.
+                delay(1_000L)
+            }
+        }
+    }
+
+    /**
+     * Parks the client after a 429.
+     *
+     * `Retry-After` is seconds in AniList's answers (it occasionally sends a
+     * date); anything unreadable falls back to a minute, the window the API
+     * itself names.
+     */
+    private fun park(retryAfter: String?) {
+        val seconds = retryAfter?.trim()?.toLongOrNull()
+        val waitMs = seconds?.takeIf { it > 0L }?.times(1_000L) ?: DEFAULT_PARK_MS
+        parkedUntilMs = System.currentTimeMillis() + waitMs
+    }
+
+    /** Test hook: forgets the window and any park. */
+    internal fun resetRateLimitForTest() {
+        recentRequestsMs.clear()
+        parkedUntilMs = 0L
+    }
+}

@@ -164,7 +164,17 @@ enum class ResumeSource {
      * authority's pick; it competes on the ordinary order like any other
      * unpreferred card.
      */
-    BINGECAT
+    BINGECAT,
+
+    /**
+     * The read-only anime legs (spec 2026-11-13, F2): an AniList or Kitsu
+     * public list's in-progress anime. Same rule as BingeCat - they are legs,
+     * not resume authorities, so neither is offered in
+     * [com.kennyb1201.kbstream.data.settings.ResumeAuthority] and both compete
+     * on the ordinary order.
+     */
+    ANILIST,
+    KITSU
 }
 
 data class UpNextItem(
@@ -2441,6 +2451,19 @@ internal sealed interface TraktNextUpResult {
  * itself first. Past those gates a `null` can only mean the read failed, and it
  * is reported as [Failed] rather than as an empty history.
  */
+/**
+ * The anime legs' Continue Watching answer (spec 2026-11-13, F2).
+ *
+ * The same three-way split as BingeCat's: a leg with no username saved is
+ * NotConfigured and its slot is cleared, a failed read is Failed and the slot
+ * keeps its previous cards, and an answer - even an empty one - replaces it.
+ */
+internal sealed interface AnimeNextUpResult {
+    data class Success(val items: List<UpNextItem>) : AnimeNextUpResult
+    data object NotConfigured : AnimeNextUpResult
+    data class Failed(val error: Throwable) : AnimeNextUpResult
+}
+
 internal sealed interface BingeCatNextUpResult {
 
     data class Success(

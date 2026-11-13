@@ -1,6 +1,9 @@
 package com.kennyb1201.kbstream.ui.player
 
-import java.util.Locale
+import com.kennyb1201.kbstream.data.anime.animeTitleMatches as animeTitleMatchesInDataLayer
+import com.kennyb1201.kbstream.data.anime.animeUrlEncode
+import com.kennyb1201.kbstream.data.anime.jikanAnimeSearchUrl
+import com.kennyb1201.kbstream.data.anime.normalizeAnimeTitle as normalizeAnimeTitleInDataLayer
 
 /**
  * The rules of the skip-source chain, with no network, no JSON and no Android.
@@ -65,38 +68,24 @@ internal fun introDbChainStillOpen(stamps: List<IntroDbStamp>): Boolean {
  * A title reduced to what can be compared across services: lowercase, letters
  * and digits only.
  *
- * Jikan answers a fuzzy search, so "Attack on Titan" and "attackontitan" are
- * the same title while "Attack on Titan" and "Attack on Titan: Junior High" are
- * not - punctuation and spacing carry no identity here, and case never does.
+ * The rule itself lives in `data.anime.AnimeTitleRules`, beside the hub and the
+ * tracker legs that also need it; this is the name the intro-skip chain and its
+ * tests have always used.
  */
-internal fun normalizeAnimeTitle(raw: String?): String =
-    raw.orEmpty()
-        .trim()
-        .lowercase(Locale.ROOT)
-        .filter { ch -> ch.isLetterOrDigit() }
+internal fun normalizeAnimeTitle(raw: String?): String = normalizeAnimeTitleInDataLayer(raw)
 
 /**
- * Whether a Jikan search result names the show we asked about.
+ * Whether a service's name for a title is the one we asked about.
  *
- * An anime's romanized title and its English title are different fields, and
- * KBStream's title may be either - so every name the result carries
- * ([titles] is the result's whole `titles[]` array) is compared, not just
- * `title`. This gate is what stops a live-action show that merely resembles an
- * anime in a fuzzy search from being given that anime's OP/ED times.
+ * See `data.anime.animeTitleMatches`: every name a result carries is compared
+ * (romanized, English, `titles[]`), because KBStream's title may be either.
  */
 internal fun animeTitleMatches(
     showTitle: String?,
     title: String?,
     titleEnglish: String?,
     titles: List<String?>
-): Boolean {
-    val wanted = normalizeAnimeTitle(showTitle)
-    if (wanted.isEmpty()) return false
-
-    return (listOf(title, titleEnglish) + titles).any { candidate ->
-        normalizeAnimeTitle(candidate) == wanted
-    }
-}
+): Boolean = animeTitleMatchesInDataLayer(showTitle, title, titleEnglish, titles)
 
 /** The id form SkipDB accepts: an IMDb id, never a TMDB or add-on id. */
 internal fun isSkipDbImdbId(parentId: String): Boolean {
@@ -159,32 +148,11 @@ internal fun aniSkipTimesUrl(malId: Int, episode: Int, durationMs: Long?): Strin
 }
 
 /** Jikan's title search, which is how a MAL id is found for [showTitle]. */
-internal fun jikanSearchUrl(showTitle: String): String =
-    "https://api.jikan.moe/v4/anime?q=" + urlEncode(showTitle.trim()) + "&limit=1"
+internal fun jikanSearchUrl(showTitle: String): String = jikanAnimeSearchUrl(showTitle)
 
 /**
- * Percent-encoding for a query VALUE, done here rather than through
- * `android.net.Uri` so the URL builders stay JVM-testable.
- *
- * Only what actually appears in these values is escaped (space, `&`, `=`, `#`,
- * `?`, `+`, `%` and non-ASCII); an id or a duration never contains more.
+ * Percent-encoding for a query VALUE, done in the anime layer so every URL
+ * builder in the app shares one implementation (and stays JVM-testable).
  */
-internal fun urlEncode(value: String): String {
-    val out = StringBuilder(value.length + 8)
-    for (byte in value.toByteArray(Charsets.UTF_8)) {
-        val ch = byte.toInt().toChar()
-        if (
-            ch in 'A'..'Z' || ch in 'a'..'z' || ch in '0'..'9' ||
-            ch == '-' || ch == '_' || ch == '.' || ch == '~'
-        ) {
-            out.append(ch)
-        } else {
-            out.append('%')
-            out.append(HEX[(byte.toInt() shr 4) and 0xF])
-            out.append(HEX[byte.toInt() and 0xF])
-        }
-    }
-    return out.toString()
-}
+internal fun urlEncode(value: String): String = animeUrlEncode(value)
 
-private const val HEX = "0123456789ABCDEF"

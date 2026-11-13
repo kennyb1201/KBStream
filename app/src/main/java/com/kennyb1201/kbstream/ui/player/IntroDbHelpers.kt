@@ -2,13 +2,13 @@ package com.kennyb1201.kbstream.ui.player
 
 import android.net.Uri
 import com.kennyb1201.kbstream.BuildConfig
+import com.kennyb1201.kbstream.data.anime.AnimeIdHub
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import org.json.JSONObject
 import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 // The stamp model and its source marker live in IntroDbModel.kt: they carry no
@@ -413,61 +413,16 @@ private fun readAniSkipResult(row: JSONObject?): IntroDbStamp? {
 }
 
 /**
- * The MyAnimeList id for [showTitle], remembered for the life of the process.
+ * The MyAnimeList id for [showTitle], from the anime ID hub (spec 2026-11-13).
  *
- * Without the cache every episode of one anime would cost a Jikan call; with it,
- * one call per show per session. A successful search that names no matching
- * title is cached too - "this show is not that anime" is an answer, and asking
- * again for the next episode would only repeat it. A FAILED call is not cached:
- * a 429 or an outage must not become a permanent verdict for the session.
+ * This is the intro-skip chain's anime leg, and the hub is what it asks now: the
+ * hub tries AniList first (one call returns the MAL id AND the AniList id), then
+ * Kitsu's mapping graph, and only then Jikan - which is where this resolution
+ * used to start and end. The title gate and the per-title memo live in the hub,
+ * so an anime Detail open and a playback lookup share one answer.
  */
-internal suspend fun resolveMalId(showTitle: String?): Int? {
-    val normalized = normalizeAnimeTitle(showTitle)
-    if (normalized.isEmpty()) return null
-
-    malResolutions[normalized]?.let { remembered -> return remembered.malId }
-
-    val body = fetchIntroDbJson(jikanSearchUrl(showTitle ?: "")) ?: return null
-    val malId = readJikanMalId(body, showTitle)
-    malResolutions[normalized] = MalResolution(malId)
-    return malId
-}
-
-/**
- * The first Jikan result's MAL id, and only when its title matches [showTitle].
- *
- * The title gate is the whole safety of this leg: Jikan answers a fuzzy search,
- * so asking about a live-action show can return an anime with a similar name, and
- * accepting it would give that live-action episode an anime's OP/ED times.
- */
-internal fun readJikanMalId(root: JSONObject, showTitle: String?): Int? {
-    val first = root.optJSONArray("data")?.optJSONObject(0) ?: return null
-    val malId = first.optInt("mal_id", 0).takeIf { it > 0 } ?: return null
-
-    val titles = first.optJSONArray("titles")
-    val names = if (titles == null) {
-        emptyList()
-    } else {
-        (0 until titles.length()).mapNotNull { index ->
-            titles.optJSONObject(index)?.optString("title")
-        }
-    }
-
-    val matches = animeTitleMatches(
-        showTitle = showTitle,
-        title = first.optString("title"),
-        titleEnglish = first.optString("title_english"),
-        titles = names
-    )
-
-    return if (matches) malId else null
-}
-
-/** A remembered Jikan answer: an id, or a "not this anime" verdict. */
-private class MalResolution(val malId: Int?)
-
-/** Keyed by [normalizeAnimeTitle], so spacing and case cannot split the cache. */
-private val malResolutions = ConcurrentHashMap<String, MalResolution>()
+internal suspend fun resolveMalId(showTitle: String?): Int? =
+    AnimeIdHub.resolve(showTitle).malId
 
 /**
  * Reads one `/media` body into stamps.

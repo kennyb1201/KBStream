@@ -12,6 +12,7 @@ import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListWatchedSnapshot
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
@@ -23,6 +24,11 @@ import com.kennyb1201.kbstream.data.trakt.TraktIdKeys
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.trakt.TraktWatchedSnapshot
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.anime.AnimeTrackerLegs
+import com.kennyb1201.kbstream.data.anime.AnimeTrackerRead
+import com.kennyb1201.kbstream.ui.home.AnimeTrackerRail
+import com.kennyb1201.kbstream.ui.home.CaughtUpShowCandidate
+import com.kennyb1201.kbstream.ui.home.MAX_ANIME_CAUGHT_UP_CANDIDATES
 import com.kennyb1201.kbstream.ui.home.MAX_BINGECAT_CAUGHT_UP_UPCOMING_ITEMS
 import com.kennyb1201.kbstream.ui.home.MAX_LOCAL_CAUGHT_UP_UPCOMING_ITEMS
 import com.kennyb1201.kbstream.ui.home.MAX_MDBLIST_CAUGHT_UP_UPCOMING_ITEMS
@@ -100,6 +106,51 @@ class LibraryCalendarViewModel(
 
     private val tmdbRepository = TmdbRepository.getInstance(application)
     private val simklRepository = SimklRepository.getInstance(application)
+
+    /**
+     * The read-only anime legs' caught-up candidates (spec 2026-11-13, F2).
+     *
+     * The same bridge Home's Upcoming rail uses, with the same cached TMDB title
+     * join, so the calendar and the rail cannot disagree about which TMDB show an
+     * anime is. Both reads fail soft: no username, a private list or a transport
+     * error contributes no shows, never an empty calendar.
+     */
+    private suspend fun animeCaughtUpCandidates(): List<CaughtUpShowCandidate> {
+        val reads =
+            listOf(
+                "anilist" to suspend {
+                    AnimeTrackerLegs.readAniList(AppPreferences.getAniListUsername(getApplication()))
+                },
+                "kitsu" to suspend {
+                    AnimeTrackerLegs.readKitsu(AppPreferences.getKitsuUsername(getApplication()))
+                }
+            )
+
+        val out = ArrayList<CaughtUpShowCandidate>()
+
+        for ((source, read) in reads) {
+            val entries =
+                try {
+                    (read() as? AnimeTrackerRead.Ok)?.entries.orEmpty()
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    android.util.Log.w("CALENDAR", "$source read failed: ${e.message}", e)
+                    emptyList()
+                }
+
+            out +=
+                AnimeTrackerRail.caughtUpCandidates(
+                    tmdb = tmdbRepository,
+                    entries = entries,
+                    source = source,
+                    max = MAX_ANIME_CAUGHT_UP_CANDIDATES
+                )
+        }
+
+        return out
+    }
+
     private val traktRepository = TraktRepository.getInstance(application)
     private val bingeCatRepository = BingeCatRepository.getInstance(application)
     private val airDateRepository = TvmazeAirDateRepository.getInstance(application)
@@ -613,6 +664,11 @@ class LibraryCalendarViewModel(
         // is. Every read fails soft: a source that is down contributes no
         // priority at all, never an empty calendar.
         val caughtUp = caughtUpPriorityShows(
+            // The anime legs join the same priority set (spec 2026-11-13, F2): a
+            // COMPLETED anime on AniList/Kitsu is a caught-up show whose next
+            // episode the calendar must carry. Dormant with no username, and a
+            // failed read contributes nothing rather than emptying the months.
+            animeCaughtUpCandidates() +
             localCaughtUpCandidates(
                 rows = completedRows,
                 max = MAX_LOCAL_CAUGHT_UP_UPCOMING_ITEMS

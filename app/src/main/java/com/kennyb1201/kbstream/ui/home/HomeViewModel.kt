@@ -16,6 +16,10 @@ import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
 import com.kennyb1201.kbstream.data.airdates.TvmazeAirDateRepository
+import com.kennyb1201.kbstream.data.anime.AnimeTrackerEntry
+import com.kennyb1201.kbstream.data.anime.AnimeTrackerLegs
+import com.kennyb1201.kbstream.data.anime.AnimeTrackerRead
+import com.kennyb1201.kbstream.data.anime.AnimeTrackerStatus
 import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.bingecat.BingeCatWriteRules
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
@@ -4000,9 +4004,20 @@ Log.d(
 
         // F2b/F3a: the union, one entry per show. No source is required and no
         // source can veto another - see mergeCaughtUpCandidates.
+        // Anime: the read-only AniList/Kitsu legs (spec 2026-11-13, F2). A
+        // COMPLETED anime on either service is a caught-up show - there is
+        // nothing left to resume and its next episode is what the viewer is
+        // waiting for - so it joins the same union. Dormant with no username,
+        // and failing soft like every other half.
+        val anime =
+            runCatchingCancellable { loadAnimeCaughtUpCandidates() }.getOrElse { error ->
+                Log.w("HOME_UPNEXT", "anime caught-up candidates failed: ${error.message}", error)
+                emptyList()
+            }
+
         return mergeCaughtUpCandidates(
             local = local,
-            trackers = mdbList + trakt + bingecat
+            trackers = mdbList + trakt + bingecat + anime
         )
     }
 
@@ -7307,6 +7322,69 @@ Log.d(
                                 }
                             }
 
+                            // The anime legs (spec 2026-11-13, F2): read-only
+                            // public lists, one slot each, merged after the
+                            // trackers they joined. NotConfigured clears the
+                            // slot (no username saved), Failed leaves its
+                            // previous cards standing, an answer replaces it.
+                            launch {
+                                val result =
+                                    loadAnimeUpNextItems(
+                                        read = {
+                                            AnimeTrackerLegs.readAniList(
+                                                AppPreferences.getAniListUsername(getApplication())
+                                            )
+                                        },
+                                        idPrefix = "anilist:next:",
+                                        resumeSource = ResumeSource.ANILIST,
+                                        diagSource = "anilist"
+                                    )
+
+                                when (result) {
+                                    is AnimeNextUpResult.Success ->
+                                        arrivals.arrive(TrackerFeed.ANILIST, result.items)
+
+                                    AnimeNextUpResult.NotConfigured ->
+                                        arrivals.arrive(TrackerFeed.ANILIST, emptyList())
+
+                                    is AnimeNextUpResult.Failed ->
+                                        Log.w(
+                                            "HOME_UPNEXT",
+                                            "ANILIST next-up failed; preserving existing Up Next data",
+                                            result.error
+                                        )
+                                }
+                            }
+
+                            launch {
+                                val result =
+                                    loadAnimeUpNextItems(
+                                        read = {
+                                            AnimeTrackerLegs.readKitsu(
+                                                AppPreferences.getKitsuUsername(getApplication())
+                                            )
+                                        },
+                                        idPrefix = "kitsu:next:",
+                                        resumeSource = ResumeSource.KITSU,
+                                        diagSource = "kitsu"
+                                    )
+
+                                when (result) {
+                                    is AnimeNextUpResult.Success ->
+                                        arrivals.arrive(TrackerFeed.KITSU, result.items)
+
+                                    AnimeNextUpResult.NotConfigured ->
+                                        arrivals.arrive(TrackerFeed.KITSU, emptyList())
+
+                                    is AnimeNextUpResult.Failed ->
+                                        Log.w(
+                                            "HOME_UPNEXT",
+                                            "KITSU next-up failed; preserving existing Up Next data",
+                                            result.error
+                                        )
+                                }
+                            }
+
                             // MDBList arrives ONCE for its whole slot, the
                             // Trakt shape (Slice A extension, X4): the paused
                             // sessions and the next-episode cards are two halves
@@ -8287,6 +8365,158 @@ Log.d(
         row.idKeys.firstOrNull { key -> key.startsWith("tt") }
             ?: row.idKeys.firstOrNull { key -> key.startsWith("tmdb:") }
             ?: row.idKeys.firstOrNull()
+
+    /**
+     * One anime leg's Continue Watching cards (spec 2026-11-13, F2).
+     *
+     * Read-only and account-free: a public list, a username, no token. The three
+     * answers are the same three the other legs have - NotConfigured clears the
+     * slot, Failed leaves its previous cards standing, and an answer (even an
+     * empty one) replaces it. That last distinction is the whole reason a private
+     * profile is not reported as an empty list.
+     *
+     * [buildTrackerNextEpisodeUpNextItem] does the rail work itself: the TMDB
+     * detail, the watched-state union and the season walk that decides the next
+     * episode. This leg only supplies the identity and how much of the show the
+     * viewer has watched.
+     */
+    private suspend fun loadAnimeUpNextItems(
+        read: suspend () -> AnimeTrackerRead,
+        idPrefix: String,
+        resumeSource: ResumeSource,
+        diagSource: String
+    ): AnimeNextUpResult {
+        val answered =
+            try {
+                read()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("HOME_UPNEXT", "$diagSource next-up read failed: ${e.message}", e)
+                return AnimeNextUpResult.Failed(e)
+            }
+
+        return when (answered) {
+            AnimeTrackerRead.NotConfigured -> AnimeNextUpResult.NotConfigured
+
+            is AnimeTrackerRead.Unreadable -> {
+                // A private profile, an unknown username or a body we cannot read:
+                // nothing readable is not the same as nothing tracked, so the
+                // slot is cleared rather than replaced with a confident empty.
+                Log.i("HOME_UPNEXT", "$diagSource list unreadable: ${answered.reason}")
+                AnimeNextUpResult.NotConfigured
+            }
+
+            is AnimeTrackerRead.Failed -> AnimeNextUpResult.Failed(answered.error)
+
+            is AnimeTrackerRead.Ok -> {
+                val entries =
+                    answered.entries
+                        .filter { entry ->
+                            entry.status == AnimeTrackerStatus.IN_PROGRESS && entry.progress > 0
+                        }
+                        .take(MAX_ANIME_UP_NEXT_ITEMS)
+
+                val items =
+                    coroutineScope {
+                        entries
+                            .map { entry ->
+                                async {
+                                    runCatchingCancellable {
+                                        buildAnimeUpNextItem(
+                                            entry = entry,
+                                            idPrefix = idPrefix,
+                                            resumeSource = resumeSource,
+                                            diagSource = diagSource
+                                        )
+                                    }.getOrNull()
+                                }
+                            }
+                            .toList()
+                            .awaitAll()
+                            .filterNotNull()
+                    }
+
+                if (UP_NEXT_DIAGNOSTICS) {
+                    Log.d(
+                        "HOME_UPNEXT",
+                        "$diagSource next-up: entries=${answered.entries.size} " +
+                            "in-progress=${entries.size} resolved=${items.size}"
+                    )
+                }
+
+                AnimeNextUpResult.Success(items)
+            }
+        }
+    }
+
+    /** One anime leg entry as a Continue Watching card, or null. */
+    private suspend fun buildAnimeUpNextItem(
+        entry: AnimeTrackerEntry,
+        idPrefix: String,
+        resumeSource: ResumeSource,
+        diagSource: String
+    ): UpNextItem? {
+        val parentId = AnimeTrackerRail.parentIdFor(tmdbRepository, entry.titles) ?: return null
+        val watchedEpisodes =
+            AnimeTrackerRail.watchedPairs(tmdbRepository, parentId, entry.progress)
+        if (watchedEpisodes.isEmpty()) return null
+
+        return buildTrackerNextEpisodeUpNextItem(
+            parentId = parentId,
+            watchedEpisodes = watchedEpisodes,
+            idPrefix = idPrefix,
+            resumeSource = resumeSource,
+            diagSource = diagSource
+        )
+    }
+
+    /**
+     * The anime legs' caught-up candidates, for the Upcoming rail.
+     *
+     * A show the viewer has FINISHED on AniList/Kitsu is exactly an Upcoming
+     * candidate: there is nothing left to resume, and its next episode is what
+     * the viewer is waiting for (the same rule the Simkl caught-up leg applies).
+     * Every half fails soft, so a missing username, a private list or a failed
+     * read simply contributes no candidates.
+     */
+    private suspend fun loadAnimeCaughtUpCandidates(): List<CaughtUpShowCandidate> {
+        val reads =
+            listOf(
+                "anilist" to suspend {
+                    AnimeTrackerLegs.readAniList(AppPreferences.getAniListUsername(getApplication()))
+                },
+                "kitsu" to suspend {
+                    AnimeTrackerLegs.readKitsu(AppPreferences.getKitsuUsername(getApplication()))
+                }
+            )
+
+        val candidates = ArrayList<CaughtUpShowCandidate>()
+
+        for ((source, read) in reads) {
+            val answered =
+                try {
+                    read()
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w("HOME_UPNEXT", "$source caught-up read failed: ${e.message}", e)
+                    continue
+                }
+
+            val entries = (answered as? AnimeTrackerRead.Ok)?.entries ?: continue
+
+            candidates +=
+                AnimeTrackerRail.caughtUpCandidates(
+                    tmdb = tmdbRepository,
+                    entries = entries,
+                    source = source,
+                    max = MAX_ANIME_CAUGHT_UP_CANDIDATES
+                )
+        }
+
+        return candidates
+    }
 
     /**
      * The BingeCat next-episode leg (Slice A, X3).

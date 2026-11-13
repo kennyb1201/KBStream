@@ -98,6 +98,16 @@ object AppPreferences {
     private const val KEY_EXTERNAL_PLAYER_ASK = "external_player_ask_each_time"
     private const val KEY_CUSTOM_EXTERNAL_PLAYER_PACKAGE = "custom_external_player_package"
     private const val KEY_CUSTOM_EXTERNAL_PLAYER_LABEL = "custom_external_player_label"
+
+    /**
+     * The anime trackers' public usernames (spec 2026-11-13, F2).
+     *
+     * A username, not a credential: v1 reads public lists only, so there is no
+     * token to keep in the secure store and nothing here is a secret. An empty
+     * value is "not connected", which is what keeps both legs dormant.
+     */
+    private const val KEY_ANILIST_USERNAME = "anilist_username"
+    private const val KEY_KITSU_USERNAME = "kitsu_username"
     private const val KEY_EXTERNAL_TRUST_RETURN = "external_player_trust_return"
     private const val KEY_DECODER_MODE = "decoder_mode" // legacy toggle, migrated below
     private const val KEY_DECODER_PRIORITY = "decoder_priority" // combined (one release), migrated below
@@ -1121,6 +1131,32 @@ object AppPreferences {
         prefs(context).edit()
             .putString(KEY_EXTERNAL_PLAYER_PACKAGE, packageName)
             .putString(KEY_EXTERNAL_PLAYER_LABEL, label)
+            .apply()
+    }
+
+    /** The AniList username whose public anime list is read, or null. */
+    fun getAniListUsername(context: Context): String? =
+        prefs(context).getString(KEY_ANILIST_USERNAME, null)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+
+    /** Saves - or, with a blank value, forgets - the AniList username. */
+    fun setAniListUsername(context: Context, username: String?) {
+        prefs(context).edit()
+            .putString(KEY_ANILIST_USERNAME, username?.trim()?.takeIf { it.isNotEmpty() })
+            .apply()
+    }
+
+    /** The Kitsu username whose public anime library is read, or null. */
+    fun getKitsuUsername(context: Context): String? =
+        prefs(context).getString(KEY_KITSU_USERNAME, null)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+
+    /** Saves - or, with a blank value, forgets - the Kitsu username. */
+    fun setKitsuUsername(context: Context, username: String?) {
+        prefs(context).edit()
+            .putString(KEY_KITSU_USERNAME, username?.trim()?.takeIf { it.isNotEmpty() })
             .apply()
     }
 

@@ -16,7 +16,15 @@ internal enum class TrackerFeed {
     SIMKL,
     MDBLIST,
     TRAKT,
-    BINGECAT
+    BINGECAT,
+
+    /**
+     * The anime legs (spec 2026-11-13, F2). Two slots rather than one: they are
+     * separate services with separate usernames, so one answering must not erase
+     * the other's cards - the same reason every other tracker has its own slot.
+     */
+    ANILIST,
+    KITSU
 }
 
 /**
@@ -145,7 +153,9 @@ internal class ContinueWatchingArrivals(
             TrackerFeed.SIMKL,
             TrackerFeed.MDBLIST,
             TrackerFeed.TRAKT,
-            TrackerFeed.BINGECAT
+            TrackerFeed.BINGECAT,
+            TrackerFeed.ANILIST,
+            TrackerFeed.KITSU
         )
     }
 }
@@ -164,4 +174,6 @@ private fun ResumeSource.toTrackerFeed(): TrackerFeed? =
         ResumeSource.MDBLIST -> TrackerFeed.MDBLIST
         ResumeSource.TRAKT -> TrackerFeed.TRAKT
         ResumeSource.BINGECAT -> TrackerFeed.BINGECAT
+        ResumeSource.ANILIST -> TrackerFeed.ANILIST
+        ResumeSource.KITSU -> TrackerFeed.KITSU
     }

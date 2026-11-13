@@ -8,10 +8,11 @@ import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.Meta
+import com.kennyb1201.kbstream.data.anime.AnimeIdHub
+import com.kennyb1201.kbstream.data.anime.AnimeIdentity
 import com.kennyb1201.kbstream.data.animethemes.AnimeTheme
 import com.kennyb1201.kbstream.data.animethemes.AnimeThemeRules
 import com.kennyb1201.kbstream.data.animethemes.AnimeThemesClient
-import com.kennyb1201.kbstream.ui.player.resolveMalId
 import com.kennyb1201.kbstream.data.addon.VideoEntry
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrections
@@ -290,6 +291,18 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     val animeThemes: StateFlow<List<AnimeTheme>> = _animeThemes.asStateFlow()
 
     /**
+     * The anime ID hub's answer for this title (spec 2026-11-13, F1/F3).
+     *
+     * Filled by the same one lookup the Themes tab already makes, because the hub
+     * is what that lookup starts with: one AniList `Media` query returns the
+     * AniList id, the MAL id, the community score and the next airing episode
+     * together. Empty is the ordinary answer for anything not anime, and the
+     * Detail header simply draws nothing for it.
+     */
+    private val _animeIdentity = MutableStateFlow(AnimeIdentity())
+    val animeIdentity: StateFlow<AnimeIdentity> = _animeIdentity.asStateFlow()
+
+    /**
      * Whether this ViewModel has already asked for the themes.
      *
      * One lookup per Detail open, never one per recomposition or per tab switch
@@ -331,7 +344,12 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
 
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                val malId = resolveMalId(title) ?: return@withContext
+                // One hub answer per Detail open: it is the MAL id the themes
+                // need AND the score/next-airing the header shows, and the hub
+                // caches it per title so the intro-skip leg pays nothing for it.
+                val identity = AnimeIdHub.resolve(title)
+                _animeIdentity.value = identity
+                val malId = identity.malId ?: return@withContext
                 val themes = AnimeThemesClient.fetchThemes(malId, title)
                 if (themes.isNotEmpty()) _animeThemes.value = themes
             }

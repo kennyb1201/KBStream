@@ -1157,6 +1157,52 @@ fun SettingsScreen(
                         onClick = onOpenBingeCat
                     )
 
+                    // ── The anime trackers (spec 2026-11-13, F2) ───────────
+                    // Read-only in v1: a username, a PUBLIC list, no password and
+                    // no token. They sit at the end of the section because they
+                    // are the two legs that were added last, and because neither
+                    // is a resume authority - they feed Continue Watching and
+                    // Upcoming like every other leg and are dormant when empty.
+                    var animeEditor by remember { mutableStateOf<String?>(null) }
+                    val aniListUsername = remember(profileRowKey, syncedRevision) {
+                        AppPreferences.getAniListUsername(context)
+                    }
+                    val kitsuUsername = remember(profileRowKey, syncedRevision) {
+                        AppPreferences.getKitsuUsername(context)
+                    }
+
+                    NavigationRow(
+                        label = animeTrackerRowLabel("AniList", aniListUsername),
+                        description = animeTrackerDescription("AniList", aniListUsername),
+                        onClick = { animeEditor = "anilist" }
+                    )
+
+                    NavigationRow(
+                        label = animeTrackerRowLabel("Kitsu", kitsuUsername),
+                        description = animeTrackerDescription("Kitsu", kitsuUsername),
+                        onClick = { animeEditor = "kitsu" }
+                    )
+
+                    // The dialog lives beside the rows it edits: a username is
+                    // the whole connection, so a "connect screen" would be one
+                    // field with a page around it.
+                    animeEditor?.let { service ->
+                        val isAniList = service == "anilist"
+                        AnimeUsernameDialog(
+                            service = if (isAniList) "AniList" else "Kitsu",
+                            current = if (isAniList) aniListUsername else kitsuUsername,
+                            onDismiss = { animeEditor = null },
+                            onSave = { username ->
+                                if (isAniList) {
+                                    AppPreferences.setAniListUsername(context, username)
+                                } else {
+                                    AppPreferences.setKitsuUsername(context, username)
+                                }
+                                animeEditor = null
+                            }
+                        )
+                    }
+
                 // ── PUBLIC LISTS ───────────────────────────────────────
                 // One section for the three sources that can browse and save a
                 // community list (spec F1). Before this, "where do I browse

@@ -64,6 +64,20 @@ internal const val MAX_TRAKT_CAUGHT_UP_UPCOMING_ITEMS =
 internal const val MAX_BINGECAT_CAUGHT_UP_UPCOMING_ITEMS =
     25
 
+/**
+ * Ceiling on each anime half (spec 2026-11-13, F2), mirroring the others.
+ *
+ * AniList and Kitsu cap at the same 25: every candidate is one TMDB search plus
+ * one cached detail, and a viewer with a 300-show anime list should not make a
+ * Home load walk all of it. The schedule builder still collapses duplicates.
+ */
+internal const val MAX_ANIME_CAUGHT_UP_CANDIDATES =
+    25
+
+/** Ceiling on the cards one anime leg contributes to Continue Watching. */
+internal const val MAX_ANIME_UP_NEXT_ITEMS =
+    20
+
 /** Parallel TMDB resolutions while building the caught-up Upcoming cards. */
 internal const val CAUGHT_UP_UPCOMING_CONCURRENCY =
     4
