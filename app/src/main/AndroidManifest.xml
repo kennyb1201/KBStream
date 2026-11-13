@@ -392,5 +392,36 @@
                 <action android:name="com.kennyb1201.kbstream.action.INSTALL_STATUS" />
             </intent-filter>
         </receiver>
+
+        <!-- Continue Watching home-screen widget (spec 2026-11-13).
+
+             The receiver is the only component the launcher binds to, so it is
+             exported and carries the appwidget action. The refresh action is
+             this app's own broadcast, received here and nowhere else.
+
+             The widget needs NO permission of its own: it reads a file in this
+             app's storage and starts this app's activity. (`BIND_REMOTEVIEWS`
+             below is the service's permission, held by the system's launcher
+             host, not one this app requests.) -->
+        <receiver
+            android:name=".widget.CwWidgetProvider"
+            android:exported="true"
+            android:label="@string/cw_widget_title">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.kennyb1201.kbstream.widget.action.CW_REFRESH" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/cw_widget_info" />
+        </receiver>
+
+        <!-- The widget's rows. Bound by the launcher host through the widget,
+             with the system permission that keeps any other app from calling
+             it; not exported, no intent filter. -->
+        <service
+            android:name=".widget.CwWidgetService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS" />
     </application>
 </manifest>

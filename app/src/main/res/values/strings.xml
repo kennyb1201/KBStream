@@ -21,4 +21,11 @@
 <resources>
     <string name="downloads_channel_name">Downloads</string>
     <string name="downloads_channel_description">Keeps a download going and shows its progress.</string>
+
+    <!-- Continue Watching home-screen widget (spec 2026-11-13). -->
+    <string name="cw_widget_title">Continue Watching</string>
+    <string name="cw_widget_description">What you are part-way through, with one tap to resume.</string>
+    <string name="cw_widget_refresh">Refresh</string>
+    <string name="cw_widget_empty">Nothing in progress</string>
+    <string name="cw_widget_empty_hint">Open the app to refresh</string>
 </resources>

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Continue Watching widget metadata (spec 2026-11-13).
+
+     Two cells square at minimum, free to grow in both directions; the ListView
+     inside the shell adapts its visible rows to whatever height the launcher
+     grants (S6). `updatePeriodMillis` is 0 on purpose: refreshes are pushed from
+     the app when Continue Watching changes (F2), and a periodic WorkManager
+     round keeps the freshness line honest - a launcher-driven 30-minute tick
+     would wake the app for nothing. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/cw_widget_description"
+    android:initialLayout="@layout/cw_widget"
+    android:minHeight="110dp"
+    android:minResizeHeight="110dp"
+    android:minResizeWidth="110dp"
+    android:minWidth="110dp"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellHeight="2"
+    android:targetCellWidth="2"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />

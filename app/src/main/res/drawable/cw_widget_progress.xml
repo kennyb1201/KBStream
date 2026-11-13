@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The widget row's progress bar: a quiet track and the app's accent for the
+     played part. RemoteViews sets progress/max on the ProgressBar; this drawable
+     is what makes those numbers visible (a horizontal ProgressBar with no
+     progressDrawable renders a system-grey slab). -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@android:id/background">
+        <shape android:shape="rectangle">
+            <corners android:radius="2dp" />
+            <solid android:color="#33F3EFE4" />
+        </shape>
+    </item>
+    <item android:id="@android:id/progress">
+        <clip>
+            <shape android:shape="rectangle">
+                <corners android:radius="2dp" />
+                <solid android:color="@color/kb_accent" />
+            </shape>
+        </clip>
+    </item>
+</layer-list>

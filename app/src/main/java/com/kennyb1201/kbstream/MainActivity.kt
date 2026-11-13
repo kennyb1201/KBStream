@@ -128,6 +128,8 @@ import com.kennyb1201.kbstream.ui.profiles.ProfilePickerScreen
 import com.kennyb1201.kbstream.ui.home.HomeScreen
 import com.kennyb1201.kbstream.ui.home.HomeViewModel
 import com.kennyb1201.kbstream.ui.home.upNextPlayerNameOrUnknown
+import com.kennyb1201.kbstream.widget.CwWidgetTap
+import com.kennyb1201.kbstream.widget.cwWidgetDetailScreen
 import com.kennyb1201.kbstream.ui.launchSplashVisible
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.KidsLiveTvFilter
@@ -1955,6 +1957,36 @@ fun AppRoot(
     // dropped-handoff recovery below stand down. A spoken query deliberately
     // does not (it never did: the recovery could override it).
     fun applyLaunchIntentExtras(intent: Intent?): Boolean {
+        // A Continue Watching widget row tap (spec 2026-11-13, F1): the widget
+        // carries the same facts a rail card press carries, and this resolves
+        // them into the same auto-playing Detail destination (see
+        // [cwWidgetDetailScreen]). It must be read before the launcher route
+        // below, which would otherwise open Detail WITHOUT resuming - the
+        // widget's single tap has to reach the player.
+        val widgetParentId = intent?.getStringExtra(CwWidgetTap.EXTRA_PARENT_ID)
+        if (intent != null && !widgetParentId.isNullOrBlank()) {
+            screen = cwWidgetDetailScreen(
+                parentType = intent.getStringExtra(CwWidgetTap.EXTRA_PARENT_TYPE),
+                parentId = widgetParentId,
+                streamId = intent.getStringExtra(CwWidgetTap.EXTRA_STREAM_ID),
+                showTitle = intent.getStringExtra(CwWidgetTap.EXTRA_TITLE),
+                episodeTitle = intent.getStringExtra(CwWidgetTap.EXTRA_EPISODE_TITLE),
+                season = if (intent.hasExtra(CwWidgetTap.EXTRA_SEASON)) {
+                    intent.getIntExtra(CwWidgetTap.EXTRA_SEASON, 0)
+                } else {
+                    null
+                },
+                episode = if (intent.hasExtra(CwWidgetTap.EXTRA_EPISODE)) {
+                    intent.getIntExtra(CwWidgetTap.EXTRA_EPISODE, 0)
+                } else {
+                    null
+                },
+                positionMs = intent.getLongExtra(CwWidgetTap.EXTRA_POSITION_MS, 0L),
+                poster = intent.getStringExtra(CwWidgetTap.EXTRA_POSTER)
+            )
+            return true
+        }
+
         val launcherType = intent?.getStringExtra(TvLauncherPublisher.EXTRA_TYPE)
         val launcherId = intent?.getStringExtra(TvLauncherPublisher.EXTRA_ID)
         val reminderChannelId =

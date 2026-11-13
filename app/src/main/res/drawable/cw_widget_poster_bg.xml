@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Poster placeholder fill, shown behind artwork while the row's poster loads
+     (and left in place when it cannot be loaded at all). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/kb_surface_raised" />
+    <corners android:radius="6dp" />
+</shape>

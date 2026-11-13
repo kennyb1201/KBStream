@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The widget's empty state, and its fail-soft state: either there is nothing
+     in progress, or the app has nothing to hand over yet. Both say so and both
+     open the app on tap - never a blank card, never a crash. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/cw_widget_empty_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:paddingLeft="10dp"
+    android:paddingRight="10dp">
+
+    <TextView
+        android:id="@+id/cw_widget_empty_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:maxLines="2"
+        android:text="@string/cw_widget_empty"
+        android:textColor="@color/kb_text_hi"
+        android:textSize="12sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/cw_widget_empty_hint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:gravity="center"
+        android:maxLines="2"
+        android:text="@string/cw_widget_empty_hint"
+        android:textColor="@color/kb_text_lo"
+        android:textSize="10sp" />
+</LinearLayout>

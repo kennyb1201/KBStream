@@ -30,6 +30,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
 import com.kennyb1201.kbstream.data.library.TasteProfileStore
+import com.kennyb1201.kbstream.data.widget.CwWidgetPublisher
 import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.library.isDisliked
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
@@ -517,6 +518,35 @@ class HomeViewModel(
 
     val upNext: StateFlow<List<UpNextItem>> =
         _upNext.asStateFlow()
+
+    /**
+     * Hands the rail's list to the Continue Watching home-screen widget (spec
+     * 2026-11-13, F3).
+     *
+     * This is the app's ONE place that knows the rail changed - the same funnel
+     * every publish goes through - so it is where the widget's snapshot is
+     * written: playback end, a mark, a dismissal, a tracker arrival and a
+     * profile switch all land here, and none of them needs its own widget hook.
+     * The publisher re-applies the rail's read-site rules (hidden titles, the
+     * not-yet-aired tracker card) with the same inputs the screens use, so the
+     * widget shows the rail's list rather than a second interpretation of it.
+     *
+     * Fired and forgotten: a snapshot that cannot be written must never hold up
+     * a publish, and the widget's own fail-soft path covers the gap.
+     */
+    private fun publishContinueWatchingWidgetSnapshot(items: List<UpNextItem>) {
+        if (items.isEmpty() && _continueWatchingShowNames.value.isEmpty()) {
+            // Cold start before history has answered: nothing to say yet, and a
+            // write here would blank a widget that is showing the last good list.
+            return
+        }
+        val showNames = _continueWatchingShowNames.value
+        viewModelScope.launch {
+            runCatchingCancellable {
+                CwWidgetPublisher.publish(getApplication<Application>(), items, showNames)
+            }
+        }
+    }
 
     /**
      * The show name of every Continue Watching parent this profile's history
@@ -6544,6 +6574,8 @@ Log.d(
         if (items == _upNext.value) return
 
         _upNext.value = items
+
+        publishContinueWatchingWidgetSnapshot(items)
 
         prefetchHeroArt(
             items.mapNotNull { up ->
