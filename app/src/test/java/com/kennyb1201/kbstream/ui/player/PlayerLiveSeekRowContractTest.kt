@@ -71,8 +71,12 @@ class PlayerLiveSeekRowContractTest {
         val controls = between(activity, "private fun updateControlsInfo(", "private fun applyPillBackground(")
 
         assertTrue(
+            // Safe call: `chrome` is built lazily, so this ran on a nullable
+            // receiver and did not compile. A bar that does not exist yet has
+            // nothing to hide, and it is created with isLiveChannel already
+            // known.
             "the row goes exactly where live/VOD is already decided",
-            controls.contains("chrome.setSeekAvailable(!isLiveChannel)")
+            controls.contains("chrome?.setSeekAvailable(!isLiveChannel)")
         )
         assertTrue(
             "and that is the function that shows the live-only controls",

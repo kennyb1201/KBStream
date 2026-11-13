@@ -10003,7 +10003,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // and the controls' UP target follows it (field report 2026-11-12). VOD
         // keeps the bar, its chapter marks and its times exactly as they were;
         // the live program block's own read-only bar is untouched.
-        chrome.setSeekAvailable(!isLiveChannel)
+        //
+        // [chrome] is built lazily, so a session that paints its controls before
+        // the bar exists has nothing to tell - the bar is created with the
+        // channel already known and asks the same question itself.
+        chrome?.setSeekAvailable(!isLiveChannel)
     }
 
     private fun applyPillBackground(view: TextView, selected: Boolean, focused: Boolean) {
