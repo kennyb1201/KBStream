@@ -51,9 +51,19 @@ class ExoScrubFollowContractTest {
     @Test
     fun `the play state is restored exactly and cleared per scrub`() {
         val body = functionBody(NATIVE, "private fun endScrubPause() {")
+        // Repointed by the large-seek spec (2026-11-13): the resume moved into
+        // one helper so a far seek can wait for runway first, but the rule it
+        // enforces is the same one - only a scrub that found the viewer playing
+        // resumes anything, and the flag is per-scrub.
         assertTrue(
             "only a scrub that found the player playing resumes it",
-            body.contains("if (wasPlayingBeforeScrub) exoPlayer?.play()")
+            body.contains("val resume = wasPlayingBeforeScrub") &&
+                body.contains("if (!resume) {") &&
+                body.contains("resumeAfterSeek(player, scrubStartPositionMs, scrubLandingTargetMs)")
+        )
+        assertFalse(
+            "and it is never an unconditional play",
+            body.contains("exoPlayer?.play()")
         )
         assertTrue(
             "the flag is per-scrub, so it is cleared when honoured",
@@ -66,10 +76,10 @@ class ExoScrubFollowContractTest {
         assertTrue(
             readSource(NATIVE).contains("private var wasPlayingBeforeScrub = false")
         )
-        // exoPlayer?.play() is the null check the spec requires.
+        // A null player is checked before anything is resumed.
         assertTrue(
             functionBody(NATIVE, "private fun endScrubPause() {")
-                .contains("exoPlayer?.play()")
+                .contains("val player = exoPlayer")
         )
     }
 

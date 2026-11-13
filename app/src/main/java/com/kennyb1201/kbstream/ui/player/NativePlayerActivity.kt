@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent
 import android.view.View
@@ -1244,6 +1245,34 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
     /** Whether a scrub is in flight, so a re-entry cannot re-capture the play state. */
     private var scrubInFlight = false
+
+    /**
+     * The playhead this scrub started from, captured with the play state.
+     *
+     * Together with [scrubLandingTargetMs] it is the whole input to the
+     * large-seek rule: a scrub that lands far from where it began is the one that
+     * empties the buffer (see [LargeSeekResumeRules]).
+     */
+    private var scrubStartPositionMs: Long? = null
+
+    /** Where this scrub's last seek landed, or null when it never sought. */
+    private var scrubLandingTargetMs: Long? = null
+
+    /**
+     * Token for the buffer hold after a large seek, so an abandoned hold can
+     * never resume the player later (see [holdForRunwayThenPlay]).
+     */
+    private var largeSeekHoldToken = 0
+
+    /**
+     * True while a large seek is waiting for runway.
+     *
+     * The player is paused (`playWhenReady` false) for the whole hold, so this is
+     * what tells a scrub that starts meanwhile that the viewer's intent is still
+     * "playing": without it the scrub would capture `playWhenReady=false`, release
+     * into a paused player and look like a stuck spinner (S4 of the spec).
+     */
+    private var largeSeekHoldActive = false
 
     /** Uptime of the last touch-drag follow-seek, this path's own throttle. */
     private var lastFollowSeekMs = 0L
@@ -9895,7 +9924,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // viewer paused after a scrub they made while playing.
         if (scrubInFlight) return
         scrubInFlight = true
-        wasPlayingBeforeScrub = player.playWhenReady
+        // A previous large seek's hold must not outlive this new scrub: the
+        // viewer's own press wins, and this scrub will make its own decision
+        // when it lands. Its pause is not the viewer's own, though - a hold
+        // means the intent is still "playing", so the scrub resumes afterwards
+        // exactly as it would have if it had started before the seek.
+        val holdingAfterLargeSeek = largeSeekHoldActive
+        cancelLargeSeekHold()
+        wasPlayingBeforeScrub = player.playWhenReady || holdingAfterLargeSeek
+        scrubStartPositionMs = player.currentPosition.coerceAtLeast(0L)
+        scrubLandingTargetMs = null
         player.pause()
     }
 
@@ -9905,9 +9943,90 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * per-scrub. The null check keeps a released player from being touched.
      */
     private fun endScrubPause() {
-        if (wasPlayingBeforeScrub) exoPlayer?.play()
+        val resume = wasPlayingBeforeScrub
         wasPlayingBeforeScrub = false
         scrubInFlight = false
+        if (!resume) {
+            scrubStartPositionMs = null
+            scrubLandingTargetMs = null
+            return
+        }
+        val player = exoPlayer
+        if (player == null) {
+            scrubStartPositionMs = null
+            scrubLandingTargetMs = null
+            return
+        }
+        // A far seek resumes the way it landed, not the way a nudge does: see
+        // [LargeSeekResumeRules] for why waiting for 10s of runway stops the
+        // stall cluster a cold re-fetch produces (field report 2026-11-13).
+        resumeAfterSeek(player, scrubStartPositionMs, scrubLandingTargetMs)
+        scrubStartPositionMs = null
+        scrubLandingTargetMs = null
+    }
+
+    /**
+     * Puts playback back after a scrub or a bar commit.
+     *
+     * Small seek: play at once, exactly as this always did. Large seek: hold
+     * `playWhenReady` off until the buffer holds [LargeSeekResumeRules.RESUME_BUFFER_MS]
+     * and then play. The loader fills regardless of `playWhenReady`, so the hold
+     * costs no fill time - it only stops the player from draining 5s of runway
+     * before the fill rate has recovered.
+     */
+    private fun resumeAfterSeek(player: ExoPlayer, fromMs: Long?, toMs: Long?) {
+        if (!LargeSeekResumeRules.isLargeSeek(fromMs, toMs)) {
+            player.play()
+            return
+        }
+        holdForRunwayThenPlay(player)
+    }
+
+    /**
+     * Waits for a large seek's buffer, then plays.
+     *
+     * Bounded twice over: a failed player resumes at once (the error path owns
+     * it), and [LargeSeekResumeRules.HOLD_MAX_MS] releases the hold even when the
+     * buffer never fills, so a dead source lands in the ordinary rebuffer path
+     * instead of leaving the viewer paused. The poll is re-entered by token, so a
+     * new seek, a play/pause press or a scrub start abandons it.
+     */
+    private fun holdForRunwayThenPlay(player: ExoPlayer) {
+        largeSeekHoldActive = true
+        val token = ++largeSeekHoldToken
+        val startedAt = SystemClock.elapsedRealtime()
+        pollLargeSeekHold(token, startedAt)
+    }
+
+    private fun pollLargeSeekHold(token: Int, startedAt: Long) {
+        if (token != largeSeekHoldToken) return
+        val player = exoPlayer ?: run {
+            // The player went away under the hold (a re-create, an exit): there
+            // is nothing to resume, and a stale "holding" flag would make the
+            // next scrub think the viewer had asked to play.
+            largeSeekHoldActive = false
+            return
+        }
+        val heldMs = SystemClock.elapsedRealtime() - startedAt
+        val bufferedMs = player.totalBufferedDuration
+        if (LargeSeekResumeRules.shouldResume(heldMs, bufferedMs, player.playerError != null)) {
+            if (!LargeSeekResumeRules.hasRunway(bufferedMs)) {
+                Log.w(
+                    "PLAYER_SEEK",
+                    "Large seek released after ${heldMs}ms with ${bufferedMs}ms buffered"
+                )
+            }
+            largeSeekHoldActive = false
+            player.play()
+            return
+        }
+        handler.postDelayed({ pollLargeSeekHold(token, startedAt) }, LargeSeekResumeRules.HOLD_POLL_MS)
+    }
+
+    /** Abandons a buffer hold, if one is running. */
+    private fun cancelLargeSeekHold() {
+        largeSeekHoldToken++
+        largeSeekHoldActive = false
     }
 
     /**
@@ -9922,6 +10041,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private fun landScrub() {
         if (!scrubMoved) return
         scrubMoved = false
+        scrubLandingTargetMs = scrubTargetPosMs
         exoPlayer?.seekTo(scrubTargetPosMs)
     }
 
@@ -9931,6 +10051,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // The shared bar's own resolution is 1000 (PlayerChrome), not the
             // 10000 this engine's private bar used to declare.
             val posMs = (seekbar.progress.toLong() * durationMs) / 1_000L
+            scrubLandingTargetMs = posMs
             exoPlayer?.seekTo(posMs)
         }
     }
@@ -11470,6 +11591,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // restart the episode from the top. Replay is an explicit seek or a
             // fresh session, not a toggle.
             if (playbackEndedHandled) return
+            // A press while a large seek is waiting for its buffer is the viewer
+            // saying what they want now: it wins, and the hold must not resume
+            // the player behind it later.
+            cancelLargeSeekHold()
             // playWhenReady, not isPlaying: they disagree while the player is
             // BUFFERING (playWhenReady=true, isPlaying=false). Reading isPlaying
             // there flipped playWhenReady from true to TRUE - a no-op - and took
@@ -16213,6 +16338,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     override fun onChromePlayPause() = togglePlayPause()
 
     override fun onChromeSeekTo(positionMs: Long) {
+        // The bar's release is a landing exactly like [landScrub]'s: recorded
+        // while a drag is in flight, so the large-seek rule can tell where this
+        // scrub actually went (see [resumeAfterSeek]).
+        if (scrubInFlight) scrubLandingTargetMs = positionMs
         exoPlayer?.seekTo(positionMs)
     }
 
