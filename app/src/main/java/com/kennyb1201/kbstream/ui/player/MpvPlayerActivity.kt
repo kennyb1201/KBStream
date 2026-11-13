@@ -6161,7 +6161,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      * legs' do.
      */
     private fun scrobbleKitsu() {
-        if (isLiveChannel || parentId.isBlank()) return
+        // This engine has no isLiveChannel: a live channel IS a parentType
+        // "channel" here, which is how its other write guards answer the same
+        // question.
+        if (parentType == "channel" || parentId.isBlank()) return
         if (!parentType.equals("series", ignoreCase = true)) return
         val episodeNumber = episode?.takeIf { it > 0 } ?: return
         val title = itemName.takeIf { it.isNotBlank() } ?: return

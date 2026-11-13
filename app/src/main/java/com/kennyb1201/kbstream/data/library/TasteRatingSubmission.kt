@@ -505,6 +505,11 @@ object TasteRatingSubmission {
             // key itself and answers 429 while parked: the leg has no window of
             // its own for this drain to wait out.
             TasteRatingTracker.MDBLIST -> 0L
+            // Kitsu's 429 parks the write itself (see KitsuWriteRules.parkMs):
+            // the leg answers PAUSED with its own deadline, so there is nothing
+            // for this drain to wait out up front either. The drain's own
+            // follow-up scheduling picks the entry up after that window.
+            TasteRatingTracker.KITSU -> 0L
         }
 
     /**
