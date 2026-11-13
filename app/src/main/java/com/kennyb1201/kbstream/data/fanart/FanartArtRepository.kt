@@ -37,7 +37,7 @@ import java.util.concurrent.ConcurrentHashMap
  *   failure: 1h, and it can never be mistaken for a miss. A title never resolved
  *   still costs one call - that is the price of a first answer.
  */
-class FanartArtRepository private constructor(context: Context) {
+internal class FanartArtRepository private constructor(context: Context) {
 
     private val appContext = context.applicationContext
 
