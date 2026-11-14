@@ -74,6 +74,7 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.anime.AniListAuth
 import com.kennyb1201.kbstream.data.anime.AniListLinks
 import com.kennyb1201.kbstream.data.reporting.CrashReporter
+import com.kennyb1201.kbstream.data.reporting.OAuthTrace
 import com.kennyb1201.kbstream.data.mal.MalAuth
 import com.kennyb1201.kbstream.data.mal.MalLinks
 import com.kennyb1201.kbstream.data.addon.Stream
@@ -897,6 +898,25 @@ private suspend fun recoveredEpisodeAlreadyWatched(
         // `recreate()`) after a warm launch — the extras have to survive that.
         setIntent(intent)
         incomingIntent = intent
+        // Recorded HERE, before the compose routers see it (spec 2026-11-14, F1).
+        // Kenny's 0.9.310 attempts left no line anywhere and the paste said "recent
+        // errors: none this session": an arrival the tree never routes still has to
+        // leave a shape, because that is what separates a redirect the browser
+        // never delivered from one this app refused.
+        recordOAuthArrival(warm = true, link = intent.data?.toString())
+    }
+
+    /**
+     * One shape-only arrival record (see [OAuthTrace] - never a value).
+     *
+     * Non-OAuth deep links (a title, a launcher suggestion) are skipped: they are
+     * ordinary use, and S6 asks that ordinary use adds no `oauth` lines. A null
+     * link IS recorded, because "something opened the app with no data" is exactly
+     * the line that names a vanished redirect.
+     */
+    private fun recordOAuthArrival(warm: Boolean, link: String?) {
+        if (link != null && !OAuthTrace.isOAuthLink(link)) return
+        CrashReporter.recordEvent("oauth", OAuthTrace.arrivalLine(warm, link))
     }
 
     /**
@@ -2171,8 +2191,21 @@ fun AppRoot(
     fun routeMalLink(link: String?) {
         if (link == null) return
         if (MalLinks.isCallback(link)) {
-            if (handledMalCallback == link) return
+            if (handledMalCallback == link) {
+                // A repeat is a suspect in its own right (spec 2026-11-14, F2):
+                // recorded rather than swallowed, because "the same link arrived
+                // twice" and "the link never arrived" are different bugs.
+                CrashReporter.recordEvent(
+                    "oauth",
+                    OAuthTrace.routeLine("mal", "duplicate callback ignored")
+                )
+                return
+            }
             handledMalCallback = link
+            CrashReporter.recordEvent(
+                "oauth",
+                OAuthTrace.routeLine("mal", "callback, exchange started")
+            )
             malRouteScope.launch {
                 val result = MalAuth.completeConnect(context, link)
                 // Inside the dedupe guard, so a warm+cold double routing shows
@@ -2183,10 +2216,31 @@ fun AppRoot(
             }
             return
         }
-        if (!MalLinks.isStart(link)) return
+        if (!MalLinks.isStart(link)) {
+            // Only OUR path is worth a line: this router is also handed the
+            // AniList link, and its own router speaks for that one.
+            if (OAuthTrace.isFor(link, "mal")) {
+                CrashReporter.recordEvent(
+                    "oauth",
+                    OAuthTrace.routeLine("mal", OAuthTrace.notARouteVerdict(link))
+                )
+            }
+            return
+        }
         val reason = com.kennyb1201.kbstream.data.mal.malStartFailureMessage(
             MalLinks.openAuthorize(context)
-        ) ?: return
+        )
+        if (reason == null) {
+            CrashReporter.recordEvent(
+                "oauth",
+                OAuthTrace.routeLine("mal", "start, browser opened")
+            )
+            return
+        }
+        CrashReporter.recordEvent(
+            "oauth",
+            OAuthTrace.routeLine("mal", "start failed: $reason")
+        )
         showMalFailure(reason)
     }
 
@@ -2204,19 +2258,53 @@ fun AppRoot(
     val anilistRouteScope = rememberCoroutineScope()
     var handledAniListCode by remember { mutableStateOf<String?>(null) }
 
+    // AniList's failure surface (spec 2026-11-14, F3), MAL's twin: the callback
+    // branch used to log and nothing else, so a link that ARRIVED and failed at
+    // the exchange was still invisible on screen and in the paste.
+    fun showAniListFailure(reason: String) {
+        val message = com.kennyb1201.kbstream.data.anime.AniListConnectRules
+            .anilistFailureMessage(reason)
+        android.util.Log.w("AniListLinks", message)
+        CrashReporter.recordEvent("anilist", message)
+        val host = malFeedback
+        if (host != null) {
+            host.show(message, isError = true)
+        } else {
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        }
+    }
+
     fun routeAniListLink(link: String?) {
         if (link == null) return
-        if (!AniListLinks.isCallback(link)) return
+        if (!AniListLinks.isCallback(link)) {
+            if (OAuthTrace.isFor(link, "anilist")) {
+                CrashReporter.recordEvent(
+                    "oauth",
+                    OAuthTrace.routeLine("anilist", OAuthTrace.notARouteVerdict(link))
+                )
+            }
+            return
+        }
         val code = runCatching {
             android.net.Uri.parse(link).getQueryParameter("code")
         }.getOrNull()
         val identity = code ?: link
-        if (handledAniListCode == identity) return
+        if (handledAniListCode == identity) {
+            CrashReporter.recordEvent(
+                "oauth",
+                OAuthTrace.routeLine("anilist", "duplicate callback ignored")
+            )
+            return
+        }
         handledAniListCode = identity
+        CrashReporter.recordEvent(
+            "oauth",
+            OAuthTrace.routeLine("anilist", "callback, exchange started")
+        )
         anilistRouteScope.launch {
             val result = AniListAuth.completeConnect(context, link)
             if (result is AniListAuth.ConnectResult.Failed) {
-                android.util.Log.w("AniListLinks", "AniList connect failed: ${result.reason}")
+                showAniListFailure(result.reason)
             }
         }
     }
@@ -2250,7 +2338,10 @@ fun AppRoot(
     LaunchedEffect(Unit) {
         // An OAuth link that arrived with the cold launch (the browser, or a QR
         // scan, started us). The same routers the warm arrival calls: one place
-        // decides what a link means, so the two shapes cannot disagree.
+        // decides what a link means, so the two shapes cannot disagree. The
+        // arrival is recorded first (spec 2026-11-14, F1) - including the
+        // no-data one, which is what a launcher start looks like.
+        recordOAuthArrival(warm = false, link = hostActivity?.intent?.data?.toString())
         routeMalLink(hostActivity?.intent?.data?.toString())
         routeAniListLink(hostActivity?.intent?.data?.toString())
 

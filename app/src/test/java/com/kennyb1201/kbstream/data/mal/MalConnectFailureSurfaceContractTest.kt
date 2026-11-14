@@ -148,7 +148,10 @@ class MalConnectFailureSurfaceContractTest {
     @Test
     fun `a link that is neither callback nor start shows and records nothing`() {
         val router = functionBody(activity, "fun routeMalLink(link: String?) {")
-        val startGuard = router.indexOf("if (!MalLinks.isStart(link)) return")
+        // Spec 2026-11-14 (F2) gave the guard a body: an unclassifiable MAL link
+        // is RECORDED there (shape only) before it is dropped, so "never reached
+        // the router" and "arrived and was rejected" stop looking alike.
+        val startGuard = router.indexOf("if (!MalLinks.isStart(link)) {")
         assertTrue("the router rejects other links", startGuard >= 0)
         assertTrue(
             "before anything can be shown or recorded - no message and no paste " +

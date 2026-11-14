@@ -93,7 +93,11 @@ class MalQrArrivalsContractTest {
         val router = flatten(routerBody())
         assertTrue(
             "the outcome is turned into a sentence at the one place that opens the page",
-            router.contains("malStartFailureMessage( MalLinks.openAuthorize(context) ) ?: return")
+            // Spec 2026-11-14 (F2) made the branch explicit: the opened case and
+            // the failed case each record their verdict, so the `?: return`
+            // became a null check. The sentence still comes from the same rules
+            // call, at the same one place.
+            router.contains("malStartFailureMessage( MalLinks.openAuthorize(context) )")
         )
         assertTrue(
             "and an opened page shows nothing at all",
@@ -160,7 +164,10 @@ class MalQrArrivalsContractTest {
     @Test
     fun `one callback link is exchanged once`() {
         val router = flatten(routerBody())
-        val guardAt = router.indexOf("if (handledMalCallback == link) return")
+        // A body since spec 2026-11-14 (F2): a swallowed repeat is recorded as
+        // "duplicate callback ignored" instead of returning silently, because a
+        // repeat delivery is a suspect in its own right.
+        val guardAt = router.indexOf("if (handledMalCallback == link) {")
         val launchAt = router.indexOf("malRouteScope.launch {")
         assertTrue("the guard exists", guardAt >= 0)
         assertTrue(
@@ -175,7 +182,9 @@ class MalQrArrivalsContractTest {
         assertTrue(
             "a start link is a constant - scanning the QR again must open the browser " +
                 "again, so it is never filtered by that guard",
-            router.contains("if (!MalLinks.isStart(link)) return")
+            // A body rather than a bare return since spec 2026-11-14 (F2): an
+            // unclassifiable MAL link is recorded here before it is dropped.
+            router.contains("if (!MalLinks.isStart(link)) {")
         )
     }
 

@@ -98,6 +98,15 @@ internal object AniListConnectRules {
         "Paste the code AniList sent back, or open the link above and approve there."
 
     /**
+     * The one sentence a failed AniList connect shows and records (spec
+     * 2026-11-14, F3) - MAL's shape, so the two trackers read alike in a paste.
+     *
+     * [reason] is always one of this file's or [AniListAuth]'s fixed sentences;
+     * the code, the state and the secret never reach it.
+     */
+    fun anilistFailureMessage(reason: String): String = "AniList didn't connect: $reason"
+
+    /**
      * The authorize URL the browser opens.
      *
      * `state` is optional and is only carried by a flow THIS device started (see

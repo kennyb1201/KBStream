@@ -205,6 +205,11 @@ internal fun AniListConnectDialog(
                             text = "DISCONNECT",
                             color = KBTextHi,
                             style = MaterialTheme.typography.labelLarge,
+                            // A label that fits on Kenny's phone today can still
+                            // starve on a narrower one; wrapping a button's own
+                            // word is never the right answer (spec 2026-11-14).
+                            maxLines = 1,
+                            softWrap = false,
                             modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
                         )
                     }
@@ -257,6 +262,8 @@ internal fun AniListConnectDialog(
                             text = if (busy) "CONNECTING…" else "CONNECT",
                             color = KBTextHi,
                             style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            softWrap = false,
                             modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
                         )
                     }
@@ -269,6 +276,8 @@ internal fun AniListConnectDialog(
                         text = "CANCEL",
                         color = KBTextLo,
                         style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                        softWrap = false,
                         modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
                     )
                 }
@@ -304,10 +313,16 @@ internal fun AniListConnectDialog(
                     onClick = {
                         keyboard?.hide()
                         onSaveUsername(username.trim().takeIf { it.isNotEmpty() })
-                    }
+                    },
+                    // SAVE USERNAME absorbs the row's slack; CLEAR keeps its own
+                    // width, which is what stops CLEAR wrapping to "CLEA / R"
+                    // (spec 2026-11-14).
+                    modifier = Modifier.weight(1f)
                 ) {
                     Text(
                         text = "SAVE USERNAME",
+                        maxLines = 1,
+                        softWrap = false,
                         color = KBTextHi,
                         style = MaterialTheme.typography.labelLarge,
                         modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
@@ -325,6 +340,9 @@ internal fun AniListConnectDialog(
                         text = "CLEAR",
                         color = KBTextHi,
                         style = MaterialTheme.typography.labelLarge,
+                        // Never wraps, whatever width the row leaves it.
+                        maxLines = 1,
+                        softWrap = false,
                         modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
                     )
                 }
