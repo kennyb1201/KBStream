@@ -135,7 +135,7 @@ class GuideFetchBudgetContractTest {
         // global marker from the per-source stamps), so what proves it is
         // per-source is that the LOOP calls that helper, between the loop's own
         // opening and the tail that runs once the loop is over.
-        val loopAt = worker.indexOf("epgUrls.forEach { url ->")
+        val loopAt = worker.indexOf("epgUrls.forEachIndexed { index, url ->")
         val stampAt = worker.indexOf("stampImportedSource(prefs, url, epgUrls)")
         val afterLoopAt = worker.indexOf("// One dead source must not fail")
         assertTrue("the per-source loop must still be findable", loopAt >= 0)

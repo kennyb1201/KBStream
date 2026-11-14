@@ -35,7 +35,7 @@ class EpgRefreshWorkerDeferralContractTest {
      */
     private val gate: String by lazy {
         worker.readText()
-            .substringAfter("suspend fun doWork()")
+            .substringAfter("suspend fun runPass()")
             .substringBefore("// Recorded when the pass STARTS")
     }
 

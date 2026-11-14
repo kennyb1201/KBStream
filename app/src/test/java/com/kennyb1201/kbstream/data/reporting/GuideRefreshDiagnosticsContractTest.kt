@@ -155,12 +155,12 @@ class GuideRefreshDiagnosticsContractTest {
         assertTrue(
             "and so does the worker, so the spacing covers a box whose guide is only " +
                 "ever refreshed in the background",
-            body(worker, "suspend fun doWork()").contains("putLong(KEY_EPG_ATTEMPT_AT, now)") &&
+            body(        worker, "suspend fun runPass()").contains("putLong(KEY_EPG_ATTEMPT_AT, now)") &&
                 worker.contains("const val KEY_EPG_ATTEMPT_AT = \"epg_attempt_at\"")
         )
         assertFalse(
             "an attempt stamp is NOT a success: it must not touch the freshness marker",
-            body(worker, "suspend fun doWork()")
+            body(        worker, "suspend fun runPass()")
                 .substringAfter("putLong(KEY_EPG_ATTEMPT_AT, now)")
                 .substringBefore("// The shared instance")
                 .contains("KEY_EPG_UPDATED_AT\", ")
@@ -171,7 +171,7 @@ class GuideRefreshDiagnosticsContractTest {
 
     @Test
     fun `the worker asks the guide whether it has anything to draw`() {
-        val gate = body(worker, "suspend fun doWork()")
+        val gate = body(        worker, "suspend fun runPass()")
         assertTrue(
             "it reads the guide's own newest program end before deciding",
             gate.contains("newestGuideProgramEndMs()")

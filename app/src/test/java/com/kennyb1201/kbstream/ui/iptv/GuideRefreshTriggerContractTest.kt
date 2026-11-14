@@ -34,6 +34,11 @@ class GuideRefreshTriggerContractTest {
         worker.lines().joinToString("\n") { it.substringBefore("//") }
     }
 
+    /** The verdict rules the worker writes through, comments stripped. */
+    private val diagnosticsCode: String by lazy {
+        read(DIAGNOSTICS).lines().joinToString("\n") { it.substringBefore("//") }
+    }
+
     // ── Trigger A: entry, decided on the window ───────────────────────────
 
     @Test
@@ -207,10 +212,15 @@ class GuideRefreshTriggerContractTest {
             "and records the failing state instead of stopping",
             workerCode.contains("KEY_EPG_REFRESH_FAILING")
         )
+        // The reset is a rule now, not a literal: `failingAfter` answers 0/false
+        // for a pass that landed a source, and the worker writes whatever it
+        // answers. Pinning the literal `.putBoolean(..., false)` pinned a line
+        // that had moved into EpgRefreshDiagnostics.
         assertTrue(
             "a source landing resets both the counter and the failing state",
-            workerCode.contains(".putInt(KEY_EPG_EMPTY_RUNS, 0)") &&
-                workerCode.contains(".putBoolean(KEY_EPG_REFRESH_FAILING, false)")
+            workerCode.contains(".putInt(EpgRefreshDiagnostics.KEY_ABORT_STREAK, streak)") &&
+                workerCode.contains(".putBoolean(KEY_EPG_REFRESH_FAILING, failing)") &&
+                diagnosticsCode.contains("if (verdict.decision == Decision.IMPORT && verdict.imported > 0) return 0 to false")
         )
     }
 
@@ -276,6 +286,7 @@ class GuideRefreshTriggerContractTest {
     private companion object {
         const val IPTV_VM = "com/kennyb1201/kbstream/ui/iptv/IptvViewModel.kt"
         const val WORKER = "com/kennyb1201/kbstream/data/iptv/EpgRefreshWorker.kt"
+        const val DIAGNOSTICS = "com/kennyb1201/kbstream/data/iptv/EpgRefreshDiagnostics.kt"
         const val GUIDE_TV = "com/kennyb1201/kbstream/ui/iptv/GuideScreen.kt"
         const val GUIDE_MOBILE = "com/kennyb1201/kbstream/ui/mobile/GuideScreenMobile.kt"
     }
