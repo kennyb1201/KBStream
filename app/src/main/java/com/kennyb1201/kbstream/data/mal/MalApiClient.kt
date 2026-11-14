@@ -127,13 +127,45 @@ internal object MalApiClient {
         if (store.needsReconnect()) return MalListRead.NeedsReconnect
         if (!store.hasSession()) return MalListRead.NotConnected
 
+        return readAnimeList(context, "$API_BASE/users/@me/animelist")
+    }
+
+    /**
+     * Somebody else's anime list, by username (spec 2026-11-13, F2).
+     *
+     * MAL's routes are OAuth-only even for a public profile - there is no
+     * unauthenticated `/users/{name}/animelist` - so this read requires THIS
+     * profile's connection exactly as the `@me` read does. Without one the
+     * caller is told [MalListRead.NotConnected] and the public-lists surface
+     * asks for the connection instead of offering a username box that could not
+     * answer.
+     */
+    suspend fun userAnimeList(context: Context, username: String): MalListRead {
+        if (!MalConfig.isConfigured) return MalListRead.NotConfigured
+
+        val name = username.trim().removePrefix("@")
+        if (name.isEmpty()) return MalListRead.NotConfigured
+
+        val store = MalTokenStore(context)
+        if (store.needsReconnect()) return MalListRead.NeedsReconnect
+        if (!store.hasSession()) return MalListRead.NotConnected
+
+        val encoded = runCatching {
+            java.net.URLEncoder.encode(name, "UTF-8")
+        }.getOrNull()?.takeIf { it.isNotBlank() } ?: return MalListRead.Failed
+
+        return readAnimeList(context, "$API_BASE/users/$encoded/animelist")
+    }
+
+    /** The paged list walk both list reads share. */
+    private suspend fun readAnimeList(context: Context, baseUrl: String): MalListRead {
         val entries = ArrayList<JSONObject>()
         var offset = 0
         var page = 0
 
         while (page < MAX_LIST_PAGES) {
             val body = getJson(
-                "$API_BASE/users/@me/animelist" +
+                baseUrl +
                     "?fields=${MalConfig.LIST_FIELDS}" +
                     "&limit=$LIST_PAGE_LIMIT&offset=$offset",
                 authorized = true,

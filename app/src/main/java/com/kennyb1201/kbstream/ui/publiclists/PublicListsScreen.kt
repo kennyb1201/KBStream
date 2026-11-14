@@ -152,13 +152,26 @@ fun PublicListsScreen(
 
                 uiState.gate?.let { gate -> GatePanel(gate, uiState.vendor) }
 
-                DirectoryTabs(
-                    state = uiState,
-                    onSelect = vm::selectDirectory,
-                    onOpenSearch = vm::openSearch
-                )
+                // The two directory vendors keep their tabs and search; an anime
+                // vendor has neither (there is no trending-lists directory for
+                // anime), so its root is the username box below.
+                if (!uiState.vendor.byUsername) {
+                    DirectoryTabs(
+                        state = uiState,
+                        onSelect = vm::selectDirectory,
+                        onOpenSearch = vm::openSearch
+                    )
+                }
 
                 when (val level = uiState.level) {
+                    PublicListLevel.Username -> UsernameBody(
+                        state = uiState,
+                        onQueryChange = vm::setUsernameQuery,
+                        onRead = vm::readUsername,
+                        onOpenCard = vm::openDetail,
+                        onSave = vm::save
+                    )
+
                     is PublicListLevel.Directory -> DirectoryBody(
                         cards = uiState.cards,
                         isLoading = uiState.isLoadingCards,
@@ -216,14 +229,84 @@ private fun DirectoryTabs(
 @Composable
 private fun GatePanel(gate: PublicListGate, vendor: PublicListVendor) {
     val (title, message) = when (gate) {
-        PublicListGate.NOT_CONNECTED -> "${vendor.label} is not connected" to
-            "Connect ${vendor.label} in Settings first: public lists are read with " +
-            "your own account."
+        PublicListGate.NOT_CONNECTED ->
+            "${vendor.label}${PublicListRules.notConnectedTitleSuffix}" to
+                PublicListRules.notConnectedMessage(vendor)
 
         PublicListGate.ALLOWANCE_SPENT ->
             "${vendor.label}'s allowance is spent" to PublicListRules.allowanceText(vendor)
     }
     Panel(title = title, message = message)
+}
+
+/**
+ * The anime vendors' browse level: a username box and that profile's lists.
+ *
+ * No tabs and no list-name search: an anime list is discovered by the profile
+ * that keeps it. The box opens on the username this profile already reads its
+ * own lists with, and the snapshot note under the cards is the one promise a
+ * copy makes - it does not follow the owner's later edits.
+ */
+@Composable
+private fun UsernameBody(
+    state: PublicListsUiState,
+    onQueryChange: (String) -> Unit,
+    onRead: () -> Unit,
+    onOpenCard: (PublicListCard) -> Unit,
+    onSave: (PublicListCard) -> Unit
+) {
+    KBSectionHeader(title = "Read a ${state.vendor.label} profile")
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        KBTextField(
+            value = state.usernameQuery,
+            onValueChange = onQueryChange,
+            placeholder = PublicListRules.usernamePlaceholder(state.vendor),
+            modifier = Modifier.weight(1f),
+            onDone = onRead
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        KBButton(
+            label = if (state.isReadingUsername) "READING…" else "READ LISTS",
+            enabled = !state.isReadingUsername &&
+                PublicListRules.usernameEnabled(state.usernameQuery)
+        ) { onRead() }
+    }
+    if (!state.vendor.needsConnection) {
+        Text(
+            text = "Public profiles need no account of yours: type any username. A " +
+                "private profile answers with a prompt, never an empty list.",
+            color = KBTextLo,
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
+    state.usernameError?.let { ReasonLine(it) }
+    if (!state.isReadingUsername && state.usernameError == null &&
+        state.usernameLists.isEmpty() && state.username != null
+    ) {
+        Text(
+            text = PublicListRules.emptyUsernameText(
+                state.vendor,
+                state.username.orEmpty()
+            ),
+            color = KBTextLo,
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
+    if (state.usernameLists.isNotEmpty()) {
+        Text(
+            text = PublicListRules.copySnapshotNote(state.vendor),
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall
+        )
+    }
+    state.usernameLists.forEach { card ->
+        PublicListCardView(
+            card = card,
+            phase = state.savePhases[card.key],
+            onOpen = { onOpenCard(card) },
+            onSave = { onSave(card) }
+        )
+    }
 }
 
 /** One directory's cards. */
@@ -370,7 +453,7 @@ private fun PublicListCardView(
                 KBButton(label = "DETAILS") { onOpen() }
                 Spacer(modifier = Modifier.height(6.dp))
                 KBButton(
-                    label = saveLabel(phase, card.liked),
+                    label = saveLabel(phase, card.liked, card.vendor),
                     enabled = phase !is PublicListSavePhase.Saving && card.liked != true
                 ) { onSave() }
             }
@@ -413,11 +496,18 @@ private fun DetailBody(
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         KBButton(
-            label = saveLabel(phase, card.liked),
+            label = saveLabel(phase, card.liked, card.vendor),
             enabled = phase !is PublicListSavePhase.Saving && card.liked != true
         ) { onSave() }
         Spacer(modifier = Modifier.width(12.dp))
         PhaseLine(phase)
+    }
+    if (card.vendor.byUsername) {
+        Text(
+            text = PublicListRules.copySnapshotNote(card.vendor),
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall
+        )
     }
     KBSectionHeader(title = "Titles")
 
@@ -508,11 +598,19 @@ private fun TitleRow(row: PublicListTitle, onClick: () -> Unit) {
     }
 }
 
-/** SAVE / SAVING… / SAVED, from the phase and the list's own liked flag. */
-private fun saveLabel(phase: PublicListSavePhase?, liked: Boolean?): String = when {
+/**
+ * SAVE / SAVING… / SAVED for a directory vendor; COPY / SAVING… / COPIED for an
+ * anime one, because that leg writes a local copy rather than a like.
+ */
+private fun saveLabel(
+    phase: PublicListSavePhase?,
+    liked: Boolean?,
+    vendor: PublicListVendor
+): String = when {
     phase is PublicListSavePhase.Saving -> "SAVING…"
-    phase is PublicListSavePhase.Done -> "SAVED"
-    liked == true -> "SAVED"
+    phase is PublicListSavePhase.Done -> if (vendor.byUsername) "COPIED" else "SAVED"
+    liked == true -> if (vendor.byUsername) "COPIED" else "SAVED"
+    vendor.byUsername -> "COPY"
     else -> "SAVE"
 }
 

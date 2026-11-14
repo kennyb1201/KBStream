@@ -56,6 +56,28 @@ enum class LibrarySource(val label: String) {
     BINGECAT_WATCHLIST("BingeCat"),
     BINGECAT_SAVED("BingeCat saved"),
     BINGECAT_LIST("BingeCat list"),
+
+    /**
+     * The anime trackers' own lists (spec 2026-11-13, F1).
+     *
+     * An anime list is a Library list the same way a BingeCat or Trakt list is:
+     * it is drawn on the lists rail, opens into the grid, and pins to Home from
+     * its own row. Three sources rather than one because the row says which
+     * service holds it - and because a status list of the same name exists on
+     * all three ("Watching" means AniList's group on one row and Kitsu's on the
+     * next).
+     *
+     * READ-ONLY here: the lists belong to the service, so the rail offers no
+     * rename and no delete ([canManageList] is false) - the same promise Simkl's
+     * list bucket keeps. What the app does offer is the pin, which is this
+     * device's arrangement and nobody else's list.
+     *
+     * A service with no username (AniList, Kitsu) or no connection (MAL) simply
+     * contributes no row: there is no dead "connect me" row on the rail.
+     */
+    ANILIST_LIST("AniList"),
+    KITSU_LIST("Kitsu"),
+    MAL_LIST("MyAnimeList"),
     LOCAL_LIST("This device · list");
 
     /** True for a list this device owns and can rename/delete. */
@@ -105,6 +127,17 @@ enum class LibrarySource(val label: String) {
         get() = this == TRAKT_WATCHLIST || this == MDBLIST_WATCHLIST ||
             this == SIMKL_WATCHLIST || this == BINGECAT_WATCHLIST
 
+    /**
+     * True for one of the anime trackers' own lists (F1).
+     *
+     * The rail's actions read this: an anime list is read live from its service
+     * and written nowhere from this app, so it has a pin and nothing else - no
+     * rename, no delete, and no per-row remove beyond what the service itself
+     * does.
+     */
+    val isAnimeList: Boolean
+        get() = this == ANILIST_LIST || this == KITSU_LIST || this == MAL_LIST
+
     /** The heading a watchlist row carries, so four of them can be told apart. */
     val watchlistTitle: String
         get() = when (this) {
@@ -126,6 +159,21 @@ enum class LibrarySource(val label: String) {
  * callers test [LibraryList.remoteId] / the source rather than the sign.
  */
 fun traktListShelfId(traktId: Int): Int = Int.MIN_VALUE + traktId.coerceAtLeast(1)
+
+/**
+ * The rail id for one of an anime tracker's lists (F1).
+ *
+ * Derived from the (source, ref) pair because that pair IS the list: AniList's
+ * group key (`status:CURRENT`, `custom:<name>`), Kitsu's and MAL's status
+ * buckets. The row keeps its identity across a refresh, so a Home pin keeps
+ * pointing at it, and the ids sit in a band of their own - above MDBList's small
+ * positive ids and below the watchlist rows at the top of the Int range - clear
+ * of Trakt's bottom range, BingeCat's and the local store's negative ids.
+ */
+fun animeListShelfId(source: LibrarySource, ref: String): Int {
+    val hash = ("${source.name}:$ref").hashCode() and 0x3FFF_FFFF
+    return Int.MAX_VALUE / 2 + hash
+}
 
 /**
  * The rail id for a saved (liked) community list.
@@ -1248,6 +1296,58 @@ object LocalLibraryStore {
     fun listItems(context: Context, listId: Int): List<LibraryItem> {
         val list = readLists(context).firstOrNull { it.id == listId } ?: return emptyList()
         return list.items.map { it.copy(source = LibrarySource.LOCAL_LIST, listId = list.id, listName = list.name) }
+    }
+
+    /**
+     * Adds a whole list's worth of titles in ONE write, and answers how many
+     * were new.
+     *
+     * The public-lists surface's anime save is a COPY of somebody else's list
+     * (spec 2026-11-13 F2): a few hundred titles that would otherwise be a few
+     * hundred read-modify-write rounds over one SharedPreferences blob, each
+     * enqueueing a sync push. One write is the same result without the storm.
+     *
+     * Order is the SERVICE's order, appended (not newest-first): a copied list
+     * is a snapshot of a list somebody ordered, so re-ordering it here would
+     * lose the one thing the copy is for. Duplicates are skipped by the same
+     * either-id match every other add uses - a second copy of the same list
+     * finds the titles already present and changes nothing.
+     */
+    @Synchronized
+    fun addItemsToLocalList(context: Context, listId: Int, items: List<LibraryItem>): Int {
+        if (items.isEmpty()) return 0
+        val lists = readListsForWrite(context) ?: run {
+            Log.w(TAG, "bulk add refused: personal-lists blob will not parse")
+            return 0
+        }
+        val target = lists.firstOrNull { it.id == listId } ?: return 0
+        var added = 0
+        items.forEach { item ->
+            if (item.imdbId == null && item.tmdbId == null) return@forEach
+            if (target.items.any { matches(it, item.mediaType, item.imdbId, item.tmdbId) }) {
+                return@forEach
+            }
+            target.items.add(
+                LibraryItem(
+                    source = LibrarySource.LOCAL_LIST,
+                    mediaType = normalizedType(item.mediaType),
+                    title = item.title,
+                    year = item.year,
+                    posterUrl = cleanLibraryPoster(item.posterUrl),
+                    imdbId = item.imdbId,
+                    tmdbId = item.tmdbId
+                )
+            )
+            added++
+        }
+        if (added == 0) return 0
+        // One stamp for the whole copy: the sibling takes this copy instead of
+        // its older one, exactly as a single add does.
+        val stamped = lists.map {
+            if (it.id == listId) it.copy(updatedAt = System.currentTimeMillis()) else it
+        }
+        writeLists(context, stamped)
+        return added
     }
 
     @Synchronized

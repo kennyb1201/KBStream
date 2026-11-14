@@ -522,6 +522,17 @@ object LibraryHomeRailItems {
             }
         }
 
+        // The anime trackers' own lists (spec 2026-11-13 F1), read live from
+        // the service exactly as the Library reads them: a pinned rail follows
+        // the list, and the read already dropped every entry with no TMDB match
+        // (so no rail draws a blank card). A service that has since lost its
+        // username/connection answers empty and the rail simply does not draw -
+        // the same rule the other remote seats follow.
+        LibrarySource.ANILIST_LIST,
+        LibrarySource.KITSU_LIST,
+        LibrarySource.MAL_LIST ->
+            com.kennyb1201.kbstream.data.anime.AnimeLists.items(context, source, pin.id)
+
         // Simkl's watchlist read already answers in Library rows (it is the one
         // source the Library does not have to map).
         LibrarySource.SIMKL_WATCHLIST -> {

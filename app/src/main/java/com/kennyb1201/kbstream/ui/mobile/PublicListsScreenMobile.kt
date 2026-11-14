@@ -112,13 +112,25 @@ fun PublicListsScreenMobile(
 
                     uiState.gate?.let { gate -> GatePanelMobile(gate, uiState.vendor) }
 
-                    DirectoryTabsMobile(
-                        state = uiState,
-                        onSelect = vm::selectDirectory,
-                        onOpenSearch = vm::openSearch
-                    )
+                    // No tabs or list-name search on an anime vendor: it is
+                    // browsed by username, and its root level is that box.
+                    if (!uiState.vendor.byUsername) {
+                        DirectoryTabsMobile(
+                            state = uiState,
+                            onSelect = vm::selectDirectory,
+                            onOpenSearch = vm::openSearch
+                        )
+                    }
 
                     when (val level = uiState.level) {
+                        PublicListLevel.Username -> UsernameBodyMobile(
+                            state = uiState,
+                            onQueryChange = vm::setUsernameQuery,
+                            onRead = vm::readUsername,
+                            onOpenCard = vm::openDetail,
+                            onSave = vm::save
+                        )
+
                         is PublicListLevel.Directory -> DirectoryBodyMobile(
                             state = uiState,
                             onOpenCard = vm::openDetail,
@@ -170,14 +182,83 @@ private fun DirectoryTabsMobile(
 @Composable
 private fun GatePanelMobile(gate: PublicListGate, vendor: PublicListVendor) {
     val (title, message) = when (gate) {
-        PublicListGate.NOT_CONNECTED -> "${vendor.label} is not connected" to
-            "Connect ${vendor.label} in Settings first: public lists are read with " +
-            "your own account."
+        PublicListGate.NOT_CONNECTED ->
+            "${vendor.label}${PublicListRules.notConnectedTitleSuffix}" to
+                PublicListRules.notConnectedMessage(vendor)
 
         PublicListGate.ALLOWANCE_SPENT ->
             "${vendor.label}'s allowance is spent" to PublicListRules.allowanceText(vendor)
     }
     PanelMobile(title = title, message = message)
+}
+
+/**
+ * The anime vendors' browse level for a finger: username box, then that
+ * profile's lists. The copy note is the same promise the TV draws.
+ */
+@Composable
+private fun UsernameBodyMobile(
+    state: PublicListsUiState,
+    onQueryChange: (String) -> Unit,
+    onRead: () -> Unit,
+    onOpenCard: (PublicListCard) -> Unit,
+    onSave: (PublicListCard) -> Unit
+) {
+    Text(
+        text = "Read a ${state.vendor.label} profile",
+        color = KBTextHi,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold
+    )
+    KBTextField(
+        value = state.usernameQuery,
+        onValueChange = onQueryChange,
+        placeholder = PublicListRules.usernamePlaceholder(state.vendor),
+        modifier = Modifier.fillMaxWidth(),
+        onDone = onRead
+    )
+    KBButton(
+        label = if (state.isReadingUsername) "READING…" else "READ LISTS",
+        enabled = !state.isReadingUsername &&
+            PublicListRules.usernameEnabled(state.usernameQuery),
+        modifier = Modifier.fillMaxWidth()
+    ) { onRead() }
+    if (!state.vendor.needsConnection) {
+        Text(
+            text = "Public profiles need no account of yours: type any username. A " +
+                "private profile answers with a prompt, never an empty list.",
+            color = KBTextLo,
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
+    state.usernameError?.let { ReasonLineMobile(it) }
+    if (!state.isReadingUsername && state.usernameError == null &&
+        state.usernameLists.isEmpty() && state.username != null
+    ) {
+        Text(
+            text = PublicListRules.emptyUsernameText(
+                state.vendor,
+                state.username.orEmpty()
+            ),
+            color = KBTextLo,
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
+    if (state.usernameLists.isNotEmpty()) {
+        Text(
+            text = PublicListRules.copySnapshotNote(state.vendor),
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall
+        )
+    }
+    state.usernameLists.forEach { card ->
+        PublicListCardMobile(
+            card = card,
+            phase = state.savePhases[card.key],
+            onOpen = { onOpenCard(card) },
+            onSave = { onSave(card) }
+        )
+    }
 }
 
 @Composable
@@ -318,7 +399,7 @@ private fun PublicListCardMobile(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             KBButton(label = "DETAILS", modifier = Modifier.weight(1f)) { onOpen() }
             KBButton(
-                label = saveLabelMobile(phase, card.liked),
+                label = saveLabelMobile(phase, card.liked, card.vendor),
                 enabled = phase !is PublicListSavePhase.Saving && card.liked != true,
                 modifier = Modifier.weight(1f)
             ) { onSave() }
@@ -358,11 +439,18 @@ private fun DetailBodyMobile(
         )
     }
     KBButton(
-        label = saveLabelMobile(phase, card.liked),
+        label = saveLabelMobile(phase, card.liked, card.vendor),
         enabled = phase !is PublicListSavePhase.Saving && card.liked != true,
         modifier = Modifier.fillMaxWidth()
     ) { onSave() }
     SavePhaseLineMobile(phase)
+    if (card.vendor.byUsername) {
+        Text(
+            text = PublicListRules.copySnapshotNote(card.vendor),
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall
+        )
+    }
 
     Text(
         text = "Titles",
@@ -431,11 +519,16 @@ private fun TitleRowMobile(row: PublicListTitle, onClick: () -> Unit) {
     }
 }
 
-/** SAVE / SAVING… / SAVED, from the phase and the list's own liked flag. */
-private fun saveLabelMobile(phase: PublicListSavePhase?, liked: Boolean?): String = when {
+/** The phone twin of the TV's label rule (see PublicListsScreen.saveLabel). */
+private fun saveLabelMobile(
+    phase: PublicListSavePhase?,
+    liked: Boolean?,
+    vendor: PublicListVendor
+): String = when {
     phase is PublicListSavePhase.Saving -> "SAVING…"
-    phase is PublicListSavePhase.Done -> "SAVED"
-    liked == true -> "SAVED"
+    phase is PublicListSavePhase.Done -> if (vendor.byUsername) "COPIED" else "SAVED"
+    liked == true -> if (vendor.byUsername) "COPIED" else "SAVED"
+    vendor.byUsername -> "COPY"
     else -> "SAVE"
 }
 

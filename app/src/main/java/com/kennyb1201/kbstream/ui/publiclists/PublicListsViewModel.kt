@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.publiclists
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.data.anime.AnimeLists
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.publiclists.PublicListCard
 import com.kennyb1201.kbstream.data.publiclists.PublicListDirectory
@@ -24,6 +25,16 @@ sealed interface PublicListLevel {
 
     /** A directory's cards (the tab bar switches which directory this is). */
     data class Directory(val directory: PublicListDirectory) : PublicListLevel
+
+    /**
+     * The username box the anime vendors open on (spec F2).
+     *
+     * There is no trending-lists directory for an anime tracker, so browsing is
+     * by profile name: the box is the level, the cards below it are that
+     * profile's lists, and each card opens the same detail level as a Trakt or
+     * MDBList card does.
+     */
+    data object Username : PublicListLevel
 
     data object Search : PublicListLevel
 
@@ -83,8 +94,16 @@ data class PublicListsUiState(
     val vendor: PublicListVendor = PublicListVendor.TRAKT,
     val levels: List<PublicListLevel> = emptyList(),
     val gate: PublicListGate? = null,
-    val directory: PublicListDirectory = PublicListDirectory.TRAKT_POPULAR,
+    /** Null on a by-username vendor: it has no directory tabs at all. */
+    val directory: PublicListDirectory? = null,
     val cards: List<PublicListCard> = emptyList(),
+    /** The username box's text, on a [PublicListVendor.byUsername] vendor. */
+    val usernameQuery: String = "",
+    /** The last username READ, so the empty state can name it. */
+    val username: String? = null,
+    val usernameLists: List<PublicListCard> = emptyList(),
+    val isReadingUsername: Boolean = false,
+    val usernameError: String? = null,
     val isLoadingCards: Boolean = false,
     val cardsError: String? = null,
     val searchQuery: String = "",
@@ -95,9 +114,10 @@ data class PublicListsUiState(
     val savePhases: Map<String, PublicListSavePhase> = emptyMap(),
     val notice: String? = null
 ) {
-    /** The level being drawn. Falls back to the active directory. */
+    /** The level being drawn. Falls back to the vendor's root level. */
     val level: PublicListLevel
-        get() = levels.lastOrNull() ?: PublicListLevel.Directory(directory)
+        get() = levels.lastOrNull()
+            ?: (directory?.let { PublicListLevel.Directory(it) } ?: PublicListLevel.Username)
 
     /** Whether Back has somewhere to go inside the surface. */
     val canGoBack: Boolean get() = levels.size > 1
@@ -146,6 +166,7 @@ class PublicListsViewModel(app: Application) : AndroidViewModel(app) {
     private var cardsGeneration = 0
     private var searchGeneration = 0
     private var titlesGeneration = 0
+    private var usernameGeneration = 0
 
     init {
         observeProfileSwitches()
@@ -163,17 +184,44 @@ class PublicListsViewModel(app: Application) : AndroidViewModel(app) {
                 val vendor = _uiState.value.vendor
                 _uiState.value = initialState(vendor)
                 loadDirectory(_uiState.value.directory)
+                readStoredUsername()
             }
         }
     }
 
     private fun initialState(vendor: PublicListVendor): PublicListsUiState {
-        val first = PublicListDirectory.forVendor(vendor).first()
+        val first = PublicListDirectory.forVendor(vendor).firstOrNull()
+        val saved = storedUsername(vendor).orEmpty()
         return PublicListsUiState(
             vendor = vendor,
-            levels = listOf(PublicListLevel.Directory(first)),
-            directory = first
+            levels = listOf(
+                first?.let { PublicListLevel.Directory(it) } ?: PublicListLevel.Username
+            ),
+            directory = first,
+            // The username box opens on the username this profile already reads
+            // its own lists with, so browsing your own profile is one press.
+            usernameQuery = saved,
+            username = saved.takeIf { it.isNotEmpty() }
         )
+    }
+
+    /**
+     * The username this profile already saved for [vendor], if any.
+     *
+     * AniList and Kitsu keep theirs in Settings (it is the same name their own
+     * Library lists are read with); MAL has no username - its identity is the
+     * connection - so its box starts empty.
+     */
+    private fun storedUsername(vendor: PublicListVendor): String? = when (vendor) {
+        PublicListVendor.ANILIST ->
+            com.kennyb1201.kbstream.data.settings.AppPreferences
+                .getAniListUsername(context)
+
+        PublicListVendor.KITSU ->
+            com.kennyb1201.kbstream.data.settings.AppPreferences
+                .getKitsuUsername(context)
+
+        else -> null
     }
 
     /**
@@ -192,6 +240,17 @@ class PublicListsViewModel(app: Application) : AndroidViewModel(app) {
         }
         _uiState.value = initialState(vendor)
         loadDirectory(_uiState.value.directory)
+        // A profile already set up reads its own lists immediately; a by-username
+        // vendor with no saved name waits for one rather than spending a read on
+        // an empty name.
+        readStoredUsername()
+    }
+
+    private fun readStoredUsername() {
+        val state = _uiState.value
+        if (!state.vendor.byUsername) return
+        if (state.usernameQuery.isBlank()) return
+        readUsername()
     }
 
     /** One Back: up a level. At the root the screen leaves the surface. */
@@ -221,16 +280,33 @@ class PublicListsViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Directories ──────────────────────────────────────────────────────
 
+    /**
+     * Whether this vendor can answer at all.
+     *
+     * AniList and Kitsu need no account (a public profile is readable without
+     * one), so they are always ready - the username box is their gate. MAL's
+     * list routes are OAuth-only, so its own session is the gate; Trakt and
+     * MDBList keep the account rule they always had.
+     */
     private fun connected(): Boolean = when (_uiState.value.vendor) {
         PublicListVendor.TRAKT ->
             traktRepository.isConfigured() && traktRepository.hasToken()
 
         PublicListVendor.MDBLIST -> MdbListClient.isConfigured(context)
+
+        PublicListVendor.ANILIST, PublicListVendor.KITSU -> true
+
+        PublicListVendor.MAL -> runCatching {
+            val store = com.kennyb1201.kbstream.data.mal.MalTokenStore(context)
+            store.hasSession() && !store.needsReconnect()
+        }.getOrDefault(false)
     }
 
     /** Paints the cached directory, then refetches it (spec F2's SWR). */
-    private fun loadDirectory(directory: PublicListDirectory) {
+    private fun loadDirectory(directory: PublicListDirectory?) {
+        directory ?: return
         val vendor = _uiState.value.vendor
+        if (vendor.byUsername) return
         if (!connected()) {
             _uiState.value = _uiState.value.copy(
                 gate = PublicListGate.NOT_CONNECTED,
@@ -245,6 +321,9 @@ class PublicListsViewModel(app: Application) : AndroidViewModel(app) {
 
             PublicListVendor.MDBLIST ->
                 MdbListClient.cachedPublicLists(context, directory, allowStale = true)
+
+            // Not reachable: a by-username vendor returned above.
+            else -> null
         }
         _uiState.value = _uiState.value.copy(
             gate = null,
@@ -258,6 +337,7 @@ class PublicListsViewModel(app: Application) : AndroidViewModel(app) {
             val answer = when (vendor) {
                 PublicListVendor.TRAKT -> traktRepository.publicLists(directory)
                 PublicListVendor.MDBLIST -> MdbListClient.publicLists(context, directory)
+                else -> PublicListsAnswer.NotConnected
             }
             if (generation != cardsGeneration || profile != profileGeneration) return@launch
             applyCards(answer)
@@ -330,6 +410,9 @@ class PublicListsViewModel(app: Application) : AndroidViewModel(app) {
             val answer = when (vendor) {
                 PublicListVendor.TRAKT -> traktRepository.searchPublicLists(query)
                 PublicListVendor.MDBLIST -> MdbListClient.searchPublicLists(context, query)
+                // Directory search is the two directory vendors' surface; an
+                // anime vendor browses by username instead.
+                else -> PublicListsAnswer.Failed("not-a-directory-vendor")
             }
             if (generation != searchGeneration || profile != profileGeneration) {
                 return@launch
@@ -364,6 +447,75 @@ class PublicListsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ── By username (anime vendors, F2) ──────────────────────────────────
+
+    fun setUsernameQuery(query: String) {
+        _uiState.value = _uiState.value.copy(usernameQuery = query)
+    }
+
+    /**
+     * Reads [usernameQuery]'s public lists on the anime vendor.
+     *
+     * The gate comes first: MAL cannot read ANY list without this profile's
+     * connection, so its box is never offered a read that would fail. AniList
+     * and Kitsu answer a public profile with no account of ours at all.
+     */
+    fun readUsername() {
+        val state = _uiState.value
+        val vendor = state.vendor
+        if (!vendor.byUsername) return
+        val username = state.usernameQuery.trim().removePrefix("@")
+        if (!PublicListRules.usernameEnabled(username) || state.isReadingUsername) return
+        if (!connected()) {
+            _uiState.value = state.copy(gate = PublicListGate.NOT_CONNECTED)
+            return
+        }
+
+        _uiState.value = state.copy(
+            usernameQuery = username,
+            username = username,
+            usernameLists = emptyList(),
+            isReadingUsername = true,
+            usernameError = null,
+            gate = null,
+            notice = null
+        )
+        val generation = ++usernameGeneration
+        val profile = profileGeneration
+        viewModelScope.launch {
+            val answer = AnimeLists.groupsFor(context, vendor, username)
+            if (generation != usernameGeneration || profile != profileGeneration) {
+                return@launch
+            }
+            when (answer) {
+                is AnimeLists.AnimeGroupsRead.Ok ->
+                    _uiState.value = _uiState.value.copy(
+                        usernameLists = AnimeLists.cardsFor(vendor, username, answer.groups),
+                        isReadingUsername = false,
+                        usernameError = null
+                    )
+
+                is AnimeLists.AnimeGroupsRead.Unreadable ->
+                    _uiState.value = _uiState.value.copy(
+                        isReadingUsername = false,
+                        usernameError = PublicListRules.unreadableUsernameText(vendor, username)
+                    )
+
+                AnimeLists.AnimeGroupsRead.NotConfigured ->
+                    _uiState.value = _uiState.value.copy(
+                        isReadingUsername = false,
+                        gate = PublicListGate.NOT_CONNECTED
+                    )
+
+                is AnimeLists.AnimeGroupsRead.Failed ->
+                    _uiState.value = _uiState.value.copy(
+                        isReadingUsername = false,
+                        usernameError = PublicListRules.failureText(vendor, "NETWORK")
+                    )
+            }
+        }
+    }
+
     // ── Detail and titles ────────────────────────────────────────────────
 
     fun openDetail(card: PublicListCard) {
@@ -381,9 +533,17 @@ class PublicListsViewModel(app: Application) : AndroidViewModel(app) {
         val generation = ++titlesGeneration
         val profile = profileGeneration
         viewModelScope.launch {
-            val answer = when (vendor) {
-                PublicListVendor.TRAKT -> traktRepository.publicListTitles(card)
-                PublicListVendor.MDBLIST -> MdbListClient.publicListTitles(context, card)
+            val answer = if (vendor.byUsername) {
+                // As live as the other vendors' detail read: the list is read
+                // again by the username on the card, so an edit the owner made
+                // since the card was drawn is what opens.
+                AnimeLists.titles(context, card)
+            } else {
+                when (vendor) {
+                    PublicListVendor.TRAKT -> traktRepository.publicListTitles(card)
+                    PublicListVendor.MDBLIST -> MdbListClient.publicListTitles(context, card)
+                    else -> PublicListsAnswer.NotConnected
+                }
             }
             if (generation != titlesGeneration || profile != profileGeneration) return@launch
             when (answer) {
@@ -454,18 +614,28 @@ class PublicListsViewModel(app: Application) : AndroidViewModel(app) {
         setSavePhase(card.key, PublicListSavePhase.Saving)
         val profile = profileGeneration
         viewModelScope.launch {
-            val outcome = when (vendor) {
-                PublicListVendor.TRAKT -> traktRepository.likePublicList(card)
-                PublicListVendor.MDBLIST -> MdbListClient.likePublicList(context, card)
+            val outcome = if (vendor.byUsername) {
+                // No anime tracker has a "save somebody's list" write, so the
+                // save is a COPY into this profile's local Library - snapshot,
+                // named after the vendor (spec F2).
+                AnimeLists.copyToLibrary(context, card)
+            } else {
+                when (vendor) {
+                    PublicListVendor.TRAKT -> traktRepository.likePublicList(card)
+                    PublicListVendor.MDBLIST -> MdbListClient.likePublicList(context, card)
+                    else -> PublicListSaveOutcome.Failed("not-a-public-vendor")
+                }
             }
             if (profile != profileGeneration) return@launch
             when (outcome) {
                 PublicListSaveOutcome.Saved -> {
-                    setSavePhase(
-                        card.key,
-                        PublicListSavePhase.Done(PublicListRules.savedText(vendor))
-                    )
-                    _uiState.value = _uiState.value.copy(notice = PublicListRules.savedText(vendor))
+                    val text = if (vendor.byUsername) {
+                        PublicListRules.copySavedText(vendor)
+                    } else {
+                        PublicListRules.savedText(vendor)
+                    }
+                    setSavePhase(card.key, PublicListSavePhase.Done(text))
+                    _uiState.value = _uiState.value.copy(notice = text)
                 }
 
                 PublicListSaveOutcome.AlreadySaved -> setSavePhase(

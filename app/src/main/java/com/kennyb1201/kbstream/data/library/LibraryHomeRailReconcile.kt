@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.library
 
 import android.content.Context
+import com.kennyb1201.kbstream.data.anime.AnimeLists
 import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.bingecat.bingecatShelfId
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
@@ -46,7 +47,13 @@ object LibraryHomeRailReconcile {
     private val REMOTE_LIST_SOURCES = setOf(
         LibrarySource.TRAKT_LIST.name,
         LibrarySource.MDBLIST_LIST.name,
-        LibrarySource.BINGECAT_LIST.name
+        LibrarySource.BINGECAT_LIST.name,
+        // The anime trackers' lists live at their services too (spec F1): a list
+        // deleted or renamed there is only visible as an absence, so a pinned
+        // anime rail has to be checked with the rest at launch.
+        LibrarySource.ANILIST_LIST.name,
+        LibrarySource.KITSU_LIST.name,
+        LibrarySource.MAL_LIST.name
     )
 
     /**
@@ -183,6 +190,35 @@ object LibraryHomeRailReconcile {
                                     )
                                 )
                             }
+                        }
+                }
+            }
+        }
+
+        // Every anime source reads together, once: one object owns the three
+        // services' reads (AniList/Kitsu by username, MAL by connection), and a
+        // source that did not answer is ABSENT from `answered` - so its pins are
+        // left alone rather than pruned. Only a real answer contributes, exactly
+        // as the Library's own refresh builds this map.
+        val animeWanted = wanted.mapNotNull { name ->
+            runCatching { LibrarySource.valueOf(name) }.getOrNull()?.takeIf { it.isAnimeList }
+        }
+        if (animeWanted.isNotEmpty()) {
+            val own = runCatchingCancellable { AnimeLists.own(context) }.getOrNull()
+            own?.answered?.forEach { source ->
+                if (source in animeWanted) {
+                    live[source.name] = own.lists
+                        .filter { it.source == source }
+                        .map { row ->
+                            libraryHomeRailLiveList(
+                                LibraryList(
+                                    id = animeListShelfId(row.source, row.ref),
+                                    name = row.name,
+                                    itemCount = row.itemCount,
+                                    source = row.source,
+                                    remoteId = row.ref
+                                )
+                            )
                         }
                 }
             }

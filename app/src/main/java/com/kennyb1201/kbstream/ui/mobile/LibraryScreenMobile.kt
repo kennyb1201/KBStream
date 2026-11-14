@@ -767,6 +767,14 @@ fun LibraryScreenMobile(
                             // Simkl list row keeps the explanatory copy (the
                             // sheet's attribution note) and no dead removal.
                             LibrarySource.SIMKL_LIST -> Unit
+
+                            // An anime list's rows are the service's: no
+                            // remove-from-list write exists for AniList, Kitsu
+                            // or MAL, so the phone offers no dead removal either
+                            // (the TV's branch, same reason).
+                            LibrarySource.ANILIST_LIST,
+                            LibrarySource.KITSU_LIST,
+                            LibrarySource.MAL_LIST -> Unit
                         }
 
                         // Simkl's API rules: wherever Simkl data appears, name

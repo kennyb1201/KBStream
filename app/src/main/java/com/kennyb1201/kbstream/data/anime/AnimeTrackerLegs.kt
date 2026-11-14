@@ -85,7 +85,7 @@ internal object AnimeTrackerLegs {
 
     private const val KITSU_MAX_PAGES = 2
 
-    private fun parseAniListEntry(row: JSONObject?, listStatus: String): AnimeTrackerEntry? {
+    internal fun parseAniListEntry(row: JSONObject?, listStatus: String): AnimeTrackerEntry? {
         val entry = row ?: return null
         val media = entry.optJSONObject("media") ?: return null
         val titles = media.optJSONObject("title")
@@ -109,7 +109,7 @@ internal object AnimeTrackerLegs {
         )
     }
 
-    private fun parseKitsuEntry(
+    internal fun parseKitsuEntry(
         row: JSONObject?,
         included: Map<String, JSONObject>
     ): AnimeTrackerEntry? {
@@ -145,7 +145,7 @@ internal object AnimeTrackerLegs {
     }
 
     /** Kitsu's `included` array, keyed by resource id (`anime` resources only). */
-    private fun includedAnimeById(body: JSONObject): Map<String, JSONObject> {
+    internal fun includedAnimeById(body: JSONObject): Map<String, JSONObject> {
         val included = body.optJSONArray("included") ?: return emptyMap()
         val out = HashMap<String, JSONObject>(included.length())
         for (index in 0 until included.length()) {

@@ -905,6 +905,14 @@ private fun LibraryItemMenu(
                 )
 
                 LibrarySource.SIMKL_LIST -> Unit
+
+                // An anime list's rows are the service's: there is no
+                // remove-from-list write for AniList, Kitsu or MAL, so the menu
+                // offers the actions every row has (details, the picker) and no
+                // removal that could not keep its promise.
+                LibrarySource.ANILIST_LIST,
+                LibrarySource.KITSU_LIST,
+                LibrarySource.MAL_LIST -> Unit
             }
 
             // Simkl's API rules: wherever Simkl data appears, name Simkl and

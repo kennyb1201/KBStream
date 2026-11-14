@@ -1255,6 +1255,34 @@ fun SettingsScreen(
                     onClick = onOpenBingeCatPublicLists
                 )
 
+                // The anime vendors (spec 2026-11-13 F2): browsed BY USERNAME,
+                // because none of the three has a trending-lists directory.
+                // Same surface, same cards, same save-to-Library as the two
+                // above - the save is a copy (a snapshot), which the cards say.
+                // AniList and Kitsu read a public profile with no account;
+                // MAL needs this profile's connection first, which its gate
+                // says on the surface rather than here.
+                NavigationRow(
+                    label = "AniList public lists",
+                    description = "Read any AniList profile's public anime lists by " +
+                        "username, and copy one into your Library.",
+                    onClick = { onOpenPublicLists("anilist") }
+                )
+
+                NavigationRow(
+                    label = "Kitsu public lists",
+                    description = "Read any Kitsu profile's public anime lists by " +
+                        "username, and copy one into your Library.",
+                    onClick = { onOpenPublicLists("kitsu") }
+                )
+
+                NavigationRow(
+                    label = "MyAnimeList public lists",
+                    description = "Read a MyAnimeList profile's anime list by username and " +
+                        "copy it into your Library. Needs your MAL connection first.",
+                    onClick = { onOpenPublicLists("mal") }
+                )
+
                 // ── API KEYS ─────────────────────────────────────────────
                 // ONE contiguous block (settings reorg §3.3, M2 + M4): the four
                 // key surfaces used to be split by the MDBList card and by the

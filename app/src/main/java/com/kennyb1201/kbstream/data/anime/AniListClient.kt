@@ -74,10 +74,18 @@ internal object AniListClient {
      * `MediaListCollection` is the documented read for a user's list. Without a
      * token it answers only for a PUBLIC profile: a private one returns nothing,
      * and the caller reports that rather than pretending the list is empty.
+     *
+     * `lists` is AniList's `MediaListGroup[]`: the six status groups AND the
+     * viewer's own custom lists (spec 2026-11-13 F1 - "the collection already
+     * carries custom lists"). Its `name` and `isCustomList` are asked for here
+     * because the Library names each group by that field; a status group's name
+     * is "Watching"/"Planning"/..., a custom list's is whatever the viewer
+     * called it. The group's `status` is still read as the fallback for a body
+     * that omits `name`.
      */
     const val MEDIA_LIST_COLLECTION_QUERY =
         "query (\$username: String) { MediaListCollection(userName: \$username, type: ANIME) " +
-            "{ lists { status entries { mediaId status progress score " +
+            "{ lists { name isCustomList status entries { mediaId status progress score " +
             "media { id idMal title { romaji english } format episodes " +
             "nextAiringEpisode { episode airingAt } } } } } }"
 

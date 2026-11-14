@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
+import com.kennyb1201.kbstream.data.anime.AnimeLists
 import com.kennyb1201.kbstream.data.library.LibraryHomeRailLiveList
 import com.kennyb1201.kbstream.data.library.LibraryHomeRails
 import com.kennyb1201.kbstream.data.library.LibraryHomeRailPin
@@ -19,6 +20,7 @@ import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.library.TastePlacement
 import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.library.WATCHLIST_REMOTE_ID
+import com.kennyb1201.kbstream.data.library.animeListShelfId
 import com.kennyb1201.kbstream.data.library.libraryHomeRailId
 import com.kennyb1201.kbstream.data.library.libraryHomeRailLiveList
 import com.kennyb1201.kbstream.data.library.libraryHomeRailPinFor
@@ -972,6 +974,13 @@ class LibraryViewModel(
                 // adds the watchlist and the user lists, not BingeCat's own
                 // favorites, so there is no remove to offer there.
                 LibrarySource.BINGECAT_SAVED -> Unit
+
+                // An anime list belongs to its service: the app has no
+                // "remove from AniList/Kitsu/MAL list" write, and the row menu
+                // offers no remove for these sources (see LibraryScreen).
+                LibrarySource.ANILIST_LIST,
+                LibrarySource.KITSU_LIST,
+                LibrarySource.MAL_LIST -> Unit
             }
         }
     }
@@ -1248,6 +1257,26 @@ class LibraryViewModel(
                     }
                 }
 
+            // The anime trackers' own lists (spec 2026-11-13 F1). One read per
+            // configured service - AniList and Kitsu by their saved username,
+            // MAL by this profile's connection - and the same rail row every
+            // other list gets, so the pin action and the Home rail are the ones
+            // that already exist. A service without a username/connection is
+            // simply absent: no row, no placeholder, nothing that opens to
+            // nothing.
+            val animeRead = runCatchingCancellable { AnimeLists.own(appContext) }
+                .onFailure { Log.w(TAG, "Anime lists fetch failed: ${it.message}") }
+                .getOrNull()
+            val animeLists = animeRead?.lists.orEmpty().map { row ->
+                LibraryList(
+                    id = animeListShelfId(row.source, row.ref),
+                    name = row.name,
+                    itemCount = row.itemCount,
+                    source = row.source,
+                    remoteId = row.ref
+                )
+            }
+
             // The connected accounts' WATCHLISTS, as rows beside their lists.
             // A watchlist is the one list every account has, and until now it
             // had no row in this rail - only the merged WATCHLIST filter - so
@@ -1289,7 +1318,8 @@ class LibraryViewModel(
             // still arrive twice (an overlapping page), so the rail's own data
             // is what guarantees each identity appears once.
             val lists = (localLists + mdbLists + mdbLiked + traktLists + traktLiked +
-                bingecatLists + watchlistLists).distinctBy { libraryListRowKey(it) }
+                bingecatLists + animeLists + watchlistLists)
+                .distinctBy { libraryListRowKey(it) }
 
             // The list sources that ANSWERED this refresh, and the ids each of
             // them still has. A source that failed, is not configured or is not
@@ -1332,6 +1362,17 @@ class LibraryViewModel(
                     put(
                         LibrarySource.BINGECAT_LIST.name,
                         bingecatLists.map { libraryHomeRailLiveList(it) }
+                    )
+                }
+                // The anime sources join on the same rule: only a service that
+                // ANSWERED contributes its id set. A missing username, a private
+                // profile or a failed read stays out, so an unanswered read
+                // cannot prune a pin (withoutVanishedPins).
+                animeRead?.answered?.forEach { source ->
+                    put(
+                        source.name,
+                        animeLists.filter { it.source == source }
+                            .map { libraryHomeRailLiveList(it) }
                     )
                 }
             }
@@ -1524,6 +1565,21 @@ class LibraryViewModel(
                         )
                     }
                 }
+            // The anime shelves survive a local-list mutation too: this path
+            // replaces the rail wholesale, so leaving them out would drop them
+            // until the next full refresh (the same reason BingeCat's stay).
+            val animeRead = runCatchingCancellable { AnimeLists.own(appContext) }
+                .onFailure { Log.w(TAG, "Anime lists fetch failed: ${it.message}") }
+                .getOrNull()
+            val animeLists = animeRead?.lists.orEmpty().map { row ->
+                LibraryList(
+                    id = animeListShelfId(row.source, row.ref),
+                    name = row.name,
+                    itemCount = row.itemCount,
+                    source = row.source,
+                    remoteId = row.ref
+                )
+            }
             if (version != requestVersion) {
                 // A newer request owns the screen now, and the refresh this path
                 // superseded will never publish - so ITS "remotes are still
@@ -1562,6 +1618,15 @@ class LibraryViewModel(
                         bingecatLists.map { libraryHomeRailLiveList(it) }
                     )
                 }
+                // An anime source that answered speaks for its own pins; one
+                // that did not stays out, so its rails are left alone.
+                animeRead?.answered?.forEach { source ->
+                    put(
+                        source.name,
+                        animeLists.filter { it.source == source }
+                            .map { libraryHomeRailLiveList(it) }
+                    )
+                }
             }
             // The pin the rename in this breath just wrote is kept even if this
             // read has not caught up with it yet: the pin is the newer answer,
@@ -1594,7 +1659,7 @@ class LibraryViewModel(
             // reading. No match (the list vanished - a website deleted it) keeps
             // the selection as it was: a refresh must never kick the viewer out.
             val refreshed =
-                localLists + mdbLists + traktLists + bingecatLists +
+                localLists + mdbLists + traktLists + bingecatLists + animeLists +
                     _uiState.value.lists.filter { it.source.isWatchlistSource }
             val openList = _uiState.value.selectedList
             val resolvedOpen = openList?.let { held ->
@@ -1703,6 +1768,19 @@ class LibraryViewModel(
                     listRemoteId = remoteId
                 )
             }
+        }
+
+        if (list.source.isAnimeList) {
+            // Read live from the service on every open (the standing Library
+            // list rule): nothing here is a cached snapshot, so a list edited on
+            // AniList/Kitsu/MAL is what the pane shows. Rows with no TMDB match
+            // were already dropped by the read.
+            val ref = list.remoteId?.takeIf { it.isNotBlank() } ?: return emptyList()
+            return runCatchingCancellable {
+                AnimeLists.items(appContext, list.source, ref)
+            }.onFailure {
+                Log.w(TAG, "Anime list items fetch failed: ${it.message}")
+            }.getOrDefault(emptyList())
         }
 
         if (list.source.isWatchlistSource) {

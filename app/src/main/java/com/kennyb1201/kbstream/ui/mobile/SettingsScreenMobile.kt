@@ -1010,6 +1010,27 @@ private fun IntegrationsPaneMobile(
                 "and import one into your BingeCat profile.",
             onClick = onOpenBingeCatPublicLists
         )
+        // The anime vendors (spec 2026-11-13 F2), browsed by username on the
+        // same surface: AniList and Kitsu need no account, MAL needs this
+        // profile's connection (its gate says so on the surface).
+        SettingsNavRowMobile(
+            label = "AniList public lists",
+            description = "Read any AniList profile's public anime lists by username, " +
+                "and copy one into your Library.",
+            onClick = { onOpenPublicLists("anilist") }
+        )
+        SettingsNavRowMobile(
+            label = "Kitsu public lists",
+            description = "Read any Kitsu profile's public anime lists by username, " +
+                "and copy one into your Library.",
+            onClick = { onOpenPublicLists("kitsu") }
+        )
+        SettingsNavRowMobile(
+            label = "MyAnimeList public lists",
+            description = "Read a MyAnimeList profile's anime list by username and copy " +
+                "it into your Library. Needs your MAL connection first.",
+            onClick = { onOpenPublicLists("mal") }
+        )
 
         // ── API Keys ─────────────────────────────────────────────
         // ONE contiguous block (settings reorg §3.3): the four key surfaces used

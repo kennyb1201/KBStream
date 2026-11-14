@@ -202,7 +202,10 @@ class BingeCatTrackerContractTest {
         listOf(
             "bingecat.pushWatchedMovie(",
             "bingecat.pushWatchedShow(",
-            "bingecatRepository().pushWatchedEpisode(",
+            // The episode leg is ONE batch for the mark (the writes contract's
+            // "one action is one batch"), not a call per episode: the mark path
+            // hands the whole covered set to pushWatchedEpisodes.
+            "bingecatRepository().pushWatchedEpisodes(",
             "bingecat.removeWatchedMovie(",
             "bingecat.removeWatchedShow("
         ).forEach { call ->

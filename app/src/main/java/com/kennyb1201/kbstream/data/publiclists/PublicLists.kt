@@ -12,21 +12,59 @@ package com.kennyb1201.kbstream.data.publiclists
  * Simkl is deliberately absent: its API serves watchlist statuses only, so
  * there is no public-list directory to browse. A vendor added here without a
  * data leg would be a screen with nothing behind it.
+ *
+ * The three ANIME vendors (spec 2026-11-13, F2) join the same surface because
+ * they answer the same questions - whose list is it, what is on it, save it to
+ * Library - even though their browse shape differs: there is no trending-lists
+ * directory for anime, so those vendors are browsed BY USERNAME ([byUsername]).
+ * One surface, not a second browser: the tabs become a username box and the
+ * cards are the same cards.
  */
-enum class PublicListVendor(val wire: String, val label: String) {
+enum class PublicListVendor(
+    val wire: String,
+    val label: String,
+    /**
+     * True when this vendor is browsed by a username instead of a directory.
+     *
+     * AniList and Kitsu read a public profile with no account of ours; MAL's
+     * list routes are OAuth-only, so it needs THIS profile's connection before
+     * any username can be read ([needsConnection]).
+     */
+    val byUsername: Boolean = false
+) {
 
     TRAKT("trakt", "Trakt"),
 
-    MDBLIST("mdblist", "MDBList");
+    MDBLIST("mdblist", "MDBList"),
+
+    ANILIST("anilist", "AniList", byUsername = true),
+
+    KITSU("kitsu", "Kitsu", byUsername = true),
+
+    MAL("mal", "MyAnimeList", byUsername = true);
 
     /** The surface's own heading, e.g. "TRAKT PUBLIC LISTS". */
     val browseTitle: String get() = "$label PUBLIC LISTS"
 
+    /**
+     * True when browsing needs this profile's own account, not just a name.
+     *
+     * Only MAL: it has no public list read at all, so the surface asks for the
+     * connection instead of showing a box that would fail.
+     */
+    val needsConnection: Boolean get() = this == MAL
+
     /** The line that keeps a community list from reading as this app's pick. */
     val attributionRule: String
-        get() = "These are $label community lists, with the owner named on every " +
-            "card. Saving one puts it in your Library beside your own lists - " +
-            "KBStream does not pick these titles."
+        get() = if (byUsername) {
+            "These are $label profiles' public anime lists, read by username. " +
+                "Copying one puts its titles in your Library on this device - a " +
+                "snapshot, not a live feed - and KBStream does not pick these titles."
+        } else {
+            "These are $label community lists, with the owner named on every " +
+                "card. Saving one puts it in your Library beside your own lists - " +
+                "KBStream does not pick these titles."
+        }
 
     companion object {
         fun fromWire(raw: String?): PublicListVendor? =
@@ -173,6 +211,46 @@ object PublicListRules {
     /** Below this a search is a fetch per keystroke, and MDBList charges for each. */
     const val MIN_SEARCH_CHARS = 2
 
+    /** A username read costs one profile read; a blank one is not a query. */
+    fun usernameEnabled(query: String): Boolean = query.trim().isNotEmpty()
+
+    /** The prompt the username box carries on an anime vendor. */
+    fun usernamePlaceholder(vendor: PublicListVendor): String =
+        "${vendor.label} username"
+
+    /** What a username read that found nothing says. */
+    fun emptyUsernameText(vendor: PublicListVendor, username: String): String =
+        "$username has no public lists $vendor can show right now."
+
+    /**
+     * What a username read that answered with NOTHING READABLE says.
+     *
+     * A private profile and a misspelled name are the same silence on the wire,
+     * so the sentence names both possibilities rather than presenting either as
+     * an empty list (the anime legs' own rule).
+     */
+    fun unreadableUsernameText(vendor: PublicListVendor, username: String): String =
+        "$username could not be read on ${vendor.label}: either no such profile, or " +
+            "one that keeps its list private."
+
+    /** The snapshot note a copied anime list carries (spec F2's labelling). */
+    fun copySnapshotNote(vendor: PublicListVendor): String =
+        "A copied list is a snapshot: later edits on $vendor do not change it here."
+
+    /** What a copy that landed says. */
+    fun copySavedText(vendor: PublicListVendor): String = "Copied to your Library ($vendor)"
+
+    /** The prompt a vendor's connection gate carries, in one place. */
+    val notConnectedTitleSuffix: String get() = " is not connected"
+
+    fun notConnectedMessage(vendor: PublicListVendor): String = if (vendor.needsConnection) {
+        "${vendor.label} has no public list reads: connect your own ${vendor.label} " +
+            "account in Settings first, then any username can be read."
+    } else {
+        "Connect ${vendor.label} in Settings first: public lists are read with " +
+            "your own account."
+    }
+
     /** One Trakt read's page size (Trakt's own maximum). */
     const val PAGE_SIZE = 100
 
@@ -237,7 +315,21 @@ object PublicListRules {
         "429" -> "${vendor.label} is rate limiting KBStream. Try again in a minute."
         "NETWORK" -> "Couldn't reach ${vendor.label}. Check the connection, then try again."
         "" -> "Couldn't read ${vendor.label} lists."
-        else -> "Couldn't read ${vendor.label} lists ($reason)."
+        // The anime legs' own answers (spec 2026-11-13, F2). A private profile is
+        // not an empty list, and a list whose titles none of which match TMDB has
+        // nothing this app could open - both say so plainly.
+        "list-not-found" -> "That list is no longer on ${vendor.label}."
+        "unreadable" -> "${vendor.label} could not read that profile's list: either no " +
+            "such profile, or one that keeps its list private."
+        "no-tmdb-matches" -> "None of that list's titles matched KBStream's catalogue, " +
+            "so there is nothing to copy."
+        "copy-failed" -> "Couldn't create the list in your Library."
+        "private-profile" -> "That profile is private: ${vendor.label} will not read it."
+        else -> if (reason.startsWith("Unreadable") || reason.contains("private")) {
+            reason
+        } else {
+            "Couldn't read ${vendor.label} lists ($reason)."
+        }
     }
 
     /** The detail screen's note about who decides what a title shows under. */
