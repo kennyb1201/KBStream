@@ -460,8 +460,12 @@ class SpotlightHomeContractTest {
             home.contains("HERO_RESOLVE_DEBOUNCE_MS = 150L")
         )
         assertTrue(
-            "and the expansion waits the chosen delay, not the debounce",
-            source(SPOTLIGHT_HOME).contains("delay(expandDelayMs)")
+            "and the expansion waits the chosen delay, not the debounce - less only " +
+                "the time this same card had already held before a rebuild restarted " +
+                "the effect (F1, 2026-11-13)",
+            source(SPOTLIGHT_HOME).contains(
+                "delay((expandDelayMs - dwellClockElapsedMs).coerceAtLeast(0L))"
+            )
         )
         assertFalse(
             "which would be this mistake: an expansion gated on the debounce",

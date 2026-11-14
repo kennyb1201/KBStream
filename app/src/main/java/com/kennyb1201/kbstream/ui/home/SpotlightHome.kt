@@ -15,10 +15,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.zIndex
+import android.os.SystemClock
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
@@ -35,8 +37,12 @@ import kotlinx.coroutines.delay
  * other focus landings use, and long enough for the pill's node to attach after
  * the page that drew it. It is deliberately bounded: a claim that cannot land in
  * this window is not going to, and retrying longer would fight the viewer.
+ *
+ * Shared with the Home's UP carve-out (F6), which has the same job after it
+ * scrolls the hero back: one window, so "the claim had its chance" means the
+ * same thing on both paths.
  */
-private const val SPOTLIGHT_CLAIM_RETRY_FRAMES = 12
+internal const val SPOTLIGHT_CLAIM_RETRY_FRAMES = 12
 
 /**
  * Spotlight's top section: the phone's billboard, TV-sized.
@@ -87,6 +93,28 @@ internal fun SpotlightHeroSection(
      * so this composable only obeys it.
      */
     claimEntryFocus: Boolean,
+    /**
+     * Whether one of the hero's pills holds focus right now (F4).
+     *
+     * This is what "the claim landed" MEANS. `requestFocus()` answering true
+     * only says a node accepted the request for that frame - the field report's
+     * skipped pills were a claim that answered true (or false) and never
+     * actually held focus, so the latch closed on a landing nobody saw.
+     */
+    pillHoldsFocus: Boolean = false,
+    /** The billboard's focus report, forwarded so the Home can hold it (F4/F5). */
+    onPillFocusChange: (Boolean) -> Unit = {},
+    /**
+     * Called when a claim that HAD landed loses the pill (F4).
+     *
+     * A page settling replaces the pills (they are per-page), so a loss here is
+     * not "the viewer left" - it is a claim that needs to re-arm. The Home owns
+     * the latch and re-arms it; the viewer's own press is still the one gate that
+     * cannot be crossed (see `viewerMovedFocusSinceEntry`).
+     */
+    onEntryFocusLost: () -> Unit = {},
+    /** UP from a focused pill opens the top bar (F6, Spotlight only). */
+    onOpenTopBar: () -> Unit = {},
     /**
      * The Play pill's own node, owned by the Home.
      *
@@ -193,23 +221,51 @@ internal fun SpotlightHeroSection(
     // item is composed, and F1's hold is what keeps the list at item 0 until the
     // pages settle - so the retry always happens with the hero on screen, and a
     // scrolled-away hero never gets a bare requestFocus() into a disposed node.
+
+    // The live value of the focus report, readable from inside the retry loop:
+    // params are snapshots, and the whole point of F4 is to watch the state
+    // CHANGE while the loop runs.
+    val pillHoldsFocusNow = rememberUpdatedState(pillHoldsFocus)
     LaunchedEffect(pages.isNotEmpty(), claimEntryFocus) {
         // The latch itself, which is what keeps the entry focus live across
         // re-deals when a claim failed (F3).
         SpotlightDiagTrace.spotlightClaimGate(claimEntryFocus)
         if (!claimEntryFocus || pages.isEmpty()) return@LaunchedEffect
-        var taken = false
+        // One frame first, so the pill has a node to ask at all.
+        withFrameNanos { }
+        var landed = pillHoldsFocusNow.value
         var frames = 0
-        // One frame first, so the pill has a node to take focus.
-        while (!taken && frames < SPOTLIGHT_CLAIM_RETRY_FRAMES) {
+        while (!landed && frames < SPOTLIGHT_CLAIM_RETRY_FRAMES) {
             frames++
+            runCatching { firstPillFocus.requestFocus() }
             withFrameNanos { }
-            taken = runCatching { firstPillFocus.requestFocus() }.getOrDefault(false)
+            // The OBSERVATION is the answer (F4). `requestFocus()` returning
+            // true only means a node accepted the request; the field report's
+            // skipped pills were exactly that gap. The retry also waits for the
+            // focus to arrive rather than for the request to be accepted.
+            landed = pillHoldsFocusNow.value
         }
         // Either outcome closes the latch through the Home; the trace records
-        // which, so a claim that gave up is visible rather than silent.
-        SpotlightDiagTrace.spotlightClaim(taken)
-        if (taken) onEntryFocusClaimed() else onEntryFocusClaimGivenUp()
+        // which - and how much of the window it took - so a claim that gave up
+        // is visible rather than silent.
+        SpotlightDiagTrace.spotlightClaim(landed, frames)
+        if (landed) onEntryFocusClaimed() else onEntryFocusClaimGivenUp()
+    }
+
+    // A claim that landed and then LOST the pill re-arms (F4). The pills are
+    // per-page: a page that settles, or a re-deal that replaces the pool, swaps
+    // the focused node out from under the viewer without any press - and the
+    // old code closed the latch on the request, so that loss was permanent.
+    // The Home re-arms only when the viewer has not taken the D-pad and no
+    // restore owns the landing, so this can never fight either.
+    var claimObserved by remember { mutableStateOf(false) }
+    LaunchedEffect(pillHoldsFocus) {
+        if (pillHoldsFocus) {
+            claimObserved = true
+        } else if (claimObserved) {
+            claimObserved = false
+            onEntryFocusLost()
+        }
     }
 
     MobileBillboard(
@@ -240,7 +296,11 @@ internal fun SpotlightHeroSection(
             BillboardPlaySelection.request(page.preview.id)
             onPlay(page.preview)
         },
-        onDetails = { page -> onDetails(page.preview) }
+        onDetails = { page -> onDetails(page.preview) },
+        // F4's signal, and F6's UP chain: both belong to the pill group, so the
+        // billboard reports the first and asks the second.
+        onPillFocusChange = onPillFocusChange,
+        onPillUpPressed = onOpenTopBar
     )
 }
 
@@ -276,6 +336,24 @@ internal fun SpotlightPreviewHost(
     metaLoading: Boolean = false,
     /** The hero meta resolve failed: the panel says so. */
     metaFailed: Boolean = false,
+    /**
+     * The title whose resolve has settled, as `id:type` (F1, 2026-11-13).
+     *
+     * The panel draws the picture for the card it is SHOWING, and the resolved
+     * backdrop belongs to whichever card the hero last settled on. Comparing the
+     * two is what makes "no picture for this title" distinguishable from "a
+     * picture for a title that is no longer on screen" - the old code could not
+     * tell them apart and drew the rail's small still into the gap.
+     */
+    settledTitleKey: String? = null,
+    /**
+     * The settled title's resolved BACKDROP only - never a poster (F1).
+     *
+     * Null while the resolve for the shown card has not landed, when it failed,
+     * and when the title has no backdrop at all: all three draw the panel's text
+     * tile rather than an upscaled small image.
+     */
+    settledBackdropUrl: String? = null,
     onTrailerPlayingChange: (Boolean) -> Unit,
     onExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
@@ -314,6 +392,35 @@ internal fun SpotlightPreviewHost(
     // What the in-flight delay was armed on, so a cancellation can NAME the
     // input that did it (F1). Plain holder: the effect is the only writer.
     val dwellRun = remember { DwellRun() }
+
+    // ── The dwell's CLOCK, kept across effect restarts (F1, 2026-11-13) ───
+    //
+    // The field report (0.9.285/296, "you have to wait multiple minutes before
+    // they all work") is a restart that the trace cannot even name: the effect is
+    // also keyed on `heldNode` - the card's own FocusRequester - and
+    // [DwellInputs] only names card/identity, delay and menu changes. A card
+    // RE-CREATED under the viewer therefore cancelled the two seconds silently:
+    // a rail re-deal, a bring-into-view rebuild or a re-landed focus hands back a
+    // new node for the same card, and every one of those began the delay again
+    // from zero. A cold box rebuilds its rails for a while, so a hold taken at 3 s
+    // could be restarted every second until the screen went quiet - minutes -
+    // and after that, every card "works".
+    //
+    // So the clock belongs to the CARD, not to the effect run: a restart for the
+    // same card resumes the time already held, and only a different card starts a
+    // new clock. What the spec forbids is untouched - the delay is still the
+    // viewer's setting, the identity key still re-arms a real card change, and a
+    // blur that lands back on the same card still does not end the panel.
+    var dwellClockCard by remember { mutableStateOf<String?>(null) }
+    var dwellClockElapsedMs by remember { mutableStateOf(0L) }
+    var dwellClockRunStartMs by remember { mutableStateOf(0L) }
+
+    /** Drops the held time: a deliberate close or a real card change starts over. */
+    fun resetDwellClock() {
+        dwellClockCard = null
+        dwellClockElapsedMs = 0L
+        dwellClockRunStartMs = 0L
+    }
 
     // The held card's snapshot IDENTITY is a key (spec 2026-11-13, F2).
     //
@@ -371,6 +478,9 @@ internal fun SpotlightPreviewHost(
                 expanded = null
                 onExpandedChange(false)
             }
+            // A closed panel is not a held card any more: the next hold (even of
+            // the same title on another card) waits the full delay again.
+            resetDwellClock()
             if (collapseGuard != "cardChanged") return@LaunchedEffect
         }
         // Focus is nowhere: nothing to arm, and the guard above has already
@@ -384,9 +494,24 @@ internal fun SpotlightPreviewHost(
         val armedOn = tracker.snapshot ?: return@LaunchedEffect
         val armedNode = tracker.focusedNode
         dwellRun.inputs = now
+        // The clock is the CARD's, and it survives a restart of this effect (F1).
+        val cardNow = armedOn.cardIdentity()
+        val nowMs = SystemClock.uptimeMillis()
+        if (dwellClockCard != cardNow) {
+            dwellClockCard = cardNow
+            dwellClockElapsedMs = 0L
+        } else if (dwellClockRunStartMs > 0L) {
+            // The run being replaced held the card for this long before it was
+            // cancelled: it counts, or a re-created card could never reach 2 s.
+            dwellClockElapsedMs += (nowMs - dwellClockRunStartMs).coerceAtLeast(0L)
+        }
+        dwellClockRunStartMs = nowMs
         dwellRun.armed = true
-        delay(expandDelayMs)
+        delay((expandDelayMs - dwellClockElapsedMs).coerceAtLeast(0L))
         dwellRun.armed = false
+        // The panel is up: the clock has done its job, so a later re-hold of
+        // this card (or a rebuild of it) starts the viewer's delay again.
+        resetDwellClock()
         // The snapshot captured when the dwell ARMED, not whatever the tracker
         // holds now (F3): the panel a held card earned must not be lost to a
         // live snapshot that flickered during the last frame of the wait.
@@ -414,6 +539,9 @@ internal fun SpotlightPreviewHost(
     BackHandler(enabled = expanded != null) {
         expanded = null
         onExpandedChange(false)
+        // The viewer closed it: the next hold waits the delay, it does not
+        // re-open from the clock the dismissed panel already spent.
+        resetDwellClock()
         runCatching { tracker.cardRequester?.requestFocus() }
     }
     val panel = expanded?.snapshot ?: return
@@ -427,6 +555,16 @@ internal fun SpotlightPreviewHost(
         SpotlightPreviewPanel(
             snapshot = panel,
             meta = meta,
+            // The picture for THIS card's title, or nothing (F1): the settle key
+            // must name the card the panel is showing before its backdrop is
+            // allowed to draw.
+            backdropUrl = panel.snapshot.heroTitleKey()
+                ?.takeIf { it == settledTitleKey }
+                ?.let { settledBackdropUrl },
+            // ...and whether that title's resolve has finished, so the tile can
+            // be a wait (loading) or the answer (none) rather than both.
+            backdropSettled = panel.snapshot.heroTitleKey() != null &&
+                panel.snapshot.heroTitleKey() == settledTitleKey,
             trailerKey = trailerKey,
             imdbId = imdbId,
             tmdbId = tmdbId,
@@ -498,6 +636,19 @@ private data class DwellInputs(
 private class DwellRun {
     var armed = false
     var inputs = DwellInputs(null, 0L, false)
+}
+
+/**
+ * The hero resolve's key for this card's title: `id:type`.
+ *
+ * Not the same spelling as [cardIdentity] (`type:id`): this one has to match
+ * `HomeViewModel.heroSettledKey`, which the resolve publishes as
+ * `"<id>:<type>"`. Two spellings of one key is exactly how a title ends up
+ * compared against the wrong card.
+ */
+internal fun SpotlightCardSnapshot.heroTitleKey(): String? {
+    val cardId = id?.takeIf { it.isNotBlank() } ?: return null
+    return "$cardId:${type.orEmpty()}"
 }
 
 /** The card's identity across snapshot copies: type:id, or the title alone. */

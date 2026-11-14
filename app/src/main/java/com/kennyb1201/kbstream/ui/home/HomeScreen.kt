@@ -5113,6 +5113,19 @@ fun HomeScreen(
     // is a one-shot for the life of this composition, and it stands down once the
     // viewer presses anything themselves.
     var spotlightEntryFocusClaimed by remember { mutableStateOf(false) }
+    // Whether the hero's pill group holds focus right now (F4/F5), reported by
+    // the billboard. The claim's success is this observed state - not the
+    // boolean a focus request returns - and the billboard's own hold pauses on
+    // it, so both read the same fact.
+    var spotlightHeroPillFocused by remember { mutableStateOf(false) }
+    // The rail card the UP carve-out was pressed on (F6). The bar is two stops
+    // further on, but its dismiss has to land where the chain STARTED - the card
+    // the viewer pressed UP on - not on the pill the middle stop used. Null
+    // until a rail press has run, so the first entry into the bar from a pill
+    // still has something sensible to return to.
+    var spotlightHeroReturnRequester by remember {
+        mutableStateOf<FocusRequester?>(null)
+    }
     // F4's return path: UP from the first rail is the hero's own press. The hero
     // is a list item, so while it is off screen it is not composed and a plain
     // focus search finds nothing above the rail - the list has to bring the item
@@ -5295,6 +5308,11 @@ fun HomeScreen(
     // reads, so a hero art/trailer update recomposes the hero instead of this
     // whole screen (rails LazyColumn and overlays included).
     val heroMetaState = viewModel.heroMeta.collectAsStateWithLifecycle()
+    // The settled title's BACKDROP-ONLY picture (F1, 2026-11-13): the expanded
+    // panel's picture, where `heroMeta.background` used to stand in. It is null
+    // when the title has no backdrop, and the panel then draws its text tile
+    // instead of blowing a poster or a rail still up to panel size.
+    val heroBackdropPictureState = viewModel.heroBackdropPicture.collectAsStateWithLifecycle()
     // The panel's loading / failure line (audit A4): "not landed yet" and
     // "resolve failed" are different states now, and the second one is what puts
     // the RETRY pill up.
@@ -6705,15 +6723,39 @@ fun HomeScreen(
             // search: while the hero is scrolled away it is not composed at all,
             // so the search would run before there is anything to find. The press
             // is consumed either way, so no stale search moves focus into the top
-            // bar. HOLD-Up still opens the bar through the list's own hold hook,
-            // which a short press never trips: the bar stays reachable from every
-            // rail by hold, and from the pills by DOWN -> rail -> hold.
+            // bar.
+            //
+            // SHORT UP REACHES THE BAR THROUGH THE PILLS (spec 2026-11-13, F6).
+            // This used to claim the bar "stays reachable from every rail by
+            // hold" and stop there - which is not a path a viewer finds: Kenny
+            // taps UP, he does not hold it, and the pills had no UP handler at
+            // all, so the chain died on the hero. The chain is now three stops on
+            // every rail kind: top rail -> hero pills (this hook) -> top bar (the
+            // pills' own UP, see BillboardAction). HOLD-Up remains as a second,
+            // faster path from any rail through the list's own hold hook; it is
+            // no longer the only way to the bar from the hero.
             spotlightActive -> {
-                { _: FocusRequester ->
+                { railRequester: FocusRequester ->
+                    // Kept for the bar's dismiss (F6, settler S10): DOWN from
+                    // the top bar returns to the rail card that asked.
+                    spotlightHeroReturnRequester = railRequester
                     spotlightHeroScope.launch {
                         runCatching { railListState.animateScrollToItem(0) }
-                        awaitFrame()
-                        runCatching { spotlightHeroPillRequester.requestFocus() }
+                        // Bounded retry on the OBSERVED focus, not on the
+                        // request's answer (F4/F6): the hero has just been
+                        // scrolled back into composition, so its pills may be a
+                        // frame or two behind the scroll animation's end. A miss
+                        // is not a dead end - the next UP runs this again - but
+                        // the window is the same one the entry claim uses.
+                        var frames = 0
+                        while (
+                            frames < SPOTLIGHT_CLAIM_RETRY_FRAMES &&
+                            !spotlightHeroPillFocused
+                        ) {
+                            frames++
+                            runCatching { spotlightHeroPillRequester.requestFocus() }
+                            awaitFrame()
+                        }
                     }
                 }
             }
@@ -7001,6 +7043,28 @@ fun HomeScreen(
                                     // viewer is on.
                                     onEntryFocusClaimGivenUp = {
                                         spotlightEntryFocusClaimed = true
+                                    },
+                                    // F4: a claim that landed and then lost the
+                                    // pill (a page settling replaces the pills,
+                                    // they are per-page) re-arms. The gates above
+                                    // still keep it off the viewer's own press
+                                    // and off a restore.
+                                    pillHoldsFocus = spotlightHeroPillFocused,
+                                    onPillFocusChange = { focused ->
+                                        spotlightHeroPillFocused = focused
+                                    },
+                                    onEntryFocusLost = {
+                                        spotlightEntryFocusClaimed = false
+                                    },
+                                    // F6: UP from a focused pill opens the top
+                                    // bar, completing the chain top rail ->
+                                    // pills -> bar. The pill is the requester the
+                                    // bar hands focus back to on dismiss.
+                                    onOpenTopBar = {
+                                        openTopBar(
+                                            spotlightHeroReturnRequester
+                                                ?: spotlightHeroPillRequester
+                                        )
                                     },
                                     cardExpanded = spotlightCardExpanded,
                                     onPlay = onItemClick,
@@ -8090,6 +8154,11 @@ fun HomeScreen(
                 meta = heroMetaState.value,
                 metaLoading = heroMetaState.value == null && !heroMetaFailedState.value,
                 metaFailed = heroMetaFailedState.value,
+                // Whose backdrop the picture is, and the picture (F1). The
+                // panel gates on the key itself; a backdrop resolved for a
+                // title the panel is not showing is not handed over at all.
+                settledTitleKey = heroSettledKeyState.value,
+                settledBackdropUrl = heroBackdropPictureState.value,
                 trailerKey = heroTrailerKeyState.value,
                 // The card's trailer resolves with the title's own ids, so the
                 // ladder's IMDb leg can fire on a YouTube death (F5).

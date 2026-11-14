@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
@@ -219,6 +220,30 @@ internal fun SpotlightPreviewPanel(
     trailerDelayMs: Long,
     /** The overlay's own size, in the same pixels `boundsInRoot` reports. */
     viewport: IntSize,
+    /**
+     * The BACKDROP for this card's own title - the resolved w1280 picture - or
+     * null when there is none yet or none at all (F1, 2026-11-13).
+     *
+     * Not a preference order any more. The panel used to draw
+     * `meta.background ?: snapshot.stillUrl ?: meta.poster`, and every rung below
+     * the first is a small image: the rail card's still, or a w780 poster, blown
+     * up to 62% of the viewport. That is exactly the blur the field reported
+     * twice, and a preference order is not a guarantee - when the preferred rung
+     * was empty the panel silently drew a thumbnail at panel size. The caller
+     * hands in the resolve for THIS title (or null), and null means the text
+     * tile, never a bigger version of a small picture.
+     */
+    backdropUrl: String?,
+    /**
+     * Whether THIS card's title has finished resolving (true) or is still in
+     * flight (false) - the difference between the tile as a WAIT and the tile as
+     * the honest answer (F1/F3).
+     *
+     * [metaLoading] cannot say this on its own: the hero's meta belongs to the
+     * last title that settled, so while the panel's own title resolves, the
+     * object can be non-null and about a different card entirely.
+     */
+    backdropSettled: Boolean = true,
     /** The hero meta has not landed yet, and has not failed: show placeholders. */
     metaLoading: Boolean = false,
     /** The hero meta resolve FAILED: say so and offer the retry (audit A4). */
@@ -262,6 +287,35 @@ internal fun SpotlightPreviewPanel(
     // radius is copied here and no edge is special-cased.
     val panelShape = posterEdgeShape()
 
+    // ── Which picture draws, and at what size (F1/F2/F3, 2026-11-13) ───────
+    //
+    // One value: the title's own resolved backdrop, or nothing. `snapshot`
+    // still carries the rail's small still and `meta` still carries a poster,
+    // and neither is a panel picture - the chain below the backdrop is GONE,
+    // not reordered, because reordering it is what left the blur in place on
+    // 0.9.296 while the paste could not say which rung had drawn.
+    val stillNow = backdropUrl?.takeIf { it.isNotBlank() }
+    val stillRung = when {
+        stillNow != null -> "background"
+        // The resolve for this card's title failed: the tile is the answer.
+        metaFailed -> "none"
+        // Not landed yet: the tile is a wait, and the paste says so.
+        !backdropSettled || metaLoading -> "loading"
+        else -> "none"
+    }
+    LaunchedEffect(stillRung, stillNow, snapshot.title) {
+        SpotlightDiagTrace.spotlightPanelBackdrop(stillRung, stillNow)
+    }
+    // The SETTLED picture box: the panel's width less its 20 dp of horizontal
+    // padding, at 16:9 - the constraints the image gets once the expand
+    // animation has finished. Taken from `box` (the target) rather than from the
+    // animating `width.value`, so a load started mid-expand is still requested at
+    // the size it will be drawn at (F2).
+    val stillDecodeSize = box.width
+        .toFloat()
+        .let { widthPx -> (widthPx - with(density) { 20.dp.toPx() }).toInt().coerceAtLeast(1) }
+        .let { widthPx -> IntSize(widthPx, (widthPx * 9 / 16).coerceAtLeast(1)) }
+
     Column(
         modifier = modifier
             .offset { IntOffset(box.left, box.top) }
@@ -277,22 +331,20 @@ internal fun SpotlightPreviewPanel(
         // still and the trailer read as a picture instead of a thumbnail
         // (spec 2026-11-12, F1).
         Box(modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
-            // A title with no still, no backdrop and no poster used to leave this
-            // half of the panel an empty KBVoid box (audit a5). The tile's own
+            // A title with no backdrop used to leave this half of the panel an
+            // empty KBVoid box, or - worse - fill it with the rail card's small
+            // still (audit a5, then the two blur reports). The tile's own
             // fallback says what the title is, so the panel uses the same
             // words: the app has no generic empty-art image (ic_cast_placeholder
             // is the cast silhouette, not a title), and the card's fallback has
             // always been text.
-            // The FULL-RESOLUTION backdrop first (spec 2026-11-13, F3). The
-            // card's `stillUrl` is the rail's own image - a poster/backdrop at
-            // card size - and the panel is 62% of the viewport wide in 16:9, so
-            // blowing that small image up is what made the backdrop fuzzy. The
-            // hero meta's `background` is the title's own backdrop (the w1280
-            // variant, or the addon's full-size artwork - see the resolve in
-            // HomeViewModel), which is the picture this size wants. The card's
-            // still is the fallback, then the poster.
-            val stillNow = meta?.background ?: snapshot.stillUrl ?: meta?.poster
-            if (stillNow.isNullOrBlank()) {
+            //
+            // The picture is the resolved backdrop for THIS title, or nothing
+            // (F1, 2026-11-13). `snapshot.stillUrl` is the rail's own image and
+            // `meta.poster` is at most a w780 poster: both are correct at card
+            // size and both are the reported blur at this one, so neither is in
+            // the chain any more. There is no picture rung below the backdrop.
+            if (stillNow == null) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -329,6 +381,13 @@ internal fun SpotlightPreviewPanel(
                 // computed value rather than repeating the chain is what stops
                 // the two from drifting apart a third time.
                 stillUrl = stillNow,
+                // F2: the decode size is the SETTLED picture box, not whatever
+                // the layout is reporting while the panel grows out of the
+                // card's bounds over EXPAND_MS. A w1280 backdrop decoded at card
+                // size and then stretched to panel size is soft for exactly the
+                // reason the small still was, so the request states the size it
+                // will be drawn at.
+                stillDecodeSize = stillDecodeSize,
                 title = snapshot.title,
                 onPlayingChange = onTrailerPlayingChange
             )

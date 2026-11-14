@@ -77,7 +77,10 @@ class SpotlightFixesContractTest {
         assertTrue(
             "the cycle re-arms when the card collapses, so it restarts instead of " +
                 "staying frozen on the page it stopped",
-            billboard.contains("trailerSuppressed\n    ) {")
+            // Still a KEY, with the pill hold beside it (F5, 2026-11-13): both
+            // pauses re-arm the delay when they lift.
+            billboard.contains("trailerSuppressed,") &&
+                billboard.contains("pillsFocused\n    ) {")
         )
         val spotlight = source(SPOTLIGHT_HOME)
         assertTrue(

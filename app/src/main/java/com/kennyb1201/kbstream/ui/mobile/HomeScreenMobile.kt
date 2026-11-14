@@ -47,6 +47,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -63,6 +64,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -2243,6 +2250,23 @@ internal fun MobileBillboard(
      * nothing; it has no such overlay.)
      */
     onTrailerPlayingChange: (Boolean) -> Unit = {},
+    /**
+     * Reports whether one of the hero's own pills holds focus (F4/F5).
+     *
+     * Two things depend on it. The entry claim only counts as LANDED when focus
+     * is observed here, not when `requestFocus()` returned true (F4). And the
+     * billboard holds still while it is true (F5): Left/Right move between Play,
+     * Details and Trailer, and a cycle that advanced under them replaced the
+     * focused pill mid-traversal.
+     */
+    onPillFocusChange: (Boolean) -> Unit = {},
+    /**
+     * UP from a focused pill (F6) - the TV Home opens the top bar from here.
+     *
+     * Null on the phone, which has no top bar and no D-pad: the pills stay plain
+     * focusables there and no key is intercepted.
+     */
+    onPillUpPressed: (() -> Unit)? = null,
     onPlay: (BillboardPage) -> Unit,
     onDetails: (BillboardPage) -> Unit
 ) {
@@ -2341,6 +2365,22 @@ internal fun MobileBillboard(
     var trailerDurationMs by remember(ladderPageKey) { mutableLongStateOf(0L) }
 
     var backgrounded by remember { mutableStateOf(false) }
+
+    // Whether one of the hero's OWN pills holds focus (F5). Written by the pill
+    // row's focus observer below and read by the hold and the sweep, so the two
+    // pause on exactly the same fact.
+    var pillsFocused by remember { mutableStateOf(false) }
+    // A page change draws a NEW set of pills and disposes the old ones, so any
+    // focus they held went with them. Cleared here as well as by the focus
+    // observer, because a node that is simply removed is not guaranteed to
+    // report its own blur - and a stale `true` would freeze the hold (and make
+    // the UP carve-out think it had already landed).
+    LaunchedEffect(pagerState.currentPage) {
+        if (pillsFocused) {
+            pillsFocused = false
+            onPillFocusChange(false)
+        }
+    }
 
     fun stopTrailer() {
         playback = null
@@ -2648,6 +2688,14 @@ internal fun MobileBillboard(
     DisposableEffect(Unit) {
         onDispose { onTrailerPlayingChange(false) }
     }
+    // The focus report must not outlive the pills it describes (F4/F6). A hero
+    // scrolled out of the list takes the pill nodes with it, and no focus event
+    // fires for a node that is simply gone - a stale `true` here would make the
+    // UP carve-out believe focus is already on a pill that is not composed at
+    // all, so it would never ask for it.
+    DisposableEffect(Unit) {
+        onDispose { if (pillsFocused) onPillFocusChange(false) }
+    }
     LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) {
         backgrounded = true
         stopTrailer()
@@ -2717,7 +2765,12 @@ internal fun MobileBillboard(
         // Lifting the suppression re-arms the hold, so the billboard's cycle
         // restarts when the expanded card collapses instead of staying frozen
         // on the page it stopped (the landing intent, now the behaviour).
-        trailerSuppressed
+        trailerSuppressed,
+        // A pill holding focus is a pause for the same reason, and lifting it
+        // re-arms the delay (F5): the viewer's Left/Right move between Play,
+        // Details and Trailer, and a page change under them replaced the very
+        // node they were stepping onto.
+        pillsFocused
     ) {
         if (cycleMs <= 0L || pages.size <= 1) return@LaunchedEffect
         if (backgrounded || playbackPageKey != null || playback != null) {
@@ -2730,6 +2783,10 @@ internal fun MobileBillboard(
         // had moved to on its own. Keyed on trailerSuppressed above, so lifting
         // it re-enters here and restarts the delay (the landing intent).
         if (trailerSuppressed) return@LaunchedEffect
+        // F5: the hero holds still under its own pills, so a title never changes
+        // under a viewer working Left/Right - the press and the page change used
+        // to fight, and the page change won by replacing the focused node.
+        if (pillsFocused) return@LaunchedEffect
         snapshotFlow { pagerState.settledPage to pagerState.isScrollInProgress }
             .collectLatest { (page, scrolling) ->
                 if (scrolling) return@collectLatest
@@ -2754,12 +2811,42 @@ internal fun MobileBillboard(
         autoTrailerArmed ||
         // The Ken Burns sweep is the other half of the hold (audit a1): the
         // still must not keep moving under an expanded card either.
-        trailerSuppressed
+        trailerSuppressed ||
+        // And it is the same hold while the viewer is on the pills (F5): the
+        // sweep is the other clock that would have moved the hero under them.
+        pillsFocused
     // The page this Animatable belongs to. It is what distinguishes a page
     // CHANGE (snap back to the start) from a pause (hold where it is): the
-    // effect below is keyed on both, so the difference has to be data.
+    // effect below is keyed on the page, and a pause only stops the tween, so
+    // the difference has to be data.
     var sweptPage by remember { mutableStateOf(-1) }
-    LaunchedEffect(pagerState.settledPage, sweepPaused, cycleMs, reducedMotion) {
+    // The pause input, readable from INSIDE the effect (F2): the effect is no
+    // longer keyed on it, because re-entering a keyed effect is what restarted
+    // the tween on every flip of `isScrollInProgress`.
+    val sweepPausedNow = rememberUpdatedState(sweepPaused)
+    // ── One slow sweep per page, never restarted by a pause ───────────────
+    //
+    // The field report was "the billboard is stuttery compared to the
+    // screensaver", and the animation shape was never the difference: the same
+    // Animatable, the same tween, the same draw-phase read. Two other things
+    // were.
+    //
+    // THE PACE FOLLOWED THE CYCLE (F1). `totalMs` was `cycleMs` - six seconds for
+    // a full pan on an upscaled backdrop - where the screensaver sweeps one slide
+    // over its ten-second dwell. A fast pan on a 2 GB box shows every dropped
+    // frame; a slow one hides them. The duration is now the fixed
+    // [BILLBOARD_KEN_BURNS_MANUAL_MS] (ten seconds, the same duration the manual
+    // billboard and the screensaver's slide already use), so changing the cycle
+    // interval changes when the next title arrives and NOTHING about the pace.
+    //
+    // AND EVERY PAUSE RESTARTED IT (F2). The effect was keyed on `sweepPaused`,
+    // so a trailer arming, a card expanding, or - twice per turn - the cycle's
+    // own page scroll cancelled the tween and re-entered it. Now the pause is
+    // observed INSIDE the effect: a pause stops the Animatable where it is and a
+    // resume animates the REMAINING portion of the same fixed duration. Nothing
+    // snaps unless the PAGE changed, which is the one cut that belongs to the
+    // content rather than to the motion.
+    LaunchedEffect(pagerState.settledPage, reducedMotion) {
         val page = pagerState.settledPage
         if (reducedMotion) {
             sweepProgress.snapTo(1f)
@@ -2770,18 +2857,24 @@ internal fun MobileBillboard(
             sweepProgress.snapTo(0f)
             sweptPage = page
         }
-        if (sweepPaused) {
-            // Holds the held fraction: stop() keeps the value it reached, and
-            // the branch above only snaps when the PAGE changed.
-            sweepProgress.stop()
-            return@LaunchedEffect
+        snapshotFlow { sweepPausedNow.value }.collectLatest { paused ->
+            if (paused) {
+                // A HOLD, not a restart: stop() keeps the fraction it reached.
+                sweepProgress.stop()
+                return@collectLatest
+            }
+            // Resume from the held fraction over the rest of the fixed duration.
+            // collectLatest cancels this tween when the pause arrives, and a
+            // cancelled Animatable keeps the value it had reached - which is how
+            // the hold survives without a snap and without a new clock.
+            val remainingMs = ((1f - sweepProgress.value) * BILLBOARD_KEN_BURNS_MANUAL_MS)
+                .toInt()
+                .coerceAtLeast(1)
+            sweepProgress.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = remainingMs, easing = LinearEasing)
+            )
         }
-        val totalMs = if (cycleMs > 0L) cycleMs else BILLBOARD_KEN_BURNS_MANUAL_MS
-        val remainingMs = ((1f - sweepProgress.value) * totalMs).toInt().coerceAtLeast(1)
-        sweepProgress.animateTo(
-            targetValue = 1f,
-            animationSpec = tween(durationMillis = remainingMs, easing = LinearEasing)
-        )
     }
     // One entrance per page entry, replayed when a page is returned to.
     LaunchedEffect(pagerState.settledPage, reducedMotion) {
@@ -2802,39 +2895,62 @@ internal fun MobileBillboard(
     // The pills, handed to the CURRENT page's hero and drawn on the art. One
     // block, one reveal: the copy and the pills are the page.
     val pageActions: @Composable () -> Unit = {
-        BillboardAction(
-            label = "Play",
-            icon = Icons.Filled.PlayArrow,
-            accent = true,
-            focusRequester = firstPillFocusRequester,
-            onClick = { currentPage?.let(onPlay) }
-        )
-        BillboardAction(
-            label = "Details",
-            onClick = { currentPage?.let(onDetails) }
-        )
-        // Manual mode is the ONLY mode that draws this: with Off there is no
-        // trailer affordance at all, and with Auto-play the mode itself is
-        // the affordance.
-        if (
-            trailerMode == BillboardTrailerMode.MANUAL &&
-            !currentPage?.trailerKey.isNullOrBlank()
+        // ONE node for the pill group, so its focus state cannot race itself:
+        // three pills each reporting their own boolean would leave the last
+        // write, not the truth, whenever focus moved from Play to Details
+        // (F4/F5). `hasFocus` covers the node OR a descendant, which is exactly
+        // "one of the pills holds focus".
+        Row(
+            modifier = Modifier.onFocusChanged { state ->
+                val held = state.hasFocus
+                if (held != pillsFocused) {
+                    pillsFocused = held
+                    onPillFocusChange(held)
+                }
+            },
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             BillboardAction(
-                label = if (playback != null) "Stop" else "Trailer",
-                icon = if (playback != null) {
-                    Icons.Filled.Close
-                } else {
-                    Icons.Filled.PlayArrow
-                },
-                onClick = {
-                    if (playback != null) {
-                        stopTrailer()
-                    } else {
-                        startTrailer(pagerState.currentPage)
-                    }
-                }
+                label = "Play",
+                icon = Icons.Filled.PlayArrow,
+                accent = true,
+                focusRequester = firstPillFocusRequester,
+                onUp = onPillUpPressed,
+                onClick = { currentPage?.let(onPlay) }
             )
+            BillboardAction(
+                label = "Details",
+                onUp = onPillUpPressed,
+                onClick = { currentPage?.let(onDetails) }
+            )
+            // Manual mode is the ONLY mode that draws this: with Off there is
+            // no trailer affordance at all, and with Auto-play the mode itself
+            // is the affordance.
+            if (
+                trailerMode == BillboardTrailerMode.MANUAL &&
+                !currentPage?.trailerKey.isNullOrBlank()
+            ) {
+                BillboardAction(
+                    label = if (playback != null) "Stop" else "Trailer",
+                    icon = if (playback != null) {
+                        Icons.Filled.Close
+                    } else {
+                        Icons.Filled.PlayArrow
+                    },
+                    // The pause covers this one too (F5): the moments before
+                    // and after the trailer starts are focus-held, and the
+                    // trailer itself pauses the cycle through `playback`.
+                    onUp = onPillUpPressed,
+                    onClick = {
+                        if (playback != null) {
+                            stopTrailer()
+                        } else {
+                            startTrailer(pagerState.currentPage)
+                        }
+                    }
+                )
+            }
         }
     }
 
@@ -3021,6 +3137,15 @@ private fun BillboardAction(
     accent: Boolean = false,
     /** The pill a TV Home parks focus on when it opens (see MobileBillboard). */
     focusRequester: FocusRequester? = null,
+    /**
+     * UP from a focused pill, for the TV Home's top-bar chain (F6).
+     *
+     * The hero is the middle stop of a three-stop chain (top rail -> pills ->
+     * top bar). Without this the chain ended at the pills: they had no UP
+     * handler at all, so the bar was only reachable by the undiscoverable
+     * hold-UP. Null leaves the key alone - the phone has no bar to open.
+     */
+    onUp: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     val contentColor = if (accent) KBVoid else KBTextHi
@@ -3066,6 +3191,22 @@ private fun BillboardAction(
             .then(
                 if (focusRequester != null) {
                     Modifier.focusRequester(focusRequester)
+                } else {
+                    Modifier
+                }
+            )
+            .then(
+                if (onUp != null) {
+                    // The press is CONSUMED, so no stale focus search runs after
+                    // it - the same contract the rail hook keeps (F6). Only the
+                    // key-down is answered: the up event is swallowed with it,
+                    // so the bar does not receive a stray release.
+                    Modifier.onKeyEvent { event ->
+                        if (event.key != Key.DirectionUp) return@onKeyEvent false
+                        if (event.type != KeyEventType.KeyDown) return@onKeyEvent true
+                        onUp()
+                        true
+                    }
                 } else {
                     Modifier
                 }

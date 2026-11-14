@@ -333,6 +333,83 @@ class SpotlightScrollHeroContractTest {
         )
     }
 
+    // ── (j) F5 (2026-11-13): the hero holds still under its own pills ─────
+
+    @Test
+    fun `the cycle and the sweep pause while a hero pill holds focus`() {
+        val mobile = flat(source(MOBILE))
+        assertTrue(
+            "the pill group reports its own focus as one node, so three pills cannot " +
+                "race each other's booleans",
+            mobile.contains("var pillsFocused by remember { mutableStateOf(false) }") &&
+                mobile.contains("modifier = Modifier.onFocusChanged { state ->") &&
+                mobile.contains("onPillFocusChange(held)")
+        )
+        assertTrue(
+            "the hold refuses to advance while that is true",
+            mobile.contains("if (pillsFocused) return@LaunchedEffect")
+        )
+        assertTrue(
+            "and the delay re-arms when it lifts: the flag is a KEY of the hold effect",
+            mobile.contains("node they were stepping onto. pillsFocused ) {")
+        )
+        assertTrue(
+            "the Ken Burns sweep is the same hold - one fact, both clocks",
+            mobile.contains("trailerSuppressed ||") &&
+                mobile.contains("hero under them. pillsFocused")
+        )
+        assertTrue(
+            "and the report falls with the pills, so a scrolled-away hero cannot " +
+                "leave it stuck true for the UP carve-out to read",
+            mobile.contains("onDispose { if (pillsFocused) onPillFocusChange(false) }")
+        )
+        assertFalse(
+            "and no key maps Left/Right to a page change: the timer is the only " +
+                "title-changer on the D-pad path",
+            mobile.contains("Key.DirectionLeft ->") || mobile.contains("Key.DirectionRight ->")
+        )
+    }
+
+    // ── (k) F6 (2026-11-13): UP from a pill reaches the top bar ────────────
+
+    @Test
+    fun `Up from a focused pill opens the top bar and the carve-out says so`() {
+        val mobile = flat(source(MOBILE))
+        assertTrue(
+            "a pill takes an UP handler at all - it had none, which is where the " +
+                "chain died",
+            mobile.contains("onUp: (() -> Unit)? = null") &&
+                mobile.contains("if (event.key != Key.DirectionUp) return@onKeyEvent false")
+        )
+        assertTrue(
+            "all three pills carry it, including Trailer - the pause covers it too",
+            mobile.split("onUp = onPillUpPressed").size - 1 == 3
+        )
+        val h = home()
+        assertTrue(
+            "the Home answers it with the bar, and the bar gets somewhere to return to",
+            h.contains("onOpenTopBar = {") &&
+                h.contains("spotlightHeroReturnRequester ?: spotlightHeroPillRequester")
+        )
+        assertTrue(
+            "the return target is the rail card whose UP started the chain (settler S10), " +
+                "captured by the carve-out rather than guessed at dismiss time",
+            h.contains("spotlightHeroReturnRequester = railRequester")
+        )
+        val hook = between(h, "fun topRailUpHook(entryIndex: Int)", "One pinned Library list")
+        assertTrue(
+            "the carve-out retries on OBSERVED focus, so a miss is not a dead end",
+            hook.contains("while (") &&
+                hook.contains("!spotlightHeroPillFocused") &&
+                hook.contains("SPOTLIGHT_CLAIM_RETRY_FRAMES")
+        )
+        val carveOut = between(h, "fun topRailUpHook(entryIndex: Int)", "One pinned Library list")
+        assertFalse(
+            "and its comment no longer claims the bar is only reachable by hold",
+            carveOut.contains("the bar stays reachable from every rail by hold, and from the pills by")
+        )
+    }
+
     // ── (i) a scrolled-away hero stops its trailer ────────────────────────
 
     @Test

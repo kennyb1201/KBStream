@@ -1185,6 +1185,27 @@ class HomeViewModel(
     val heroBackdropUrl: StateFlow<String?> =
         _heroBackdropUrl.asStateFlow()
 
+    /**
+     * The resolved BACKDROP for the settled hero title - never a poster (F1,
+     * 2026-11-13).
+     *
+     * [heroBackdropUrl] is the picture the HERO draws, and its chain ends in
+     * poster rungs: an alternate TMDB poster at w780, then the add-on's poster,
+     * then the card's own. At the hero's size that is a reasonable last resort.
+     * At the expanded Spotlight panel's size - 62% of the viewport wide, 16:9 -
+     * the same poster is the blur the panel was reported for twice, so the panel
+     * gets THIS instead: the backdrop rungs only, or null. A null is not a
+     * failure: the panel draws its text tile and says so in the trace.
+     *
+     * Published with [heroSettledKey], so a screen can tell whose backdrop it is
+     * - a picture for another title is as wrong as a small one.
+     */
+    private val _heroBackdropPicture =
+        MutableStateFlow<String?>(null)
+
+    val heroBackdropPicture: StateFlow<String?> =
+        _heroBackdropPicture.asStateFlow()
+
     private val _heroLogoUrl =
         MutableStateFlow<String?>(null)
 
@@ -1430,6 +1451,7 @@ class HomeViewModel(
         if (item == null) {
             _heroMeta.value = null
             _heroBackdropUrl.value = null
+            _heroBackdropPicture.value = null
             _heroLogoUrl.value = null
             _heroTrailerKey.value = null
             _heroTmdbDetail.value = null
@@ -1651,13 +1673,24 @@ Log.d(
         "artworkLogo=${heroArtwork?.logoUrl}"
 )
 
-                    val resolvedBackdrop =
+                    // The backdrop rungs on their own (F1, 2026-11-13).
+                    //
+                    // Split out of [resolvedBackdrop] so the panel can draw the
+                    // picture its size deserves and NOTHING ELSE: the poster
+                    // rungs below exist for the hero, where a poster at hero
+                    // size is a last resort, but at the expanded panel's size a
+                    // poster is the reported blur under another name. Same
+                    // chain, same fetches - only the poster tail is excluded.
+                    val resolvedBackdropPicture =
                         heroArtwork?.backdropUrl?.takeIf { it.isNotBlank() }
                             ?: resolvedTmdbDetail?.backdropPath
                                 ?.takeIf { it.isNotBlank() }
                                 ?.let { TmdbRepository.BACKDROP_BASE + it }
                             ?: resolvedAddonMeta?.background?.takeIf { it.isNotBlank() }
                             ?: item.background?.takeIf { it.isNotBlank() }
+
+                    val resolvedBackdrop =
+                        resolvedBackdropPicture
                             // Poster fallback for backdrop-less titles:
                             // prefer an ALTERNATE TMDB poster so the hero
                             // doesn't display the exact image the focused
@@ -1760,6 +1793,7 @@ Log.d(
                     // + heroArtwork), so publish them on their own state regardless of
                     // whether finalMeta exists, instead of losing them via the ?.copy() above.
                     _heroBackdropUrl.value = resolvedBackdrop
+                    _heroBackdropPicture.value = resolvedBackdropPicture
                     _heroLogoUrl.value = resolvedLogo
                     _heroTmdbDetail.value = resolvedTmdbDetail
                     _heroTrailerKey.value = heroTrailerKeyOf(resolvedTmdbDetail)
@@ -1799,6 +1833,7 @@ Log.d(
                 )
                 _heroMeta.value = null
                 _heroBackdropUrl.value = null
+                _heroBackdropPicture.value = null
                 _heroLogoUrl.value = null
                 _heroTrailerKey.value = null
                 _heroTmdbDetail.value = null

@@ -364,10 +364,16 @@ internal const val BILLBOARD_KEN_BURNS_MAX_SCALE = 1.10f
 internal const val BILLBOARD_KEN_BURNS_PAN_FRACTION = 0.02f
 
 /**
- * How long the sweep runs when the billboard cannot advance by itself.
+ * How long the sweep runs - ALWAYS, whatever the cycle interval is (F1).
  *
- * "Manual only" has no dwell to fill, but a backdrop still has to move
- * somewhere and stop: ten seconds, then it holds at its end state.
+ * It started as the "Manual only" duration, where there is no dwell to fill but
+ * a backdrop still has to move somewhere and stop. The field report ("the
+ * billboard is stuttery compared to the screensaver", 2026-11-13) is why it is now
+ * the only duration: the billboard used to sweep a full pan inside `cycleMs`
+ * (six seconds by default), and a fast pan on an upscaled backdrop on a 2 GB box
+ * shows every dropped frame, while the screensaver - ten seconds a slide - hides
+ * them. The same ten seconds as `ScreensaverRules.SCREENSAVER_DWELL_MS`, so the
+ * two move at the same visible pace and the comparison stays honest.
  */
 internal const val BILLBOARD_KEN_BURNS_MANUAL_MS = 10_000L
 
@@ -381,7 +387,7 @@ internal const val BILLBOARD_CONTENT_RISE_DP = 8
 internal const val BILLBOARD_SEGMENT_TRACK_DP = 3
 
 /**
- * One page's backdrop sweep: where it starts, where it ends, how long it takes.
+ * One page's backdrop sweep: where it starts, where it ends, and the page's dwell.
  *
  * A data class rather than a lambda so the screen can hand it to the image
  * layer once and interpolate it per frame without allocating.
@@ -393,6 +399,13 @@ internal data class BillboardSweep(
     val startPanFraction: Float,
     /** ...and at the end. */
     val endPanFraction: Float,
+    /**
+     * The page's dwell - how long the title stays up - which is NOT the sweep's
+     * pace any more (F1, 2026-11-13). The renderer sweeps over the fixed
+     * [BILLBOARD_KEN_BURNS_MANUAL_MS] whatever the cycle is; this stays as the
+     * dwell the page was dealt with, so a shorter cycle cuts the sweep short
+     * rather than making it faster.
+     */
     val durationMs: Long
 )
 

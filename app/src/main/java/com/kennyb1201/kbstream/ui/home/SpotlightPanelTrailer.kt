@@ -14,7 +14,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.IntSize
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
 import com.kennyb1201.kbstream.data.reporting.SpotlightDiagTrace
 import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
 import com.kennyb1201.kbstream.data.youtube.HeroTrailerResumeVerdict
@@ -79,6 +82,17 @@ internal fun SpotlightPanelTrailer(
     delayMs: Long,
     /** What the panel shows when there is no trailer on screen. */
     stillUrl: String?,
+    /**
+     * The size the still is DRAWN at, in pixels (F2, 2026-11-13).
+     *
+     * The request carries it explicitly. Left to the layout, a load started
+     * while the panel was still growing out of the card's bounds could decode at
+     * card size and then be stretched to panel size - soft for exactly the reason
+     * a small still is, even when the URL is the w1280 backdrop. The caller
+     * computes it from the SETTLED panel box, so the decode never depends on when
+     * the load happened to start.
+     */
+    stillDecodeSize: IntSize,
     title: String?,
     onPlayingChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
@@ -260,8 +274,18 @@ internal fun SpotlightPanelTrailer(
         // is an unpainted black rectangle until then.
         val still = stillUrl?.takeIf { it.isNotBlank() }
         if (still != null && !firstFrame && !frameMissing) {
+            val context = LocalContext.current
+            // The explicit size is the fix, not a hint: Coil decodes to fit the
+            // requested size, so the picture is already at panel resolution the
+            // first time it paints and a mid-expand size can never be captured.
+            val request = remember(still, stillDecodeSize) {
+                ImageRequest.Builder(context)
+                    .data(still)
+                    .size(stillDecodeSize.width, stillDecodeSize.height)
+                    .build()
+            }
             AsyncImage(
-                model = still,
+                model = request,
                 contentDescription = title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()

@@ -100,6 +100,18 @@ internal object SpotlightDiagTrace {
     /** The expanded card's trailer's state, as its own composable reported it (F4). */
     private var panelTrailer: String? = null
 
+    /**
+     * The picture the panel actually DREW - its rung and the host it came from
+     * (F3, 2026-11-13).
+     *
+     * Twice now the field report was "the panel backdrop is blurry" and the
+     * paste could not say whether the panel drew a backdrop, a poster, the rail
+     * still, or nothing at all. The rung is the whole answer: `background@host`
+     * is the title's own backdrop, `none` is the honest text tile while a title
+     * without one is up, `loading` is the same tile before the resolve lands.
+     */
+    private var panelBackdrop: String? = null
+
     /** When the panel last expanded, so a following blur can be dated against it. */
     private var expandedAtMs = 0L
 
@@ -382,10 +394,16 @@ internal object SpotlightDiagTrace {
      * The first-pill claim's outcome - the gate-hole case: a failed claim
      * leaves the entry focus live, so every billboard re-deal yanks focus.
      */
-    fun spotlightClaim(taken: Boolean) {
+    fun spotlightClaim(taken: Boolean, frames: Int = 0) {
         synchronized(lock) { lastClaim = taken }
         putSpotlight("dwell", dwellLine())
-        note(SPOTLIGHT + "claim ${if (taken) "taken" else "not-taken"}")
+        // The count is what separates "landed on the first try" from "needed the
+        // retry" - and, on a failure, how much of the bounded window the attempt
+        // actually spent (spec 2026-11-13, F4).
+        note(
+            SPOTLIGHT + "claim ${if (taken) "taken" else "not-taken"}" +
+                (if (frames > 0) " frames=$frames" else "")
+        )
     }
 
     /** The panel expanded for the held card. */
@@ -395,6 +413,9 @@ internal object SpotlightDiagTrace {
             lastExpanded = true
             expandedCard = label(lastKey, title ?: lastTitle)
             panelTrailer = "not-reported"
+            // A new panel draws a new picture; until its composable reports, the
+            // last card's rung would be a lie about this one.
+            panelBackdrop = null
         }
         putSpotlight("tracker", trackerLine())
         putSpotlight("panel", panelLine("expanded=yes last=expanded"))
@@ -414,9 +435,34 @@ internal object SpotlightDiagTrace {
         putSpotlight("panel", panelLine(if (lastExpanded) "expanded=yes last=expanded" else "expanded=no"))
     }
 
+    /**
+     * The picture the expanded panel drew (F3, 2026-11-13).
+     *
+     * [rung] is `background`, `none` (the title has no backdrop) or `loading`
+     * (the resolve for this title has not landed); [url] is the drawn URL, of
+     * which only the host travels in the paste - the size class is implied by
+     * the rung, and the full URL would be a wall of signed hostnames.
+     */
+    fun spotlightPanelBackdrop(rung: String, url: String?) {
+        val host = url
+            ?.substringAfter("://", "")
+            ?.substringBefore('/')
+            ?.takeIf { it.isNotBlank() }
+        synchronized(lock) {
+            panelBackdrop = if (host != null) "$rung@$host" else rung
+        }
+        putSpotlight(
+            "panel",
+            panelLine(if (lastExpanded) "expanded=yes last=expanded" else "expanded=no")
+        )
+    }
+
     /** The dwell guard collapsed the panel, and which guard fired (F3/F5). */
     fun spotlightCollapsed(guard: String) {
-        synchronized(lock) { panelTrailer = null }
+        synchronized(lock) {
+            panelTrailer = null
+            panelBackdrop = null
+        }
         putSpotlight("panel", panelLine("expanded=no last=collapsed guard=$guard"))
         note(SPOTLIGHT + "collapse guard=$guard")
     }
@@ -425,7 +471,8 @@ internal object SpotlightDiagTrace {
     private fun panelLine(state: String): String {
         val card = expandedCard?.let { " $it" } ?: ""
         val trailer = panelTrailer?.let { " trailer=$it" } ?: ""
-        return "panel $state$card$trailer"
+        val picture = panelBackdrop?.let { " picture=$it" } ?: ""
+        return "panel $state$card$trailer$picture"
     }
 
     // ── Reads ─────────────────────────────────────────────────────────────

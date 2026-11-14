@@ -114,6 +114,101 @@ class SpotlightDwellContractTest {
 
     // ── S2/S3: what a move must still do ────────────────────────────────
 
+    // ── F1 (2026-11-13): the clock survives a re-created card ─────────────
+
+    @Test
+    fun `a re-created card resumes the held time instead of restarting it`() {
+        // The field report this fixes: "you have to wait multiple minutes before
+        // they all work", on a build where a quiet screen expands in 2 s. The
+        // effect is ALSO keyed on `heldNode` (the card's FocusRequester), and the
+        // trace only names card / delay / menu changes - so a card rebuilt under
+        // the viewer (a rail re-deal, a re-landed focus) restarted the two
+        // seconds SILENTLY, every time, until the screen went quiet.
+        assertTrue(
+            "the clock is the CARD's, kept outside the effect",
+            host.contains("var dwellClockCard by remember { mutableStateOf<String?>(null) }") &&
+                host.contains("var dwellClockElapsedMs by remember { mutableStateOf(0L) }")
+        )
+        assertTrue(
+            "only a different card starts a new clock",
+            dwellEffect.contains("if (dwellClockCard != cardNow) {")
+        )
+        assertTrue(
+            "and a restart of the same card counts the time the replaced run held it",
+            dwellEffect.contains("dwellClockElapsedMs += (nowMs - dwellClockRunStartMs)")
+        )
+        assertTrue(
+            "a deliberate close drops the held time, so the next hold waits it out again",
+            host.contains("fun resetDwellClock()") &&
+                dwellEffect.contains("resetDwellClock()")
+        )
+        val back = host.substringAfter("BackHandler(enabled = expanded != null) {")
+            .substringBefore("val panel =")
+        assertTrue(
+            "BACK is a deliberate close too",
+            back.contains("resetDwellClock()")
+        )
+        assertTrue(
+            "and the viewer's delay itself is unchanged - no longer wait, no shorter one",
+            !host.contains("SPOTLIGHT_DWELL_CLOCK") &&
+                host.contains("delay((expandDelayMs - dwellClockElapsedMs)")
+        )
+    }
+
+    // ── F2/F3 (2026-11-13): the details are the panel's content ───────────
+
+    @Test
+    fun `the held catalog card starts its own resolve and the rails warm it first`() {
+        val home = source(HOME)
+        assertTrue(
+            "Spotlight resolves the FOCUSED card directly - no separate hero path",
+            home.contains("viewModel.resolveHeroMeta(focused)")
+        )
+        assertTrue(
+            "behind the 150 ms dwell that keeps transitive focus from resolving",
+            home.contains("delay(HERO_RESOLVE_DEBOUNCE_MS)")
+        )
+        val model = source(VIEW_MODEL)
+        assertTrue(
+            "and every rail item is prefetched, so the card the dwell is about to open " +
+                "is a cache hit (F2 is a verification, not a change)",
+            model.contains("prefetchHeroArt(\n                    finalRails.flatMap { it.items }\n                )")
+        )
+        assertTrue(
+            "bounded, as before: two permits, sixty cards",
+            model.contains("Semaphore(permits = 2)") &&
+                model.contains("heroArtPrefetchLimit = 60")
+        )
+    }
+
+    @Test
+    fun `the open panel takes the details when they land`() {
+        val home = source(HOME)
+        assertTrue(
+            "the panel's details are LIVE state, not a copy taken at expansion time",
+            home.contains("meta = heroMetaState.value,") &&
+                home.contains("metaLoading = heroMetaState.value == null && !heroMetaFailedState.value,") &&
+                home.contains("metaFailed = heroMetaFailedState.value,")
+        )
+        assertTrue(
+            "and the host hands them to the panel it is already drawing",
+            host.contains("meta = meta,") &&
+                host.contains("metaLoading = metaLoading,") &&
+                host.contains("metaFailed = metaFailed,")
+        )
+        val panel = source(SPOTLIGHT_PREVIEW)
+        assertTrue(
+            "the panel says it is still working, and says when the resolve failed",
+            panel.contains("metaLoading -> \"LOADING DETAILS…\"") &&
+                panel.contains("metaFailed -> \"DETAILS UNAVAILABLE\"")
+        )
+        assertTrue(
+            "and the panel's own picture arrives the same way (the panel-backdrop spec), " +
+                "so a late resolve fills the whole panel, not just its text",
+            home.contains("settledBackdropUrl = heroBackdropPictureState.value")
+        )
+    }
+
     @Test
     fun `moving to another card restarts the dwell, and moving early opens nothing`() {
         assertTrue(
@@ -127,9 +222,10 @@ class SpotlightDwellContractTest {
                 dwellEffect.contains("if (heldNode == null) return@LaunchedEffect")
         )
         assertTrue(
-            "the wait is the delay, after which the panel opens and nothing earlier",
-            dwellEffect.contains("delay(expandDelayMs)") &&
-                dwellEffect.indexOf("delay(expandDelayMs)") <
+            "the wait is the delay (less whatever this card had already held), after " +
+                "which the panel opens and nothing earlier",
+            dwellEffect.contains("delay((expandDelayMs - dwellClockElapsedMs).coerceAtLeast(0L))") &&
+                dwellEffect.indexOf("delay((expandDelayMs") <
                 dwellEffect.indexOf("expanded = ExpandedPanel(armedOn, armedNode)")
         )
         // Repointed by the 2026-11-12 collapse spec: `!hasSnapshot` is NOT a
@@ -180,5 +276,7 @@ class SpotlightDwellContractTest {
     private companion object {
         const val SPOTLIGHT_HOME = "com/kennyb1201/kbstream/ui/home/SpotlightHome.kt"
         const val SPOTLIGHT_PREVIEW = "com/kennyb1201/kbstream/ui/home/SpotlightPreview.kt"
+        const val HOME = "com/kennyb1201/kbstream/ui/home/HomeScreen.kt"
+        const val VIEW_MODEL = "com/kennyb1201/kbstream/ui/home/HomeViewModel.kt"
     }
 }

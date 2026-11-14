@@ -159,24 +159,48 @@ class SpotlightEntryPanelContractTest {
 
         assertTrue(
             "the attempt is retried instead of losing the visit to one miss",
-            claim.contains("while (!taken && frames < SPOTLIGHT_CLAIM_RETRY_FRAMES)")
+            claim.contains("while (!landed && frames < SPOTLIGHT_CLAIM_RETRY_FRAMES)")
         )
         assertTrue(
             "one frame first, so the pill has a node to take focus",
             claim.contains("withFrameNanos { }")
         )
+        // F4 (2026-11-13): the request's boolean was the wrong answer. It says a
+        // node ACCEPTED the request, not that the pill holds focus - and the
+        // field report's skipped pills were exactly that gap. The claim now lands
+        // on the focus REPORT, read live because params are snapshots.
         assertTrue(
-            "the outcome is still traced",
-            claim.contains("SpotlightDiagTrace.spotlightClaim(taken)")
+            "the claim lands on observed focus, not on requestFocus()'s answer (F4)",
+            section.contains("rememberUpdatedState(pillHoldsFocus)") &&
+                claim.contains("landed = pillHoldsFocusNow.value") &&
+                !claim.contains("taken = runCatching { firstPillFocus.requestFocus() }")
         )
-        assertTrue("a taken claim closes the latch", claim.contains("if (taken) onEntryFocusClaimed()"))
+        assertTrue(
+            "the outcome is still traced - with how much of the window it took",
+            claim.contains("SpotlightDiagTrace.spotlightClaim(landed, frames)")
+        )
+        assertTrue(
+            "a landed claim closes the latch",
+            claim.contains("if (landed) onEntryFocusClaimed()")
+        )
         assertTrue(
             "a given-up claim closes it too - it must not re-fire on a re-deal",
             claim.contains("else onEntryFocusClaimGivenUp()")
         )
         assertTrue(
-            "and the window is a named, bounded constant",
-            section.contains("private const val SPOTLIGHT_CLAIM_RETRY_FRAMES = 12")
+            "and the window is a named, bounded constant, shared with the UP carve-out",
+            section.contains("internal const val SPOTLIGHT_CLAIM_RETRY_FRAMES = 12")
+        )
+
+        // F4: a claim that HAD landed and then lost the pill re-arms, because a
+        // page that settles replaces the pills (they are per-page) without any
+        // press. The viewer's own press and a restore still gate it at the Home.
+        assertTrue(
+            "a lost pill re-arms the claim instead of ending it for the visit (F4)",
+            section.contains("LaunchedEffect(pillHoldsFocus) {") &&
+                section.contains("onEntryFocusLost()") &&
+                home.contains("onEntryFocusLost = {") &&
+                home.contains("spotlightEntryFocusClaimed = false")
         )
 
         val latch = home.substringAfter("onEntryFocusClaimGivenUp = {").substringBefore("},")
@@ -267,18 +291,28 @@ class SpotlightEntryPanelContractTest {
     // ── F3: the panel draws the full-resolution backdrop ──────────────────
 
     @Test
-    fun `the panel prefers the meta backdrop over the card's still`() {
+    fun `the panel draws the backdrop for its own title, or the text tile`() {
+        // F1 (2026-11-13). The PREFERENCE ORDER is gone, not reordered: it put a
+        // small image under the panel whenever the preferred rung was empty, and
+        // the same blur came back twice with a paste that could not say which
+        // rung had drawn. One value goes in - the caller's resolved backdrop for
+        // this card's title - and null means the tile.
         assertTrue(
-            "full-resolution first, the card's rail image second, the poster last",
-            preview.contains("val stillNow = meta?.background ?: snapshot.stillUrl ?: meta?.poster")
+            "the picture is the caller's resolved backdrop for this title",
+            preview.contains("val stillNow = backdropUrl?.takeIf { it.isNotBlank() }")
         )
         assertFalse(
-            "the old order is what made it fuzzy",
-            preview.contains("val stillNow = snapshot.stillUrl ?: meta?.background")
+            "the rail card's still is not a panel picture at any position in a chain",
+            preview.contains("meta?.background ?: snapshot.stillUrl") ||
+                preview.contains("stillUrl = snapshot.stillUrl")
+        )
+        assertFalse(
+            "and a poster is the same blur under another name",
+            preview.contains("?: meta?.poster") || preview.contains("?: meta?.background")
         )
         assertTrue(
-            "and a title with no art still gets the text tile",
-            preview.contains("if (stillNow.isNullOrBlank()) {")
+            "a title with no backdrop gets the text tile rather than a small image",
+            preview.contains("if (stillNow == null) {")
         )
         // F3 fixed the EMPTY-STATE value only, and the trailer's still - the one
         // the panel actually DRAWS (SpotlightPanelTrailer paints it under the
@@ -286,12 +320,76 @@ class SpotlightEntryPanelContractTest {
         // left on the old rail-image-first order. 0.9.285 was still fuzzy
         // because of exactly that (spec 2026-11-13, F1 follow-up).
         assertTrue(
-            "the panel's drawn still is the one computed above, full-resolution first",
+            "the panel's drawn still is the one computed above",
             preview.contains("stillUrl = stillNow,")
         )
         assertFalse(
             "no visible panel image may keep the rail image first",
             preview.contains("stillUrl = snapshot.stillUrl ?: meta?.background")
+        )
+    }
+
+    @Test
+    fun `the backdrop is gated on the title the panel is showing`() {
+        // The 296 blur's second half: the panel drew whatever `heroMeta.background`
+        // happened to hold, which can be the LAST settled title's picture or none
+        // at all while this card's resolve is still in flight. The settle key is
+        // what makes "not for this title" mean no picture.
+        assertTrue(
+            "the panel compares the shown card's key with the settled one",
+            section.contains("panel.snapshot.heroTitleKey()") &&
+                section.contains("?.takeIf { it == settledTitleKey }")
+        )
+        assertTrue(
+            "and the host is handed both the key and the picture",
+            section.contains("settledTitleKey: String? = null") &&
+                section.contains("settledBackdropUrl: String? = null")
+        )
+        assertTrue(
+            "Home passes the VIEWMODEL's settled key and its backdrop-only picture",
+            home.contains("settledTitleKey = heroSettledKeyState.value") &&
+                home.contains("settledBackdropUrl = heroBackdropPictureState.value")
+        )
+        assertTrue(
+            "the resolve splits the backdrop rungs out of the hero's poster tail",
+            source(VIEW_MODEL).contains("val resolvedBackdropPicture =") &&
+                source(VIEW_MODEL).contains("val resolvedBackdrop =\n                        resolvedBackdropPicture")
+        )
+    }
+
+    @Test
+    fun `the still is decoded at the settled panel size`() {
+        // F2: a w1280 backdrop decoded at CARD size and then stretched is as soft
+        // as the small still was, so the request states the size it will draw at.
+        assertTrue(
+            "the panel computes the decode size from the SETTLED box, not the animating one",
+            preview.contains("val stillDecodeSize = box.width") &&
+                preview.contains("stillDecodeSize = stillDecodeSize,")
+        )
+        assertTrue(
+            "and the trailer's Coil request carries it",
+            source(PANEL_TRAILER).contains(".size(stillDecodeSize.width, stillDecodeSize.height)")
+        )
+    }
+
+    @Test
+    fun `the drawn picture and its rung reach the paste`() {
+        // F3: the next report has to be decidable from the paste alone.
+        assertTrue(
+            "the panel reports the rung it drew and the URL that drew it",
+            preview.contains("SpotlightDiagTrace.spotlightPanelBackdrop(stillRung, stillNow)")
+        )
+        assertTrue(
+            "with three rungs, and no small-still rung left to name",
+            preview.contains("stillNow != null -> \"background\"") &&
+                preview.contains("metaLoading -> \"loading\"") &&
+                preview.contains("else -> \"none\"")
+        )
+        val trace = source(TRACE)
+        assertTrue(
+            "the paste line carries it beside the trailer's own status",
+            trace.contains("private var panelBackdrop: String?") &&
+                trace.contains("val picture = panelBackdrop?.let { \" picture=\$it\" } ?: \"\"")
         )
     }
 
@@ -359,6 +457,8 @@ class SpotlightEntryPanelContractTest {
         const val SPOTLIGHT_PREVIEW = "${ROOT}SpotlightPreview.kt"
         const val LAYOUT_RULES = "${ROOT}HomeLayoutRules.kt"
         const val VIEW_MODEL = "${ROOT}HomeViewModel.kt"
+        const val PANEL_TRAILER = "${ROOT}SpotlightPanelTrailer.kt"
+        const val TRACE = "com/kennyb1201/kbstream/data/reporting/SpotlightDiagTrace.kt"
         const val POSTER_CARD = "com/kennyb1201/kbstream/ui/components/PosterCard.kt"
     }
 }

@@ -234,13 +234,15 @@ class SpotlightAuditFixesContractTest {
     fun `a title with no art shows a placeholder in the panel's media area`() {
         val p = preview()
         assertTrue(
-            // Order repointed by the 2026-11-13 spec (F3): the full-resolution
-            // backdrop first, because the card's still is a rail-sized image and
-            // the panel is 62% of the viewport wide in 16:9.
-            "the panel checks the same three sources the trailer does, best first",
-            p.contains("val stillNow = meta?.background ?: snapshot.stillUrl ?: meta?.poster")
+            // Replaced wholesale by the 2026-11-13 blur spec (F1): the chain's
+            // lower rungs were a rail-sized still and a poster, and blowing
+            // either up to 62% of the viewport is the blur that was reported
+            // twice. The panel now takes the caller's resolved backdrop for its
+            // own title, or nothing.
+            "the panel's one picture source is the resolved backdrop for this title",
+            p.contains("val stillNow = backdropUrl?.takeIf { it.isNotBlank() }")
         )
-        val placeholder = p.substringAfter("if (stillNow.isNullOrBlank()) {")
+        val placeholder = p.substringAfter("if (stillNow == null) {")
             .substringBefore("SpotlightPanelTrailer(")
         assertTrue(
             "and fills the box with the app's art-less fallback - the title",
@@ -255,7 +257,7 @@ class SpotlightAuditFixesContractTest {
         assertEquals(
             "one panel, one media placeholder",
             1,
-            Regex("if \\(stillNow\\.isNullOrBlank\\(\\)\\)").findAll(p).count()
+            Regex("if \\(stillNow == null\\)").findAll(p).count()
         )
         assertFalse(
             "the phone's own Home is not the surface this spec changed",
