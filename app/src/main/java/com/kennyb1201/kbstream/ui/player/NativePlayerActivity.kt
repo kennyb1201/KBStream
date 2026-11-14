@@ -1279,6 +1279,29 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
     private val scrubHandler = Handler(Looper.getMainLooper())
     private val clockHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * Keeps the death marker's position current while this session plays.
+     *
+     * One tick per [PlaybackDeathMarker.PROGRESS_CHECKPOINT_MS], armed when the
+     * first picture lands and stopped with the activity. It exists because the
+     * marker's two stage checkpoints left every mid-film death reading `at
+     * 0:00`, which is the one number that report needs to be useful.
+     */
+    private val deathMarkerHandler = Handler(Looper.getMainLooper())
+    private val deathMarkerRunnable = object : Runnable {
+        override fun run() {
+            val token = playbackDeathToken ?: return
+            PlaybackDeathMarker.noteProgress(
+                this@NativePlayerActivity,
+                token,
+                exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
+            )
+            if (!isFinishing && !isDestroyed) {
+                deathMarkerHandler.postDelayed(this, PlaybackDeathMarker.PROGRESS_CHECKPOINT_MS)
+            }
+        }
+    }
     // The overlay clock's two formatters. DateTimeFormatter is immutable and
     // thread-safe (unlike the SimpleDateFormat pair this replaced, which needed
     // a main-thread-only cache keyed by pattern), so these are built once per
@@ -8390,6 +8413,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 it,
                 PlaybackDeathMarker.STAGE_PLAYING,
                 exoPlayer?.currentPosition ?: 0L
+            )
+            // ...and then the position, so a death twenty minutes in does not
+            // still read "at 0:00" (Sentry ANDROID-1F). The marker throttles
+            // the writes; this only has to ask.
+            deathMarkerHandler.removeCallbacks(deathMarkerRunnable)
+            deathMarkerHandler.postDelayed(
+                deathMarkerRunnable,
+                PlaybackDeathMarker.PROGRESS_CHECKPOINT_MS
             )
         }
         // Process-wide, so a later 0x80001000 in THIS or any other session can
@@ -15808,6 +15839,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
     override fun onStop() {
         super.onStop()
+        // The session is off screen: stop sampling a position nothing moves.
+        deathMarkerHandler.removeCallbacks(deathMarkerRunnable)
         // Second checkpoint: dying from here is the ordinary background reclaim
         // unless the viewer was still watching, and the stage says which.
         playbackDeathToken?.let {
@@ -15950,6 +15983,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // it. First, because everything below is teardown that can throw, and
         // the token guard keeps this from clearing a successor that has already
         // armed itself.
+        deathMarkerHandler.removeCallbacks(deathMarkerRunnable)
         playbackDeathToken?.let { PlaybackDeathMarker.clear(this, it) }
         // Safety net for a player that never reached onStop's counterpart:
         // leaving this set would hold guide writes back forever.

@@ -5561,6 +5561,12 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private fun onProgress(position: Long, duration: Long) {
         positionMs = position
         durationMs = duration
+        // Keep the death marker's own position current while the session runs:
+        // the marker throttles to one write per half-minute, so this costs a
+        // field read on the ticks it decides not to write (Sentry ANDROID-1F).
+        playbackDeathToken?.let {
+            PlaybackDeathMarker.noteProgress(this, it, position)
+        }
         // The file the viewer is watching may hold two TMDB episodes, or be half
         // of one: read that from the file's own duration against the episode's
         // TMDB runtime, once per file. Cheap and non-blocking - it does nothing

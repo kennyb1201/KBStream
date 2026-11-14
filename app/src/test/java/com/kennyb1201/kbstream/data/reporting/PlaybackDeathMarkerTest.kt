@@ -101,6 +101,22 @@ class PlaybackDeathMarkerTest {
         assertEquals("1:02:05", PlaybackDeathMarker.clock(3_725_000L))
     }
 
+    @Test
+    fun `a running session checkpoints its position on a cadence, at most`() {
+        assertTrue(
+            "the first tick a running session offers must land, or the position stays 0:00",
+            PlaybackDeathMarker.progressCheckpointDue(0L, 1_000L)
+        )
+        assertFalse(
+            "a player's own tick is not a write",
+            PlaybackDeathMarker.progressCheckpointDue(10_000L, 39_999L)
+        )
+        assertTrue(
+            "half a minute is the cadence",
+            PlaybackDeathMarker.progressCheckpointDue(10_000L, 40_000L)
+        )
+    }
+
     // ── the wiring ─────────────────────────────────────────────────────────
 
     @Test

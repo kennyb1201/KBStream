@@ -206,16 +206,22 @@ internal object TvdbApiClient {
     ): Get {
         val token = tokenFor(context, forceLogin) ?: return Get.Unauthorized
 
-        val request =
-            Request.Builder()
-                .url(url)
-                .header("User-Agent", TvdbConfig.USER_AGENT)
-                .header("Accept", "application/json")
-                .header("Authorization", "Bearer $token")
-                .get()
-                .build()
-
         return runCatching {
+            // The request is BUILT inside the guard, not before it. OkHttp throws
+            // from `url(...)` on a string without a scheme, and that call used to
+            // sit outside this runCatching - so a malformed URL became an
+            // uncaught fatal in a coroutine instead of "TVDB has nothing to say"
+            // (Sentry ANDROID-1E). Whatever produces the bad string, the leg now
+            // degrades the way every other TVDB failure does.
+            val request =
+                Request.Builder()
+                    .url(url)
+                    .header("User-Agent", TvdbConfig.USER_AGENT)
+                    .header("Accept", "application/json")
+                    .header("Authorization", "Bearer $token")
+                    .get()
+                    .build()
+
             httpClient.newCall(request).execute().use { response ->
                 when {
                     response.isSuccessful -> {
@@ -279,16 +285,19 @@ internal object TvdbApiClient {
         val pin = runCatching { AppPreferences.getTvdbPin(context) }.getOrDefault("")
         if (pin.isNotBlank()) payload.put("pin", pin)
 
-        val request =
-            Request.Builder()
-                .url("$TvdbConfig.API_BASE/login")
-                .header("User-Agent", TvdbConfig.USER_AGENT)
-                .header("Accept", "application/json")
-                .post(payload.toString().toRequestBody(JSON))
-                .build()
-
         val body = withContext(Dispatchers.IO) {
             runCatching {
+                // Built inside the guard for the same reason as [execute]: a URL
+                // OkHttp refuses is a failed login, never a process death
+                // (Sentry ANDROID-1E - this is the exact frame that crashed).
+                val request =
+                    Request.Builder()
+                        .url("$TvdbConfig.API_BASE/login")
+                        .header("User-Agent", TvdbConfig.USER_AGENT)
+                        .header("Accept", "application/json")
+                        .post(payload.toString().toRequestBody(JSON))
+                        .build()
+
                 httpClient.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
                         Log.w(TAG, "TVDB login ${response.code}")

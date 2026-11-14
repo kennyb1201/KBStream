@@ -133,6 +133,9 @@ internal object PlaybackDeathMarker {
         sourceUrl: String?
     ): String {
         val token = UUID.randomUUID().toString().take(8)
+        // A new session owns its own cadence; the previous session's checkpoint
+        // time must not delay this one's first position write.
+        lastProgressAtMs = 0L
         runCatching {
             prefs(context).edit()
                 .putString(KEY_TOKEN, token)
@@ -159,16 +162,72 @@ internal object PlaybackDeathMarker {
             val store = prefs(context)
             if (store.getString(KEY_TOKEN, null) != token) return
             val armedElapsed = store.getLong(KEY_ARMED_ELAPSED_MS, 0L)
-            store.edit()
+            // The stage that leaves the screen is written SYNCHRONOUSLY, the
+            // first-frame one is not. That asymmetry is the fix for a report the
+            // field produced (Sentry ANDROID-1F): pressing HOME and being killed
+            // in the next few hundred milliseconds is the ordinary background
+            // reclaim, but an `apply()` that had not reached disk yet left the
+            // marker reading PLAYING - so the ordinary reclaim was reported as
+            // "the process died with the player playing" and turned up on the
+            // crash feed as a fault. This write happens at most once per session,
+            // on the way out, so committing it costs nothing worth measuring.
+            val editor = store.edit()
                 .putString(KEY_STAGE, stage)
                 .putLong(KEY_POSITION_MS, positionMs.coerceAtLeast(0L))
                 .putLong(
                     KEY_OPEN_FOR_MS,
                     (SystemClock.elapsedRealtime() - armedElapsed).coerceAtLeast(0L)
                 )
+            if (stage == STAGE_BACKGROUND) editor.commit() else editor.apply()
+        }
+    }
+
+    /**
+     * Where the playhead had got to, refreshed while the session runs.
+     *
+     * The two stage checkpoints alone left every mid-session death reading
+     * `at 0:00` - the first-frame checkpoint is at zero by definition and the
+     * next one is the exit - which is exactly the number that made Sentry
+     * ANDROID-1F un-actionable (a 23-minute session reported at 0:00). This is
+     * throttled here rather than at the call sites, so a player may hand it its
+     * own progress tick as often as it likes.
+     *
+     * The stage is NEVER written here: a late progress callback must not turn a
+     * background reclaim back into an on-screen death. Written with `apply()`
+     * because a death loses at most the last half-minute, and a kill during
+     * playback cannot be scheduled around.
+     */
+    fun noteProgress(context: Context, token: String, positionMs: Long) {
+        if (token.isEmpty()) return
+        val now = SystemClock.elapsedRealtime()
+        if (!progressCheckpointDue(lastProgressAtMs, now)) return
+        runCatching {
+            val store = prefs(context)
+            if (store.getString(KEY_TOKEN, null) != token) return
+            lastProgressAtMs = now
+            val armedElapsed = store.getLong(KEY_ARMED_ELAPSED_MS, 0L)
+            store.edit()
+                .putLong(KEY_POSITION_MS, positionMs.coerceAtLeast(0L))
+                .putLong(KEY_OPEN_FOR_MS, (now - armedElapsed).coerceAtLeast(0L))
                 .apply()
         }
     }
+
+    /** When [noteProgress] last wrote, for the throttle below. */
+    @Volatile
+    private var lastProgressAtMs = 0L
+
+    /**
+     * True when a position checkpoint at [nowMs] is due.
+     *
+     * Pure so the cadence is a test rather than a claim, and zero-tolerant: a
+     * process that has written none yet takes the first tick it is handed.
+     */
+    internal fun progressCheckpointDue(lastMs: Long, nowMs: Long): Boolean =
+        lastMs <= 0L || nowMs - lastMs >= PROGRESS_CHECKPOINT_MS
+
+    /** How often a running session's position is allowed to be written. */
+    const val PROGRESS_CHECKPOINT_MS = 30_000L
 
     /**
      * The attempt ended normally: forget it.
@@ -205,6 +264,7 @@ internal object PlaybackDeathMarker {
             sourceHost = store.getString(KEY_SOURCE_HOST, null).orEmpty()
         )
         runCatching { store.edit().clear().commit() }
+        lastProgressAtMs = 0L
         return death
     }
 
