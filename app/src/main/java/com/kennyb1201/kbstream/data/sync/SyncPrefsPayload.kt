@@ -742,57 +742,6 @@ object PrefsPayloadBuilder {
     }
 
     /**
-     * The tracker sessions this app has taught the sync layer to carry.
-     *
-     * ONE list, and the backfill is written over it rather than over Kitsu
-     * (spec 2026-11-14): the next tracker whose session starts travelling joins
-     * here once, and the same "has this device ever published it" question is
-     * asked of it from the same place. Order is the rail's, not meaningful.
-     */
-    private val ENROLLED_TRACKER_AUTH =
-        listOf(KEY_KITSU_AUTH, KEY_MAL_AUTH, KEY_ANILIST_AUTH)
-
-    /** True when [prefKey] carries an enrolled tracker session. */
-    fun isTrackerAuthKey(prefKey: String): Boolean = prefKey in ENROLLED_TRACKER_AUTH
-
-    /**
-     * One enrolled session's blob, by key - the backfill's read, and the
-     * payload it enqueues. Null for any other key, so a caller cannot enqueue a
-     * blob it did not mean.
-     */
-    fun trackerAuthBlob(context: Context, prefKey: String): JsonObject? = when (prefKey) {
-        KEY_KITSU_AUTH -> buildKitsuAuth(context)
-        KEY_MAL_AUTH -> buildMalAuth(context)
-        KEY_ANILIST_AUTH -> buildAnilistAuth(context)
-        else -> null
-    }
-
-    /**
-     * Every enrolled session, with its publish gate and what this profile holds
-     * right now.
-     *
-     * Both halves come from this one list on purpose: the gate and the blob have
-     * to describe the SAME session, or the backfill could queue a fingerprint it
-     * never read the gate for. A build for a key this list does not carry is a
-     * key the backfill cannot see, which is the only failure mode worth having.
-     */
-    internal fun trackerAuthBackfillEntries(
-        context: Context
-    ): List<TrackerAuthBackfillRules.EnrolledAuth> = ENROLLED_TRACKER_AUTH.mapNotNull { prefKey ->
-        val payload = trackerAuthBlob(context, prefKey) ?: return@mapNotNull null
-        TrackerAuthBackfillRules.EnrolledAuth(
-            prefKey = prefKey,
-            hasSomethingToPublish = when (prefKey) {
-                KEY_KITSU_AUTH -> hasKitsuAuthToPublish(context)
-                KEY_MAL_AUTH -> hasMalAuthToPublish(context)
-                KEY_ANILIST_AUTH -> hasAnilistAuthToPublish(context)
-                else -> false
-            },
-            fingerprint = TrackerAuthBackfillRules.fingerprint(payload)
-        )
-    }
-
-    /**
      * The profile's Kitsu session, as one blob.
      *
      * Everything the session needs travels - access token, refresh token,

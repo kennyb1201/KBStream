@@ -2770,7 +2770,7 @@ object SupabaseSync {
      */
     private fun recordPublishedTrackerAuth(row: OutboxItem) {
         if (row.table != TABLE_PREFS) return
-        if (!PrefsPayloadBuilder.isTrackerAuthKey(unscopedKey(row.key))) return
+        if (!TrackerAuthBackfill.isEnrolled(unscopedKey(row.key))) return
         val appContext = appContextRef?.get() ?: return
         syncPrefs(appContext).edit()
             .putString(
@@ -2800,13 +2800,13 @@ object SupabaseSync {
     private suspend fun backfillUnpublishedTrackerAuth(context: Context) {
         if (!isSignedIn() || client == null) return
         val pid = currentProfileId()
-        val enrolled = PrefsPayloadBuilder.trackerAuthBackfillEntries(context)
+        val enrolled = TrackerAuthBackfill.entries(context)
         if (!PushScopeRules.scopeStillActive(pid, currentProfileId())) return
         val lastPublished = enrolled.associate { entry ->
             entry.prefKey to lastPublishedTrackerAuth(context, scopedKey(entry.prefKey, pid))
         }
         TrackerAuthBackfillRules.due(enrolled, lastPublished).forEach { prefKey ->
-            val payload = PrefsPayloadBuilder.trackerAuthBlob(context, prefKey) ?: return@forEach
+            val payload = TrackerAuthBackfill.blob(context, prefKey) ?: return@forEach
             enqueuePrefs(context, prefKey, payload, pid)
         }
     }

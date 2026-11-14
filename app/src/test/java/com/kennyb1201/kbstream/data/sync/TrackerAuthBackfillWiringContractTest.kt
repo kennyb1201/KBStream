@@ -23,7 +23,7 @@ import org.junit.Test
 class TrackerAuthBackfillWiringContractTest {
 
     private val sync by lazy { readSource(SYNC) }
-    private val payload by lazy { readSource(PAYLOAD) }
+    private val enrolledSource by lazy { readSource(ENROLLED) }
 
     // ── F2: the ordering ──────────────────────────────────────────────────
 
@@ -62,6 +62,10 @@ class TrackerAuthBackfillWiringContractTest {
             "the existing queue, so the push rides the existing flush",
             body.contains("enqueuePrefs(context, prefKey, payload, pid)")
         )
+        assertTrue(
+            "and the payload it queues is the builder's own, not a bespoke blob",
+            body.contains("TrackerAuthBackfill.blob(context, prefKey)")
+        )
         listOf("upsert(", "pushPrefsBlobs(", "pushAllNow(", "pullAllNow(", "postgrest")
             .forEach { forbidden ->
                 assertFalse(
@@ -78,19 +82,15 @@ class TrackerAuthBackfillWiringContractTest {
 
     @Test
     fun `the set it reads is the enrolled trackers, with their own publish gates`() {
-        val enrolled = payload.substringAfter("private val ENROLLED_TRACKER_AUTH =")
-            .substringBefore("fun isTrackerAuthKey")
+        val keys = enrolledSource.substringAfter("private val ENROLLED_KEYS =")
+            .substringBefore("fun isEnrolled")
         listOf("KEY_KITSU_AUTH", "KEY_MAL_AUTH", "KEY_ANILIST_AUTH").forEach { key ->
             assertTrue(
                 "the backfill is written over the enrolled set, so a newly enrolled " +
                     "tracker ($key) is carried without changing the backfill",
-                enrolled.contains(key)
+                keys.contains(key)
             )
         }
-        val entries = functionBody(
-            payload,
-            "fun trackerAuthBackfillEntries("
-        )
         listOf(
             "hasKitsuAuthToPublish(context)",
             "hasMalAuthToPublish(context)",
@@ -99,12 +99,21 @@ class TrackerAuthBackfillWiringContractTest {
             assertTrue(
                 "each session's gate travels with its blob ($gate): a profile that never " +
                     "connected publishes nothing, so no blank can be seeded",
-                entries.contains(gate)
+                enrolledSource.contains(gate)
             )
         }
+        val entries = enrolledSource.substringAfter("fun entries(context: Context)")
         assertTrue(
             "and the fingerprint is taken from the same blob the gate was asked about",
-            entries.contains("TrackerAuthBackfillRules.fingerprint(payload)")
+            entries.contains("TrackerAuthBackfillRules.fingerprint(payload)") &&
+                entries.contains("hasSomethingToPublish = hasSomethingToPublish(context, prefKey)")
+        )
+        assertTrue(
+            "the blobs are the builder's own, so a queued session is byte-for-byte the " +
+                "one a connect would have published",
+            enrolledSource.contains("PrefsPayloadBuilder.buildKitsuAuth(context)") &&
+                enrolledSource.contains("PrefsPayloadBuilder.buildMalAuth(context)") &&
+                enrolledSource.contains("PrefsPayloadBuilder.buildAnilistAuth(context)")
         )
     }
 
@@ -150,7 +159,7 @@ class TrackerAuthBackfillWiringContractTest {
         )
         assertTrue(
             "keyed by the STORED (profile-scoped) key the flush uploaded",
-            recorder.contains("PrefsPayloadBuilder.isTrackerAuthKey(unscopedKey(row.key))")
+            recorder.contains("TrackerAuthBackfill.isEnrolled(unscopedKey(row.key))")
         )
     }
 
@@ -231,6 +240,6 @@ class TrackerAuthBackfillWiringContractTest {
 
     private companion object {
         const val SYNC = "com/kennyb1201/kbstream/data/sync/SupabaseSync.kt"
-        const val PAYLOAD = "com/kennyb1201/kbstream/data/sync/SyncPrefsPayload.kt"
+        const val ENROLLED = "com/kennyb1201/kbstream/data/sync/TrackerAuthBackfill.kt"
     }
 }
