@@ -5435,6 +5435,11 @@ private fun SyncHealthSection(modifier: Modifier = Modifier) {
         )
         SyncStatRow("LAST PULL", syncRelativeTime(lastPull))
         SyncStatRow("LAST PUSH", syncRelativeTime(lastPush))
+        // The automatic push's two halves, under the number that says it never
+        // happened (spec 2026-11-14, F3). Both are durable: after a force-stop
+        // and reopen they still answer, which is when a viewer looks.
+        SyncStatRow("BACKFILL", sync.backfillDiagnostics(context))
+        SyncStatRow("FLUSH LOOP", sync.flushLoopDiagnostics(context))
         SyncStatRow(
             "PENDING UPLOADS",
             if (pendingUploads == 0) "none — everything uploaded" else "$pendingUploads row(s)"

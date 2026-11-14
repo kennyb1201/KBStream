@@ -1561,6 +1561,12 @@ object SupabaseSync {
 
     private fun scheduleFlush() {
         if (flushJob?.isActive == true) return
+        // The arm that actually starts a flush, counted durably (spec 2026-11-14,
+        // F2): the paste could not say whether an enqueue ever reached this
+        // point. Recorded AFTER the guard on purpose - a swallowed arm is not an
+        // arm, and this sits on the enqueue path of every synced write, so it
+        // must not add a prefs write per write. The debounce below paces it.
+        appContextRef?.get()?.let { recordFlushScheduled(it) }
         flushJob = scope.launch {
             while (true) {
                 delay(FLUSH_DEBOUNCE_MS)
@@ -1594,11 +1600,27 @@ object SupabaseSync {
     private fun startPeriodicFlush() {
         if (periodicFlushJob?.isActive == true) return
         periodicFlushJob = scope.launch {
-            while (isSignedIn()) {
-                delay(OUTBOX_RETRY_MS)
-                if (!outbox.isEmpty) {
-                    runCatchingCancellable { flushOutbox() }
+            // The loop's liveness is the second half of the automatic push, and
+            // until now nothing recorded it: a loop that never started and a
+            // loop that quietly died produced the same paste (spec 2026-11-14,
+            // F2). Start, heartbeat and exit all land in the sync layer's own
+            // prefs, so the next process can answer for this one.
+            val ctx = appContextRef?.get()
+            ctx?.let { recordFlushLoopStarted(it) }
+            try {
+                while (isSignedIn()) {
+                    delay(OUTBOX_RETRY_MS)
+                    ctx?.let { recordFlushLoopAlive(it) }
+                    if (!outbox.isEmpty) {
+                        runCatchingCancellable { flushOutbox() }
+                    }
                 }
+                ctx?.let { recordFlushLoopExited(it, SyncPushDiagnostics.LOOP_SIGNED_OUT) }
+            } catch (cancelled: CancellationException) {
+                // The scope died under the loop (sign-out, teardown). A prefs
+                // write does not suspend, so this records even here.
+                ctx?.let { recordFlushLoopExited(it, SyncPushDiagnostics.LOOP_CANCELLED) }
+                throw cancelled
             }
         }
     }
@@ -1709,6 +1731,27 @@ object SupabaseSync {
         if (anyChunkOk) {
             _lastSyncAtMs.value = flushedAt
             _lastPushAtMs.value = flushedAt
+        }
+
+        // This flush's own outcome, for the paste: the loop waking every minute
+        // and uploading nothing is the difference between "the loop is dead"
+        // and "the rows cannot upload", and only the numbers can say which
+        // (spec 2026-11-14, F2). Recorded only when there were rows to attempt -
+        // an empty outbox is not an outcome. A run that uploaded nothing is
+        // recorded as an event as well, because that is the interesting one.
+        if (batch.isNotEmpty()) {
+            appContextRef?.get()?.let { ctx ->
+                runCatching {
+                    syncPrefs(ctx).edit()
+                        .putLong(SyncPushDiagnostics.PREFS_FLUSH_AT, flushedAt)
+                        .putInt(SyncPushDiagnostics.PREFS_FLUSH_ATTEMPTED, batch.size)
+                        .putInt(SyncPushDiagnostics.PREFS_FLUSH_UPLOADED, removed)
+                        .apply()
+                }
+            }
+            if (removed == 0) {
+                CrashReporter.recordEvent("sync", SyncPushDiagnostics.flushOutcomeLine(batch.size, 0))
+            }
         }
 
         // Rows still pending means we were offline (or a chunk failed): hand
@@ -1834,7 +1877,26 @@ object SupabaseSync {
         // the sync-health panel report a sync that never happened - and "last
         // sync" is the number a viewer reads to decide whether to trust what is
         // on screen. A PARTIAL run still stamps: three tables really did land.
-        if (ran.none { it }) return
+        if (ran.none { it }) {
+            // The backfill sits AFTER this gate, so a pull that ran nothing
+            // never asked the question. That is a third answer, distinct from
+            // "asked, nothing due" and "the loop is not running", and without
+            // it the paste cannot tell a failed pull from a quiet backfill
+            // (spec 2026-11-14, F1). Signed out, this would be noise on every
+            // start, so it is recorded only when a real sync was attempted.
+            if (isSignedIn()) {
+                recordBackfillVerdict(
+                    context,
+                    SyncPushDiagnostics.BackfillVerdict(
+                        signedIn = true,
+                        pullRan = false,
+                        scopeActive = true,
+                        loopRunning = flushLoopRunning()
+                    )
+                )
+            }
+            return
+        }
         val pulledAt = System.currentTimeMillis()
         _lastSyncAtMs.value = pulledAt
         _lastPullAtMs.value = pulledAt
@@ -1844,6 +1906,10 @@ object SupabaseSync {
         // 2026-11-14, F2). It enqueues only - the push is the ordinary flush -
         // and the markers make a later start queue nothing.
         runCatchingCancellable { backfillUnpublishedTrackerAuth(context) }
+            // The wrapper swallowed the failure silently, which is one of the
+            // three breaks this spec has to rule on: record the class (never
+            // the message - it can carry a URL or a response body).
+            .onFailure { error -> recordBackfillFailure(context, error) }
     }
 
     private suspend fun pushAllNow(context: Context) {
@@ -2798,17 +2864,210 @@ object SupabaseSync {
      * tombstone and is due again because its blob changed.
      */
     private suspend fun backfillUnpublishedTrackerAuth(context: Context) {
-        if (!isSignedIn() || client == null) return
+        // Every exit records its own verdict (spec 2026-11-14, F1). This is the
+        // half whose silence a paste could not tell from "nothing to do": three
+        // builds of `pending=0 lastPush=never` and no way to say why.
+        if (!isSignedIn() || client == null) {
+            recordBackfillVerdict(
+                context,
+                SyncPushDiagnostics.BackfillVerdict(
+                    signedIn = isSignedIn(),
+                    pullRan = true,
+                    scopeActive = true,
+                    loopRunning = flushLoopRunning()
+                )
+            )
+            return
+        }
         val pid = currentProfileId()
         val enrolled = TrackerAuthBackfill.entries(context)
-        if (!PushScopeRules.scopeStillActive(pid, currentProfileId())) return
+        if (!PushScopeRules.scopeStillActive(pid, currentProfileId())) {
+            recordBackfillVerdict(
+                context,
+                SyncPushDiagnostics.BackfillVerdict(
+                    signedIn = true,
+                    pullRan = true,
+                    scopeActive = false,
+                    loopRunning = flushLoopRunning()
+                )
+            )
+            return
+        }
         val lastPublished = enrolled.associate { entry ->
             entry.prefKey to lastPublishedTrackerAuth(context, scopedKey(entry.prefKey, pid))
         }
-        TrackerAuthBackfillRules.due(enrolled, lastPublished).forEach { prefKey ->
+        val due = TrackerAuthBackfillRules.due(enrolled, lastPublished)
+        val queued = mutableSetOf<String>()
+        due.forEach { prefKey ->
             val payload = TrackerAuthBackfill.blob(context, prefKey) ?: return@forEach
             enqueuePrefs(context, prefKey, payload, pid)
+            queued += prefKey
         }
+        // One verdict per ENROLLED key, not just the entries that exist: a tracker
+        // this device holds no copy of at all is the answer to half the field
+        // reports, and an absent key would otherwise read the same as one the
+        // gate filtered out. `localSession` is "this device holds it", so a
+        // session PULLED from the TV shows as a local copy with the gate shut -
+        // a correct "nothing due", not a broken backfill (spec §4).
+        recordBackfillVerdict(
+            context,
+            SyncPushDiagnostics.BackfillVerdict(
+                signedIn = true,
+                pullRan = true,
+                scopeActive = true,
+                loopRunning = flushLoopRunning(),
+                keys = TrackerAuthBackfill.enrolledKeys().map { prefKey ->
+                    val entry = enrolled.firstOrNull { it.prefKey == prefKey }
+                    val marker = lastPublished[prefKey]
+                    SyncPushDiagnostics.KeyVerdict(
+                        key = prefKey.removeSuffix("_auth"),
+                        localSession = entry != null,
+                        gateOpen = entry?.hasSomethingToPublish == true,
+                        marker = when {
+                            marker == null -> SyncPushDiagnostics.Marker.ABSENT
+                            entry != null && entry.fingerprint == marker -> SyncPushDiagnostics.Marker.MATCH
+                            else -> SyncPushDiagnostics.Marker.MISMATCH
+                        },
+                        due = prefKey in due,
+                        queued = prefKey in queued
+                    )
+                }
+            )
+        )
+    }
+
+    // ── The automatic push's own diagnostics (spec 2026-11-14, F1/F2/F3) ──
+
+    /** True while the one-minute flush loop is running in THIS process. */
+    private fun flushLoopRunning(): Boolean = periodicFlushJob?.isActive == true
+
+    /**
+     * Records one backfill verdict: the detailed line to the paste's recent
+     * events, and the panel's summary - with its timestamp - to the sync layer's
+     * own prefs, so both survive a force-stop. Diagnostic only: nothing here
+     * decides whether anything is queued; the caller has already done that.
+     */
+    private fun recordBackfillVerdict(context: Context, verdict: SyncPushDiagnostics.BackfillVerdict) {
+        CrashReporter.recordEvent("sync", SyncPushDiagnostics.backfillLine(verdict))
+        // The spec's single most useful line: a backfill that queues rows into an
+        // outbox nothing is draining looks exactly like a backfill that found
+        // nothing due, unless this is said.
+        if (!verdict.loopRunning) {
+            CrashReporter.recordEvent("sync", SyncPushDiagnostics.pullEndLoopLine(false))
+        }
+        runCatching {
+            syncPrefs(context).edit()
+                .putString(SyncPushDiagnostics.PREFS_BACKFILL, SyncPushDiagnostics.backfillSummary(verdict))
+                .putLong(SyncPushDiagnostics.PREFS_BACKFILL_AT, System.currentTimeMillis())
+                .apply()
+        }
+    }
+
+    /** A backfill that threw: the class only, never the message. */
+    private fun recordBackfillFailure(context: Context, error: Throwable) {
+        recordBackfillVerdict(
+            context,
+            SyncPushDiagnostics.BackfillVerdict(
+                signedIn = true,
+                pullRan = true,
+                scopeActive = true,
+                loopRunning = flushLoopRunning(),
+                failureClass = error::class.java.simpleName
+            )
+        )
+    }
+
+    private fun recordFlushLoopStarted(context: Context) {
+        runCatching {
+            val prefs = syncPrefs(context)
+            // A stored "alive" that this process has not started yet means the
+            // last loop ended with its process - the one exit no code observes,
+            // and the difference between "never runs" and "ran and stopped".
+            if (prefs.getString(SyncPushDiagnostics.PREFS_LOOP_STATE, null) == SyncPushDiagnostics.LOOP_ALIVE) {
+                prefs.edit()
+                    .putString(SyncPushDiagnostics.PREFS_LOOP_EXIT, SyncPushDiagnostics.LOOP_PROCESS_END)
+                    .putLong(SyncPushDiagnostics.PREFS_LOOP_EXIT_AT, System.currentTimeMillis())
+                    .apply()
+            }
+            prefs.edit()
+                .putString(SyncPushDiagnostics.PREFS_LOOP_STATE, SyncPushDiagnostics.LOOP_ALIVE)
+                .putLong(SyncPushDiagnostics.PREFS_LOOP_ALIVE_AT, System.currentTimeMillis())
+                .apply()
+            CrashReporter.recordEvent("sync", "flush loop: started")
+        }
+    }
+
+    /** The loop's heartbeat, once per wake. Durable: the next process reads it. */
+    private fun recordFlushLoopAlive(context: Context) {
+        runCatching {
+            syncPrefs(context).edit()
+                .putString(SyncPushDiagnostics.PREFS_LOOP_STATE, SyncPushDiagnostics.LOOP_ALIVE)
+                .putLong(SyncPushDiagnostics.PREFS_LOOP_ALIVE_AT, System.currentTimeMillis())
+                .apply()
+        }
+    }
+
+    private fun recordFlushLoopExited(context: Context, state: String) {
+        runCatching {
+            syncPrefs(context).edit()
+                .putString(SyncPushDiagnostics.PREFS_LOOP_STATE, state)
+                .putString(SyncPushDiagnostics.PREFS_LOOP_EXIT, state)
+                .putLong(SyncPushDiagnostics.PREFS_LOOP_EXIT_AT, System.currentTimeMillis())
+                .apply()
+            CrashReporter.recordEvent(
+                "sync",
+                "flush loop: exited — ${SyncPushDiagnostics.loopExitLabel(state)}"
+            )
+        }
+    }
+
+    /**
+     * The enqueue-time flush arm, counted rather than logged: it fires on every
+     * write burst, so a recent-events line per arm would bury the verdicts it is
+     * meant to support. The count and stamp are durable and show in the panel.
+     */
+    private fun recordFlushScheduled(context: Context) {
+        runCatching {
+            val prefs = syncPrefs(context)
+            prefs.edit()
+                .putLong(SyncPushDiagnostics.PREFS_SCHEDULE_AT, System.currentTimeMillis())
+                .putInt(
+                    SyncPushDiagnostics.PREFS_SCHEDULE_COUNT,
+                    prefs.getInt(SyncPushDiagnostics.PREFS_SCHEDULE_COUNT, 0) + 1
+                )
+                .apply()
+        }
+    }
+
+    /**
+     * The sync-health panel's backfill line, durable across a force-stop: the
+     * last verdict plus how long ago it was produced.
+     */
+    fun backfillDiagnostics(context: Context): String {
+        val prefs = syncPrefs(context)
+        val summary = prefs.getString(SyncPushDiagnostics.PREFS_BACKFILL, null) ?: return "not run yet"
+        val at = prefs.getLong(SyncPushDiagnostics.PREFS_BACKFILL_AT, 0L)
+        return "$summary · ${SyncPushDiagnostics.ago(at, System.currentTimeMillis())}"
+    }
+
+    /**
+     * The sync-health panel's flush-loop line. The live Job is authoritative
+     * while this process runs it; otherwise the durable state says whether it
+     * was signed out, cancelled, ended with its process, or never started.
+     */
+    fun flushLoopDiagnostics(context: Context): String {
+        val prefs = syncPrefs(context)
+        return SyncPushDiagnostics.loopLine(
+            stateToken = SyncPushDiagnostics.loopStateToken(
+                alive = flushLoopRunning(),
+                storedState = prefs.getString(SyncPushDiagnostics.PREFS_LOOP_STATE, null)
+            ),
+            lastAliveAtMs = prefs.getLong(SyncPushDiagnostics.PREFS_LOOP_ALIVE_AT, 0L),
+            lastFlushAtMs = prefs.getLong(SyncPushDiagnostics.PREFS_FLUSH_AT, 0L),
+            lastUploaded = prefs.getInt(SyncPushDiagnostics.PREFS_FLUSH_UPLOADED, 0),
+            lastAttempted = prefs.getInt(SyncPushDiagnostics.PREFS_FLUSH_ATTEMPTED, 0),
+            nowMs = System.currentTimeMillis()
+        )
     }
 
     /** Manual "Sync now" from Settings. */

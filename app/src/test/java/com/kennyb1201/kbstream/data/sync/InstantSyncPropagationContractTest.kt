@@ -389,16 +389,19 @@ class InstantSyncPropagationContractTest {
             )
         }
         val body = functionBody(sync, "private suspend fun pullAllNow(context: Context) {")
+        // The guard gained a body with the sync-push verdicts (spec 2026-11-14,
+        // F1): it now records that the backfill was skipped because no pull ran,
+        // then returns from inside the block.
+        val guard = "if (ran.none { it }) {"
         assertTrue(
             "all four answering false is not a slow sync, it is no sync - the " +
                 "client gone, the tables unreachable, every read thrown - and " +
                 "\"last sync\" is the number the sync-health panel reports",
-            body.contains("val ran =") && body.contains("if (ran.none { it }) return")
+            body.contains("val ran =") && body.contains(guard)
         )
         assertTrue(
             "while a PARTIAL run still stamps: three tables really did land",
-            body.indexOf("if (ran.none { it }) return") <
-                body.indexOf("_lastPullAtMs.value = pulledAt")
+            body.indexOf(guard) < body.indexOf("_lastPullAtMs.value = pulledAt")
         )
     }
 

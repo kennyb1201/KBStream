@@ -4141,6 +4141,11 @@ private fun SyncPaneMobile() {
         )
         SyncStatRowMobile("LAST PULL", syncRelativeTime(lastPull))
         SyncStatRowMobile("LAST PUSH", syncRelativeTime(lastPush))
+        // The automatic push's two halves, under the number that says it never
+        // happened (spec 2026-11-14, F3). Both are durable: after a force-stop
+        // and reopen they still answer, which is when a viewer looks.
+        SyncStatRowMobile("BACKFILL", SupabaseSync.backfillDiagnostics(context))
+        SyncStatRowMobile("FLUSH LOOP", SupabaseSync.flushLoopDiagnostics(context))
         SyncStatRowMobile(
             "PENDING UPLOADS",
             if (pendingUploads == 0) "none — everything uploaded" else "$pendingUploads row(s)"

@@ -127,7 +127,7 @@ object Diagnostics {
         report.appendLine(accountLine())
         report.appendLine(profileLine())
         report.appendLine(cleanupLine(app))
-        report.appendLine(syncLine())
+        report.appendLine(syncLine(app))
         // The MDBList key's day (counts only, never key material), directly
         // after sync: that is where a capture's reader looks for it, and the
         // tracker section once grew in front of it and pushed it out.
@@ -612,13 +612,21 @@ object Diagnostics {
     private fun cleanupLine(context: Context): String =
         "cleanup: ${SupabaseSync.poisonSweepStatus(context)}"
 
-    private fun syncLine(): String {
+    private fun syncLine(context: Context): String {
         val outbox = SupabaseSync.pendingOutboxSummary(MAX_OUTBOX_ROWS)
         return buildString {
             append("sync: lastPull=${absoluteOrNever(SupabaseSync.lastPullAtMs.value)} ")
             append("lastPush=${absoluteOrNever(SupabaseSync.lastPushAtMs.value)} ")
             append("pending=${SupabaseSync.pendingOutboxCount.value} ")
             append("realtime=${SupabaseSync.realtimeStatus.value}/${SupabaseSync.realtimeChannelCount.value}ch")
+            // The automatic push's two halves, on their own lines under the same
+            // section (spec 2026-11-14, F3). `lastPush=never pending=0` could not
+            // say which half was dead; these two can. Both read from the sync
+            // layer's durable prefs, so a force-stop + reopen still answers.
+            appendLine()
+            append("sync backfill: ").append(SupabaseSync.backfillDiagnostics(context))
+            appendLine()
+            append("sync flush loop: ").append(SupabaseSync.flushLoopDiagnostics(context))
             if (outbox.isNotEmpty()) {
                 appendLine()
                 append("pending rows: ")

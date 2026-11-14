@@ -39,8 +39,11 @@ class TrackerAuthBackfillWiringContractTest {
         )
         assertTrue(
             "and after the all-failed guard: a pull in which every table threw is not " +
-                "a pull to hand a device's sessions to",
-            pull.indexOf("if (ran.none { it }) return") in 0 until ask
+                "a pull to hand a device's sessions to. The guard gained a body with the " +
+                "sync-push verdicts (spec 2026-11-14, F1): it now RECORDS that the " +
+                "backfill was skipped because no pull ran, then returns.",
+            pull.indexOf("if (ran.none { it }) {") in 0 until ask &&
+                pull.substringBefore("backfillUnpublishedTrackerAuth").contains("pullRan = false")
         )
         assertEquals(
             "one trigger, on the one path every sign-in / start / Sync now pull " +
@@ -75,8 +78,12 @@ class TrackerAuthBackfillWiringContractTest {
                 )
             }
         assertTrue(
-            "and it refuses a signed-out or client-less start before touching anything",
-            body.contains("if (!isSignedIn() || client == null) return")
+            "and it refuses a signed-out or client-less start before touching anything. " +
+                "The refusal gained a recorded verdict (spec 2026-11-14, F1) but still " +
+                "comes first and still enqueues nothing.",
+            body.contains("if (!isSignedIn() || client == null) {") &&
+                body.indexOf("if (!isSignedIn() || client == null) {") in
+                0 until body.indexOf("enqueuePrefs(context, prefKey, payload, pid)")
         )
     }
 

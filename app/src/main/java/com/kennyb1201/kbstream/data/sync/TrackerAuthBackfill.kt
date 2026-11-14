@@ -30,6 +30,16 @@ internal object TrackerAuthBackfill {
         PrefsPayloadBuilder.KEY_ANILIST_AUTH
     )
 
+    /**
+     * The enrolled keys, in the order the paste lists them.
+     *
+     * Read by the sync diagnostics, which must report a key this device holds NO
+     * copy of as well as one it does: "the phone never had a Kitsu session" and
+     * "the phone has one that is not due" are different answers to the same
+     * field report, and only a list wider than [entries] can say the first.
+     */
+    fun enrolledKeys(): List<String> = ENROLLED_KEYS
+
     /** True when [prefKey] carries an enrolled tracker session. */
     fun isEnrolled(prefKey: String): Boolean = prefKey in ENROLLED_KEYS
 

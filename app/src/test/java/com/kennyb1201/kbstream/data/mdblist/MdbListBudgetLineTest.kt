@@ -79,7 +79,9 @@ class MdbListBudgetLineTest {
     @Test
     fun `diagnostics prints it right after the sync line`() {
         val diagnostics = source("com/kennyb1201/kbstream/data/reporting/Diagnostics.kt")
-        val sync = diagnostics.indexOf("report.appendLine(syncLine())")
+        // syncLine takes the context since the sync-push verdicts (spec
+        // 2026-11-14, F3) read their durable state from prefs.
+        val sync = diagnostics.indexOf("report.appendLine(syncLine(app))")
         val budget = diagnostics.indexOf("report.appendLine(MdbListClient.localBudgetLine(app))")
         assertTrue("the sync line is missing", sync > 0)
         assertTrue("the budget line is missing", budget > 0)
