@@ -42,6 +42,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -75,7 +76,9 @@ import android.widget.Toast
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.download.DownloadIdentity
+import com.kennyb1201.kbstream.data.art.SeasonPosterMemory
 import com.kennyb1201.kbstream.data.images.ImageOverrides
+import com.kennyb1201.kbstream.data.reporting.SeasonPosterTrace
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
@@ -705,24 +708,77 @@ fun DetailScreenMobile(
         // poster stays up while the next one loads.
         val seasonPosterContext = LocalContext.current
         var mobileSeasonPosterUrl by remember { mutableStateOf<String?>(null) }
+        // One retry for the header image, and the trace that names which half
+        // failed (spec 2026-11-14, F1/F3): a healthy URL whose image did not
+        // redraw is a different bug from a URL that was cleared.
+        var mobileSeasonPosterRetry by remember { mutableIntStateOf(0) }
+        var mobileSeasonPosterRetried by remember { mutableStateOf(false) }
+        LaunchedEffect(mobileSeasonPosterUrl) { mobileSeasonPosterRetried = false }
+        // Which (type, show, season) the last run asked for: it names the trigger
+        // in the trace and tells a transient null from another title's page.
+        var mobileSeasonPosterKeys by remember { mutableStateOf<Triple<String, Int?, Int?>?>(null) }
         LaunchedEffect(normalizedType, tmdbDetail?.id, currentSeason) {
             val showId = tmdbDetail?.id
-            if (normalizedType == "movie" || showId == null) {
-                mobileSeasonPosterUrl = null
+            val seasonNumber = currentSeason
+            val previous = mobileSeasonPosterKeys
+            val trigger = when {
+                previous == null -> "open"
+                previous.first != normalizedType -> "type"
+                previous.second != showId -> "show"
+                previous.third != seasonNumber -> "season"
+                else -> "rerun"
+            }
+            mobileSeasonPosterKeys = Triple(normalizedType, showId, seasonNumber)
+            if (normalizedType == "movie" || showId == null || seasonNumber == null) {
+                // A transient null (a seasons re-emission while he scrolls)
+                // keeps the poster already on screen; a movie page clears it,
+                // because that poster belongs to another title.
+                val clear = normalizedType == "movie"
+                if (clear) mobileSeasonPosterUrl = null
+                SeasonPosterTrace.record(
+                    SeasonPosterTrace.runLine(
+                        trigger = trigger,
+                        season = seasonNumber,
+                        answer = null,
+                        decision = if (clear) {
+                            SeasonPosterMemory.Decision.CLEAR
+                        } else {
+                            SeasonPosterMemory.Decision.KEEP
+                        }
+                    )
+                )
                 return@LaunchedEffect
             }
             val fanart = com.kennyb1201.kbstream.data.fanart.FanartArtRepository
                 .getInstance(seasonPosterContext)
-            val tvdbId = runCatching {
-                com.kennyb1201.kbstream.data.tmdb.TmdbRepository
-                    .getInstance(seasonPosterContext)
-                    .resolveTvdbId(showId, "series")
-            }.getOrNull()
-            mobileSeasonPosterUrl = fanart.seasonPoster(
+            val tmdbRepo = com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+                .getInstance(seasonPosterContext)
+            val tvdbId = runCatching { tmdbRepo.resolveTvdbId(showId, "series") }.getOrNull()
+            // A null id is a failed resolve unless TMDB proved there is no TVDB
+            // mapping, and only that proof may count as an answered none.
+            val tvdbProvenAbsent = runCatching {
+                tmdbRepo.hasProvenNoTvdbMapping(showId, "series")
+            }.getOrDefault(false)
+            val answer = fanart.seasonPosterAnswer(
                 tvdbId = tvdbId,
                 tmdbTvId = showId,
-                season = currentSeason
+                season = seasonNumber
             )
+            // Replace on an answer, keep through a failure, clear only on an
+            // answered none - on every run, not only a season change.
+            val decision = SeasonPosterMemory.decide(
+                current = mobileSeasonPosterUrl,
+                answer = answer,
+                forSeries = true,
+                season = seasonNumber,
+                tvdbProvenAbsent = tvdbProvenAbsent
+            )
+            SeasonPosterTrace.record(SeasonPosterTrace.runLine(trigger, seasonNumber, answer, decision))
+            when (decision) {
+                SeasonPosterMemory.Decision.REPLACE -> mobileSeasonPosterUrl = answer.url
+                SeasonPosterMemory.Decision.CLEAR -> mobileSeasonPosterUrl = null
+                SeasonPosterMemory.Decision.KEEP -> Unit
+            }
         }
 
         // The episodes of the season on screen this profile has watched: Simkl,
@@ -2127,16 +2183,38 @@ fun DetailScreenMobile(
                                 // that already follows the chips. No poster of
                                 // its own = nothing drawn here, never the show's.
                                 mobileSeasonPosterUrl?.let { poster ->
-                                    AsyncImage(
-                                        model = poster,
-                                        contentDescription = null,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier
-                                            .padding(end = 16.dp)
-                                            .width(48.dp)
-                                            .aspectRatio(2f / 3f)
-                                            .clip(KBShapeSmall)
-                                    )
+                                    // Re-keyed on the retry so a failed draw gets
+                                    // exactly one more request instead of a
+                                    // silent blank (F3).
+                                    key(mobileSeasonPosterRetry) {
+                                        AsyncImage(
+                                            model = poster,
+                                            contentDescription = null,
+                                            contentScale = ContentScale.Crop,
+                                            onSuccess = { state ->
+                                                SeasonPosterTrace.record(
+                                                    SeasonPosterTrace.imageLine(
+                                                        "phone",
+                                                        state.result.dataSource.name.lowercase()
+                                                    )
+                                                )
+                                            },
+                                            onError = {
+                                                SeasonPosterTrace.record(
+                                                    SeasonPosterTrace.imageLine("phone", "error")
+                                                )
+                                                if (!mobileSeasonPosterRetried) {
+                                                    mobileSeasonPosterRetried = true
+                                                    mobileSeasonPosterRetry++
+                                                }
+                                            },
+                                            modifier = Modifier
+                                                .padding(end = 16.dp)
+                                                .width(48.dp)
+                                                .aspectRatio(2f / 3f)
+                                                .clip(KBShapeSmall)
+                                        )
+                                    }
                                 }
                             }
                             // The season chips own the row now. The episode

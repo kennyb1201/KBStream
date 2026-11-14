@@ -272,6 +272,12 @@ object Diagnostics {
         // [DetailTrace]). Absent until something on Detail has been moved on,
         // so the rest of a report is unchanged.
         DetailTrace.lines().forEach { report.appendLine("detail: $it") }
+        // The season poster's own runs, right beside the Detail state it belongs
+        // to: which key re-ran the effect, what fanart and TMDB answered, whether
+        // the URL was set / kept / cleared, and what the header image's request
+        // did on its last draw (spec 2026-11-14, F1). One paste after a scroll-back
+        // then says whether the URL went null or the image failed to redraw.
+        SeasonPosterTrace.lines().forEach { report.appendLine("poster: $it") }
         // Episode identity per playback session and per handoff between them:
         // the bookkeeping behind "the binge offered an episode I had already
         // watched". Absent until something has played (see

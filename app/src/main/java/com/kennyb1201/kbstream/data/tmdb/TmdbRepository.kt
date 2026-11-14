@@ -3,6 +3,8 @@ package com.kennyb1201.kbstream.data.tmdb
 import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.data.BackgroundWork
+import com.kennyb1201.kbstream.data.art.ArtAnswer
+import com.kennyb1201.kbstream.data.art.ArtSourceAnswer
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import java.util.concurrent.ConcurrentHashMap
@@ -2155,29 +2157,51 @@ class TmdbRepository private constructor(context: Context) :
      * the season header then draws no poster, which is what it did before this
      * existed.
      */
-    suspend fun seasonPosterPath(tvId: Int?, season: Int?): String? {
-        val id = tvId?.takeIf { it > 0 } ?: return null
-        val number = season?.takeIf { it >= 0 } ?: return null
-        if (apiKey.isBlank()) return null
+    suspend fun seasonPosterPath(tvId: Int?, season: Int?): String? =
+        seasonPosterAnswer(tvId, season).url
+
+    /**
+     * The same lookup as [seasonPosterPath], with "this season has no poster"
+     * told apart from "the call did not answer" (spec 2026-11-14, F2).
+     *
+     * The Detail page's season poster may only be CLEARED on a NONE answer: a
+     * call that failed (offline, a 5xx) has to leave the poster it already had,
+     * which is exactly the erasure Kenny's scroll-back report was made of.
+     */
+    suspend fun seasonPosterAnswer(tvId: Int?, season: Int?): ArtAnswer {
+        val id = tvId?.takeIf { it > 0 } ?: return ArtAnswer(null, ArtSourceAnswer.NO_KEY)
+        val number = season?.takeIf { it >= 0 } ?: return ArtAnswer(null, ArtSourceAnswer.NO_KEY)
+        if (apiKey.isBlank()) return ArtAnswer(null, ArtSourceAnswer.NO_KEY)
 
         val key = "$id:$number"
         seasonPosterMemo[key]?.let { (at, url) ->
-            if (System.currentTimeMillis() - at < SEASON_POSTER_TTL_MS) return url
+            if (System.currentTimeMillis() - at < SEASON_POSTER_TTL_MS) {
+                return if (url.isNullOrBlank()) {
+                    ArtAnswer(null, ArtSourceAnswer.NONE)
+                } else {
+                    ArtAnswer("$POSTER_BASE$url", ArtSourceAnswer.FOUND)
+                }
+            }
             seasonPosterMemo.remove(key)
         }
 
-        val path = runCatchingCancellable {
+        val fetched = runCatchingCancellable {
             api.getSeasonDetail(id, number, apiKey).posterPath
-        }.getOrNull()
+        }
+        if (fetched.isFailure) return ArtAnswer(null, ArtSourceAnswer.UNANSWERED)
+        val path = fetched.getOrNull()
+            // TMDB answered, and the field is absent: no poster of its own.
+            ?: return ArtAnswer(null, ArtSourceAnswer.NONE)
 
         // A blank path is still an answer (this season has no poster of its
         // own) and is remembered; a failed call is not remembered at all, so the
         // next open tries again.
-        if (path != null) {
-            seasonPosterMemo[key] = System.currentTimeMillis() to path
+        seasonPosterMemo[key] = System.currentTimeMillis() to path
+        return if (path.isBlank()) {
+            ArtAnswer(null, ArtSourceAnswer.NONE)
+        } else {
+            ArtAnswer("$POSTER_BASE$path", ArtSourceAnswer.FOUND)
         }
-        return path?.takeIf { it.isNotBlank() }
-            ?.let { "$POSTER_BASE$it" }
     }
 
     private val SEASON_POSTER_TTL_MS = 12L * 60L * 60L * 1000L

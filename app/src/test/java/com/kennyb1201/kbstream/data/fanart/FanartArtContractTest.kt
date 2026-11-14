@@ -262,9 +262,13 @@ class FanartArtContractTest {
                 screen.contains("LaunchedEffect(normalizedType, tmdbDetail?.id, effectiveSeason)") ||
                     screen.contains("LaunchedEffect(normalizedType, tmdbDetail?.id, currentSeason)")
             )
+            // Since the vanishing-poster fix (spec 2026-11-14, F2) the screen asks
+            // the provenance-carrying lookup and writes through the keep/replace/
+            // clear rule, which is the same promise - held for every run, not only
+            // a season change.
             assertTrue(
                 "$path writes the new poster only when it answers (no flash)",
-                screen.contains("seasonPoster(")
+                screen.contains("seasonPosterAnswer(") && screen.contains("SeasonPosterMemory.decide(")
             )
         }
     }

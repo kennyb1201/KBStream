@@ -73,10 +73,13 @@ class DetailSeasonPosterPlacementContractTest {
             "the season's own art is still the only model",
             header.contains(".data(poster)")
         )
+        // The lookup now carries provenance and the state is written through the
+        // keep/replace/clear rule (spec 2026-11-14, F2): the art still comes from
+        // the same fanart season lookup - only the write is guarded.
         assertTrue(
             "and the loader resolves it from the same fanart season lookup",
-            detail.contains("fanart.seasonPoster(") &&
-                detail.contains("seasonPosterUrl = fanart.seasonPoster(")
+            detail.contains("fanart.seasonPosterAnswer(") &&
+                detail.contains("SeasonPosterMemory.Decision.REPLACE -> seasonPosterUrl = answer.url")
         )
         listOf(
             ".width(54.dp)",

@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream.data.fanart
 
 import android.content.Context
+import com.kennyb1201.kbstream.data.art.ArtSourceAnswer
+import com.kennyb1201.kbstream.data.art.SeasonPosterAnswer
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
@@ -194,16 +196,55 @@ internal class FanartArtRepository private constructor(context: Context) {
         tmdbTvId: Int?,
         season: Int?,
         wantFullSize: Boolean = false
-    ): String? {
-        val number = season?.takeIf { it >= 0 } ?: return null
+    ): String? = seasonPosterAnswer(tvdbId, tmdbTvId, season, wantFullSize).url
 
-        val fanart = art(FanartKind.Tv, tvdbId)
+    /**
+     * The same lookup as [seasonPoster], saying what each source ANSWERED rather
+     * than only what URL came out of it (spec 2026-11-14, F2).
+     *
+     * [art] is fail-soft by design, so its null is three answers at once: no key,
+     * a proven miss, or a call that failed. Only the middle one means "fanart has
+     * no poster for this season", and the Detail page may only clear its poster
+     * on that - a failed lookup has to leave the poster it had. Here the bundle
+     * itself separates them: a bundle that arrived without a season poster is a
+     * NONE, while no bundle at all (when this build has a key) is UNANSWERED.
+     */
+    suspend fun seasonPosterAnswer(
+        tvdbId: Int?,
+        tmdbTvId: Int?,
+        season: Int?,
+        wantFullSize: Boolean = false
+    ): SeasonPosterAnswer {
+        val number = season?.takeIf { it >= 0 }
+            ?: return SeasonPosterAnswer(null, tvdbId, ArtSourceAnswer.NO_KEY, ArtSourceAnswer.NO_KEY)
+
+        val bundle = tvdbId?.takeIf { it > 0 }?.let { art(FanartKind.Tv, it) }
+        val fanartUrl = bundle
             ?.let { fanartSeasonPoster(it.seasonPosters, number) }
             ?.url
             ?.let { if (wantFullSize) it else fanartBigPreviewUrl(it) }
-        if (!fanart.isNullOrBlank()) return fanart
+        if (!fanartUrl.isNullOrBlank()) {
+            return SeasonPosterAnswer(
+                url = fanartUrl,
+                tvdbId = tvdbId,
+                fanart = ArtSourceAnswer.FOUND,
+                // Never asked: fanart answered first.
+                tmdb = ArtSourceAnswer.UNANSWERED
+            )
+        }
 
-        return tmdb.seasonPosterPath(tmdbTvId, number)
+        val fanartAnswer = when {
+            tvdbId == null || tvdbId <= 0 -> ArtSourceAnswer.NO_KEY
+            bundle == null -> ArtSourceAnswer.UNANSWERED
+            else -> ArtSourceAnswer.NONE
+        }
+        val tmdbAnswer = tmdb.seasonPosterAnswer(tmdbTvId, number)
+        return SeasonPosterAnswer(
+            url = tmdbAnswer.url,
+            tvdbId = tvdbId,
+            fanart = fanartAnswer,
+            tmdb = tmdbAnswer.answer
+        )
     }
 
     /**
