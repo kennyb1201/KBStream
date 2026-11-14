@@ -27,8 +27,18 @@ import com.kennyb1201.kbstream.R
  * list is already showing.
  */
 class SeasonStripAdapter(
-    private val items: List<PickerItem>
+    items: List<PickerItem>
 ) : RecyclerView.Adapter<SeasonStripAdapter.ViewHolder>() {
+
+    /**
+     * The chips, replaced in place by [submit].
+     *
+     * ONE adapter per panel on purpose (spec 2026-11-14, F1(d)): the panel used
+     * to build a brand-new adapter on every rebind, which threw away the chip's
+     * focus before a ring could be drawn - a season switch or a menu refresh
+     * silently ended the viewer's position in the strip.
+     */
+    private val items = items.toMutableList()
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val chip: TextView = view.findViewById(R.id.picker_season_chip)
@@ -42,18 +52,65 @@ class SeasonStripAdapter(
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val item = items[position]
-        holder.chip.text = item.label
+        val chip = holder.chip
+        chip.text = item.label
         // Both states matter and they are not the same state: selected is where
         // the list is, focused is where the D-pad is. The style is applied again
         // from the focus listener so a chip that is only focused never loses its
         // ring when the selection moves elsewhere.
-        fun restyle(focused: Boolean) = applyChipStyle(holder.chip, item.isSelected, focused)
-        restyle(holder.chip.isFocused)
-        holder.chip.setOnFocusChangeListener { _, focused -> restyle(focused) }
+        //
+        // THE RING IS THE D-PAD'S (spec 2026-11-14, F1(e)): a touch leaves the
+        // tapped chip focused (it is focusableInTouchMode), and a ring left on it
+        // read as a selection that never happened.
+        fun restyle(focused: Boolean) =
+            applyChipStyle(chip, item.isSelected, focused && !chip.isInTouchMode)
+        restyle(chip.isFocused)
+        chip.setOnFocusChangeListener { _, focused -> restyle(focused) }
+        // The focused view is the CHIP, not the root, and a center press calls
+        // performClick() on the focused view - so the listener has to sit on the
+        // chip or OK would do nothing on a focused chip (spec 2026-11-14,
+        // F1(c)). The root keeps one too, for a touch on the chip's margin.
+        chip.setOnClickListener { item.onClick() }
         holder.itemView.setOnClickListener { item.onClick() }
     }
 
     override fun getItemCount() = items.size
+
+    /** Replaces the chips in place, keeping the adapter (and any focus) alive. */
+    fun submit(newItems: List<PickerItem>) {
+        items.clear()
+        items.addAll(newItems)
+        notifyDataSetChanged()
+    }
+
+    /**
+     * Hands the D-pad to the chip of the loaded season (spec 2026-11-14, F1(a)).
+     *
+     * Answers whether a request was made - immediately, or on the next layout
+     * when the chip was not placed yet - so the caller can consume the press
+     * that asked for it instead of letting focus search land on the strip's
+     * RecyclerView, which draws no ring at all.
+     */
+    fun focusSelected(parent: RecyclerView): Boolean {
+        val index = items.indexOfFirst { it.isSelected }
+        if (index < 0) return false
+        parent.scrollToPosition(index)
+        val placed = parent.findViewHolderForAdapterPosition(index)
+            ?.itemView
+            ?.findViewById<TextView>(R.id.picker_season_chip)
+        if (placed != null && placed.requestFocus()) return true
+        parent.post {
+            parent.findViewHolderForAdapterPosition(index)
+                ?.itemView
+                ?.findViewById<TextView>(R.id.picker_season_chip)
+                ?.requestFocus()
+        }
+        return true
+    }
+
+    /** True when a chip this adapter owns currently holds the D-pad. */
+    fun hasChipFocus(parent: RecyclerView): Boolean =
+        parent.findFocus()?.id == R.id.picker_season_chip
 
     private fun applyChipStyle(chip: TextView, selected: Boolean, focused: Boolean) {
         val context = chip.context

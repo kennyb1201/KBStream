@@ -329,6 +329,14 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private var pickerSeasons: RecyclerView? = null
 
     /**
+     * The strip's one adapter, for the panel's lifetime (spec 2026-11-14,
+     * F1(d)). Rebuilding it per bind is what destroyed chip focus: a season
+     * switch or a menu refresh replaced the adapter under the D-pad. The main
+     * player carries the same field for the same reason.
+     */
+    private var seasonStripAdapter: SeasonStripAdapter? = null
+
+    /**
      * The selected season's own poster in the episode panel (spec 2026-11-13,
      * F3), and what it is currently showing. The URL is only replaced when a
      * lookup ANSWERS, which is what keeps the previous season's poster up while
@@ -2006,6 +2014,20 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         pickerSeasons?.isFocusable = true
         pickerSeasons?.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
         pickerSeasons?.nextFocusDownId = R.id.mpv_picker_list
+        // A chip holds the D-pad, never the strip's RecyclerView (spec
+        // 2026-11-14, F1(a)): a press that lands on the strip itself - UP out of
+        // the first row is the common one - draws no ring where it lands, so it
+        // is forwarded to the loaded season's chip at once.
+        pickerSeasons?.setOnFocusChangeListener { view, hasFocus ->
+            if (hasFocus && !view.isInTouchMode && view is RecyclerView) {
+                seasonStripAdapter?.focusSelected(view)
+            }
+        }
+        // The mirror of it: DOWN out of the strip lands on the list's holder,
+        // which highlights nothing, so the first row takes the focus instead.
+        pickerList?.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus && pickerList?.isInTouchMode == false) pickerList?.post { parkPickerFocus() }
+        }
         pickerSeasons?.addOnChildAttachStateChangeListener(
             object : RecyclerView.OnChildAttachStateChangeListener {
                 override fun onChildViewAttachedToWindow(view: View) {
@@ -3282,14 +3304,27 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      * screen while that load runs, exactly as before.
      */
     private fun bindEpisodeSeasonStrip() {
-        pickerSeasons?.adapter = SeasonStripAdapter(
-            PlayerEpisodePicker.seasonStrip(
-                seasons = episodePickerSeasons,
-                selectedSeason = episodePickerSeason,
-                onSeason = { picked -> selectEpisodeSeason(picked) }
-            )
+        val items = PlayerEpisodePicker.seasonStrip(
+            seasons = episodePickerSeasons,
+            selectedSeason = episodePickerSeason,
+            onSeason = { picked -> selectEpisodeSeason(picked) }
         )
+        // ONE adapter, updated in place (spec 2026-11-14, F1(d)): see
+        // [seasonStripAdapter]. Replacing it here is what erased the D-pad's
+        // position in the strip on every rebind.
+        val strip = pickerSeasons ?: return
+        val hadChipFocus = seasonStripAdapter?.hasChipFocus(strip) == true
+        val existing = seasonStripAdapter
+        if (existing == null) {
+            seasonStripAdapter = SeasonStripAdapter(items)
+            strip.adapter = seasonStripAdapter
+        } else {
+            existing.submit(items)
+        }
         pickerSeasons?.visibility = View.VISIBLE
+        // A rebind while the D-pad is in the strip keeps it there, on the chip of
+        // the season now loaded (spec 2026-11-14, F1(d)).
+        if (hadChipFocus) pickerSeasons?.post { seasonStripAdapter?.focusSelected(strip) }
         bindEpisodeSeasonPoster()
     }
 

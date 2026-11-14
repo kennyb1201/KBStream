@@ -1,6 +1,6 @@
 package com.kennyb1201.kbstream.ui.player
 
-import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -13,6 +13,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.res.ResourcesCompat
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.theme.themeVoidWindowColor
 
 /**
  * The episode picker's long-press menu, as the player's View-side twin of
@@ -77,7 +78,16 @@ internal class PickerEpisodeMenu(
 
         val panel = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            background = ContextCompat.getDrawable(activity, R.drawable.panel_bg)
+            // Themed at runtime, like every other panel in this package (spec
+            // 2026-11-14, F2). @drawable/panel_bg is a fixed raised tone - the
+            // XML chrome is re-tinted by the player's own pass, but a drawable
+            // built by hand is not in that walk, so on AMOLED this menu stayed
+            // dark grey over a pure-black app. playerPanelRaisedColor is the
+            // resolver the player already uses for its panels.
+            background = GradientDrawable().apply {
+                cornerRadius = 16 * activity.resources.displayMetrics.density
+                setColor(playerPanelRaisedColor(activity))
+            }
             setPadding(dp(18), dp(16), dp(18), dp(14))
             isFocusable = false
         }
@@ -114,7 +124,11 @@ internal class PickerEpisodeMenu(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
-            setBackgroundColor(Color.parseColor("#99000000"))
+            // The app's modal scrim, not a fixed black: PosterContextMenu dims
+            // with KBVoid at 60%, which is pure black on AMOLED and the themed
+            // void everywhere else (spec 2026-11-14, F2(b)). Resolved from the
+            // same stored toggles the theme mirrors read.
+            setBackgroundColor((0x99 shl 24) or (themeVoidWindowColor(activity) and 0x00FFFFFF))
             isFocusable = false
             setOnClickListener { dismiss() }
         }

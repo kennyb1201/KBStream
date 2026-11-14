@@ -891,6 +891,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
     /** The episode picker's pinned season strip (see [bindEpisodeSeasonStrip]). */
     private lateinit var pickerSeasons: RecyclerView
+
+    /**
+     * The strip's one adapter, for the panel's lifetime (spec 2026-11-14,
+     * F1(d)). Rebuilding it per bind is what destroyed chip focus: a season
+     * switch or a menu refresh replaced the adapter under the D-pad.
+     */
+    private var seasonStripAdapter: SeasonStripAdapter? = null
     private lateinit var btnSubSmall: TextView
     private lateinit var btnSubNormal: TextView
     private lateinit var btnSubLarge: TextView
@@ -4929,6 +4936,20 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         pickerSeasons.isFocusableInTouchMode = true
         pickerSeasons.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
         pickerSeasons.nextFocusDownId = R.id.picker_list
+        // A chip holds the D-pad, never the strip's RecyclerView (spec
+        // 2026-11-14, F1(a)): a press that lands on the strip itself - UP out of
+        // the first row is the common one - draws no ring where it lands, so it
+        // is forwarded to the loaded season's chip at once.
+        pickerSeasons.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus && !pickerSeasons.isInTouchMode) {
+                seasonStripAdapter?.focusSelected(pickerSeasons)
+            }
+        }
+        // The mirror of it: DOWN out of the strip lands on the list's holder,
+        // which highlights nothing, so the first row takes the focus instead.
+        pickerList.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus && !pickerList.isInTouchMode) pickerList.post { parkPickerFocus() }
+        }
         pickerSeasons.addOnChildAttachStateChangeListener(
             object : androidx.recyclerview.widget.RecyclerView.OnChildAttachStateChangeListener {
                 override fun onChildViewAttachedToWindow(view: View) {
@@ -12605,14 +12626,26 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * screen while that load runs, exactly as before.
      */
     private fun bindEpisodeSeasonStrip() {
-        pickerSeasons.adapter = SeasonStripAdapter(
-            PlayerEpisodePicker.seasonStrip(
-                seasons = episodePickerSeasons,
-                selectedSeason = episodePickerSeason,
-                onSeason = { picked -> selectEpisodeSeason(picked) }
-            )
+        val items = PlayerEpisodePicker.seasonStrip(
+            seasons = episodePickerSeasons,
+            selectedSeason = episodePickerSeason,
+            onSeason = { picked -> selectEpisodeSeason(picked) }
         )
+        // ONE adapter, updated in place: see [seasonStripAdapter]. The chips are
+        // re-bound where they are, so a rebind no longer hands the D-pad back to
+        // the list behind the viewer's back.
+        val hadChipFocus = seasonStripAdapter?.hasChipFocus(pickerSeasons) == true
+        val existing = seasonStripAdapter
+        if (existing == null) {
+            seasonStripAdapter = SeasonStripAdapter(items)
+            pickerSeasons.adapter = seasonStripAdapter
+        } else {
+            existing.submit(items)
+        }
         pickerSeasons.visibility = View.VISIBLE
+        // A rebind while the D-pad is in the strip keeps it in the strip, on the
+        // chip of the season now loaded (spec 2026-11-14, F1(d)).
+        if (hadChipFocus) pickerSeasons.post { seasonStripAdapter?.focusSelected(pickerSeasons) }
         bindEpisodeSeasonPoster()
     }
 
