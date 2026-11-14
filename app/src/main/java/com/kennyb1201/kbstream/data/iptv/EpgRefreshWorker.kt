@@ -16,18 +16,77 @@ class EpgRefreshWorker(
     params: WorkerParameters
 ) : CoroutineWorker(appContext, params) {
 
+    /**
+     * What this pass was doing when WorkManager stopped it (spec 2026-11-14,
+     * F1c). A stopped job used to leave nothing behind - it died between the
+     * attempt stamp and every outcome branch - so a field paste could show 22
+     * hours without an import and every flag reading clean.
+     */
+    @Volatile
+    private var stoppedDecision: EpgRefreshDiagnostics.Decision? = null
+
+    @Volatile
+    private var stoppedSources: List<EpgRefreshDiagnostics.SourceResult> = emptyList()
+
+    @Volatile
+    private var stoppedImported: Int = 0
+
+    override fun onStopped() {
+        val decision = stoppedDecision
+        if (decision != null) {
+            recordPass(
+                EpgRefreshDiagnostics.PassVerdict(
+                    decision = decision,
+                    sources = stoppedSources,
+                    imported = stoppedImported,
+                    stopped = true
+                )
+            )
+        }
+        super.onStopped()
+    }
+
+    /** The ACTIVE profile's scoped store, as the run reads it. */
+    private fun iptvPrefs(): SharedPreferences = applicationContext.getSharedPreferences(
+        com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+            applicationContext,
+            PREFS_NAME
+        ),
+        Context.MODE_PRIVATE
+    )
+
+    /**
+     * Records one pass: the durable verdict line the paste and Playlist Setup
+     * read, the no-import streak, and the `failing` state that streak drives.
+     *
+     * Every exit calls this - a declined pass, a deferred one, a pass whose
+     * sources timed out or threw, and a pass WorkManager stopped - because the
+     * field bug was an exit that recorded nothing.
+     */
+    private fun recordPass(verdict: EpgRefreshDiagnostics.PassVerdict) {
+        val line = EpgRefreshDiagnostics.verdictLine(verdict)
+        runCatching {
+            val prefs = iptvPrefs()
+            val (streak, failing) = EpgRefreshDiagnostics.failingAfter(
+                verdict,
+                prefs.getInt(EpgRefreshDiagnostics.KEY_ABORT_STREAK, 0)
+            )
+            prefs.edit()
+                .putString(EpgRefreshDiagnostics.KEY_LAST_OUTCOME, line)
+                .putLong(EpgRefreshDiagnostics.KEY_LAST_OUTCOME_AT, System.currentTimeMillis())
+                .putInt(EpgRefreshDiagnostics.KEY_ABORT_STREAK, streak)
+                .putBoolean(KEY_EPG_REFRESH_FAILING, failing)
+                .apply()
+        }
+        com.kennyb1201.kbstream.data.reporting.CrashReporter.recordEvent("guide", "refresh: $line")
+    }
+
     override suspend fun doWork(): Result {
         // WorkManager fires outside any profile context, so resolve the
         // ACTIVE profile's scoped store at run time - otherwise the worker
         // would always read the legacy/global config even after profiles
         // exist (and could import the wrong account's EPG into a scoped DB).
-        val prefs = applicationContext.getSharedPreferences(
-            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
-                applicationContext,
-                PREFS_NAME
-            ),
-            Context.MODE_PRIVATE
-        )
+        val prefs = iptvPrefs()
 
         // EVERY configured source, not just the primary. A second guide URL
         // (the extras textarea) is a first-class source in the lineup - it has
@@ -36,6 +95,7 @@ class EpgRefreshWorker(
         // kept showing the last window that happened to be imported in-app.
         val epgUrls = guideUrls(prefs)
         if (epgUrls.isEmpty()) {
+            recordPass(EpgRefreshDiagnostics.PassVerdict(EpgRefreshDiagnostics.Decision.NO_SOURCES))
             return Result.success()
         }
 
@@ -77,26 +137,34 @@ class EpgRefreshWorker(
         val guideHasPrograms = runCatchingCancellable { repository.newestGuideProgramEndMs() }
             .getOrNull()
             ?.let { endsAt -> endsAt > 0L }
-        when (
-            WorkPolicies.epgRefreshDecision(
-                lastImport,
-                now,
-                EpgWriteGate.isPlayerActive,
-                guideHasPrograms
-            )
-        ) {
+        val decision = WorkPolicies.epgRefreshDecision(
+            lastImport,
+            now,
+            EpgWriteGate.isPlayerActive,
+            guideHasPrograms
+        )
+        when (decision) {
             WorkPolicies.EpgRefreshDecision.FRESH -> {
+                // Recorded, not merely logged: "the worker declines every six
+                // hours because the marker is young" and "the worker is dead"
+                // were the same paste (spec 2026-11-14, F1c).
+                recordPass(EpgRefreshDiagnostics.PassVerdict(EpgRefreshDiagnostics.Decision.FRESH))
                 Log.i(TAG, "EPG refresh skipped: data fresh (age=${(now - lastImport) / 60_000}min)")
                 return Result.success()
             }
 
             WorkPolicies.EpgRefreshDecision.DEFER -> {
+                // The quiet one that explains a 22-hour gap with clean flags: a
+                // process whose playback gate never clears defers forever, and
+                // nothing said so.
+                recordPass(EpgRefreshDiagnostics.PassVerdict(EpgRefreshDiagnostics.Decision.DEFER))
                 Log.i(TAG, "EPG refresh deferred: playback active")
                 return Result.retry()
             }
 
             WorkPolicies.EpgRefreshDecision.IMPORT -> Unit
         }
+        stoppedDecision = EpgRefreshDiagnostics.Decision.IMPORT
 
         // Recorded when the pass STARTS, before any source is fetched: the entry
         // check spaces its own empty-guide retries off this stamp
@@ -107,7 +175,12 @@ class EpgRefreshWorker(
         prefs.edit().putLong(KEY_EPG_ATTEMPT_AT, now).apply()
 
         var imported = 0
-        epgUrls.forEach { url ->
+        // What each source did, for the pass's own verdict (spec 2026-11-14,
+        // F1c). Collected as the loop runs, so a pass WorkManager stops still
+        // reports how far it got (onStopped reads the copy below).
+        val results = mutableListOf<EpgRefreshDiagnostics.SourceResult>()
+        epgUrls.forEachIndexed { index, url ->
+            val sourceIndex = index + 1
             // Bounded per source, so one wedged source cannot spend the pass's
             // whole window on its own (see
             // WorkPolicies.GUIDE_SOURCE_BUDGET_MS). A source that runs out of
@@ -135,7 +208,15 @@ class EpgRefreshWorker(
                         // fresh for the full 12 h window, so B's channels had no
                         // programs until the day's next pass.
                         stampImportedSource(prefs, url, epgUrls)
+                        results += EpgRefreshDiagnostics.SourceResult(
+                            sourceIndex,
+                            EpgRefreshDiagnostics.SourceOutcome.LANDED
+                        )
                     } else if (outcome != null) {
+                        results += EpgRefreshDiagnostics.SourceResult(
+                            sourceIndex,
+                            EpgRefreshDiagnostics.SourceOutcome.NOT_LANDED
+                        )
                         // Not an error - the source answered and had nothing to
                         // store (or honoured a 304 over an empty guide). Named
                         // so an empty run is not a silent zero: the importer's
@@ -145,17 +226,44 @@ class EpgRefreshWorker(
                             "GUIDE REFRESH NOT LANDED source=${Redaction.url(url)} " +
                                 "outcome=${outcome.javaClass.simpleName}"
                         )
+                    } else {
+                        // null is the per-source budget expiring: the import was
+                        // abandoned mid-parse. It used to be a log line and
+                        // nothing else, which is the candidate this spec asks
+                        // the paste to expose.
+                        results += EpgRefreshDiagnostics.SourceResult(
+                            sourceIndex,
+                            EpgRefreshDiagnostics.SourceOutcome.TIMEOUT
+                        )
                     }
                 }
                 .onFailure { error ->
                     if (error is kotlinx.coroutines.CancellationException) throw error
+                    results += EpgRefreshDiagnostics.SourceResult(
+                        sourceIndex,
+                        EpgRefreshDiagnostics.SourceOutcome.FAILED,
+                        // The class only: a message can carry the source URL.
+                        error::class.java.simpleName
+                    )
                     Log.w(
                         TAG,
                         "GUIDE REFRESH FAILED source=${Redaction.url(url)}",
                         Redaction.throwable(error)
                     )
                 }
+            // Updated as the pass advances, so a job stopped mid-import
+            // reports the sources it finished rather than nothing.
+            stoppedSources = results.toList()
+            stoppedImported = imported
         }
+
+        recordPass(
+            EpgRefreshDiagnostics.PassVerdict(
+                decision = EpgRefreshDiagnostics.Decision.IMPORT,
+                sources = results.toList(),
+                imported = imported
+            )
+        )
 
         // One dead source must not fail the whole refresh: the sources that
         // did import are stored, and retrying would re-download every one of
@@ -177,12 +285,14 @@ class EpgRefreshWorker(
             // the schedule alive; the run of empty passes is recorded instead,
             // and Playlist Setup shows it (§3.6).
             val consecutive = prefs.getInt(KEY_EPG_EMPTY_RUNS, 0) + 1
-            val failing = consecutive >= MAX_EMPTY_RUNS
+            // The `failing` state itself is now owned by [recordPass], which
+            // counts every no-import pass - timeouts, throws and stops included
+            // - rather than only the all-sources-answered-but-empty case. This
+            // counter stays as the empty-run streak Playlist Setup quotes.
             prefs.edit()
                 .putInt(KEY_EPG_EMPTY_RUNS, consecutive)
-                .putBoolean(KEY_EPG_REFRESH_FAILING, failing)
                 .apply()
-            if (failing) {
+            if (consecutive >= MAX_EMPTY_RUNS) {
                 Log.w(
                     TAG,
                     "GUIDE REFRESH FAILING after $consecutive empty runs; " +
@@ -219,10 +329,10 @@ class EpgRefreshWorker(
             .putLong(KEY_EPG_UPDATED_AT, oldest)
             .putString(KEY_EPG_DB_NAME, activeGuideName())
             .putInt(KEY_EPG_EMPTY_RUNS, 0)
-            // Any source landing is what clears the "refresh failing" state:
-            // the state is about the SET importing nothing, not about one
-            // provider being broken.
-            .putBoolean(KEY_EPG_REFRESH_FAILING, false)
+            // The "refresh failing" flag is NOT written here: [recordPass] owns
+            // it, and a pass that lands anything resets the streak there. Keeping
+            // a second writer here is how the old flag could read `no` on a pass
+            // that imported nothing.
             .apply()
     }
 

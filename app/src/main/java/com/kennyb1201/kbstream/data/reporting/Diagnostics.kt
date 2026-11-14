@@ -12,6 +12,7 @@ import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.bingecat.BingeCatTrace
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.iptv.EpgRefreshDiagnostics
 import com.kennyb1201.kbstream.data.iptv.EpgRefreshScheduler
 import com.kennyb1201.kbstream.data.iptv.GuideFiles
 import com.kennyb1201.kbstream.data.iptv.GuideRefreshPolicy
@@ -887,6 +888,11 @@ object Diagnostics {
                 appendLine()
                 append("  ${Redaction.url(row.url)}: channels=${row.channels} ")
                 append("programsInWindow=${row.programsInWindow} ")
+                // The grid's row yield (spec 2026-11-14, F2): channels holding at
+                // least one program in the window, against the channels the
+                // source holds. Programs can exist on a handful of channels and
+                // still draw an empty grid, and then the refresh is not the bug.
+                append("rowsWithPrograms=${row.channelsWithPrograms}/${row.channels} ")
                 append("newestProgramEnd=")
                 append(
                     row.newestProgramEndMs
@@ -958,6 +964,8 @@ object Diagnostics {
         val urgency = GuideRefreshPolicy.urgency(endsAt, now, ageStale, attempt)
         val sources = runCatching { GuideFiles.guideUrls(context).size }.getOrDefault(0)
         val work = EpgRefreshScheduler.scheduledWork(context)
+        val outcome = prefs.getString(EpgRefreshDiagnostics.KEY_LAST_OUTCOME, null)
+        val outcomeAt = prefs.getLong(EpgRefreshDiagnostics.KEY_LAST_OUTCOME_AT, 0L)
         buildString {
             append("guide: refresh lastImport=")
             append(timeOrNone(lastImport))
@@ -976,6 +984,14 @@ object Diagnostics {
             append(" worker=").append(work.state)
             append(" next=").append(until(now, work.nextRunAtMs ?: 0L))
             append(" attempts=").append(work.attempts)
+            // What the last pass DECIDED and what each source did (spec
+            // 2026-11-14, F1c). The flags above were all clean through a
+            // 22-hour gap; this is the field that says why each pass imported
+            // nothing - fresh, deferred for playback, timed out, threw, or was
+            // stopped by WorkManager mid-import.
+            append(" outcome=").append(outcome ?: "none")
+            append(" outcomeAge=").append(elapsed(now, outcomeAt))
+            append(" aborts=").append(prefs.getInt(EpgRefreshDiagnostics.KEY_ABORT_STREAK, 0))
         }
     }
 
@@ -998,15 +1014,17 @@ object Diagnostics {
         }
     }
 
-    /** A FUTURE stamp as a countdown: `none`, `in 12m`, `in 5h 20m`. */
-    private fun until(nowMs: Long, atMs: Long): String {
-        if (atMs <= 0L) return "none"
-        val delta = atMs - nowMs
-        if (delta <= 0L) return "due"
-        val minutes = delta / 60_000
-        val hours = minutes / 60
-        return if (hours > 0) "in ${hours}h ${minutes % 60}m" else "in ${minutes}m"
-    }
+    /**
+     * A FUTURE stamp as a countdown: `none`, `in 12m`, `in 5h 20m`.
+     *
+     * `Long.MAX_VALUE` means WorkManager has no next run for the job (and is
+     * what it reports while a run is in flight), not a run two and a half
+     * trillion hours away - the field paste's `next=in 2562047289488h 51m` was
+     * this formatter reading that sentinel literally (spec 2026-11-14, F3). The
+     * rule lives in [EpgRefreshDiagnostics.countdown] so it is unit tested.
+     */
+    private fun until(nowMs: Long, atMs: Long): String =
+        EpgRefreshDiagnostics.countdown(nowMs, atMs)
 
     /**
      * Which guide source resolved each playlist channel, and which channels

@@ -196,6 +196,28 @@ interface IptvDao {
     ): Int
 
     /**
+     * How many of [sourceUrl]'s CHANNELS hold at least one program in the window
+     * - the guide grid's row yield (spec 2026-11-14, F2).
+     *
+     * The difference between this and [countChannelsForSource] is the one a
+     * field capture could not see: 15,396 channels and 11,587 programs can still
+     * draw an empty grid if the programs sit on a handful of channels, and a
+     * grid that is empty over a FRESH import is a render/snapshot bug rather
+     * than a refresh one. Same overlap test as the read queries, so the figure
+     * describes the rows the grid would draw.
+     */
+    @Query(
+        "SELECT COUNT(DISTINCT channelId) FROM epg_programs " +
+            "WHERE sourceId = (SELECT id FROM epg_sources WHERE url = :sourceUrl) " +
+            "AND startUtcMillis < :windowEndMs AND endUtcMillis > :windowStartMs"
+    )
+    suspend fun countChannelsWithProgramsInWindow(
+        sourceUrl: String,
+        windowStartMs: Long,
+        windowEndMs: Long
+    ): Int
+
+    /**
      * The newest program end [sourceUrl]'s guide holds, or null when it holds
      * none.
      *

@@ -88,6 +88,12 @@ data class GuideSourceState(
     val url: String,
     val channels: Int,
     val programsInWindow: Int,
+    /**
+     * Channels holding at least one program in the window: the grid's row yield
+     * (spec 2026-11-14, F2). Programs can exist while the grid is empty if they
+     * all sit on a handful of channels, and only this number shows that.
+     */
+    val channelsWithPrograms: Int,
     /** The newest program end this source holds, or null when it holds none. */
     val newestProgramEndMs: Long?,
     val hasValidators: Boolean
@@ -656,6 +662,11 @@ class IptvRepository(
                 url = normalizedUrl,
                 channels = dao.countChannelsForSource(normalizedUrl),
                 programsInWindow = dao.countProgramsForSourceInWindow(
+                    normalizedUrl,
+                    nowMs - EpgWindow.READ_PAST_MS,
+                    nowMs + EpgWindow.READ_FUTURE_MS
+                ),
+                channelsWithPrograms = dao.countChannelsWithProgramsInWindow(
                     normalizedUrl,
                     nowMs - EpgWindow.READ_PAST_MS,
                     nowMs + EpgWindow.READ_FUTURE_MS
