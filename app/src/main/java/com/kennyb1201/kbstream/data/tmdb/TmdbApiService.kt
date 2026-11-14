@@ -215,6 +215,10 @@ interface TmdbApiService {
         @Query("sort_by") sortBy: String,
         @Query("vote_count.gte") voteCountGte: Int? = null,
         @Query("primary_release_date.lte") releaseDateLte: String? = null,
+        // The feature/short cut on a movie RECENT rail (spec 2026-11-14, F2).
+        // Movie-only on purpose: the /discover/tv twins below have no such
+        // parameter, because a series' runtime is per EPISODE.
+        @Query("with_runtime.gte") withRuntimeGte: Int? = null,
         @Query("with_original_language") withOriginalLanguage: String? = null,
         @Query("page") page: Int = 1
     ): TmdbDiscoverResponse
@@ -238,6 +242,8 @@ interface TmdbApiService {
         @Query("sort_by") sortBy: String,
         @Query("vote_count.gte") voteCountGte: Int? = null,
         @Query("primary_release_date.lte") releaseDateLte: String? = null,
+        // Movie RECENT only - see discoverMovieByCompany.
+        @Query("with_runtime.gte") withRuntimeGte: Int? = null,
         @Query("with_original_language") withOriginalLanguage: String? = null,
         @Query("page") page: Int = 1
     ): TmdbDiscoverResponse
@@ -260,6 +266,8 @@ interface TmdbApiService {
         @Query("sort_by") sortBy: String,
         @Query("vote_count.gte") voteCountGte: Int? = null,
         @Query("primary_release_date.lte") releaseDateLte: String? = null,
+        // Movie RECENT only - see discoverMovieByCompany.
+        @Query("with_runtime.gte") withRuntimeGte: Int? = null,
         @Query("with_original_language") withOriginalLanguage: String? = null,
         @Query("page") page: Int = 1
     ): TmdbDiscoverResponse

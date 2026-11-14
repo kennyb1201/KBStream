@@ -122,15 +122,30 @@ val kitsuClientId = localProps.getProperty("KITSU_CLIENT_ID")
     ?: System.getenv("KITSU_CLIENT_ID")
     ?: ""
 
-// AniList, by client id only - and here that is not a preference but the whole
-// reason the connect works. AniList issues every app a client SECRET and its
-// Authorization Code grant needs it in the token exchange, but a secret compiled
-// into an APK is recoverable from every published build. AniList's own docs route
-// a client that cannot store one to the IMPLICIT grant, whose auth-pin page hands
-// the viewer a token to paste - so that is the flow, and only the id travels in
-// the authorize URL. A blank id is an inert row, not a broken build.
+// AniList, by client id AND client secret - the one deliberate secret exception
+// in this file (spec 2026-11-14, F1).
+//
+// The previous rule was "id only, implicit grant" precisely so no secret had to
+// ship. AniList REMOVED the implicit grant: its authorize endpoint answers
+// `unsupported_grant_type` for `response_type=token` (verified live in 2026-06),
+// and the auth-pin page that flow handed a pasteable token on is gone with it.
+// The connect is now the Authorization Code grant, whose exchange requires the
+// secret. KBStream has no backend to hold it, so Kenny decided on 2026-11-14
+// ("Bundle the secret - spec the code grant switch") that it ships in the APK.
+//
+// What that means, recorded rather than softened: the secret IS recoverable from
+// every published build by anyone who unpacks it. That is the accepted cost. It
+// is used in exactly one place - the token-exchange POST body - and never in a
+// URL, a log line, a diagnostic paste or a sync payload. Every OTHER provider
+// still ships no secret, which SimklClientConfigTest enforces (AniList is its
+// single, cited allowlist entry). A blank id or secret is an inert row, not a
+// broken build.
 val aniListClientId = localProps.getProperty("ANILIST_CLIENT_ID")
     ?: System.getenv("ANILIST_CLIENT_ID")
+    ?: ""
+
+val aniListClientSecret = localProps.getProperty("ANILIST_CLIENT_SECRET")
+    ?: System.getenv("ANILIST_CLIENT_SECRET")
     ?: ""
 
 // BingeCat, by client id only - the same rule as Trakt and Simkl above, and for
@@ -305,6 +320,9 @@ android {
         buildConfigField("String", "MAL_CLIENT_ID", "\"$malClientId\"")
         buildConfigField("String", "KITSU_CLIENT_ID", "\"$kitsuClientId\"")
         buildConfigField("String", "ANILIST_CLIENT_ID", "\"$aniListClientId\"")
+        // The one shipped secret, and the reason is in the comment above. Used
+        // only by the AniList token exchange (data/anime/AniListAuth.kt).
+        buildConfigField("String", "ANILIST_CLIENT_SECRET", "\"$aniListClientSecret\"")
         buildConfigField("String", "BINGECAT_CLIENT_ID", "\"$bingecatClientId\"")
         buildConfigField("String", "SENTRY_DSN", "\"$sentryDsn\"")
         buildConfigField("String", "MDBLIST_API_KEY", "\"$mdbListApiKey\"")

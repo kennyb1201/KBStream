@@ -19,28 +19,29 @@ class AniListWriteRulesTest {
     // ── The connect ────────────────────────────────────────────────────────
 
     @Test
-    fun `the authorize URL is the implicit grant against the auth-pin page`() {
+    fun `the authorize URL is the code grant against the app's own redirect`() {
         val url = AniListWriteRules.authorizeUrl("1234", state = "abc")!!
 
         assertTrue(url.startsWith("https://anilist.co/api/v2/oauth/authorize?"))
         assertTrue(
-            "the implicit grant is what makes a bundled secret unnecessary",
-            url.contains("response_type=token")
+            "the implicit grant is gone at AniList's end - it answers " +
+                "unsupported_grant_type for response_type=token",
+            url.contains("response_type=code") && !url.contains("response_type=token")
         )
         assertTrue(url.contains("client_id=1234"))
         assertTrue(
-            "the pin page is the redirect, so the viewer gets a token to paste",
-            url.contains("redirect_uri=https%3A%2F%2Fanilist.co%2Fapi%2Fv2%2Foauth%2Fpin")
+            "the app's own scheme is the redirect, so the code comes back to the app",
+            url.contains("redirect_uri=kbstream%3A%2F%2Foauth%2Fanilist")
         )
         assertTrue(url.contains("state=abc"))
     }
 
     @Test
-    fun `no secret and no code challenge are ever part of the connect`() {
+    fun `no secret and no code challenge are ever part of the authorize URL`() {
         val url = AniListWriteRules.authorizeUrl("1234")!!
 
-        // AniList has no PKCE, and a client secret compiled into an APK is what
-        // `SimklClientConfigTest` fails the build for.
+        // The secret is one field of the exchange POST body and never rides a
+        // URL; AniList's code grant takes no PKCE values at all.
         assertFalse(url.contains("client_secret"))
         assertFalse(url.contains("code_challenge"))
         assertFalse(url.contains("code_challenge_method"))
@@ -218,28 +219,12 @@ class AniListWriteRulesTest {
     }
 
     // ── the token ──────────────────────────────────────────────────────────
-
-    @Test
-    fun `a pasted token is accepted in whatever shape the viewer copied it`() {
-        val jwt = "aaa.bbb.ccc"
-
-        assertEquals(jwt, AniListWriteRules.normalizePastedToken(jwt))
-        assertEquals(jwt, AniListWriteRules.normalizePastedToken("  $jwt \n"))
-        assertEquals(jwt, AniListWriteRules.normalizePastedToken("\"$jwt\""))
-        assertEquals(jwt, AniListWriteRules.normalizePastedToken("Bearer $jwt"))
-        assertEquals(
-            "a copied callback URL still yields just the token",
-            jwt,
-            AniListWriteRules.normalizePastedToken(
-                "https://anilist.co/api/v2/oauth/pin#access_token=$jwt&token_type=Bearer"
-            )
-        )
-        // Not a JWT: storing it would only produce 401s that look like an outage.
-        assertNull(AniListWriteRules.normalizePastedToken("nope"))
-        assertNull(AniListWriteRules.normalizePastedToken("a.b"))
-        assertNull(AniListWriteRules.normalizePastedToken(""))
-        assertNull(AniListWriteRules.normalizePastedToken(null))
-    }
+    //
+    // The connect field now takes a CODE, not a token (spec 2026-11-14, F3): the
+    // paste-a-token path is gone with the implicit grant it belonged to, and a
+    // token pasted into the code field is refused by name. What the field accepts
+    // is pinned in AniListConnectRulesTest; what remains here is the session's
+    // deadline, which is unchanged.
 
     @Test
     fun `the deadline comes from the token's own exp claim`() {

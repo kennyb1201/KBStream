@@ -60,12 +60,15 @@ jobs:
       # contract defines bingecat-api-key as the application client_id, and the
       # device flow is a public-client flow (see app/build.gradle.kts).
       BINGECAT_CLIENT_ID: ${{ secrets.BINGECAT_CLIENT_ID }}
-      # AniList's app registration: a client id and NO secret. The connect is the
-      # implicit grant against the auth-pin redirect (AniList's documented flow for
-      # a client that cannot store a secret), so the id is public by construction -
-      # it rides the authorize URL - and a *SECRET* BuildConfig field is what
-      # SimklClientConfigTest fails the build for.
+      # AniList's app registration: a client id AND a client secret (spec
+      # 2026-11-14, F1). AniList removed the implicit grant the id-only flow was
+      # built on, so the connect is now the Authorization Code grant and the
+      # exchange needs the secret. Kenny's decision 2026-11-14: bundle it, because
+      # KBStream has no backend to hold one. It is the only shipped secret and
+      # SimklClientConfigTest's single cited allowlist entry; see the comment above
+      # aniListClientId in app/build.gradle.kts.
       ANILIST_CLIENT_ID: ${{ secrets.ANILIST_CLIENT_ID }}
+      ANILIST_CLIENT_SECRET: ${{ secrets.ANILIST_CLIENT_SECRET }}
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
       # Authenticates the Sentry Gradle plugin's R8-mapping upload so release
       # crash traces arrive deobfuscated (real class/method names).

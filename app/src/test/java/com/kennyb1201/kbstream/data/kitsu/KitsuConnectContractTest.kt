@@ -216,11 +216,31 @@ class KitsuConnectContractTest {
         val buildGradle = File("build.gradle.kts").let {
             if (it.exists()) it.readText() else File("../app/build.gradle.kts").readText()
         }
-        // A secret in a published APK is recoverable from it; AniList's docs send
-        // a client that cannot store one to the implicit grant, which is the flow
-        // this app uses (see AniListWriteRules.PIN_REDIRECT_URI).
-        assertFalse(buildGradle.contains("ANILIST_CLIENT_SECRET"))
+        // Amended 2026-11-14, deliberately: AniList REMOVED the implicit grant
+        // (its authorize endpoint answers `unsupported_grant_type` for
+        // `response_type=token`), so the id-only connect this test used to pin is
+        // a flow that cannot complete at all. The Authorization Code grant that
+        // replaces it needs the app secret in the exchange, and Kenny decided on
+        // 2026-11-14 to bundle it - KBStream has no backend to hold one.
+        //
+        // What stays true, and is what this assertion now pins: the secret is
+        // AniList's ALONE. Every other provider's config and the workflow still
+        // carry no secret, and SimklClientConfigTest's allowlist names exactly
+        // this one field (see AniListConnectRules and the comment above
+        // aniListClientId in app/build.gradle.kts).
+        assertTrue(
+            "AniList's exchange is the only provider that carries a secret field",
+            buildGradle.contains("buildConfigField(\"String\", \"ANILIST_CLIENT_SECRET\"")
+        )
         assertTrue(buildGradle.contains("\"ANILIST_CLIENT_ID\""))
+        listOf("SIMKL", "TRAKT", "MAL", "KITSU", "BINGECAT").forEach { provider ->
+            assertFalse(
+                "$provider must never ship a secret field: only AniList's grant needs one",
+                buildGradle.contains(
+                    "buildConfigField(\"String\", \"${provider}_CLIENT_SECRET\""
+                )
+            )
+        }
     }
 
     @Test

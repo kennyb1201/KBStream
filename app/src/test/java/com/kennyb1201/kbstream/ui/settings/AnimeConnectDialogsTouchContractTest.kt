@@ -131,9 +131,10 @@ class AnimeConnectDialogsTouchContractTest {
                 kitsu.contains("error = \"Enter your Kitsu email and password\"")
         )
         assertTrue(
-            "AniList still refuses an empty token",
+            "AniList still refuses an empty field (spec 2026-11-14, F3: the field is " +
+                "a CODE now, and its sentence says what to do instead of guessing)",
             aniList.contains("if (pasted.isEmpty()) {") &&
-                aniList.contains("error = \"Paste the token AniList showed you\"")
+                aniList.contains("\"Approve in the browser, or paste the code AniList \"")
         )
         listOf(KITSU to kitsu, ANILIST to aniList).forEach { (name, dialog) ->
             val guard = dialog.indexOf("if (busy) return@AnimeDialogButton")

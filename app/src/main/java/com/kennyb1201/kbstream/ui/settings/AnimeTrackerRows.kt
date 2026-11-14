@@ -129,6 +129,8 @@ internal fun AnimeTrackerRows(
             authorizeUrl = AniListAuth.authorizeUrl(),
             currentUsername = aniListUsername,
             phone = phone,
+            missingClientSecret = com.kennyb1201.kbstream.data.anime.AniListConfig
+                .missingClientSecret,
             onDismiss = { aniListEditor = false },
             onConnect = { pasted ->
                 val result = AniListAuth.connect(context, pasted)

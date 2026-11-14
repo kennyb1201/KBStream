@@ -85,13 +85,17 @@ internal object TmdbRailPages {
         lang: String?
     ): List<StudioItem>? {
         val results = when (title) {
+            // The movie RECENT rails carry the 5-vote floor and the 40-minute
+            // feature cut (spec 2026-11-14, F1/F2); the SERIES · RECENT arm below
+            // carries neither, and its API twin has no runtime parameter at all.
             "MOVIES · RECENT" -> runCatchingCancellable {
                 repo.api.discoverMovieByGenre(
                     genreId,
                     repo.apiKey,
                     "primary_release_date.desc",
-                    repo.minRecentVoteCount,
+                    repo.minRecentMovieVoteCount,
                     releaseDateLte = repo.today,
+                    withRuntimeGte = repo.minRecentMovieRuntimeMinutes,
                     withOriginalLanguage = lang,
                     page = page
                 ).results
@@ -195,13 +199,16 @@ internal object TmdbRailPages {
         lang: String?
     ): List<StudioItem>? {
         val results = when (title) {
+            // Movie RECENT only, exactly as in [genrePageItems]: the floor and
+            // the feature cut are Kenny's 2026-11-14 fix; series are untouched.
             "MOVIES · RECENT" -> runCatchingCancellable {
                 repo.api.discoverMovieByKeyword(
                     keywordId,
                     repo.apiKey,
                     "primary_release_date.desc",
-                    repo.minRecentVoteCount,
+                    repo.minRecentMovieVoteCount,
                     releaseDateLte = repo.today,
+                    withRuntimeGte = repo.minRecentMovieRuntimeMinutes,
                     withOriginalLanguage = lang,
                     page = page
                 ).results
@@ -410,13 +417,18 @@ internal object TmdbRailPages {
         lang: String?
     ): List<StudioItem>? {
         val results = when (title) {
+            // Movie RECENT only. This arm also serves a network's MOVIES rails
+            // and the ORIGINALS · MOVIES rails (both route through a company id),
+            // so the floor and the feature cut reach every movie RECENT rail on
+            // the browse surfaces - and no series rail, ever.
             "MOVIES · RECENT" -> runCatchingCancellable {
                 repo.api.discoverMovieByCompany(
                     companyIds = companyIds,
                     apiKey = repo.apiKey,
                     sortBy = "primary_release_date.desc",
-                    voteCountGte = repo.minRecentVoteCount,
+                    voteCountGte = repo.minRecentMovieVoteCount,
                     releaseDateLte = repo.today,
+                    withRuntimeGte = repo.minRecentMovieRuntimeMinutes,
                     withOriginalLanguage = lang,
                     page = page
                 ).results

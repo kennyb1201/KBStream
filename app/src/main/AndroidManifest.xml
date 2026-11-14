@@ -324,6 +324,21 @@
                     android:host="oauth"
                     android:pathPrefix="/mal" />
             </intent-filter>
+            <!-- AniList's code-grant callback (spec 2026-11-14, F3):
+                 kbstream://oauth/anilist?code=...&state=... after the viewer
+                 approves on AniList. The redirect_uri registered on the app's
+                 AniList page is this exact scheme+host+path, and AniList rejects
+                 an authorize request naming anything else. BROWSABLE is what lets
+                 the browser hand the redirect back. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="kbstream"
+                    android:host="oauth"
+                    android:pathPrefix="/anilist" />
+            </intent-filter>
             <meta-data
                 android:name="android.app.searchable"
                 android:resource="@xml/searchable" />

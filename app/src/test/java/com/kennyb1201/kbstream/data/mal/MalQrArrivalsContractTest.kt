@@ -97,7 +97,10 @@ class MalQrArrivalsContractTest {
         )
         assertTrue(
             "and an opened page shows nothing at all",
-            router.indexOf("malStartFailureMessage") < router.indexOf("host.show")
+            // The surface is the shared helper now (spec 2026-11-14, F1), which
+            // this slice also covers - the sentence is only built once the outcome
+            // is a failure.
+            router.indexOf("malStartFailureMessage") < router.indexOf("showMalFailure(reason)")
         )
         assertTrue(
             "the sentence goes through the app's one feedback channel",

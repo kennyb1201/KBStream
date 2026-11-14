@@ -67,6 +67,17 @@ internal fun malStartFailureMessage(outcome: MalStartOutcome): String? = when (o
         "This device has no browser to open MyAnimeList's authorize page."
 }
 
+/**
+ * The one sentence a failed MAL connect shows and records (spec 2026-11-14, F1/F2).
+ *
+ * It exists as a function rather than a literal at the call site so the screen and
+ * the diagnostics paste cannot say different things - and so a contract test can
+ * assert that a failing LINK produces a message with nothing from the link in it:
+ * [reason] is always one of this file's or [MalAuth]'s fixed sentences, never the
+ * code, the state or the verifier the link carried.
+ */
+internal fun malFailureMessage(reason: String): String = "MAL didn't connect: $reason"
+
 /** A parsed token response. Refresh tokens live a month, access tokens an hour. */
 internal data class MalToken(
     val accessToken: String,

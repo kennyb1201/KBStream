@@ -76,43 +76,24 @@ internal enum class AniListConnectionState(val label: String) {
  */
 internal object AniListWriteRules {
 
-    const val AUTHORIZE_URL = "https://anilist.co/api/v2/oauth/authorize"
-
-    /**
-     * The auth-pin redirect.
-     *
-     * Registered as the app's redirect URL on AniList, and used by the
-     * IMPLICIT grant: the viewer approves on a phone and AniList shows them an
-     * access token to paste. That is the documented flow for a client that
-     * cannot store a secret ("If your client is in an environment where your
-     * client credentials and secret cannot be securely stored, you should use
-     * the Implicit Grant. These types of applications are typically websites or
-     * mobile apps" - AniList's auth docs), and it is what keeps
-     * `ANILIST_CLIENT_SECRET` out of the APK, which `SimklClientConfigTest`
-     * enforces for every tracker.
-     */
-    const val PIN_REDIRECT_URI = "https://anilist.co/api/v2/oauth/pin"
-
     /** How long a 429 parks the leg when `Retry-After` is missing or unreadable. */
     const val DEFAULT_PARK_MS = 60_000L
 
     /**
-     * The authorize URL whose PIN page shows an access token.
+     * The authorize URL, now the AUTHORIZATION CODE grant (spec 2026-11-14).
      *
-     * `response_type=token` is the implicit grant (no code exchange, therefore no
-     * secret). A blank client id answers null: there is no usable URL, and a
-     * connect row that offered one would be a dead end.
+     * `response_type=code` and the app's own redirect - not the auth-pin page and
+     * not `response_type=token`. The implicit grant this used to build is gone at
+     * AniList's end (the endpoint answers `unsupported_grant_type` for it), which
+     * is why the connect now needs the bundled secret; [AniListConnectRules] owns
+     * the flow's shape and this stays here as the one entry point the rest of the
+     * write path already knows.
+     *
+     * A blank client id answers null: there is no usable URL, and a connect row
+     * that offered one would be a dead end.
      */
-    fun authorizeUrl(clientId: String, state: String? = null): String? {
-        val id = clientId.trim()
-        if (id.isEmpty()) return null
-        val fields = ArrayList<String>(4)
-        fields += "response_type=token"
-        fields += "client_id=" + urlEncode(id)
-        fields += "redirect_uri=" + urlEncode(PIN_REDIRECT_URI)
-        state?.takeIf { it.isNotBlank() }?.let { fields += "state=" + urlEncode(it) }
-        return AUTHORIZE_URL + "?" + fields.joinToString("&")
-    }
+    fun authorizeUrl(clientId: String, state: String? = null): String? =
+        AniListConnectRules.authorizeUrl(clientId, state)
 
     /** KBStream's title status → AniList's `MediaListStatus`. */
     fun statusFor(appStatus: String?): String? = when (appStatus?.trim()?.lowercase()) {
@@ -261,41 +242,6 @@ internal object AniListWriteRules {
         // trusted into a session: the first answer is a 401 and a reconnect.
         if (expMs <= nowMs) return nowMs
         return expMs.coerceAtMost(nowMs + ONE_YEAR_MS)
-    }
-
-    /**
-     * A pasted connect value, reduced to the token itself.
-     *
-     * The PIN page shows the token, but a viewer who copied the whole page or a
-     * URL fragment may paste more than that: an `access_token=` pair, a leading
-     * `Bearer`, surrounding quotes or whitespace. All of those are stripped, and
-     * a value that is not shaped like an access token is refused rather than
-     * stored (AniList's tokens are JWTs - three dot-separated parts).
-     */
-    fun normalizePastedToken(pasted: String?): String? {
-        var value = pasted?.trim().orEmpty()
-        if (value.isEmpty()) return null
-
-        // A pasted URL or query fragment: keep the access_token value.
-        val marker = "access_token="
-        val at = value.indexOf(marker)
-        if (at >= 0) {
-            value = value.substring(at + marker.length)
-                .substringBefore('&')
-                .substringBefore('#')
-                .substringBefore(' ')
-        }
-
-        value = value.trim().trim('"', '\'', ',', '.', ';')
-        if (value.startsWith("Bearer ", ignoreCase = true)) {
-            value = value.substring("Bearer ".length).trim()
-        }
-        if (value.isEmpty()) return null
-        // A JWT has three dot-separated parts; anything else is not a token this
-        // app can use, and storing it would only produce 401s that look like a
-        // server problem.
-        if (value.count { it == '.' } != 2) return null
-        return value
     }
 
     /**

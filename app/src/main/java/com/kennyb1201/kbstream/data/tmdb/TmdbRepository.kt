@@ -328,25 +328,33 @@ class TmdbRepository private constructor(context: Context) :
     // Caps parallel TMDB availability lookups for the digital-release filter.
     private val availabilitySemaphore = Semaphore(permits = 6)
 
-    // Vote floors per rail kind. RECENT is light (newest-first, just skip
-    // no-title junk); POPULAR and TOP RATED use 10 so smaller catalogs
+    // Vote floors per rail kind. RECENT is split by media type (spec
+    // 2026-11-14, and [TmdbRailFloors] holds the numbers and the reasoning): a
+    // movie RECENT rail needs 5 votes and a 40-minute runtime, a TV RECENT rail
+    // needs neither. POPULAR and TOP RATED stay at 10 so smaller catalogs
     // (Tubi, Pluto, Crunchyroll, keywords, mid-size studios) keep real rows
     // instead of starving to empty.
-    internal val minVoteCount = 10
+    internal val minVoteCount = TmdbRailFloors.POPULAR_VOTE_FLOOR
 
     /** TOP-RATED / "Most Voted" rail floor (sort is vote_count.desc). */
-    internal val minTopRatedVoteCount = 10
+    internal val minTopRatedVoteCount = TmdbRailFloors.TOP_RATED_VOTE_FLOOR
 
-    /**
-     * RECENT-rail floor: none. These rails are strictly newest-first, and a
-     * vote floor can only punch holes in a chronological list — a brand-new
-     * title has almost no votes yet, which is exactly the title a "recent"
-     * rail exists to show. (History's whole 2026 slate sat behind the old
-     * floor of 5.) Junk without artwork is dropped by [finishRailPage]
-     * instead, which is what the floor was really guarding against — see
-     * [dropPosterless].
-     */
-    internal val minRecentVoteCount = 0
+    /** TV RECENT floor: none — a first episode belongs here the hour it airs. */
+    internal val minRecentVoteCount = TmdbRailFloors.RECENT_TV_VOTE_FLOOR
+
+    /** MOVIE RECENT floor: 5, the old value restored (see [TmdbRailFloors]). */
+    internal val minRecentMovieVoteCount = TmdbRailFloors.RECENT_MOVIE_VOTE_FLOOR
+
+    /** The feature/short line a movie RECENT rail cuts at, in minutes. */
+    internal val minRecentMovieRuntimeMinutes =
+        TmdbRailFloors.RECENT_MOVIE_MIN_RUNTIME_MINUTES
+
+    /** The RECENT floor for a rail of [isTv]: shows none, movies five. */
+    internal fun recentVoteFloor(isTv: Boolean): Int = TmdbRailFloors.recentVoteFloor(isTv)
+
+    /** The runtime cut a RECENT rail sends: 40 for movies, null for TV - always. */
+    internal fun recentRuntimeGte(isTv: Boolean): Int? =
+        TmdbRailFloors.recentRuntimeGte(isTv)
 
     /**
      * Rail depth policy for the Search browse chips' screens (genre,
@@ -2851,8 +2859,10 @@ class TmdbRepository private constructor(context: Context) :
             "TOP RATED" -> "vote_count.desc"
             else -> return TagRailPage(emptyList(), false)
         }
+        // RECENT means something different per media type (spec 2026-11-14,
+        // F1/F2): movies need votes and a feature runtime, shows need neither.
         val voteFloor = when (mode) {
-            "RECENT" -> minRecentVoteCount
+            "RECENT" -> recentVoteFloor(isTv)
             "POPULAR" -> minVoteCount
             else -> minTopRatedVoteCount
         }
@@ -2868,6 +2878,9 @@ class TmdbRepository private constructor(context: Context) :
 
         val filters = com.kennyb1201.kbstream.data.kb.KBFilters(
             voteCountGte = voteFloor,
+            // Shorts out of the movie RECENT rails, and only there: the gate
+            // answers null for TV, whose runtime is per episode.
+            withRuntimeGte = if (mode == "RECENT") recentRuntimeGte(isTv) else null,
             // English-only catalogs while that switch is on (see
             // [browseLanguage]) — this is the cross-genre and decade rails
             // behind the Search browse chips.
@@ -3545,14 +3558,20 @@ class TmdbRepository private constructor(context: Context) :
         // vote_count surfaces what people actually voted on. Floors are
         // light so mid-size catalogs keep real rails; "Popular"
         // (popularity.desc) needs just enough to skip no-title entries.
-        val voteFloor = if (sortBy.startsWith("vote_count")) {
-            minTopRatedVoteCount
-        } else {
-            minVoteCount
+        // A date sort is a RECENT rail (today only the two orders above reach
+        // this loader, but the floor and the runtime cut follow the SORT rather
+        // than assuming). The runtime gate answers null for a series.
+        val isRecent = sortBy.startsWith("primary_release_date") ||
+            sortBy.startsWith("first_air_date")
+        val voteFloor = when {
+            isRecent -> recentVoteFloor(isTv)
+            sortBy.startsWith("vote_count") -> minTopRatedVoteCount
+            else -> minVoteCount
         }
         val filters = com.kennyb1201.kbstream.data.kb.KBFilters(
             year = yearRange,
             voteCountGte = voteFloor,
+            withRuntimeGte = if (isRecent) recentRuntimeGte(isTv) else null,
             withOriginalLanguage = browseLanguage()
         )
 
@@ -3612,7 +3631,7 @@ class TmdbRepository private constructor(context: Context) :
             else -> "popularity.desc"
         }
         val voteFloor = when (mode) {
-            "recent" -> minRecentVoteCount
+            "recent" -> recentVoteFloor(isTv)
             "popular" -> minVoteCount
             "voted" -> minTopRatedVoteCount
             else -> minRecentVoteCount
@@ -3620,6 +3639,9 @@ class TmdbRepository private constructor(context: Context) :
 
         val base = com.kennyb1201.kbstream.data.kb.KBFilters(
             voteCountGte = voteFloor,
+            // Same movie-only gate as the cross-genre rails: a provider's movie
+            // RECENT rail drops shorts, its series RECENT rail is untouched.
+            withRuntimeGte = if (mode == "recent") recentRuntimeGte(isTv) else null,
             withOriginalLanguage = browseLanguage()
         )
         val filters = if (mode == "originals") {

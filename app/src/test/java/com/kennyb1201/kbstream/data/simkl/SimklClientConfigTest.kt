@@ -49,17 +49,53 @@ class SimklClientConfigTest {
      * `buildConfigField` list. Credentials that must ship (the TMDB key, the
      * Supabase URL and publishable key, the Sentry DSN) are public-by-design
      * identifiers, not secrets, and none of them is named `*SECRET*`.
+     *
+     * ONE NAMED EXCEPTION, and it is the only one: `ANILIST_CLIENT_SECRET`.
+     * AniList removed the implicit grant this app's AniList connect was built on
+     * (its authorize endpoint answers `unsupported_grant_type` for
+     * `response_type=token`, verified live by two independent apps in 2026-06),
+     * so the connect is now the Authorization Code grant, whose token exchange
+     * requires the app's secret. KBStream has no backend to hold it. Kenny
+     * decided on 2026-11-14 ("Bundle the secret - spec the code grant switch") to
+     * ship it, knowing it is recoverable from any published APK - the same
+     * conclusion TMSync's docs reach for the same reason.
+     *
+     * The allowlist is a NAME, not a category: any second `*SECRET*` field fails
+     * this test exactly as before, and the exception cannot quietly grow into the
+     * Simkl, Trakt, MAL, Kitsu or BingeCat configs it was written for.
      */
     @Test
     fun `no secret is compiled into BuildConfig`() {
         val bakedInSecrets = buildConfigFields.filter { it.contains("SECRET") }
+        val unexpected = bakedInSecrets - ALLOWED_SHIPPED_SECRETS
         assertFalse(
             "A secret is being baked into every published APK again: " +
-                "$bakedInSecrets. Anything compiled in via buildConfigField is " +
+                "$unexpected. Anything compiled in via buildConfigField is " +
                 "recoverable from the APK by anyone who downloads it; a " +
                 "public-client flow (device/PIN, PKCE) must be used instead, " +
-                "or the call must move behind a server.",
-            bakedInSecrets.isNotEmpty()
+                "or the call must move behind a server. The one allowed field is " +
+                "$ALLOWED_SHIPPED_SECRETS (AniList's code-grant exchange, decided " +
+                "2026-11-14 - see the comment on this test).",
+            unexpected.isNotEmpty()
         )
+    }
+
+    /**
+     * Guards the allowlist against the OTHER failure: an entry for a field that
+     * no longer exists would keep passing while the rule it was granted for had
+     * been abandoned.
+     */
+    @Test
+    fun `the allowed secret is still the one AniList's exchange uses`() {
+        assertTrue(
+            "the allowlist names a BuildConfig field that is not compiled in: " +
+                "fields present: $buildConfigFields",
+            buildConfigFields.containsAll(ALLOWED_SHIPPED_SECRETS)
+        )
+    }
+
+    private companion object {
+        /** One entry, AniList's, and the decision behind it is cited above. */
+        val ALLOWED_SHIPPED_SECRETS = setOf("ANILIST_CLIENT_SECRET")
     }
 }

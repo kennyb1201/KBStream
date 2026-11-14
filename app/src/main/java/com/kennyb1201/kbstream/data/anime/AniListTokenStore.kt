@@ -47,6 +47,17 @@ internal class AniListTokenStore(
         const val KEY_VIEWER_NAME = "viewer_name"
         const val KEY_SIGNED_OUT = "signed_out"
         const val KEY_NEEDS_RECONNECT = "needs_reconnect"
+
+        /**
+         * The `state` of the code-grant flow this profile started, and nothing
+         * else (spec 2026-11-14, F3).
+         *
+         * A CSRF token, not a credential: no verifier exists because AniList's
+         * code grant takes no PKCE. Stored rather than kept in memory for the same
+         * reason MAL stores its verifier - the redirect can arrive in a fresh
+         * process after the browser was in front.
+         */
+        const val KEY_PENDING_STATE = "pending_state"
     }
 
     private fun storeName(appContext: Context): String =
@@ -121,6 +132,18 @@ internal class AniListTokenStore(
     }
 
     fun signedOut(): Boolean = prefs?.getBoolean(KEY_SIGNED_OUT, false) == true
+
+    /** Remembers the state a connect started here must see echoed back. */
+    fun savePendingState(state: String) {
+        prefs?.edit()?.putString(KEY_PENDING_STATE, state)?.apply()
+    }
+
+    /** The state this profile is waiting for, or null when no flow is pending. */
+    fun pendingState(): String? = prefs?.getString(KEY_PENDING_STATE, null)?.takeIf { it.isNotBlank() }
+
+    fun clearPendingState() {
+        prefs?.edit()?.remove(KEY_PENDING_STATE)?.apply()
+    }
 
     /**
      * Retires a lingering disconnect marker without touching the session.

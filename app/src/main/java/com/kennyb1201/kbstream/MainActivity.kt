@@ -71,6 +71,9 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.anime.AniListAuth
+import com.kennyb1201.kbstream.data.anime.AniListLinks
+import com.kennyb1201.kbstream.data.reporting.CrashReporter
 import com.kennyb1201.kbstream.data.mal.MalAuth
 import com.kennyb1201.kbstream.data.mal.MalLinks
 import com.kennyb1201.kbstream.data.addon.Stream
@@ -2135,26 +2138,27 @@ fun AppRoot(
     // scanning it again has to open the browser again.
     var handledMalCallback by remember { mutableStateOf<String?>(null) }
 
-    fun routeMalLink(link: String?) {
-        if (link == null) return
-        if (MalLinks.isCallback(link)) {
-            if (handledMalCallback == link) return
-            handledMalCallback = link
-            malRouteScope.launch {
-                val result = MalAuth.completeConnect(context, link)
-                if (result is MalAuth.ConnectResult.Failed) {
-                    android.util.Log.w("MalLinks", "MAL connect failed: ${result.reason}")
-                }
-            }
-            return
-        }
-        if (!MalLinks.isStart(link)) return
-        val message = com.kennyb1201.kbstream.data.mal.malStartFailureMessage(
-            MalLinks.openAuthorize(context)
-        ) ?: return
+    // ONE failure path for both MAL branches (spec 2026-11-14, F1/F2).
+    //
+    // The callback branch used to log and nothing else: by the time the browser
+    // returns, the dialog the viewer left is gone, so a failed connect landed them
+    // back in the app with no sentence anywhere - and logcat is not a surface
+    // Kenny can reach. The start branch already showed its sentence, so the two
+    // lived in different code and could drift back to silence one at a time. Both
+    // now come through here.
+    //
+    // The RECORD is the other half: COPY DIAGNOSTICS prints CrashReporter's recent
+    // events, so the same sentence that was on screen is in the next paste. Only
+    // the reason travels - a link, its code, its state and the verifier are never
+    // part of it.
+    fun showMalFailure(reason: String) {
+        val message = com.kennyb1201.kbstream.data.mal.malFailureMessage(reason)
         android.util.Log.w("MalLinks", message)
+        CrashReporter.recordEvent("mal", message)
         val host = malFeedback
         if (host != null) {
+            // App-wide: the return from the browser can land on Settings, Home or
+            // the player, and this is drawn above whichever is showing.
             host.show(message, isError = true)
         } else {
             // No shell above this node (the player's own activities, or a
@@ -2164,8 +2168,65 @@ fun AppRoot(
         }
     }
 
+    fun routeMalLink(link: String?) {
+        if (link == null) return
+        if (MalLinks.isCallback(link)) {
+            if (handledMalCallback == link) return
+            handledMalCallback = link
+            malRouteScope.launch {
+                val result = MalAuth.completeConnect(context, link)
+                // Inside the dedupe guard, so a warm+cold double routing shows
+                // this once per attempt; success shows nothing.
+                if (result is MalAuth.ConnectResult.Failed) {
+                    showMalFailure(result.reason)
+                }
+            }
+            return
+        }
+        if (!MalLinks.isStart(link)) return
+        val reason = com.kennyb1201.kbstream.data.mal.malStartFailureMessage(
+            MalLinks.openAuthorize(context)
+        ) ?: return
+        showMalFailure(reason)
+    }
+
+    // AniList's code-grant callback (spec 2026-11-14, F3). The same two shapes
+    // MAL's router was fixed for, and the same two traps: ONE router for the cold
+    // launch's intent and the running activity's `incomingIntent`, and the
+    // exchange launched in a scope the warm intent-consumer cannot cancel - that
+    // clear restarts every effect keyed on `incomingIntent`, and a coroutine
+    // cancelled there is an exchange stopped mid-flight (the MAL race, b8bd7d39a).
+    //
+    // Deduped by CODE: AniList's codes are single-use, so a second exchange of the
+    // same one fails and would report a failure for a connect that already worked.
+    // The code is also what identifies the exchange, so the rest of the link does
+    // not matter to the guard.
+    val anilistRouteScope = rememberCoroutineScope()
+    var handledAniListCode by remember { mutableStateOf<String?>(null) }
+
+    fun routeAniListLink(link: String?) {
+        if (link == null) return
+        if (!AniListLinks.isCallback(link)) return
+        val code = runCatching {
+            android.net.Uri.parse(link).getQueryParameter("code")
+        }.getOrNull()
+        val identity = code ?: link
+        if (handledAniListCode == identity) return
+        handledAniListCode = identity
+        anilistRouteScope.launch {
+            val result = AniListAuth.completeConnect(context, link)
+            if (result is AniListAuth.ConnectResult.Failed) {
+                android.util.Log.w("AniListLinks", "AniList connect failed: ${result.reason}")
+            }
+        }
+    }
+
     // Warm arrival: the running activity was handed the link by onNewIntent.
+    // Both OAuth schemes arrive the same way, so this one effect routes for both.
     LaunchedEffect(incomingIntent) {
+        // AniList first: the MAL router returns early when there is no link, and
+        // a link that is not MAL's must still reach the AniList router.
+        routeAniListLink(incomingIntent?.data?.toString())
         routeMalLink(incomingIntent?.data?.toString() ?: return@LaunchedEffect)
     }
 
@@ -2187,10 +2248,11 @@ fun AppRoot(
     // reconciling the TV launcher's Continue Watching rail with the in-app
     // watch history (self-healing, cheap).
     LaunchedEffect(Unit) {
-        // A MAL link that arrived with the cold launch (the browser, or a QR
-        // scan, started us). The same router the warm arrival calls: one place
-        // decides what a MAL link means, so the two shapes cannot disagree.
+        // An OAuth link that arrived with the cold launch (the browser, or a QR
+        // scan, started us). The same routers the warm arrival calls: one place
+        // decides what a link means, so the two shapes cannot disagree.
         routeMalLink(hostActivity?.intent?.data?.toString())
+        routeAniListLink(hostActivity?.intent?.data?.toString())
 
         val handledByExtras =
             applyLaunchIntentExtras(hostActivity?.intent)
