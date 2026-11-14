@@ -388,7 +388,7 @@ class TheSportsDbContractTest {
         )
         assertTrue(
             "and its table from TheSportsDB, on the same six-hour path",
-            viewModel.contains("theSportsDb.standings(theSportsDbKey(), league)")
+            viewModel.contains("theSportsDb.standings(theSportsDbKey(), tsdbLeague)")
         )
         assertTrue(
             "an ESPN league's cards still come from ESPN, with only the missing badge filled",
@@ -427,16 +427,25 @@ class TheSportsDbContractTest {
     }
 
     @Test
-    fun `a set written before these leagues existed is brought up to the catalog once`() {
+    fun `the new leagues are on for a fresh install, and the panel owns a stored set`() {
+        // `getSportsEnabledLeagues` is a PURE read: a set a viewer arranged is
+        // returned exactly as written, so these leagues join a fresh install
+        // through DEFAULT_ENABLED and an existing profile turns them on in the
+        // leagues panel - the same path every league added before them took.
         val prefs = code(PREFS)
         assertTrue(
-            "the stored enabled-set is a snapshot, so it is migrated",
-            prefs.contains("KEY_SPORTS_LEAGUES_VERSION") &&
-                prefs.contains("SportsLeagues.THESPORTSDB_PATHS")
+            "the enabled set comes from the stored value or the catalog default, never a migration",
+            prefs.contains("readSportsSet(context, KEY_SPORTS_LEAGUES)") &&
+                prefs.contains("SportsLeagues.DEFAULT_ENABLED")
+        )
+        assertFalse(
+            "no version stamp rewrites what a viewer chose",
+            prefs.contains("SPORTS_LEAGUES_VERSION")
         )
         assertTrue(
-            "and the stamp means a viewer who turns them off keeps them off",
-            prefs.contains("if (version >= SPORTS_LEAGUES_VERSION) return stored")
+            "and the panel lists every catalog league, so the new ones have toggles",
+            code(PANEL).contains("SportsLeagues") &&
+                SportsLeagues.ALL.size > SportsLeagues.THESPORTSDB_PATHS.size
         )
     }
 
@@ -496,6 +505,7 @@ class TheSportsDbContractTest {
         const val WORKER = "$PKG/work/SportsNotificationWorker.kt"
         const val LIVE_FEED = "$PKG/data/sports/LiveScoreFeed.kt"
         const val PREFS = "$PKG/data/settings/AppPreferences.kt"
+        const val PANEL = "$PKG/ui/sports/SportsHubScreen.kt"
         const val SETTINGS_TV = "$PKG/ui/settings/SettingsScreen.kt"
         const val SETTINGS_MOBILE = "$PKG/ui/mobile/SettingsScreenMobile.kt"
 

@@ -345,8 +345,9 @@ class SportsHubStandingsContractTest {
     @Test
     fun `a points table is the league's own fact, not a stat the feed reuses`() {
         assertEquals(
-            "the four soccer leagues and the NHL are ranked on points",
-            5,
+            "the four soccer leagues, the four TheSportsDB ones and the NHL are " +
+                "ranked on points",
+            9,
             Regex("pointsTable = true").findAll(sportModels).count()
         )
         assertFalse(

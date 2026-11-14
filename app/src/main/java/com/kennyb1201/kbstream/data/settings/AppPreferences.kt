@@ -262,12 +262,6 @@ object AppPreferences {
     private const val KEY_BADGES_ABOVE_FILE = "badges_above_file"            // badge chips above (true) or below the file name
     // Which ESPN leagues the sports hub renders; a Set<String> of league paths.
     private const val KEY_SPORTS_LEAGUES = "sports_enabled_leagues"
-
-    /** The catalog generation a stored enabled-set was last brought up to. */
-    private const val KEY_SPORTS_LEAGUES_VERSION = "sports_enabled_leagues_version"
-
-    /** 2: the TheSportsDB leagues joined the catalog (spec 2026-11-13 F2). */
-    private const val SPORTS_LEAGUES_VERSION = 2
     // The viewer's own league order, a newline-separated run of league paths.
     private const val KEY_SPORTS_LEAGUE_ORDER = "sports_league_order"
     private const val KEY_SPORTS_FAVORITE_TEAMS = "sports_favorite_teams"
@@ -2877,25 +2871,9 @@ object AppPreferences {
      * leagues panel is what narrows it. Synced to the account (see
      * [syncDisplayPrefsBlob]), so the other TV comes up with the same hub.
      */
-    fun getSportsEnabledLeagues(context: Context): Set<String> {
-        val stored = readSportsSet(context, KEY_SPORTS_LEAGUES)
-            ?: return com.kennyb1201.kbstream.data.sports.SportsLeagues.DEFAULT_ENABLED
-        // A stored set is a SNAPSHOT of the catalog at the time it was written,
-        // so a league added by a later build was never in it and never reached an
-        // existing viewer's hub - the new coverage would only appear for someone
-        // who happened to open the leagues panel and notice a toggle. One
-        // migration fixes it: on the first read after the update the new
-        // TheSportsDB leagues are turned on with whatever was already on, and the
-        // stamp means a viewer who turns them off keeps them off.
-        val version = prefs(context).getInt(KEY_SPORTS_LEAGUES_VERSION, 1)
-        if (version >= SPORTS_LEAGUES_VERSION) return stored
-        val migrated = stored + com.kennyb1201.kbstream.data.sports.SportsLeagues.THESPORTSDB_PATHS
-        setSportsEnabledLeagues(context, migrated)
-        prefs(context).edit()
-            .putInt(KEY_SPORTS_LEAGUES_VERSION, SPORTS_LEAGUES_VERSION)
-            .apply()
-        return migrated
-    }
+    fun getSportsEnabledLeagues(context: Context): Set<String> =
+        readSportsSet(context, KEY_SPORTS_LEAGUES)
+            ?: com.kennyb1201.kbstream.data.sports.SportsLeagues.DEFAULT_ENABLED
 
     fun setSportsEnabledLeagues(context: Context, leagues: Set<String>) {
         prefs(context).edit().putString(KEY_SPORTS_LEAGUES, encodeSportsSet(leagues)).apply()
