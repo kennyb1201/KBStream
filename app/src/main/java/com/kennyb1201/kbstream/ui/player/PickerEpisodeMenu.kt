@@ -74,8 +74,6 @@ internal class PickerEpisodeMenu(
         if (actions.isEmpty()) return
         if (isShowing) dismiss(restoreFocus = false)
         val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
-        val density = activity.resources.displayMetrics.density
-        fun dp(value: Int): Int = (value * density).toInt()
 
         val panel = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
@@ -122,7 +120,7 @@ internal class PickerEpisodeMenu(
         }
 
         actions.forEachIndexed { index, action ->
-            panel.addView(buildRow(action, index, actions.lastIndex, dp))
+            panel.addView(buildRow(action, index, actions.lastIndex))
         }
 
         val stack = android.widget.FrameLayout(activity).apply {
@@ -163,10 +161,21 @@ internal class PickerEpisodeMenu(
         rowViews.forEach { row -> row.isEnabled = false }
         rowViews.clear()
         backCallback.isEnabled = false
-        activity.onBackPressedDispatcher.removeCallback(backCallback)
+        // The callback takes itself out of the dispatcher: `remove()` is the
+        // pair of `addCallback` on every androidx.activity version this app
+        // ships against, where the dispatcher's own remove arrived later.
+        backCallback.remove()
         KbViewMotion.fadeOut(view) { (view.parent as? ViewGroup)?.removeView(view) }
         if (restoreFocus) onDismissed()
     }
+
+    /**
+     * Density in pixels. A member, not a local in [show], because the rows are
+     * built by [buildRow] and a local function cannot be handed across as a
+     * value (`::dp` or a lambda would be needed where a call will do).
+     */
+    private fun dp(value: Int): Int =
+        (value * activity.resources.displayMetrics.density).toInt()
 
     /** Hands the D-pad to the menu's first row. */
     fun focusFirst() {
@@ -191,8 +200,7 @@ internal class PickerEpisodeMenu(
     private fun buildRow(
         action: PosterContextAction,
         index: Int,
-        lastIndex: Int,
-        dp: (Int) -> Int
+        lastIndex: Int
     ): View {
         val row = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
