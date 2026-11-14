@@ -16,7 +16,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -25,8 +24,6 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.kitsu.KitsuConnectionState
-import com.kennyb1201.kbstream.ui.components.KBCard
-import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import kotlinx.coroutines.launch
@@ -53,7 +50,10 @@ import kotlinx.coroutines.launch
 internal fun KitsuConnectDialog(
     state: KitsuConnectionState,
     currentUsername: String?,
-    /** True on the phone, whose plate is the touch twin (see [AnimeDialogPanel]). */
+    /**
+     * True on the phone, whose plate, buttons and fields are all the touch twins
+     * (see [AnimeDialogPanel]).
+     */
     phone: Boolean = false,
     onDismiss: () -> Unit,
     onConnect: suspend (email: String, password: String) -> String?,
@@ -88,7 +88,8 @@ internal fun KitsuConnectDialog(
 
             if (state != KitsuConnectionState.Connected) {
                 Spacer(modifier = Modifier.height(10.dp))
-                KBTextField(
+                AnimeDialogField(
+                    phone = phone,
                     value = email,
                     onValueChange = { entered -> email = entered },
                     placeholder = "Kitsu email",
@@ -96,7 +97,8 @@ internal fun KitsuConnectDialog(
                     keyboardType = KeyboardType.Email
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                KBTextField(
+                AnimeDialogField(
+                    phone = phone,
                     value = password,
                     onValueChange = { entered -> password = entered },
                     placeholder = "Kitsu password",
@@ -124,7 +126,8 @@ internal fun KitsuConnectDialog(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (state == KitsuConnectionState.Connected) {
-                    KBCard(
+                    AnimeDialogButton(
+                        phone = phone,
                         onClick = {
                             keyboard?.hide()
                             onDisconnect()
@@ -139,13 +142,14 @@ internal fun KitsuConnectDialog(
                         )
                     }
                 } else {
-                    KBCard(
+                    AnimeDialogButton(
+                        phone = phone,
                         onClick = {
-                            if (busy) return@KBCard
+                            if (busy) return@AnimeDialogButton
                             val typedEmail = email.trim()
                             if (typedEmail.isEmpty() || password.isEmpty()) {
                                 error = "Enter your Kitsu email and password"
-                                return@KBCard
+                                return@AnimeDialogButton
                             }
                             keyboard?.hide()
                             busy = true
@@ -163,7 +167,9 @@ internal fun KitsuConnectDialog(
                                 }
                             }
                         },
-                        modifier = Modifier.focusRequester(connectFocusRequester)
+                        // TV only: the D-pad lands on CONNECT. Touch needs no
+                        // requester - a tap focuses its own target.
+                        focusRequester = connectFocusRequester
                     ) {
                         Text(
                             text = if (busy) "CONNECTING…" else "CONNECT",
@@ -176,7 +182,7 @@ internal fun KitsuConnectDialog(
 
                 Spacer(modifier = Modifier.width(4.dp))
 
-                KBCard(onClick = onDismiss) {
+                AnimeDialogButton(phone = phone, onClick = onDismiss) {
                     Text(
                         text = "CANCEL",
                         color = KBTextLo,
@@ -194,7 +200,8 @@ internal fun KitsuConnectDialog(
                 fontSize = 11.sp
             )
             Spacer(modifier = Modifier.height(6.dp))
-            KBTextField(
+            AnimeDialogField(
+                phone = phone,
                 value = username,
                 onValueChange = { entered -> username = entered },
                 placeholder = "Kitsu username",
@@ -210,7 +217,8 @@ internal fun KitsuConnectDialog(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                KBCard(
+                AnimeDialogButton(
+                    phone = phone,
                     onClick = {
                         keyboard?.hide()
                         onSaveUsername(username.trim().takeIf { it.isNotEmpty() })
@@ -223,7 +231,8 @@ internal fun KitsuConnectDialog(
                         modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
                     )
                 }
-                KBCard(
+                AnimeDialogButton(
+                    phone = phone,
                     onClick = {
                         keyboard?.hide()
                         username = ""

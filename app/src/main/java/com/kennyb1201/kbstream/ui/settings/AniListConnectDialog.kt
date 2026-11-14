@@ -21,8 +21,6 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.anime.AniListConnectionState
-import com.kennyb1201.kbstream.ui.components.KBCard
-import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import kotlinx.coroutines.launch
@@ -53,7 +51,10 @@ internal fun AniListConnectDialog(
     state: AniListConnectionState,
     authorizeUrl: String?,
     currentUsername: String?,
-    /** True on the phone, whose plate is the touch twin (see [AnimeDialogPanel]). */
+    /**
+     * True on the phone, whose plate, buttons and fields are all the touch twins
+     * (see [AnimeDialogPanel]).
+     */
     phone: Boolean = false,
     onDismiss: () -> Unit,
     onConnect: suspend (token: String) -> String?,
@@ -102,7 +103,8 @@ internal fun AniListConnectDialog(
                             fontSize = 12.sp
                         )
                         Spacer(modifier = Modifier.height(8.dp))
-                        KBTextField(
+                        AnimeDialogField(
+                            phone = phone,
                             value = token,
                             onValueChange = { entered -> token = entered },
                             placeholder = "AniList token",
@@ -129,7 +131,8 @@ internal fun AniListConnectDialog(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (state == AniListConnectionState.Connected) {
-                    KBCard(
+                    AnimeDialogButton(
+                        phone = phone,
                         onClick = {
                             keyboard?.hide()
                             onDisconnect()
@@ -144,13 +147,14 @@ internal fun AniListConnectDialog(
                         )
                     }
                 } else if (authorizeUrl != null) {
-                    KBCard(
+                    AnimeDialogButton(
+                        phone = phone,
                         onClick = {
-                            if (busy) return@KBCard
+                            if (busy) return@AnimeDialogButton
                             val pasted = token.trim()
                             if (pasted.isEmpty()) {
                                 error = "Paste the token AniList showed you"
-                                return@KBCard
+                                return@AnimeDialogButton
                             }
                             keyboard?.hide()
                             busy = true
@@ -180,7 +184,7 @@ internal fun AniListConnectDialog(
 
                 Spacer(modifier = Modifier.width(4.dp))
 
-                KBCard(onClick = onDismiss) {
+                AnimeDialogButton(phone = phone, onClick = onDismiss) {
                     Text(
                         text = "CANCEL",
                         color = KBTextLo,
@@ -198,7 +202,8 @@ internal fun AniListConnectDialog(
                 fontSize = 11.sp
             )
             Spacer(modifier = Modifier.height(6.dp))
-            KBTextField(
+            AnimeDialogField(
+                phone = phone,
                 value = username,
                 onValueChange = { entered -> username = entered },
                 placeholder = "AniList username",
@@ -214,7 +219,8 @@ internal fun AniListConnectDialog(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                KBCard(
+                AnimeDialogButton(
+                    phone = phone,
                     onClick = {
                         keyboard?.hide()
                         onSaveUsername(username.trim().takeIf { it.isNotEmpty() })
@@ -227,7 +233,8 @@ internal fun AniListConnectDialog(
                         modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
                     )
                 }
-                KBCard(
+                AnimeDialogButton(
+                    phone = phone,
                     onClick = {
                         keyboard?.hide()
                         username = ""

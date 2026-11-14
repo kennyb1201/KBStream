@@ -22,7 +22,6 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.mal.MalAuth
 import com.kennyb1201.kbstream.data.mal.MalConnectionState
 import com.kennyb1201.kbstream.data.mal.MalLinks
-import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBQrCode
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -117,7 +116,8 @@ internal fun MalConnectDialog(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (canConnect && phone && !browserUnavailable) {
-                    KBCard(
+                    AnimeDialogButton(
+                        phone = phone,
                         onClick = {
                             // The flow starts HERE: the verifier is stored before
                             // the URL is handed to the browser, so a redirect into
@@ -140,7 +140,8 @@ internal fun MalConnectDialog(
                 if (state == MalConnectionState.Connected ||
                     state == MalConnectionState.NeedsReconnect
                 ) {
-                    KBCard(
+                    AnimeDialogButton(
+                        phone = phone,
                         onClick = {
                             MalAuth.disconnect(context)
                             onDisconnect()
@@ -155,7 +156,7 @@ internal fun MalConnectDialog(
                         )
                     }
                 }
-                KBCard(onClick = onDismiss) {
+                AnimeDialogButton(phone = phone, onClick = onDismiss) {
                     Text(
                         text = "CLOSE",
                         color = KBTextLo,
