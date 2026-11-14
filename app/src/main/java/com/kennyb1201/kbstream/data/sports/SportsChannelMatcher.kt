@@ -26,7 +26,27 @@ data class MatcherProgram(
      * preview show, while a title naming both is the game itself.
      */
     val description: String? = null,
-)
+) {
+    /**
+     * [title]'s tokens, worked out once for the pass that holds this row.
+     *
+     * The guide tier and its trace read the same row's title for EVERY card on
+     * the slate - the trace alone reads every program's title and description
+     * per card - and re-tokenizing them each time was pure repetition: identical
+     * strings, identical answer. The row is built by a pass and dropped with it,
+     * so this cache cannot outlive the guide it came from. NONE is safe because a
+     * pass reads its rows on one dispatcher; a second thread would at worst
+     * tokenize the same string twice.
+     */
+    internal val titleTokens: List<String> by lazy(LazyThreadSafetyMode.NONE) {
+        SportsChannelMatcher.words(title)
+    }
+
+    /** [description]'s tokens, cached for the same reason as [titleTokens]. */
+    internal val descriptionTokens: List<String> by lazy(LazyThreadSafetyMode.NONE) {
+        SportsChannelMatcher.words(description.orEmpty())
+    }
+}
 
 /**
  * A game's two sides' name forms, resolved ONCE for a matching pass.
@@ -848,10 +868,10 @@ internal object SportsChannelMatcher {
         val guideDistance = HashMap<String, Long>()
         programs.forEach { program ->
             if (!overlapsWindow(program, game.dateMs)) return@forEach
-            val titleTokens = words(program.title)
+            val titleTokens = program.titleTokens
             val titleStrength = teamNameStrength(titleTokens, game.away, game.home, variants)
             val descriptionTokens = if (titleStrength == TeamNameStrength.NONE) {
-                words(program.description.orEmpty())
+                program.descriptionTokens
             } else {
                 emptyList()
             }
@@ -1000,7 +1020,19 @@ internal object SportsChannelMatcher {
     ): NameHits {
         val strong = ArrayList<IptvChannel>()
         val weak = ArrayList<IptvChannel>()
-        channelIndex.forEachNamed { nameWords, channel ->
+        // Only the channels that COULD name this game are graded. [nameGrade]
+        // needs a whole name form (or a city) of one of the two teams inside the
+        // channel's own name, so a channel that contains none of those words can
+        // only ever answer NONE - and on a 40k-channel playlist that was every
+        // card grading all 40k names to reject almost all of them, which is what
+        // turned a sixteen-league slate into minutes of "Finding channel…".
+        //
+        // The candidate set is COMPLETE, not a heuristic: every grade but NONE
+        // requires a run of tokens from one of those forms, so the union of their
+        // words is exactly the set of names that could grade. The visit order is
+        // still playlist order (the index walks its facts and filters), so the
+        // feeds a card lists keep the precedence they had.
+        channelIndex.forEachNamedMatching(nameCandidateTokens(game, variants)) { nameWords, channel ->
             when (nameGrade(nameWords, game, variants)) {
                 NameGrade.BOTH -> strong += channel
                 NameGrade.ONE -> weak += channel
@@ -1009,6 +1041,22 @@ internal object SportsChannelMatcher {
         }
         return NameHits(strong = strong, weak = weak)
     }
+
+    /**
+     * Every word [nameGrade] could match a channel's name on, for one game.
+     *
+     * The three things that make a grade anything but NONE: a real name form of
+     * either side (the full name, the feed's short name, the abbreviation, the
+     * last word, a short-form alias - all of them already resolved into
+     * [TeamVariants]) and a team's city. Their union is what the channel-name
+     * index is asked for; see [nameHits].
+     */
+    private fun nameCandidateTokens(game: SportsGame, variants: TeamVariants): Set<String> =
+        buildSet {
+            (variants.away + variants.home).forEach { addAll(it) }
+            cityOf(game.away)?.let { addAll(it) }
+            cityOf(game.home)?.let { addAll(it) }
+        }
 
     /** What the channel-name tier found, in the two strengths [matches] orders by. */
     private data class NameHits(
@@ -1164,7 +1212,7 @@ internal object SportsChannelMatcher {
         val eventWords = words(event.name)
         if (eventWords.isEmpty()) return emptyList()
         val hits = programs.filter { program ->
-            words(program.title).containsSequence(eventWords)
+            program.titleTokens.containsSequence(eventWords)
         }
         if (hits.isEmpty()) return emptyList()
         // Which of a multi-day event's guide rows is the one on now, not which
@@ -1411,6 +1459,24 @@ internal object SportsChannelMatcher {
             }
         }
 
+        /**
+         * Name token -> the facts carrying it, built once when the index is.
+         *
+         * What makes [forEachNamedMatching] possible: a card names its game with
+         * a handful of words, and only channels carrying one of them can be the
+         * game. One bucket per distinct word per channel, built from the tokens
+         * the index already normalized.
+         */
+        private val byToken: Map<String, List<Fact>> = buildMap {
+            val buckets = HashMap<String, MutableList<Fact>>(facts.size * 2)
+            facts.forEach { fact ->
+                fact.nameWords.toHashSet().forEach { token ->
+                    buckets.getOrPut(token) { ArrayList(2) } += fact
+                }
+            }
+            putAll(buckets)
+        }
+
         /** Network families resolved so far, by the RAW name they were asked for. */
         private val byNetwork = HashMap<String, List<IptvChannel>>()
 
@@ -1434,15 +1500,36 @@ internal object SportsChannelMatcher {
          * Visits every channel in the pass with the name tokens this index has
          * already normalized, in playlist order.
          *
-         * The channel-name tier's read (see [SportsChannelMatcher.nameHits]).
-         * Handed out rather than re-derived for the same reason the network tier
-         * reads precomputed strings: a pass of sixty cards visits every channel
-         * for every card, and re-tokenizing forty thousand names per card is the
-         * cost that took this loop to a minute before the index existed. Nothing
-         * is allocated here - the lists the index already holds are handed over.
+         * Kept for a caller that genuinely wants the whole playlist; the
+         * channel-name tier does NOT use it any more - see
+         * [forEachNamedMatching], which is the same visit narrowed to the only
+         * channels that could answer.
          */
         fun forEachNamed(visit: (nameWords: List<String>, channel: IptvChannel) -> Unit) {
             facts.forEach { visit(it.nameWords, it.channel) }
+        }
+
+        /**
+         * Visits only the channels whose name contains at least one of [tokens],
+         * in playlist order.
+         *
+         * The channel-name tier's read (see [SportsChannelMatcher.nameHits]).
+         * The token -> channels map is built once with the facts, so a card's
+         * visit costs one hash lookup per token it asks about plus one per
+         * candidate, instead of grading every name in the playlist. Playlist
+         * order is preserved (the facts are walked and filtered rather than the
+         * token buckets being concatenated), so a card's feed precedence cannot
+         * change with the index.
+         */
+        fun forEachNamedMatching(
+            tokens: Collection<String>,
+            visit: (nameWords: List<String>, channel: IptvChannel) -> Unit,
+        ) {
+            if (tokens.isEmpty() || facts.isEmpty()) return
+            val wanted = HashSet<String>()
+            tokens.forEach { token -> byToken[token]?.forEach { wanted.add(it.channel.id) } }
+            if (wanted.isEmpty()) return
+            facts.forEach { if (it.channel.id in wanted) visit(it.nameWords, it.channel) }
         }
 
         private fun networkChannels(network: String): List<IptvChannel> {
