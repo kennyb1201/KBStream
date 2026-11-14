@@ -262,9 +262,10 @@ class SettingsPublicListsSectionTest {
                 section.contains("Simkl public lists")
             )
         }
-        // ...while its tracker row is untouched.
-        assertTrue(source(TV).contains("label = \"Simkl\""))
-        assertTrue(source(MOBILE).contains("label = \"Simkl\""))
+        // ...while its tracker row is still there, now naming the connected
+        // account (spec 2026-11-14, F1).
+        assertTrue(source(TV).contains("connectedAsLabel(\"Simkl\", simklAccount)"))
+        assertTrue(source(MOBILE).contains("connectedAsLabel(\"Simkl\", simklAccount)"))
     }
 
     private fun findSourceRoot(): File {

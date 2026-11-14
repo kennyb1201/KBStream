@@ -45,8 +45,10 @@ class TrackersSectionContractTest {
     fun `the tv Trackers section holds Simkl, Trakt and Resume Source in order`() {
         val trackers = tv.indexOf("SettingsSectionHeader(\"Trackers\")")
         val keys = tv.indexOf("SettingsSectionHeader(\"API Keys\")")
-        val simkl = tv.indexOf("label = \"Simkl\"")
-        val trakt = tv.indexOf("label = \"Trakt\"")
+        // The two labels name the connected account since spec 2026-11-14 (F1),
+        // so the anchor is the label builder, not a bare string literal.
+        val simkl = tv.indexOf("connectedAsLabel(\"Simkl\", simklAccount)")
+        val trakt = tv.indexOf("connectedAsLabel(\"Trakt\", traktAccount)")
         val resume = tv.indexOf("ResumeAuthorityRow(")
 
         listOf(simkl, trakt, resume).forEach { index ->
@@ -139,8 +141,8 @@ class TrackersSectionContractTest {
         assertTrue("Trackers follows Profiles & Accounts", trackers > profiles)
         assertTrue("and precedes API Keys", trackers < keys)
 
-        val simkl = mobile.indexOf("label = \"Simkl\"")
-        val trakt = mobile.indexOf("label = \"Trakt\"")
+        val simkl = mobile.indexOf("connectedAsLabel(\"Simkl\", simklAccount)")
+        val trakt = mobile.indexOf("connectedAsLabel(\"Trakt\", traktAccount)")
         val resume = mobile.indexOf("ResumeAuthorityMobile(")
         listOf(simkl, trakt, resume).forEach { index ->
             assertTrue("every item must be inside the Trackers section", index in trackers until keys)
@@ -174,9 +176,19 @@ class TrackersSectionContractTest {
         )
         // The tracker rows themselves are unconditional in both panes; the
         // connect screens own their own kids/PIN gating.
-        listOf("Simkl", "Trakt").forEach { label ->
-            assertTrue("TV: $label is an unconditional row", tv.contains("label = \"$label\","))
-            assertTrue("phone: $label is an unconditional row", mobile.contains("label = \"$label\","))
+        // Unconditional since spec 2026-11-14 (F1): the row always renders, and
+        // only its label switches between the plain name and "connected as".
+        listOf("Simkl" to "simklAccount", "Trakt" to "traktAccount").forEach { (label, account) ->
+            assertTrue(
+                "TV: $label is an unconditional row",
+                tv.contains("connectedAsLabel(\"$label\", $account)") &&
+                    tv.contains("onClick = onOpen$label")
+            )
+            assertTrue(
+                "phone: $label is an unconditional row",
+                mobile.contains("connectedAsLabel(\"$label\", $account)") &&
+                    mobile.contains("onClick = onOpen$label")
+            )
         }
     }
 
