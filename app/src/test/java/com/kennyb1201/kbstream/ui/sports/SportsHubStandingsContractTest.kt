@@ -151,12 +151,20 @@ class SportsHubStandingsContractTest {
     @Test
     fun `standings are fetched on their own path, never through game logic`() {
         assertTrue(
-            "the ViewModel asks the repository for the league's table",
-            model.contains("val groups = withContext(Dispatchers.IO) { espn.standings(path) }")
+            "the ViewModel asks the repository for an ESPN league's table",
+            model.contains("val groups = withContext(Dispatchers.IO) {") &&
+                model.contains("espn.standings(path)")
         )
         assertTrue(
-            "and holds a failure state of its own",
-            model.contains("_standingsFailed.value = if (groups.isEmpty() && espn.lastStandingsFetchFailed(path))")
+            "and a TheSportsDB league's table comes from its own client, on the " +
+                "same six-hour path (spec 2026-11-13 F4)",
+            model.contains("theSportsDb.standings(theSportsDbKey(), tsdbLeague)")
+        )
+        assertTrue(
+            "and holds a failure state of its own, named for the source that answered",
+            model.contains("_standingsFailed.value = if (failed)") &&
+                model.contains("groups.isEmpty() && espn.lastStandingsFetchFailed(path)") &&
+                model.contains("theSportsDb.lastStandingsFetchFailed(tsdbId)")
         )
         // The standings fetch must not touch the scoreboard match machinery.
         val ensure = slice(model, "private fun ensureStandings()", "fun setTeamFavorite(")

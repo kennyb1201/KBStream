@@ -74,9 +74,13 @@ class SportsNotificationWorker(
         val requested = SportsReminderStore.loadRequested(prefs)
         if (!SportsGameReminderRules.shouldSchedule(favorites, requested.keys)) return
 
+        // ESPN leagues only: this round reads a SCOREBOARD, and a `tsdb:` league
+        // has no ESPN path and no live scores at all (spec 2026-11-13 §5) - asking
+        // ESPN for one is an HTTP 400, and asking TheSportsDB would be a poll of a
+        // fixtures endpoint nothing here can use.
         val leagues = SportsLeagues.enabled(
             AppPreferences.getSportsEnabledLeagues(applicationContext)
-        )
+        ).filterNot { it.isTheSportsDb }
         if (leagues.isEmpty()) return
 
         // The shared repository, so a round that lands while the hub is open

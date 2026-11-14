@@ -41,6 +41,7 @@ import com.kennyb1201.kbstream.data.sports.SportsLeagues
 import com.kennyb1201.kbstream.data.sports.SportsTeam
 import com.kennyb1201.kbstream.data.sports.StandingGroup
 import com.kennyb1201.kbstream.data.sports.TeamVariants
+import com.kennyb1201.kbstream.data.sports.TheSportsDbClient
 import com.kennyb1201.kbstream.data.sports.TournamentEvent
 import com.kennyb1201.kbstream.data.sports.involvesFavorite
 import com.kennyb1201.kbstream.data.sync.ProfileManager
@@ -118,6 +119,20 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
 
     private val iptv = IptvRepository.shared(app)
     private val espn = EspnSportsRepository.shared()
+
+    /**
+     * The second sports source (spec 2026-11-13): the leagues ESPN does not
+     * carry, their fixtures and tables, and badges where ESPN has none.
+     *
+     * Deliberately beside [espn] and not instead of it: live scores stay ESPN's,
+     * and this client is never asked on the 30-second beat - a fixture list is
+     * cached until midnight and a table for six hours, so its rate-limit budget
+     * (30/minute on the shared free key) is spent once, not per tick.
+     */
+    private val theSportsDb = TheSportsDbClient.shared()
+
+    /** TheSportsDB key for this read: the viewer's own, else the published test key. */
+    private fun theSportsDbKey(): String = TheSportsDbClient.keyFor(getApplication())
 
     /**
      * The per-matchup guide lookup: the FTS index first, and the `LIKE` scan
@@ -344,6 +359,10 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun loadDetailSummary() {
         val (leaguePath, eventId) = detailRequest ?: return
+        // A TheSportsDB league has no ESPN path to summarise and no free summary
+        // of its own, so the sheet draws the card it already has rather than
+        // spending a request that can only come back 400 (spec 2026-11-13 F2).
+        if (SportsLeagues.byPath(leaguePath)?.isTheSportsDb == true) return
         _detailSummary.value = espn.gameSummary(leaguePath, eventId)
     }
 
@@ -830,8 +849,16 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         _standingsLoading.value = _standingsLoading.value + path
         viewModelScope.launch {
             // The repository already holds a 6-hour cache; this is a network hop
-            // only when that cache is cold.
-            val groups = withContext(Dispatchers.IO) { espn.standings(path) }
+            // only when that cache is cold. A `tsdb:` league reads its table from
+            // TheSportsDB instead, on the same six-hour cadence (spec F4).
+            val tsdbLeague = SportsLeagues.byPath(path)?.takeIf { it.isTheSportsDb }
+            val groups = withContext(Dispatchers.IO) {
+                if (tsdbLeague != null) {
+                    theSportsDb.standings(theSportsDbKey(), tsdbLeague)
+                } else {
+                    espn.standings(path)
+                }
+            }
             // Best record first, whichever order ESPN sent: the NBA's document
             // arrives worst-first and the NFL's does not (see
             // SportsStandingsOrder). Sorted here, once, so the TV table and the
@@ -841,7 +868,17 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 pointsTable = SportsLeagues.byPath(path)?.pointsTable == true
             )
             _standings.value = _standings.value + (path to table)
-            _standingsFailed.value = if (groups.isEmpty() && espn.lastStandingsFetchFailed(path)) {
+            // Which source's failure flag: an empty table cannot say why it is
+            // empty, and the retry state must describe the source that answered.
+            val tsdbId = tsdbLeague?.theSportsDbId.orEmpty()
+            val failed = if (tsdbLeague != null) {
+                groups.isEmpty() &&
+                    tsdbId.isNotEmpty() &&
+                    theSportsDb.lastStandingsFetchFailed(tsdbId)
+            } else {
+                groups.isEmpty() && espn.lastStandingsFetchFailed(path)
+            }
+            _standingsFailed.value = if (failed) {
                 _standingsFailed.value + path
             } else {
                 _standingsFailed.value - path
@@ -1153,19 +1190,42 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             }.awaitAll()
         }
 
+    /**
+     * One league's card slate, from the source that carries it.
+     *
+     * A `tsdb:` league is read from TheSportsDB (ESPN has no path for it); every
+     * other league is ESPN's, and its sides then get the badge gap-fill - ESPN's
+     * own crest where it has one, TheSportsDB's where it does not (spec F3). The
+     * fill is a no-op with no request when nothing is missing, which is the normal
+     * case, and it never replaces a logo the feed already sent.
+     *
+     * The result is the same [LeagueSection] either way, so the matcher, the
+     * favourites tab, the cards and the phone screen cannot tell the two sources
+     * apart - which is what makes a TheSportsDB fixture channel-matched exactly
+     * like an ESPN one (the coverage fix, spec F2).
+     */
     private suspend fun fetchSection(
         league: SportsLeague,
         previous: LeagueSection?
-    ): LeagueSection = when (league.kind) {
-        SportsKind.HEAD_TO_HEAD -> {
-            val games = espn.scoreboard(league.path)
+    ): LeagueSection = when {
+        league.isTheSportsDb -> {
+            val leagueId = league.theSportsDbId.orEmpty()
+            val games = theSportsDb.fixtures(theSportsDbKey(), leagueId)
+            LeagueSection(
+                league = league,
+                games = games,
+                failed = games.isEmpty() && theSportsDb.lastFetchFailed(leagueId),
+            )
+        }
+        league.kind == SportsKind.HEAD_TO_HEAD -> {
+            val games = theSportsDb.withBadges(theSportsDbKey(), espn.scoreboard(league.path))
             LeagueSection(
                 league = league,
                 games = games,
                 failed = games.isEmpty() && espn.lastFetchFailed(league.path),
             )
         }
-        SportsKind.TOURNAMENT -> {
+        else -> {
             val events = espn.tournamentEvents(league.path)
             LeagueSection(
                 league = league,

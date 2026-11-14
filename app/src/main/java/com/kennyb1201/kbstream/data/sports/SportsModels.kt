@@ -399,7 +399,9 @@ enum class SportsKind { HEAD_TO_HEAD, TOURNAMENT }
  * One league the hub can show.
  *
  * [path] is the ESPN URL segment (`site.api.espn.com/apis/site/v2/sports/$path/scoreboard`)
- * and doubles as the stable id the enabled-set is stored under.
+ * and doubles as the stable id the enabled-set is stored under - except for a
+ * TheSportsDB league, whose path is `tsdb:<their league id>` because ESPN has no
+ * segment for it (see [isTheSportsDb]).
  */
 data class SportsLeague(
     val path: String,
@@ -449,7 +451,24 @@ data class SportsLeague(
      * only where [pointsTable] is true.
      */
     val pointsColumns: List<PointsColumn> = DEFAULT_POINTS_COLUMNS,
+    /**
+     * TheSportsDB's own league id, when this league is read from them.
+     *
+     * Null for every ESPN league: ESPN keeps the Hub's live scores, and the only
+     * thing TheSportsDB adds to an ESPN league is a badge where ESPN carries none
+     * - which is looked up by TEAM NAME (see TheSportsDbClient.withBadges), so it
+     * needs no league mapping at all. Set only on the leagues ESPN does not carry.
+     */
+    val theSportsDbId: String? = null,
 ) {
+    /**
+     * Whether this league's fixtures and table come from TheSportsDB rather than
+     * ESPN (spec 2026-11-13 F2). False for every ESPN league, including the ones
+     * TheSportsDB also covers: live scores stay ESPN's.
+     */
+    val isTheSportsDb: Boolean
+        get() = path.startsWith(SportsLeagues.THESPORTSDB_PATH_PREFIX)
+
     companion object {
         /** Soccer's table: wins, draws, losses, then points. */
         val DEFAULT_POINTS_COLUMNS: List<PointsColumn> =
@@ -595,6 +614,50 @@ object SportsLeagues {
                 PointsColumn.POINTS
             )
         ),
+        // ── TheSportsDB's leagues (spec 2026-11-13 F2) ──────────────
+        //
+        // The coverage gap this closes: ESPN carries the majors, and a league it
+        // does not carry never reached the Hub at all. These four are the ones
+        // verified against the live free V1 API on 2026-11-14 (league id -> name
+        // and current table) and are the ones the free key answers fixtures for;
+        // each is read for its NEXT MATCHDAY, so the tab draws the whole round
+        // rather than one card.
+        //
+        // Live scores stay ESPN's: these leagues have none here (the free key has
+        // no livescore endpoint), so their cards are fixtures and results, and the
+        // Hub's 30-second poll never asks TheSportsDB anything.
+        SportsLeague(
+            "tsdb:4332",
+            "Serie A",
+            SportsKind.HEAD_TO_HEAD,
+            hasStandings = true,
+            pointsTable = true,
+            theSportsDbId = "4332"
+        ),
+        SportsLeague(
+            "tsdb:4331",
+            "Bundesliga",
+            SportsKind.HEAD_TO_HEAD,
+            hasStandings = true,
+            pointsTable = true,
+            theSportsDbId = "4331"
+        ),
+        SportsLeague(
+            "tsdb:4334",
+            "Ligue 1",
+            SportsKind.HEAD_TO_HEAD,
+            hasStandings = true,
+            pointsTable = true,
+            theSportsDbId = "4334"
+        ),
+        SportsLeague(
+            "tsdb:4350",
+            "Liga MX",
+            SportsKind.HEAD_TO_HEAD,
+            hasStandings = true,
+            pointsTable = true,
+            theSportsDbId = "4350"
+        ),
         // Individual sports: no team table exists, so the hub never offers one.
         SportsLeague("tennis/atp", "Tennis", SportsKind.HEAD_TO_HEAD),
         SportsLeague("mma/ufc", "UFC", SportsKind.HEAD_TO_HEAD),
@@ -607,15 +670,24 @@ object SportsLeagues {
      * The hub's own favourites tab.
      *
      * Not an ESPN path - there is no league behind it - so it is spelled in a
-     * way no real path can collide with. [SportsLeagues.enabled] never returns
-     * it and the leagues panel never lists it: it is a view over the leagues
-     * the viewer turned on, not one of them.
+     * way no real path (and no `tsdb:` path) can collide with.
+     * [SportsLeagues.enabled] never returns it and the leagues panel never lists
+     * it: it is a view over the leagues the viewer turned on, not one of them.
      */
     val FAVORITES: SportsLeague =
         SportsLeague(FAVORITES_PATH, "Favorites", SportsKind.HEAD_TO_HEAD)
 
     /** The favourites tab's id, which is also the hub's selected-tab value. */
     const val FAVORITES_PATH = "sports:favorites"
+
+    /**
+     * The prefix a TheSportsDB league's path carries: `tsdb:<their league id>`.
+     *
+     * A prefix rather than a bare id, so it can never be mistaken for an ESPN
+     * segment (no ESPN path has a colon) and so [SportsLeague.isTheSportsDb] is a
+     * fact about the id the enabled-set already stores.
+     */
+    const val THESPORTSDB_PATH_PREFIX = "tsdb:"
 
     /**
      * Every league in [ALL], on out of the box.
@@ -633,6 +705,16 @@ object SportsLeagues {
      * remembers to touch this set.
      */
     val DEFAULT_ENABLED: Set<String> = ALL.map { it.path }.toSet()
+
+    /**
+     * The TheSportsDB league paths, on in the catalog's own order.
+     *
+     * The catalog generation an existing profile's stored enabled-set is brought
+     * up to (see AppPreferences.getSportsEnabledLeagues): a set written before
+     * these leagues existed cannot contain them, and coverage nobody can see is
+     * the gap this release is closing.
+     */
+    val THESPORTSDB_PATHS: List<String> = ALL.filter { it.isTheSportsDb }.map { it.path }
 
     fun byPath(path: String): SportsLeague? = ALL.firstOrNull { it.path == path }
 

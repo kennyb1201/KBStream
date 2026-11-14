@@ -96,8 +96,12 @@ internal object LiveScoreFeed {
      */
     private suspend fun pollOnce(context: Context) {
         val enabled = AppPreferences.getSportsEnabledLeagues(context)
+        // ESPN head-to-head leagues only. A `tsdb:` league is head-to-head too,
+        // but its free source has no livescore leg (spec 2026-11-13 §5), so asking
+        // it here would spend its 30/minute budget on a grid cell it can never
+        // fill - and asking ESPN for a `tsdb:` path would just 400.
         val leagues = SportsLeagues.enabled(enabled).filter {
-            it.kind == SportsKind.HEAD_TO_HEAD
+            it.kind == SportsKind.HEAD_TO_HEAD && !it.isTheSportsDb
         }
         if (leagues.isEmpty()) return
 

@@ -1088,6 +1088,20 @@ private fun IntegrationsPaneMobile(
             savedDescription = "Saved — anime episodes can now use Anime Skip " +
                 "(button only, never auto-skip)."
         )
+        // TheSportsDB's key is OPTIONAL in the opposite direction to the rest of
+        // this block: the Hub ships the service's public free key, so blank is a
+        // working Hub. A paid key buys the viewer their own rate limit.
+        KeyCardMobile(
+            title = "TheSportsDB Key",
+            description = "Optional. The Hub reads TheSportsDB with its public free key; " +
+                "paste your own paid key for your own rate limit and fuller league " +
+                "tables. Fixtures and tables only — live scores stay ESPN's. Syncs to " +
+                "your other devices.",
+            placeholder = "Paste key",
+            loadedValue = AppPreferences.getTheSportsDbKey(context),
+            onSave = { key -> AppPreferences.setTheSportsDbKey(context, key) },
+            savedDescription = "Saved — the Hub now reads TheSportsDB with your key."
+        )
         // The artwork key. Optional, and the app's own project key ships in the
         // build - this is the viewer's own fanart.tv key, which only shortens the
         // artwork delay (2 days instead of 7). Synced like the keys around it.

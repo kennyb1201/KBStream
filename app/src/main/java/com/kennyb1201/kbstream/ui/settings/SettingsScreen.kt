@@ -795,6 +795,15 @@ fun SettingsScreen(
     var animeSkipKeySaved by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getAnimeSkipClientId(context).isNotBlank())
     }
+    // TheSportsDB's OPTIONAL personal key. Blank is the normal state: the Hub
+    // ships the published free test key, and the field only buys a viewer's own
+    // rate limit (and more of each league's table) from a paid key.
+    var theSportsDbKeyInput by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getTheSportsDbKey(context))
+    }
+    var theSportsDbKeySaved by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getTheSportsDbKey(context).isNotBlank())
+    }
     var autoFetchSubtitles by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getAutoFetchSubtitles(context))
     }
@@ -1627,6 +1636,94 @@ fun SettingsScreen(
                             Text(
                                 text = "Saved — anime episodes can now use Anime Skip " +
                                     "(button only, never auto-skip).",
+                                color = KBAccent,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(top = 5.dp)
+                            )
+                        }
+                    }
+                }
+
+                // ── THESPORTSDB KEY (optional) ──────────────────────
+                // The Hub's second sports source ships the published free test
+                // key, so this row is the opposite of the others in this pane: a
+                // blank field is a working Hub. A paid key (thesportsdb.com,
+                // $9/mo) buys the viewer's own 100 req/min instead of the shared
+                // 30, and fills more of each league's table. It SYNCS.
+                Spacer(modifier = Modifier.height(12.dp))
+                val theSportsDbFocusRequester = remember { FocusRequester() }
+                KBCard(
+                    onClick = { theSportsDbFocusRequester.requestFocus() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(KBSurfaceRaised, KBShapeSmall)
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        Text(
+                            text = if (theSportsDbKeySaved) {
+                                "TheSportsDB — Personal Key set"
+                            } else {
+                                "TheSportsDB — Personal Key not set (free key in use)"
+                            },
+                            color = KBTextHi,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "Optional. The Hub reads TheSportsDB with its public " +
+                                "free key; paste your own paid key here for your own rate " +
+                                "limit and fuller league tables. Fixtures and tables only - " +
+                                "live scores stay ESPN's. Synced to your other devices.",
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                        val theSportsDbPaste: (String) -> Unit = { pasted ->
+                            theSportsDbKeyInput = pasted.trim()
+                            AppPreferences.setTheSportsDbKey(context, theSportsDbKeyInput)
+                            theSportsDbKeySaved = theSportsDbKeyInput.isNotBlank()
+                        }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .padding(top = 6.dp)
+                                .fillMaxWidth()
+                        ) {
+                            KBSecretField(
+                                value = theSportsDbKeyInput,
+                                revealable = !kidsKeysHidden,
+                                onValueChange = {
+                                    theSportsDbKeyInput = it.trim()
+                                    theSportsDbKeySaved = false
+                                },
+                                placeholder = "Paste key",
+                                modifier = Modifier.weight(1f),
+                                focusRequester = theSportsDbFocusRequester,
+                                onDone = {
+                                    AppPreferences.setTheSportsDbKey(context, theSportsDbKeyInput)
+                                    theSportsDbKeySaved = theSportsDbKeyInput.isNotBlank()
+                                },
+                                onFocusChanged = { focusedNow ->
+                                    // Save on focus loss too — remote users often
+                                    // just navigate away after pasting.
+                                    if (!focusedNow) {
+                                        AppPreferences.setTheSportsDbKey(
+                                            context,
+                                            theSportsDbKeyInput
+                                        )
+                                        theSportsDbKeySaved = theSportsDbKeyInput.isNotBlank()
+                                    }
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            KBPasteChip(onPaste = theSportsDbPaste)
+                        }
+                        if (theSportsDbKeySaved) {
+                            Text(
+                                text = "Saved — the Hub now reads TheSportsDB with your " +
+                                    "key. Clearing the field goes back to the free key.",
                                 color = KBAccent,
                                 style = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier.padding(top = 5.dp)

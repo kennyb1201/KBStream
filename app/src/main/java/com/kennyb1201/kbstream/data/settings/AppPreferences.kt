@@ -189,6 +189,13 @@ object AppPreferences {
      * the same reason every other account key does (spec 2026-11-13, F2).
      */
     private const val KEY_FANART_CLIENT_KEY = "fanart_client_key"
+    // TheSportsDB's OPTIONAL personal key (spec 2026-11-13 F1). The app ships the
+    // published test key `123` as a constant, so a blank value here is the normal
+    // state and the Hub works anyway; a viewer who pays for a dedicated key pastes
+    // it and gets the higher limit. It is a credential, so it lives in the same
+    // encrypted, profile-scoped store as the rest and SYNCS like them - a paid key
+    // is pasted once, not once per television.
+    private const val KEY_THESPORTSDB_KEY = "thesportsdb_api_key"
     private const val KEY_OPENSUBTITLES_API_KEY = "opensubtitles_api_key"
     private const val KEY_TORBOX_API_KEY = "torbox_api_key"
     private const val KEY_TORBOX_LIBRARY_SYNC = "torbox_library_sync"
@@ -255,6 +262,12 @@ object AppPreferences {
     private const val KEY_BADGES_ABOVE_FILE = "badges_above_file"            // badge chips above (true) or below the file name
     // Which ESPN leagues the sports hub renders; a Set<String> of league paths.
     private const val KEY_SPORTS_LEAGUES = "sports_enabled_leagues"
+
+    /** The catalog generation a stored enabled-set was last brought up to. */
+    private const val KEY_SPORTS_LEAGUES_VERSION = "sports_enabled_leagues_version"
+
+    /** 2: the TheSportsDB leagues joined the catalog (spec 2026-11-13 F2). */
+    private const val SPORTS_LEAGUES_VERSION = 2
     // The viewer's own league order, a newline-separated run of league paths.
     private const val KEY_SPORTS_LEAGUE_ORDER = "sports_league_order"
     private const val KEY_SPORTS_FAVORITE_TEAMS = "sports_favorite_teams"
@@ -2247,7 +2260,8 @@ object AppPreferences {
         KEY_MDBLIST_API_KEY,
         KEY_OMDB_API_KEY,
         KEY_ANIME_SKIP_CLIENT_ID,
-        KEY_FANART_CLIENT_KEY
+        KEY_FANART_CLIENT_KEY,
+        KEY_THESPORTSDB_KEY
     )
 
     private fun apiKeySyncStampKey(keyName: String) = "__sync_ts__$keyName"
@@ -2394,6 +2408,27 @@ object AppPreferences {
         // Never leave a plaintext copy behind.
         prefs(context).edit().remove(KEY_ANIME_SKIP_CLIENT_ID).apply()
         stampApiKeyEdit(context, KEY_ANIME_SKIP_CLIENT_ID, System.currentTimeMillis())
+        pushApiKeysBlob()
+    }
+
+    // ── TheSportsDB personal key (optional) ────────────────────────────
+    // The Hub's second sports source ships the published free test key, so blank
+    // is the normal state and means nothing but "use the shared key". A viewer
+    // with a paid dedicated key pastes it here (thesportsdb.com, $9/mo Single
+    // Developer): the client prefers it, and the request's own rate-limit budget
+    // is then theirs rather than the whole internet's.
+    //
+    // The key SYNCS (it is in [SYNCED_API_KEYS]) so it is pasted once per account,
+    // exactly like the MDBList and Anime Skip values beside it. It never reaches a
+    // log line, a diagnostics paste, or the APK.
+    fun getTheSportsDbKey(context: Context): String =
+        apiKeyPrefs(context).getString(KEY_THESPORTSDB_KEY, "")?.trim().orEmpty()
+
+    fun setTheSportsDbKey(context: Context, key: String) {
+        apiKeyPrefs(context).edit().putString(KEY_THESPORTSDB_KEY, key.trim()).apply()
+        // Never leave a plaintext copy behind.
+        prefs(context).edit().remove(KEY_THESPORTSDB_KEY).apply()
+        stampApiKeyEdit(context, KEY_THESPORTSDB_KEY, System.currentTimeMillis())
         pushApiKeysBlob()
     }
 
@@ -2842,9 +2877,25 @@ object AppPreferences {
      * leagues panel is what narrows it. Synced to the account (see
      * [syncDisplayPrefsBlob]), so the other TV comes up with the same hub.
      */
-    fun getSportsEnabledLeagues(context: Context): Set<String> =
-        readSportsSet(context, KEY_SPORTS_LEAGUES)
-            ?: com.kennyb1201.kbstream.data.sports.SportsLeagues.DEFAULT_ENABLED
+    fun getSportsEnabledLeagues(context: Context): Set<String> {
+        val stored = readSportsSet(context, KEY_SPORTS_LEAGUES)
+            ?: return com.kennyb1201.kbstream.data.sports.SportsLeagues.DEFAULT_ENABLED
+        // A stored set is a SNAPSHOT of the catalog at the time it was written,
+        // so a league added by a later build was never in it and never reached an
+        // existing viewer's hub - the new coverage would only appear for someone
+        // who happened to open the leagues panel and notice a toggle. One
+        // migration fixes it: on the first read after the update the new
+        // TheSportsDB leagues are turned on with whatever was already on, and the
+        // stamp means a viewer who turns them off keeps them off.
+        val version = prefs(context).getInt(KEY_SPORTS_LEAGUES_VERSION, 1)
+        if (version >= SPORTS_LEAGUES_VERSION) return stored
+        val migrated = stored + com.kennyb1201.kbstream.data.sports.SportsLeagues.THESPORTSDB_PATHS
+        setSportsEnabledLeagues(context, migrated)
+        prefs(context).edit()
+            .putInt(KEY_SPORTS_LEAGUES_VERSION, SPORTS_LEAGUES_VERSION)
+            .apply()
+        return migrated
+    }
 
     fun setSportsEnabledLeagues(context: Context, leagues: Set<String>) {
         prefs(context).edit().putString(KEY_SPORTS_LEAGUES, encodeSportsSet(leagues)).apply()
