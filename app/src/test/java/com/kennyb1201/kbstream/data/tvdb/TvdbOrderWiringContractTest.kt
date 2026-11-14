@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.tvdb
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -49,9 +50,22 @@ class TvdbOrderWiringContractTest {
             "and compiles it under that exact name",
             gradle.contains("buildConfigField(\"String\", \"TVDB_API_KEY\", \"\\\"\$tvdbApiKey\\\"\")")
         )
-        assertFalse(
-            "a *SECRET* BuildConfig field must never exist (SimklClientConfigTest's rule)",
-            Regex("buildConfigField\\(\\s*\"String\",\\s*\"[A-Z_]*SECRET[A-Z_]*\"").containsMatchIn(gradle)
+        // The rule is SimklClientConfigTest's, and it has exactly ONE named
+        // exception (spec 2026-11-14, F1): ANILIST_CLIENT_SECRET. AniList removed
+        // the implicit grant its connect was built on (its authorize endpoint
+        // answers unsupported_grant_type for response_type=token), so the connect
+        // is the Authorization Code grant and the exchange needs the app secret;
+        // KBStream has no backend to hold one, so Kenny decided on 2026-11-14 to
+        // bundle it. Every other provider still ships no secret - an unexpected
+        // field fails this, which is what the assertion below checks.
+        val shippedSecrets = Regex(
+            "buildConfigField\\(\\s*\"String\",\\s*\"([A-Z_]*SECRET[A-Z_]*)\""
+        ).findAll(gradle).map { it.groupValues[1] }.toSet()
+        assertEquals(
+            "a *SECRET* BuildConfig field must never exist beyond AniList's cited " +
+                "exception (SimklClientConfigTest's rule): $shippedSecrets",
+            setOf("ANILIST_CLIENT_SECRET"),
+            shippedSecrets
         )
         assertTrue(
             "the release workflow passes the secret through",
