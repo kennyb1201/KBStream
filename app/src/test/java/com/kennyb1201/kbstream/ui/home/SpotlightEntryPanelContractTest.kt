@@ -337,7 +337,7 @@ class SpotlightEntryPanelContractTest {
         // what makes "not for this title" mean no picture.
         assertTrue(
             "the panel compares the shown card's key with the settled one",
-            section.contains("panel.snapshot.heroTitleKey()") &&
+            section.contains("backdropUrl = panel.heroTitleKey()") &&
                 section.contains("?.takeIf { it == settledTitleKey }")
         )
         assertTrue(

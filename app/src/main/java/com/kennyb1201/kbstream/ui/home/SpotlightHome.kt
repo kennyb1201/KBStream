@@ -558,13 +558,13 @@ internal fun SpotlightPreviewHost(
             // The picture for THIS card's title, or nothing (F1): the settle key
             // must name the card the panel is showing before its backdrop is
             // allowed to draw.
-            backdropUrl = panel.snapshot.heroTitleKey()
+            backdropUrl = panel.heroTitleKey()
                 ?.takeIf { it == settledTitleKey }
                 ?.let { settledBackdropUrl },
             // ...and whether that title's resolve has finished, so the tile can
             // be a wait (loading) or the answer (none) rather than both.
-            backdropSettled = panel.snapshot.heroTitleKey() != null &&
-                panel.snapshot.heroTitleKey() == settledTitleKey,
+            backdropSettled = panel.heroTitleKey() != null &&
+                panel.heroTitleKey() == settledTitleKey,
             trailerKey = trailerKey,
             imdbId = imdbId,
             tmdbId = tmdbId,
