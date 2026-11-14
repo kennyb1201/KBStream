@@ -721,7 +721,11 @@ class LibraryListSyncContractTest {
         // and both spellings of it, so an older pin is not read as a delete.
         assertTrue(
             "the live rows come from the shared helper, not a second scheme",
-            Regex(Regex.escape("libraryHomeRailLiveList(")).findAll(launch).count() == 3 &&
+            // One per remote source: Trakt, MDBList, BingeCat and the anime
+            // trackers (spec 2026-11-13 F1). A new source must join THIS helper,
+            // which is what the count keeps honest - and the negative check says
+            // no source derives the identity a second way.
+            Regex(Regex.escape("libraryHomeRailLiveList(")).findAll(launch).count() == 4 &&
                 !launch.contains("libraryHomeRailId(")
         )
         assertTrue(

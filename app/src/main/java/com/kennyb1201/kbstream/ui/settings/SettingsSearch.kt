@@ -219,6 +219,28 @@ internal object SettingsSearchIndex {
             "BingeCat public lists",
             "public lists browse bingecat community search import library discover"
         ),
+        // The anime vendors (spec 2026-11-13 F2) browse by USERNAME rather than a
+        // directory, but they are rows in the same section and must be findable
+        // there: a row the index does not know is visible and unfindable.
+        SettingSearchEntry(
+            "integrations.anilist-public-lists",
+            SettingsPane.INTEGRATIONS,
+            "AniList public lists",
+            "public lists browse anilist anime username profile copy library discover"
+        ),
+        SettingSearchEntry(
+            "integrations.kitsu-public-lists",
+            SettingsPane.INTEGRATIONS,
+            "Kitsu public lists",
+            "public lists browse kitsu anime username profile copy library discover"
+        ),
+        SettingSearchEntry(
+            "integrations.mal-public-lists",
+            SettingsPane.INTEGRATIONS,
+            "MyAnimeList public lists",
+            "public lists browse myanimelist mal anime username profile copy library " +
+                "discover"
+        ),
         // Moved to the Subtitles pane (settings reorg §7.1, §14.1). The key stays
         // `integrations.*` because it is the row's identity, not its address; the
         // pane field is what a result groups under and jumps to.

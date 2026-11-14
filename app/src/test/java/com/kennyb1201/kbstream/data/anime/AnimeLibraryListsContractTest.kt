@@ -261,6 +261,14 @@ class AnimeLibraryListsContractTest {
                 )
             }
         }
+        // A row the search index does not know is visible and unfindable on TV.
+        val search = normalized(read(SETTINGS_SEARCH))
+        listOf("anilist", "kitsu", "mal").forEach { wire ->
+            assertTrue(
+                "the settings index must find the '$wire' public-lists row",
+                search.contains("\"integrations.$wire-public-lists\"")
+            )
+        }
     }
 
     @Test
@@ -426,5 +434,6 @@ class AnimeLibraryListsContractTest {
         const val RAIL_RECONCILE = "$PKG/data/library/LibraryHomeRailReconcile.kt"
         const val SETTINGS_TV = "$PKG/ui/settings/SettingsScreen.kt"
         const val SETTINGS_MOBILE = "$PKG/ui/mobile/SettingsScreenMobile.kt"
+        const val SETTINGS_SEARCH = "$PKG/ui/settings/SettingsSearch.kt"
     }
 }
