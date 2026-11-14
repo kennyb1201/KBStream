@@ -35,7 +35,9 @@ import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.kennyb1201.kbstream.R
+import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.clipToPosterEdge
+import com.kennyb1201.kbstream.ui.detail.isEpisodeUnavailable
 import com.kennyb1201.kbstream.ui.home.looksLikeRawMediaId
 import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 import com.kennyb1201.kbstream.data.addon.Stream
@@ -63,6 +65,8 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
+import com.kennyb1201.kbstream.data.tvdb.shownEpisode
+import com.kennyb1201.kbstream.data.tvdb.shownSeason
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.domain.streamengine.AutoplayBitrate
@@ -2036,6 +2040,15 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         window.decorView.viewTreeObserver.addOnGlobalFocusChangeListener { _, newFocus ->
             if (!pickerOpen || newFocus == null) return@addOnGlobalFocusChangeListener
             val container = pickerContainer ?: return@addOnGlobalFocusChangeListener
+            // The episode menu outranks the picker while it is up: it owns the
+            // D-pad, so a hand-off that would put control back on the list
+            // underneath is refused, and a press that escapes the menu goes to
+            // its first row instead.
+            val menu = pickerEpisodeMenu
+            if (menu?.isShowing == true) {
+                if (!menu.contains(newFocus)) menu.focusFirst()
+                return@addOnGlobalFocusChangeListener
+            }
             if (isDescendantOf(newFocus, container)) {
                 // The row only: the list and the container are not rows, and
                 // remembering either would send the D-pad back to a holder with
@@ -2994,6 +3007,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             pickerOpen = false
             currentPickerMode = null
             pickerLastFocus = null
+            pickerEpisodeMenu?.dismiss(restoreFocus = false)
             pickerContainer?.visibility = View.GONE
         }
         // showPicker raises settingsOpen for itself, so this clears whether the
@@ -3040,6 +3054,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         if (!pickerOpen) return
         pickerOpen = false
         currentPickerMode = null
+        // The menu is an overlay on this panel and goes with it, with no focus
+        // hand-back (there is no row left to hand it to).
+        pickerEpisodeMenu?.dismiss(restoreFocus = false)
         settingsOpen = false
         pickerLastFocus = null
         KbViewMotion.slideFadeOut(pickerContainer)
@@ -3069,6 +3086,18 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private var episodePickerEpisodes: List<ResolvedEpisode> = emptyList()
     private var episodePickerWatched: Set<Int> = emptySet()
     private var episodePickerLoading = false
+
+    /** The episode picker's long-press menu (spec 2026-11-13, F2). */
+    private var pickerEpisodeMenu: PickerEpisodeMenu? = null
+
+    /** The row the menu was opened on: where a dismissal hands the D-pad back. */
+    private var episodeMenuReturnRow: Int = -1
+
+    /** Every season's aired numbers, for the menu's whole-series label and row. */
+    private var episodePickerSeriesNumbers: List<Pair<Int, List<Int>>> = emptyList()
+
+    /** The show's completed (season, episode) pairs, for the same label. */
+    private var episodePickerWatchedPairs: Set<Pair<Int, Int>> = emptySet()
 
     /** Dropped results: a season switch supersedes the fetch it interrupts. */
     private var episodePickerRequest = 0
@@ -3136,13 +3165,72 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         }
         lifecycleScope.launch {
             val episodes = PlayerEpisodes.season(this@MpvPlayerActivity, parentId, parentType, wanted)
-            val watched = PlayerEpisodes.watchedEpisodes(this@MpvPlayerActivity, parentId, wanted)
+            // The picker's watched union (spec 2026-11-13): local rows plus
+            // the tracker legs, read once per show and reused - never fetched
+            // on a press.
+            val watched = PlayerEpisodes.watchedEpisodes(
+                this@MpvPlayerActivity,
+                parentId,
+                parentType,
+                wanted
+            )
+            // The menu's whole-series labels, read beside the season - the same
+            // two cached reads the other engine makes, so a show labelled
+            // watched on one engine is labelled watched on both.
+            val seriesNumbers = PlayerEpisodes.seriesEpisodeNumbers(
+                this@MpvPlayerActivity,
+                parentId,
+                parentType,
+                wanted,
+                episodes
+            )
+            val watchedPairs = PlayerEpisodes.watchedEpisodePairs(
+                this@MpvPlayerActivity,
+                parentId,
+                parentType
+            )
             if (request != episodePickerRequest || !pickerOpen) return@launch
             episodePickerEpisodes = episodes
             episodePickerListedSeason = wanted
             episodePickerWatched = watched
+            episodePickerSeriesNumbers = seriesNumbers
+            episodePickerWatchedPairs = watchedPairs
             episodePickerLoading = false
             bindEpisodePicker()
+            // What is painted right now. A menu press repaints the rows while
+            // these legs are in flight, and its answer is newer than this read -
+            // the guard below hands that press the last word instead of
+            // flashing its ✓ off again.
+            val paintedWatched = episodePickerWatched
+            val paintedPairs = episodePickerWatchedPairs
+            // The tracker legs, once per show (F1) - and read AFTER the rows are
+            // up, so a slow tracker (or an offline box) never holds the panel
+            // behind its timeout. Painted in place when they land; a cold show
+            // therefore ticks its tracker-only episodes a beat after the rows,
+            // never on a second season switch.
+            val unionWatched = PlayerEpisodes.watchedEpisodes(
+                this@MpvPlayerActivity,
+                parentId,
+                parentType,
+                wanted,
+                waitForTrackerLegs = true
+            )
+            val unionPairs = PlayerEpisodes.watchedEpisodePairs(
+                this@MpvPlayerActivity,
+                parentId,
+                parentType,
+                waitForTrackerLegs = true
+            )
+            if (request != episodePickerRequest || !pickerOpen) return@launch
+            if (episodePickerWatched !== paintedWatched || episodePickerWatchedPairs !== paintedPairs) {
+                return@launch
+            }
+            if (unionWatched == episodePickerWatched && unionPairs == episodePickerWatchedPairs) {
+                return@launch
+            }
+            episodePickerWatched = unionWatched
+            episodePickerWatchedPairs = unionPairs
+            repaintEpisodePickerRows()
         }
     }
 
@@ -3182,7 +3270,8 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         playingEpisode = episode,
         loading = episodePickerLoading,
         fallbackImageUrl = itemPoster?.takeIf { it.isNotBlank() } ?: backdropUrl,
-        onPick = { picked -> pickEpisode(picked) }
+        onPick = { picked -> pickEpisode(picked) },
+        onEpisodeMenu = { pressed -> openEpisodeMenu(pressed) }
     )
 
     /**
@@ -3227,6 +3316,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     /** Re-paints the open episode panel, parked on the playing episode. */
     private fun bindEpisodePicker() {
         if (!pickerOpen) return
+        // A rebind replaces the rows the menu was opened on: an open menu
+        // belongs to the rows it was drawn over, so it closes with them.
+        pickerEpisodeMenu?.dismiss(restoreFocus = false)
         val items = episodePickerItems()
         pickerTitle?.text = "EPISODES"
         bindEpisodeSeasonStrip()
@@ -3235,6 +3327,19 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         val currentAt = episodeCurrentRowIndex()
         if (currentAt >= 0) pickerList?.scrollToPosition(currentAt)
         if (pickerList?.findFocus() == null) pickerList?.post { parkPickerFocus() }
+    }
+
+    /**
+     * Repaints the rows in place, for a change to a row's own marks.
+     *
+     * The watched union can land after the panel has painted, and a menu press
+     * repaints the row it touched. Neither is a new list, so neither goes
+     * through [bindEpisodePicker]: replacing the adapter would reset the scroll
+     * to the playing episode and drop the D-pad focus the menu just handed back.
+     */
+    private fun repaintEpisodePickerRows() {
+        if (!pickerOpen) return
+        (pickerList?.adapter as? PickerAdapter)?.submit(episodePickerItems())
     }
 
     /** The row index of the playing episode in the current list, or -1. */
@@ -3246,6 +3351,174 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // No offset: the season rows left the list (F1), so the playing episode's
         // row IS its index in this season.
         return at
+    }
+
+    /**
+     * The episode menu, on the row that was long-pressed (spec 2026-11-13, F2).
+     *
+     * The other engine's menu: same rules object, same labels, same shared
+     * writer. Opening it never pauses, stops or restarts playback - it is an
+     * overlay on the open panel.
+     */
+    private fun openEpisodeMenu(pressed: ResolvedEpisode) {
+        if (!pickerOpen) return
+        val listed = episodePickerListedSeason ?: return
+        val airedNumbers = listedAiredEpisodeNumbers()
+        val isPlaying = listed == season && pressed.episodeNumber == episode
+        val rows = PickerEpisodeMenuRules.rows(
+            episode = pressed.episodeNumber,
+            isEpisodeWatched = pressed.episodeNumber in episodePickerWatched,
+            isSeasonWatched =
+                airedNumbers.isNotEmpty() &&
+                    airedNumbers.all { number -> number in episodePickerWatched },
+            isWholeSeriesWatched =
+                episodePickerSeriesNumbers.isNotEmpty() &&
+                    episodePickerSeriesNumbers.all { (seriesSeason, numbers) ->
+                        numbers.all { seriesEpisode ->
+                            (seriesSeason to seriesEpisode) in episodePickerWatchedPairs
+                        }
+                    },
+            isPlaying = isPlaying
+        )
+        // The chosen order's numbers on the title, the numbers the row prints:
+        // the ACTIONS stay on TMDB's (pressed.episodeNumber), because that is
+        // what a watched mark is keyed on.
+        val label = PlayerEpisodePicker.episodeLabel(
+            pressed.shownSeason(listed),
+            pressed.shownEpisode(listed)
+        )
+        val title = pressed.name
+            ?.takeIf { it.isNotBlank() }
+            ?.let { name -> "$label \u00b7 $name" }
+            ?: label
+        episodeMenuReturnRow =
+            episodePickerEpisodes.indexOfFirst { it.episodeNumber == pressed.episodeNumber }
+        val menu = pickerEpisodeMenu
+            ?: PickerEpisodeMenu(this) { restoreEpisodePickerFocus() }
+                .also { pickerEpisodeMenu = it }
+        menu.show(
+            title = title,
+            subtitle = null,
+            actions = rows.map { row ->
+                PosterContextAction(
+                    label = row.label,
+                    description = row.description
+                ) {
+                    applyEpisodeMenuRow(row, pressed)
+                }
+            }
+        )
+    }
+
+    /** The listed season's aired numbers - the scope the season row acts on. */
+    private fun listedAiredEpisodeNumbers(): List<Int> =
+        episodePickerEpisodes
+            .filterNot { candidate -> isEpisodeUnavailable(candidate.airDate) }
+            .map { candidate -> candidate.episodeNumber }
+
+    /** Runs one menu row through the shared watch writer, then repaints the rows. */
+    private fun applyEpisodeMenuRow(row: PickerEpisodeMenuRow, pressed: ResolvedEpisode) {
+        val listed = episodePickerListedSeason ?: return
+        val target = PickerEpisodeMenuTarget(
+            parentId = parentId,
+            parentType = parentType,
+            showName = itemName,
+            posterUrl = itemPoster?.takeIf { it.isNotBlank() } ?: backdropUrl,
+            tmdbId = null,
+            season = listed,
+            pressedEpisode = pressed.episodeNumber,
+            seasonEpisodeNumbers = listedAiredEpisodeNumbers(),
+            seriesEpisodeNumbers = episodePickerSeriesNumbers,
+            playingSeason = season,
+            playingEpisode = episode,
+            seasonStreamIds = episodePickerEpisodes.associate { candidate ->
+                candidate.episodeNumber to candidate.streamId
+            }
+        )
+        // Repaint NOW: the writer's return waits for the four trackers, and the
+        // checkmark belongs on the press. The same rule decides this paint and
+        // the write (see PickerEpisodeMarks.preview).
+        val preview = PickerEpisodeMenuRules.preview(
+            row,
+            target,
+            episodePickerWatched,
+            episodePickerWatchedPairs
+        )
+        episodePickerWatched = preview.seasonWatched
+        episodePickerWatchedPairs = preview.watchedPairs
+        repaintEpisodePickerRows()
+        restoreEpisodePickerFocus()
+        lifecycleScope.launch {
+            // This engine has no session-level TMDB id of its own; the shared
+            // resolver is the one every other mpv path uses.
+            val tmdbId = runCatching {
+                PlaybackHistoryIds.resolveTmdbId(
+                    this@MpvPlayerActivity,
+                    parentId,
+                    parentType
+                )
+            }.getOrNull()
+            PickerEpisodeMarks.apply(
+                this@MpvPlayerActivity,
+                row,
+                target.copy(tmdbId = tmdbId)
+            )
+            refreshEpisodePickerWatched(restoreToEpisode = pressed.episodeNumber)
+        }
+    }
+
+    /**
+     * Re-reads the season's checkmarks after a menu press and parks the D-pad
+     * back on the row the menu came from. Playback is untouched throughout.
+     */
+    private fun refreshEpisodePickerWatched(restoreToEpisode: Int) {
+        if (!pickerOpen) return
+        val listed = episodePickerListedSeason ?: return
+        val request = ++episodePickerRequest
+        lifecycleScope.launch {
+            val watched = PlayerEpisodes.watchedEpisodes(
+                this@MpvPlayerActivity,
+                parentId,
+                parentType,
+                listed
+            )
+            val pairs = PlayerEpisodes.watchedEpisodePairs(
+                this@MpvPlayerActivity,
+                parentId,
+                parentType
+            )
+            if (request != episodePickerRequest || !pickerOpen) return@launch
+            episodePickerWatched = watched
+            episodePickerWatchedPairs = pairs
+            episodeMenuReturnRow =
+                episodePickerEpisodes.indexOfFirst { it.episodeNumber == restoreToEpisode }
+            // In place: the rows are the ones the press was made on, and only
+            // their ✓ changed - a fresh adapter would drop the hand-back.
+            repaintEpisodePickerRows()
+            restoreEpisodePickerFocus()
+        }
+    }
+
+    /**
+     * Puts the D-pad back on the row the menu was opened on - Detail's
+     * hand-back, on the RecyclerView row instead of a Compose focus requester.
+     */
+    private fun restoreEpisodePickerFocus() {
+        if (!pickerOpen) return
+        val position = episodeMenuReturnRow
+        if (position < 0) return
+        val list = pickerList ?: return
+        val row = list.layoutManager?.findViewByPosition(position)
+        if (row != null) {
+            row.requestFocus()
+            return
+        }
+        list.scrollToPosition(position)
+        list.post {
+            if (!pickerOpen) return@post
+            list.layoutManager?.findViewByPosition(position)?.requestFocus()
+                ?: pickerContainer?.let { container -> focusFirstPill(container) }
+        }
     }
 
     /**

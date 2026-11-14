@@ -122,6 +122,12 @@ internal object PlayerEpisodePicker {
      *
      * [loading] appends the loading row INSTEAD of dropping the rows already on
      * screen: the panel never flashes empty.
+     *
+     * [onEpisodeMenu] is the row's long-press (spec 2026-11-13): the episode
+     * menu Detail's cards open, on the picker's own row. It is passed for every
+     * ACTIONABLE episode row - never for an unaired one (a press does nothing
+     * there, so a hold does too), never for the loading row, never for the
+     * season strip. Null (no host) leaves every row click-only.
      */
     fun rows(
         selectedSeason: Int?,
@@ -132,7 +138,8 @@ internal object PlayerEpisodePicker {
         playingEpisode: Int?,
         loading: Boolean,
         fallbackImageUrl: String?,
-        onPick: (ResolvedEpisode) -> Unit
+        onPick: (ResolvedEpisode) -> Unit,
+        onEpisodeMenu: ((ResolvedEpisode) -> Unit)? = null
     ): List<PickerItem> {
         val episodeRows = episodes.map { episode ->
             val unavailable = isEpisodeUnavailable(episode.airDate)
@@ -178,6 +185,12 @@ internal object PlayerEpisodePicker {
                 rating = episode.voteAverage,
                 watched = watched.contains(episode.episodeNumber),
                 unavailable = unavailable,
+                // The episode menu, for a row that can act. An unaired episode
+                // answers a press with nothing and a hold the same way; the
+                // loading row below is not an episode at all.
+                onLongClick = onEpisodeMenu?.takeIf { !unavailable }?.let { menu ->
+                    { menu(episode) }
+                },
                 // An unaired episode still draws; a press on it does nothing.
                 onClick = { if (!unavailable) onPick(episode) }
             )

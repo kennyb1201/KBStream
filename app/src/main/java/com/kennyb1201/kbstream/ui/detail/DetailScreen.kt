@@ -6085,19 +6085,22 @@ fun DetailScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
+                                    // The heading sizes to its own text, so the
+                                    // season's poster can hang directly off it
+                                    // (F1). It used to take weight(1f), which
+                                    // pushed the poster to the far edge of the
+                                    // row, away from the section it belongs to.
                                     KBSectionHeader(
                                         title = episodesHeader,
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .padding(
-                                                start = KBScreenEdge,
-                                                top = 14.dp
-                                            )
+                                        modifier = Modifier.padding(
+                                            start = KBScreenEdge,
+                                            top = 14.dp
+                                        )
                                     )
-                                    // The season's own poster, beside the heading
-                                    // that already follows the chips (F3). A
-                                    // season with no poster of its own draws
-                                    // nothing here - never the show's poster.
+                                    // The season's own poster, immediately right
+                                    // of the heading (F1). A season with no
+                                    // poster of its own draws nothing here -
+                                    // never the show's poster.
                                     seasonPosterUrl?.let { poster ->
                                         AsyncImage(
                                             model = ImageRequest.Builder(
@@ -6109,12 +6112,16 @@ fun DetailScreen(
                                             contentDescription = null,
                                             contentScale = ContentScale.Crop,
                                             modifier = Modifier
-                                                .padding(end = KBScreenEdge, top = 14.dp)
+                                                .padding(start = 12.dp, top = 14.dp)
                                                 .width(54.dp)
                                                 .aspectRatio(2f / 3f)
                                                 .clip(KBShapeSmall)
                                         )
                                     }
+                                    // The row still fills the width, so the
+                                    // column below never shifts; the heading
+                                    // stays at the screen edge.
+                                    Spacer(Modifier.weight(1f))
                                 }
                             }
 

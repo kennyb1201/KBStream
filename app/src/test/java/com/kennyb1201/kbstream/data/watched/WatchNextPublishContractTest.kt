@@ -18,9 +18,14 @@ class WatchNextPublishContractTest {
 
     @Test
     fun `every local mark that removes resume rows republishes the launcher`() {
+        // The episode paths are the BATCH functions now (spec 2026-11-13): the
+        // player's episode menu marks a previous run, a season or a series in
+        // one press, and the single-episode entry point delegates to the same
+        // write - so the batch body is where the republish has to be.
         listOf(
             "suspend fun markWatchedLocal(",
-            "suspend fun markEpisodeWatchedLocal(",
+            "suspend fun markEpisodesWatchedLocal(",
+            "suspend fun markEpisodesUnwatchedLocal(",
             "suspend fun markUnwatchedLocal("
         ).forEach { signature ->
             val body = functionBody(signature)
@@ -33,7 +38,7 @@ class WatchNextPublishContractTest {
 
     @Test
     fun `the episode mark announces the badge on the watched-state bus`() {
-        val body = functionBody("suspend fun markEpisodeWatchedLocal(")
+        val body = functionBody("suspend fun markEpisodesWatchedLocal(")
         assertTrue(
             "every other local write in this file announces its result, but this " +
                 "one never told the bus anything: the marker landed on disk and the " +
@@ -58,6 +63,23 @@ class WatchNextPublishContractTest {
             "the checkmark is not cleared by an episode mark: the resolved entity's " +
                 "own isWatched travels, and the eye only when it is not also watched",
             body.contains("entity.isPartiallyWatched && !entity.isWatched")
+        )
+    }
+
+    @Test
+    fun `the single episode mark is the batch mark with one episode`() {
+        // Read to the NEXT member's KDoc: the delegator is an expression body,
+        // so the first `{` after its signature is the `takeIf` lambda.
+        val src = readSource()
+        val at = src.indexOf("suspend fun markEpisodeWatchedLocal(")
+        assertTrue("the single-episode entry point must exist", at >= 0)
+        val end = src.indexOf("\n    /**", at).takeIf { it > at } ?: src.length
+        val body = src.substring(at, end)
+        assertTrue(
+            "the Continue Watching card's mark must not grow a second write path: " +
+                "it hands its one episode to the batch and shares every fork of it",
+            body.contains("episodes = listOf(episode)") &&
+                body.contains("markEpisodesWatchedLocal(")
         )
     }
 

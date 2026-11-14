@@ -61,12 +61,38 @@ data class PickerItem(
      * the watched check and from whichever row merely has focus.
      */
     val nowPlaying: Boolean = false,
+    /**
+     * The row's long-press action, when it has one (spec 2026-11-13).
+     *
+     * Only the episode picker's actionable rows pass it: the menu they open is
+     * the episode menu, which is about one episode. Every other row - a source,
+     * a track, the loading row, an unaired episode - leaves it null, and a
+     * long-press there does nothing at all, exactly like a press.
+     *
+     * A long-press NEVER also fires [onClick]: the adapter's listener consumes
+     * it, so holding OK on a row cannot start the episode by accident.
+     */
+    val onLongClick: (() -> Unit)? = null,
     val onClick: () -> Unit
 )
 
 class PickerAdapter(
-    private val items: List<PickerItem>
+    private var items: List<PickerItem>
 ) : RecyclerView.Adapter<PickerAdapter.ViewHolder>() {
+
+    /**
+     * Replaces the rows in place (spec 2026-11-13, F2).
+     *
+     * The watched union's tracker legs land after the panel has painted, and
+     * the episode menu repaints the row it touched - both change nothing but a
+     * row's ✓. A fresh adapter would drop the focus and scroll the viewer is
+     * sitting on, so both hand the new items to the SAME adapter: same holders,
+     * same position, only the bound content changes.
+     */
+    fun submit(newItems: List<PickerItem>) {
+        items = newItems
+        notifyDataSetChanged()
+    }
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val label: TextView = view.findViewById(R.id.picker_item_label)
@@ -92,6 +118,20 @@ class PickerAdapter(
             else ContextCompat.getColor(holder.itemView.context, R.color.kb_text_hi)
         )
         holder.itemView.setOnClickListener { item.onClick() }
+        // The long-press slot, and the clearing that has to go with it: a
+        // RecyclerView hands holders between rows, so a row that HAS a menu
+        // left its listener on the view the next row will use unless the null
+        // case removes it. Returning true is what marks the press consumed, so
+        // a hold never also picks the episode.
+        val longClick = item.onLongClick
+        if (longClick == null) {
+            holder.itemView.setOnLongClickListener(null)
+        } else {
+            holder.itemView.setOnLongClickListener {
+                longClick()
+                true
+            }
+        }
         applyBadgePosition(
             holder,
             AppPreferences.getBadgesAboveFile(holder.itemView.context)

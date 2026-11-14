@@ -129,10 +129,20 @@ class PickerFocusContractTest {
             "the window's focus-change listener is where an escape is caught, " +
                 "synchronously, before a posted focus request from the chrome can " +
                 "win the race",
-            guard.contains(
-                "} else if (isPickerShowing) { if (newFocus != null && " +
-                    "isDescendantOf(newFocus, pickerContainer)) {"
-            )
+            guard.contains("} else if (isPickerShowing) {") &&
+                guard.contains(
+                    "if (newFocus != null && isDescendantOf(newFocus, pickerContainer)) {"
+                )
+        )
+        // The episode menu (spec 2026-11-13) is an overlay on this panel and
+        // owns the D-pad while it is up, so it is asked BEFORE the picker's own
+        // hand-back - otherwise opening it would bounce focus straight back to
+        // the row underneath.
+        val menuCheck = guard.indexOf("menu?.isShowing == true")
+        val pickerCheck = guard.indexOf("isDescendantOf(newFocus, pickerContainer)")
+        assertTrue(
+            "the menu outranks the picker inside the same guard",
+            menuCheck in 0 until pickerCheck
         )
         assertTrue(
             "and the escape itself hands the D-pad back to the picker",

@@ -142,9 +142,10 @@ class UpcomingCaughtUpFreshnessContractTest {
     fun `both local mark paths stamp, and the marker write does too`() {
         val watched = flat(source(WATCHED_REPO))
         assertEquals(
-            "a hand mark (applyOverrideKeys) and the episode marker write are " +
-                "two different local writes, so both have to say so",
-            2,
+            "a hand mark (applyOverrideKeys), the episode marker write, and the " +
+                "episode CLEAR (the picker menu's other direction, spec 2026-11-13) " +
+                "are three different local writes, so all three have to say so",
+            3,
             watched.split("WatchedWriteStamp.record(").size - 1
         )
         assertTrue(
