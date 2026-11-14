@@ -1661,7 +1661,17 @@ object SupabaseSync {
                     // holds that newer row — removing by key alone would
                     // silently drop a write that never reached the cloud
                     // (lost update).
-                    chunk.forEach { row -> if (outbox.remove(row)) removed++ }
+                    chunk.forEach { row ->
+                        if (outbox.remove(row)) {
+                            removed++
+                            // A tracker session that actually reached the cloud
+                            // is exactly what the backfill's marker records
+                            // (see [TrackerAuthBackfillRules]). Written only on
+                            // the success path, so it never claims a push that
+                            // failed.
+                            recordPublishedTrackerAuth(row)
+                        }
+                    }
                     anyChunkOk = true
                     clearSyncError()
                 } catch (e: Exception) {
@@ -1828,6 +1838,12 @@ object SupabaseSync {
         val pulledAt = System.currentTimeMillis()
         _lastSyncAtMs.value = pulledAt
         _lastPullAtMs.value = pulledAt
+
+        // The pull is done, so a session this device already holds and the cloud
+        // has never seen can be queued now without racing the first read (spec
+        // 2026-11-14, F2). It enqueues only - the push is the ordinary flush -
+        // and the markers make a later start queue nothing.
+        runCatchingCancellable { backfillUnpublishedTrackerAuth(context) }
     }
 
     private suspend fun pushAllNow(context: Context) {
@@ -2730,6 +2746,69 @@ object SupabaseSync {
         _lastPushedPrefKeys.value = published.joinToString(",")
         flushOutbox()
         return true
+    }
+
+    // ── The enrollment backfill (spec 2026-11-14) ─────────────────────────
+
+    /**
+     * The fingerprint this device last published for one stored key, or null when
+     * it never has.
+     *
+     * Kept in the sync layer's own prefs and keyed by the STORED (profile-scoped)
+     * key, so two profiles' Kitsu sessions are two separate answers - the rule
+     * every prefs row here follows. It cannot be an in-memory map:
+     * `_lastPushedPrefKeys` is a StateFlow for the diagnostics panel and dies
+     * with the process whose next start needs the answer.
+     */
+    private fun lastPublishedTrackerAuth(context: Context, storedKey: String): String? =
+        syncPrefs(context).getString(TrackerAuthBackfillRules.markerKey(storedKey), null)
+
+    /**
+     * Records that [row] actually landed. Called from the successful chunk path
+     * in [flushOutbox] only - the marker means "the cloud has this", never "this
+     * device tried".
+     */
+    private fun recordPublishedTrackerAuth(row: OutboxItem) {
+        if (row.table != TABLE_PREFS) return
+        if (!PrefsPayloadBuilder.isTrackerAuthKey(unscopedKey(row.key))) return
+        val appContext = appContextRef?.get() ?: return
+        syncPrefs(appContext).edit()
+            .putString(
+                TrackerAuthBackfillRules.markerKey(row.key),
+                TrackerAuthBackfillRules.fingerprint(row.payload)
+            )
+            .apply()
+    }
+
+    /**
+     * Enqueues the tracker sessions this profile holds but this device has never
+     * published (spec 2026-11-14, F1).
+     *
+     * A session connected before its enrollment existed was never enqueued by
+     * anything - connect/refresh/disconnect are the only publishers - so the
+     * outbox never held it and the periodic flush (which only drains a non-empty
+     * outbox) could not find it. This is that missing question, asked once per
+     * start against a durable answer.
+     *
+     * Runs only after a pull that actually ran (see [pullAllNow]), so a fresh
+     * device has already ingested the cloud before it offers anything of its
+     * own. Nothing is queued for a tracker this profile never connected (the
+     * same `has…AuthToPublish` gate the bulk push uses), so a blank cannot be
+     * seeded over a live session; a deliberate disconnect travels as its own
+     * tombstone and is due again because its blob changed.
+     */
+    private suspend fun backfillUnpublishedTrackerAuth(context: Context) {
+        if (!isSignedIn() || client == null) return
+        val pid = currentProfileId()
+        val enrolled = PrefsPayloadBuilder.trackerAuthBackfillEntries(context)
+        if (!PushScopeRules.scopeStillActive(pid, currentProfileId())) return
+        val lastPublished = enrolled.associate { entry ->
+            entry.prefKey to lastPublishedTrackerAuth(context, scopedKey(entry.prefKey, pid))
+        }
+        TrackerAuthBackfillRules.due(enrolled, lastPublished).forEach { prefKey ->
+            val payload = PrefsPayloadBuilder.trackerAuthBlob(context, prefKey) ?: return@forEach
+            enqueuePrefs(context, prefKey, payload, pid)
+        }
     }
 
     /** Manual "Sync now" from Settings. */
