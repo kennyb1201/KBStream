@@ -126,18 +126,29 @@ internal object AnimeLists {
      * lists exist, and the Home pin prune may only act on a source that
      * answered.
      */
-    suspend fun own(context: Context): OwnLists {
+    suspend fun own(context: Context): OwnLists = coroutineScope {
         val appContext = context.applicationContext
+        val anilistUser = aniListUsername(appContext)
+        val kitsuUser = kitsuUsername(appContext)
+
+        // The three services are independent, so they are read together: Kitsu
+        // spaces its pages a second apart on purpose, and the Library's refresh
+        // must not pay that wait twice over after AniList's request. Each read
+        // fails on its own; none can take another down.
+        val anilist = async { anilistUser?.let { readAniListGroups(it) } }
+        val kitsu = async { kitsuUser?.let { readKitsuGroups(it) } }
+        val mal = async { readMalGroups(appContext, username = null) }
+
         val lists = ArrayList<OwnList>()
         val answered = LinkedHashSet<LibrarySource>()
 
-        aniListUsername(appContext)?.let { username ->
-            when (val read = readAniListGroups(username)) {
+        fun collect(source: LibrarySource, read: AnimeGroupsRead?) {
+            when (read) {
                 is AnimeGroupsRead.Ok -> {
-                    answered += LibrarySource.ANILIST_LIST
+                    answered += source
                     read.groups.forEach { group ->
                         lists += OwnList(
-                            source = LibrarySource.ANILIST_LIST,
+                            source = source,
                             ref = group.ref,
                             name = group.name,
                             itemCount = group.entries.size
@@ -145,46 +156,17 @@ internal object AnimeLists {
                     }
                 }
 
-                else -> logSkipped("anilist", read)
+                // A null read is a service this profile never set up (no
+                // username): nothing to report, and nothing to draw.
+                else -> logSkipped(source.name, read)
             }
         }
 
-        kitsuUsername(appContext)?.let { username ->
-            when (val read = readKitsuGroups(username)) {
-                is AnimeGroupsRead.Ok -> {
-                    answered += LibrarySource.KITSU_LIST
-                    read.groups.forEach { group ->
-                        lists += OwnList(
-                            source = LibrarySource.KITSU_LIST,
-                            ref = group.ref,
-                            name = group.name,
-                            itemCount = group.entries.size
-                        )
-                    }
-                }
+        collect(LibrarySource.ANILIST_LIST, anilist.await())
+        collect(LibrarySource.KITSU_LIST, kitsu.await())
+        collect(LibrarySource.MAL_LIST, mal.await())
 
-                else -> logSkipped("kitsu", read)
-            }
-        }
-
-        when (val read = readMalGroups(appContext, username = null)) {
-            is AnimeGroupsRead.Ok -> {
-                answered += LibrarySource.MAL_LIST
-                read.groups.forEach { group ->
-                    lists += OwnList(
-                        source = LibrarySource.MAL_LIST,
-                        ref = group.ref,
-                        name = group.name,
-                        itemCount = group.entries.size
-                    )
-                }
-            }
-
-            AnimeGroupsRead.NotConfigured -> Unit
-            else -> logSkipped("mal", read)
-        }
-
-        return OwnLists(lists = lists, answered = answered)
+        OwnLists(lists = lists, answered = answered)
     }
 
     /**
@@ -579,8 +561,10 @@ internal object AnimeLists {
         )
     }
 
-    private fun logSkipped(source: String, read: AnimeGroupsRead) {
+    private fun logSkipped(source: String, read: AnimeGroupsRead?) {
         when (read) {
+            null -> Unit
+
             is AnimeGroupsRead.Failed ->
                 Log.w(TAG, "$source anime lists failed: ${read.error.message}")
 

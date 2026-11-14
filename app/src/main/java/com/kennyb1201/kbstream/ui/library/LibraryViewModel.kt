@@ -1565,21 +1565,13 @@ class LibraryViewModel(
                         )
                     }
                 }
-            // The anime shelves survive a local-list mutation too: this path
-            // replaces the rail wholesale, so leaving them out would drop them
-            // until the next full refresh (the same reason BingeCat's stay).
-            val animeRead = runCatchingCancellable { AnimeLists.own(appContext) }
-                .onFailure { Log.w(TAG, "Anime lists fetch failed: ${it.message}") }
-                .getOrNull()
-            val animeLists = animeRead?.lists.orEmpty().map { row ->
-                LibraryList(
-                    id = animeListShelfId(row.source, row.ref),
-                    name = row.name,
-                    itemCount = row.itemCount,
-                    source = row.source,
-                    remoteId = row.ref
-                )
-            }
+            // The anime shelves survive a local-list mutation the way the
+            // watchlists do: carried over from the last full refresh rather
+            // than re-read. This path is a local write, which cannot change what
+            // an account's anime lists hold - and a re-read here would put three
+            // services' reads (Kitsu's deliberately paced ones included) on the
+            // back of a rename.
+            val animeLists = _uiState.value.lists.filter { it.source.isAnimeList }
             if (version != requestVersion) {
                 // A newer request owns the screen now, and the refresh this path
                 // superseded will never publish - so ITS "remotes are still
@@ -1618,15 +1610,12 @@ class LibraryViewModel(
                         bingecatLists.map { libraryHomeRailLiveList(it) }
                     )
                 }
-                // An anime source that answered speaks for its own pins; one
-                // that did not stays out, so its rails are left alone.
-                animeRead?.answered?.forEach { source ->
-                    put(
-                        source.name,
-                        animeLists.filter { it.source == source }
-                            .map { libraryHomeRailLiveList(it) }
-                    )
-                }
+                // Anime sources are ABSENT here, exactly as MDBList and Trakt
+                // are: this path carries their rows over rather than reading
+                // them, so it knows nothing about which of their lists still
+                // exist. The full refresh's map and the launch reconcile own
+                // that answer; counting a carry-over as live would be a prune
+                // against a snapshot.
             }
             // The pin the rename in this breath just wrote is kept even if this
             // read has not caught up with it yet: the pin is the newer answer,
