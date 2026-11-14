@@ -128,17 +128,16 @@ object Diagnostics {
         report.appendLine(profileLine())
         report.appendLine(cleanupLine(app))
         report.appendLine(syncLine())
+        // The MDBList key's day (counts only, never key material), directly
+        // after sync: that is where a capture's reader looks for it, and the
+        // tracker section once grew in front of it and pushed it out.
+        report.appendLine(MdbListClient.localBudgetLine(app))
         // The tracker sessions' half of the sync section: which auth rows this
         // device published on its last push, and what it did with each pulled
         // one. The blobs are skipped silently when a profile never connected a
         // leg, so without this line a capture reads the same whether the row was
         // filtered out or the whole sync was broken (spec 2026-11-13, F6.2/F6.3).
         report.appendLine(authSyncLine())
-        // The MDBList key's day, as the interceptor sees it. The spend was
-        // previously invisible: it lived in SharedPreferences and only the
-        // budget guard read it, so "the key ran out again" could not be
-        // answered from a capture. Counts only - never key material.
-        report.appendLine(MdbListClient.localBudgetLine(app))
         report.appendLine(localLine(app))
         report.appendLine(storageLine(app))
         markerLines(app).forEach { report.appendLine(it) }

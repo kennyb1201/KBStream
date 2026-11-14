@@ -84,7 +84,11 @@ class HiddenTitlesSyncWiringContractTest {
 
     @Test
     fun `a pulled row reaches the store through its own arm`() {
-        val arms = body(payload, "when (prefKey) {", 2_400)
+        // The window is the dispatch block's length, not a claim about where in
+        // it this key sits: it grew past 2,400 when the tracker auth rows joined
+        // the chain (Kitsu, MAL and AniList), and the assertion below is only
+        // that HIDDEN_TITLES has an arm at all.
+        val arms = body(payload, "when (prefKey) {", 3_200)
         assertTrue(arms.contains("PrefsPayloadBuilder.KEY_HIDDEN_TITLES ->"))
         assertTrue(
             "and it merges rather than replaces",
