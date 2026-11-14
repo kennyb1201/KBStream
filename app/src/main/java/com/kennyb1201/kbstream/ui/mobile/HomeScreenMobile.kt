@@ -2826,18 +2826,18 @@ internal fun MobileBillboard(
     val sweepPausedNow = rememberUpdatedState(sweepPaused)
     // ── One slow sweep per page, never restarted by a pause ───────────────
     //
-    // The field report was "the billboard is stuttery compared to the
-    // screensaver", and the animation shape was never the difference: the same
-    // Animatable, the same tween, the same draw-phase read. Two other things
-    // were.
+    // The field report was "the billboard is stuttery compared to the TV
+    // screen's own slow slide", and the animation shape was never the difference:
+    // the same Animatable, the same tween, the same draw-phase read. Two other
+    // things were.
     //
     // THE PACE FOLLOWED THE CYCLE (F1). `totalMs` was `cycleMs` - six seconds for
-    // a full pan on an upscaled backdrop - where the screensaver sweeps one slide
-    // over its ten-second dwell. A fast pan on a 2 GB box shows every dropped
-    // frame; a slow one hides them. The duration is now the fixed
+    // a full pan on an upscaled backdrop - where the TV hero takes one quiet slide
+    // over ten seconds. A fast pan on a 2 GB box shows every dropped frame; a slow
+    // one hides them. The duration is now the fixed
     // [BILLBOARD_KEN_BURNS_MANUAL_MS] (ten seconds, the same duration the manual
-    // billboard and the screensaver's slide already use), so changing the cycle
-    // interval changes when the next title arrives and NOTHING about the pace.
+    // billboard already uses), so changing the cycle interval changes when the
+    // next title arrives and NOTHING about the pace.
     //
     // AND EVERY PAUSE RESTARTED IT (F2). The effect was keyed on `sweepPaused`,
     // so a trailer arming, a card expanding, or - twice per turn - the cycle's

@@ -374,9 +374,16 @@ class MobileBillboardContractTest {
         // is what makes "they pause together and resume from the held
         // fraction" true by construction rather than by two clocks agreeing.
         assertTrue(home.contains("val sweepProgress = remember { Animatable(0f) }"))
+        // Repointed by the sweep-pace spec (2026-11-13, F1): the pan used to take
+        // the cycle's length, six seconds on a 2 GB box read as stutter, so the
+        // duration is now the fixed slow one whatever the cycle interval is.
+        assertFalse(
+            "the pace must not follow the cycle any more",
+            home.contains("val totalMs = if (cycleMs > 0L) cycleMs else")
+        )
         assertTrue(
             home.contains(
-                "val totalMs = if (cycleMs > 0L) cycleMs else BILLBOARD_KEN_BURNS_MANUAL_MS"
+                "val remainingMs = ((1f - sweepProgress.value) * BILLBOARD_KEN_BURNS_MANUAL_MS)"
             )
         )
         assertTrue(home.contains("progress = sweepProgress.value"))
@@ -394,9 +401,8 @@ class MobileBillboardContractTest {
         assertTrue(home.contains("if (sweptPage != page) {"))
         assertTrue(home.contains("sweepProgress.stop()"))
         assertTrue(
-            home.contains(
-                "val remainingMs = ((1f - sweepProgress.value) * totalMs).toInt().coerceAtLeast(1)"
-            )
+            "a resume is the REMAINING part of the same fixed duration",
+            home.contains("val remainingMs = ((1f - sweepProgress.value) * BILLBOARD_KEN_BURNS_MANUAL_MS)")
         )
 
         // The content entrance, once per page entry, replayed on a return.

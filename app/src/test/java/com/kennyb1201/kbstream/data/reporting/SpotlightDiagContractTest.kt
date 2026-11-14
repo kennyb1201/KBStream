@@ -368,7 +368,10 @@ class SpotlightDiagContractTest {
                 "dwell line rather than a second one",
             host.contains("SpotlightDiagTrace.spotlightClaimGate(claimEntryFocus)")
         )
-        assertTrue(host.contains("SpotlightDiagTrace.spotlightClaim(taken)"))
+        assertTrue(
+            "the claim's outcome is recorded with the frames it spent (F4, 2026-11-13)",
+            host.contains("SpotlightDiagTrace.spotlightClaim(landed, frames)")
+        )
         assertTrue(host.contains("SpotlightDiagTrace.spotlightExpanded("))
         listOf("\"menuOpen\"", "\"cardChanged\"", "\"!expands\"").forEach { guard ->
             assertTrue("the guard is named: $guard", host.contains(guard))
