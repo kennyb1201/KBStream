@@ -1176,170 +1176,20 @@ fun SettingsScreen(
                         onClick = onOpenBingeCat
                     )
 
-                    // ── The anime trackers (spec 2026-11-13, F2) ───────────
-                    // Read-only in v1: a username, a PUBLIC list, no password and
-                    // no token. They sit at the end of the section because they
-                    // are the two legs that were added last, and because neither
-                    // is a resume authority - they feed Continue Watching and
-                    // Upcoming like every other leg and are dormant when empty.
-                    val aniListUsername = remember(profileRowKey, syncedRevision) {
-                        AppPreferences.getAniListUsername(context)
-                    }
-                    val kitsuUsername = remember(profileRowKey, syncedRevision) {
-                        AppPreferences.getKitsuUsername(context)
-                    }
-
-                    // AniList has a connect as well (spec 2026-11-13 phase 2):
-                    // AniList's implicit grant against its auth-pin page. The
-                    // viewer approves the app on a phone and pastes the token it
-                    // shows - text fields only, so the TV needs no browser - and
-                    // no client secret is compiled into this APK. The
-                    // public-username read stays inside the same dialog, so a
-                    // viewer who only wants that still needs no account.
-                    var aniListEditor by remember { mutableStateOf(false) }
-                    var aniListStateRevision by remember { mutableStateOf(0) }
-                    val aniListState = remember(
-                        profileRowKey,
-                        syncedRevision,
-                        aniListStateRevision
-                    ) {
-                        com.kennyb1201.kbstream.data.anime.AniListAuth.connectionState(context)
-                    }
-                    val aniListViewer = remember(
-                        profileRowKey,
-                        syncedRevision,
-                        aniListStateRevision
-                    ) {
-                        com.kennyb1201.kbstream.data.anime.AniListAuth.viewerName(context)
-                    }
-                    NavigationRow(
-                        label = if (aniListState ==
-                            com.kennyb1201.kbstream.data.anime.AniListConnectionState.Connected
-                        ) {
-                            "AniList — connected"
-                        } else {
-                            animeTrackerRowLabel("AniList", aniListUsername)
-                        },
-                        description = if (aniListState ==
-                            com.kennyb1201.kbstream.data.anime.AniListConnectionState.Connected
-                        ) {
-                            "Progress and ratings are written to your AniList list" +
-                                (aniListViewer?.let { " ($it)" } ?: "") +
-                                ". Open to disconnect, or to read a public profile instead."
-                        } else {
-                            animeTrackerDescription("AniList", aniListUsername)
-                        },
-                        onClick = { aniListEditor = true }
-                    )
-
-                    if (aniListEditor) {
-                        AniListConnectDialog(
-                            state = aniListState,
-                            authorizeUrl = com.kennyb1201.kbstream.data.anime.AniListAuth
-                                .authorizeUrl(),
-                            currentUsername = aniListUsername,
-                            onDismiss = { aniListEditor = false },
-                            onConnect = { pasted ->
-                                val result = com.kennyb1201.kbstream.data.anime.AniListAuth
-                                    .connect(context, pasted)
-                                aniListStateRevision++
-                                if (result is
-                                    com.kennyb1201.kbstream.data.anime.AniListAuth.ConnectResult.Failed
-                                ) {
-                                    result.reason
-                                } else {
-                                    // A connect re-opens the rating leg, so anything
-                                    // queued while the session was dead is due now.
-                                    com.kennyb1201.kbstream.data.library.TasteRatingSubmission
-                                        .onTrackerConnected(
-                                            context,
-                                            com.kennyb1201.kbstream.data.library.TasteRatingTracker.ANILIST
-                                        )
-                                    null
-                                }
-                            },
-                            onDisconnect = {
-                                com.kennyb1201.kbstream.data.anime.AniListAuth.disconnect(context)
-                                com.kennyb1201.kbstream.data.library.TasteRatingSubmission
-                                    .onTrackerDisconnected(
-                                        context,
-                                        com.kennyb1201.kbstream.data.library.TasteRatingTracker.ANILIST
-                                    )
-                                aniListStateRevision++
-                            },
-                            onSaveUsername = { username ->
-                                AppPreferences.setAniListUsername(context, username)
-                            }
-                        )
-                    }
-
-                    // Kitsu has a real connect as well (spec 2026-11-13 phase 2):
-                    // the password grant, which is the one tracker flow that
-                    // works on a TV unchanged - text fields, no browser, no QR.
-                    // The public-username read stays inside the same dialog, so
-                    // a viewer who only wants that still needs no account.
-                    var kitsuEditor by remember { mutableStateOf(false) }
-                    var kitsuStateRevision by remember { mutableStateOf(0) }
-                    val kitsuState = remember(profileRowKey, syncedRevision, kitsuStateRevision) {
-                        com.kennyb1201.kbstream.data.kitsu.KitsuAuth.connectionState(context)
-                    }
-                    NavigationRow(
-                        label = if (kitsuState ==
-                            com.kennyb1201.kbstream.data.kitsu.KitsuConnectionState.Connected
-                        ) {
-                            "Kitsu — connected"
-                        } else {
-                            animeTrackerRowLabel("Kitsu", kitsuUsername)
-                        },
-                        description = if (kitsuState ==
-                            com.kennyb1201.kbstream.data.kitsu.KitsuConnectionState.Connected
-                        ) {
-                            "Progress and ratings are written to your Kitsu library. " +
-                                "Open to disconnect, or to read a public profile instead."
-                        } else {
-                            animeTrackerDescription("Kitsu", kitsuUsername)
-                        },
-                        onClick = { kitsuEditor = true }
-                    )
-
-                    if (kitsuEditor) {
-                        KitsuConnectDialog(
-                            state = kitsuState,
-                            currentUsername = kitsuUsername,
-                            onDismiss = { kitsuEditor = false },
-                            onConnect = { email, password ->
-                                val result = com.kennyb1201.kbstream.data.kitsu.KitsuAuth
-                                    .connect(context, email, password)
-                                kitsuStateRevision++
-                                if (result is
-                                    com.kennyb1201.kbstream.data.kitsu.KitsuAuth.ConnectResult.Failed
-                                ) {
-                                    result.reason
-                                } else {
-                                    // A connect re-opens the rating leg, so
-                                    // anything the profile queued while it was
-                                    // connected-but-dead is due now.
-                                    com.kennyb1201.kbstream.data.library.TasteRatingSubmission
-                                        .onTrackerConnected(
-                                            context,
-                                            com.kennyb1201.kbstream.data.library.TasteRatingTracker.KITSU
-                                        )
-                                    null
-                                }
-                            },
-                            onDisconnect = {
-                                com.kennyb1201.kbstream.data.kitsu.KitsuAuth.disconnect(context)
-                                com.kennyb1201.kbstream.data.library.TasteRatingSubmission
-                                    .onTrackerDisconnected(
-                                        context,
-                                        com.kennyb1201.kbstream.data.library.TasteRatingTracker.KITSU
-                                    )
-                                kitsuStateRevision++
-                            },
-                            onSaveUsername = { username ->
-                                AppPreferences.setKitsuUsername(context, username)
-                                kitsuEditor = false
-                            }
+                    // ── The anime trackers (spec 2026-11-13: AniList + Kitsu
+                    // phase 2, then MAL's row) ─────────────────────────────
+                    // ONE block for both surfaces, so a row cannot exist on one
+                    // and not the other: AniList and Kitsu carry the public
+                    // username read and their connects, MAL its OAuth row (QR
+                    // here, browser on the phone). They sit at the end of the
+                    // section because none is a resume authority - they feed
+                    // Continue Watching and Upcoming like every other leg and
+                    // are dormant when empty.
+                    AnimeTrackerRows(phone = false) { label, description, onClick ->
+                        NavigationRow(
+                            label = label,
+                            description = description,
+                            onClick = onClick
                         )
                     }
 

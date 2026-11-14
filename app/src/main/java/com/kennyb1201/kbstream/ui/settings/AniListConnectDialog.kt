@@ -22,7 +22,6 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.anime.AniListConnectionState
 import com.kennyb1201.kbstream.ui.components.KBCard
-import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -54,6 +53,8 @@ internal fun AniListConnectDialog(
     state: AniListConnectionState,
     authorizeUrl: String?,
     currentUsername: String?,
+    /** True on the phone, whose plate is the touch twin (see [AnimeDialogPanel]). */
+    phone: Boolean = false,
     onDismiss: () -> Unit,
     onConnect: suspend (token: String) -> String?,
     onDisconnect: () -> Unit,
@@ -68,7 +69,7 @@ internal fun AniListConnectDialog(
     val keyboard = LocalSoftwareKeyboardController.current
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        KBDialogPanel(title = "AniList") {
+        AnimeDialogPanel(phone = phone, title = "AniList") {
             Text(
                 text = "AniList: ${state.label}. " +
                     if (state == AniListConnectionState.Connected) {

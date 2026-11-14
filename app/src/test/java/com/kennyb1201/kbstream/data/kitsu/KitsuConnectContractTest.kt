@@ -162,7 +162,9 @@ class KitsuConnectContractTest {
     @Test
     fun `disconnect clears the session and stops the writes`() {
         val auth = source("$kitsu/KitsuAuth.kt")
-        val settings = source("$root/ui/settings/SettingsScreen.kt")
+        // The Kitsu row is shared by both Settings surfaces now, so its
+        // disconnect lives in the shared block rather than the TV file.
+        val settings = source("$root/ui/settings/AnimeTrackerRows.kt")
 
         assertTrue(auth.contains("fun disconnect"))
         assertTrue(settings.contains("KitsuAuth.disconnect"))

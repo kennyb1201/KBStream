@@ -270,7 +270,10 @@ class AnimeHubContractTest {
 
     @Test
     fun `Settings has a row per service, saying what it reads and what a private list does`() {
-        val settings = source(SETTINGS + "SettingsScreen.kt")
+        // The two rows moved into the shared block both Settings surfaces render
+        // (spec 2026-11-13: the phone needed the same rows), so the pins follow
+        // them there - the row, its label and its dialog are the same code.
+        val settings = source(SETTINGS + "AnimeTrackerRows.kt")
         val dialog = source(SETTINGS + "AnimeUsernameDialog.kt")
         val prefs = source("com/kennyb1201/kbstream/data/settings/AppPreferences.kt")
 

@@ -3009,6 +3009,11 @@ object PrefsPayloadApplier {
             return
         }
 
+        // A different session on this profile may be a different MAL account, so
+        // the cached display name must not answer for it: the Settings row's
+        // "connected as" is re-read from /users/@me under the adopted token.
+        if (local?.accessToken != access) store.clearViewerName()
+
         store.save(
             MalToken(
                 accessToken = access,

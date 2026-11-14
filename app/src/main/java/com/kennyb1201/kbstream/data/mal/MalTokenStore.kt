@@ -46,6 +46,19 @@ internal class MalTokenStore(
         const val KEY_SIGNED_OUT = "signed_out"
         const val KEY_NEEDS_RECONNECT = "needs_reconnect"
 
+        /**
+         * The connected account's own name, for Settings' "connected as"
+         * (spec 2026-11-13, MAL row F1).
+         *
+         * A display fact, not a credential: it is written by the `/users/@me`
+         * read the first time that answers, so the row does not ask MAL again on
+         * every compose. It is NOT part of the sync blob (`buildMalAuth` copies
+         * an explicit list) - each device reads it from MAL under its own
+         * session, and a stale name can never outlive a disconnect because
+         * [markSignedOut] drops it.
+         */
+        const val KEY_VIEWER_NAME = "viewer_name"
+
         /** The in-flight PKCE values: written before the browser opens. */
         const val KEY_PENDING_VERIFIER = "pending_verifier"
         const val KEY_PENDING_STATE = "pending_state"
@@ -118,6 +131,26 @@ internal class MalTokenStore(
 
     fun hasSession(): Boolean = accessToken() != null
 
+    /** The cached display name of the connected account, if it was ever read. */
+    fun viewerName(): String? =
+        prefs?.getString(KEY_VIEWER_NAME, null)?.takeIf { it.isNotBlank() }
+
+    fun saveViewerName(name: String) {
+        if (name.isBlank()) return
+        prefs?.edit()?.putString(KEY_VIEWER_NAME, name)?.apply()
+    }
+
+    /**
+     * Drops the cached display name without touching the session.
+     *
+     * Used when a DIFFERENT session is adopted on this profile: it may be a
+     * different MAL account, and a stale name under a healthy token would make
+     * the Settings row name the wrong account.
+     */
+    fun clearViewerName() {
+        prefs?.edit()?.remove(KEY_VIEWER_NAME)?.apply()
+    }
+
     fun isSignedOut(): Boolean = prefs?.getBoolean(KEY_SIGNED_OUT, false) == true
 
     fun needsReconnect(): Boolean = prefs?.getBoolean(KEY_NEEDS_RECONNECT, false) == true
@@ -138,6 +171,7 @@ internal class MalTokenStore(
         editor.remove(KEY_ACCESS_TOKEN)
             .remove(KEY_REFRESH_TOKEN)
             .remove(KEY_EXPIRES_AT)
+            .remove(KEY_VIEWER_NAME)
             .remove(KEY_PENDING_VERIFIER)
             .remove(KEY_PENDING_STATE)
             .putBoolean(KEY_SIGNED_OUT, true)

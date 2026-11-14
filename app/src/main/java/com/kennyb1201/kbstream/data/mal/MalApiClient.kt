@@ -158,6 +158,35 @@ internal object MalApiClient {
         return MalListRead.Ok(entries)
     }
 
+    /**
+     * The connected account's own name, for Settings' "connected as".
+     *
+     * The one place the app asks MAL who it is: `GET /users/@me?fields=name`,
+     * the same `@me` surface the list leg reads, so the Settings row never grows
+     * a second profile source of its own. The name is a DISPLAY fact, not a
+     * credential, and it is cached per profile in the token store - composing
+     * the row must not spend a request every time. A read that fails (offline, a
+     * parked 429) answers null and leaves the row saying "connected"; the next
+     * compose fills the name in.
+     */
+    suspend fun viewerName(context: Context): String? {
+        if (!MalConfig.isConfigured) return null
+
+        val store = MalTokenStore(context)
+        store.viewerName()?.let { return it }
+        if (!store.hasSession() || store.needsReconnect()) return null
+
+        val body = getJson(
+            "$API_BASE/users/@me?fields=name",
+            authorized = true,
+            context = context
+        ) ?: return null
+
+        val name = body.optString("name").trim().takeIf { it.isNotEmpty() } ?: return null
+        store.saveViewerName(name)
+        return name
+    }
+
     // ── Writes ────────────────────────────────────────────────────────────
 
     /**

@@ -95,6 +95,7 @@ import com.kennyb1201.kbstream.data.download.DownloadsManager
 import com.kennyb1201.kbstream.data.download.DownloadsStore
 import com.kennyb1201.kbstream.data.download.formatDownloadBytes
 import com.kennyb1201.kbstream.ui.components.KBSecretField
+import com.kennyb1201.kbstream.ui.settings.AnimeTrackerRows
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBCard
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
@@ -967,6 +968,19 @@ private fun IntegrationsPaneMobile(
             },
             onClick = onOpenBingeCat
         )
+        // ── The anime trackers (spec 2026-11-13) ─────────────────────
+        // AniList and Kitsu used to exist on the TV only, and MyAnimeList had no
+        // row anywhere. The same shared block the TV pane renders builds these
+        // three, so the phone cannot drift from the TV again: same labels, same
+        // states, same connects (the MAL dialog opens MAL in the browser here,
+        // where the TV shows a QR), and the public-username read with them.
+        AnimeTrackerRows(phone = true) { label, description, onClick ->
+            SettingsNavRowMobile(
+                label = label,
+                description = description,
+                onClick = onClick
+            )
+        }
         // ── Public lists ──────────────────────────────────────────
         // One section for the three browse surfaces, in Library source order -
         // the TV pane's section, same rows (spec F1). It used to be three

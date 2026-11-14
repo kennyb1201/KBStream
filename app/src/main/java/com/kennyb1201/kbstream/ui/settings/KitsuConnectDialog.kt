@@ -26,7 +26,6 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.kitsu.KitsuConnectionState
 import com.kennyb1201.kbstream.ui.components.KBCard
-import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -54,6 +53,8 @@ import kotlinx.coroutines.launch
 internal fun KitsuConnectDialog(
     state: KitsuConnectionState,
     currentUsername: String?,
+    /** True on the phone, whose plate is the touch twin (see [AnimeDialogPanel]). */
+    phone: Boolean = false,
     onDismiss: () -> Unit,
     onConnect: suspend (email: String, password: String) -> String?,
     onDisconnect: () -> Unit,
@@ -70,7 +71,7 @@ internal fun KitsuConnectDialog(
     val connectFocusRequester = remember { FocusRequester() }
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        KBDialogPanel(title = "Kitsu") {
+        AnimeDialogPanel(phone = phone, title = "Kitsu") {
             Text(
                 text = "Kitsu: ${state.label}. " +
                     if (state == KitsuConnectionState.Connected) {
