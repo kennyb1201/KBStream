@@ -776,7 +776,7 @@ object PrefsPayloadBuilder {
      * never read the gate for. A build for a key this list does not carry is a
      * key the backfill cannot see, which is the only failure mode worth having.
      */
-    fun trackerAuthBackfillEntries(
+    internal fun trackerAuthBackfillEntries(
         context: Context
     ): List<TrackerAuthBackfillRules.EnrolledAuth> = ENROLLED_TRACKER_AUTH.mapNotNull { prefKey ->
         val payload = trackerAuthBlob(context, prefKey) ?: return@mapNotNull null
