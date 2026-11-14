@@ -22,6 +22,7 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.mal.MalAuth
 import com.kennyb1201.kbstream.data.mal.MalConnectionState
 import com.kennyb1201.kbstream.data.mal.MalLinks
+import com.kennyb1201.kbstream.data.mal.MalStartOutcome
 import com.kennyb1201.kbstream.ui.components.KBQrCode
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -105,6 +106,18 @@ internal fun MalConnectDialog(
                         style = MaterialTheme.typography.labelSmall,
                         fontSize = 11.sp
                     )
+                    // spec 2026-11-14, F2a: the one thing this device cannot see.
+                    // A phone build without the app id opens from the scan and can
+                    // do nothing, and the viewer would read that as the QR being
+                    // broken.
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "The phone needs KBStream built with the MAL app id - " +
+                            "a build without one can only say it is not configured.",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = 11.sp
+                    )
                 }
             }
 
@@ -122,7 +135,8 @@ internal fun MalConnectDialog(
                             // The flow starts HERE: the verifier is stored before
                             // the URL is handed to the browser, so a redirect into
                             // a fresh process still has what the exchange needs.
-                            browserUnavailable = !MalLinks.openAuthorize(context)
+                            browserUnavailable =
+                                MalLinks.openAuthorize(context) == MalStartOutcome.NoBrowser
                         }
                     ) {
                         Text(

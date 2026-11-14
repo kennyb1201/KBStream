@@ -2100,22 +2100,73 @@ fun AppRoot(
             !launcherId.isNullOrBlank()
     }
 
-    // MyAnimeList's OAuth links (spec 2026-11-13, F1). Two shapes, both on
-    // kbstream://oauth/mal: the CALLBACK from the browser after the viewer
-    // approves, and ?connect=1 - what a TV shows as a QR code, because MAL has
-    // no device flow and a TV has no usable browser for this one. Handled before
-    // the launch-extras routing below, because neither is a destination.
-    LaunchedEffect(incomingIntent) {
-        val link = incomingIntent?.data?.toString() ?: return@LaunchedEffect
-        when {
-            MalLinks.isCallback(link) -> {
+    // MyAnimeList's OAuth links (spec 2026-11-13, F1; 2026-11-14, F2). Two
+    // shapes, both on kbstream://oauth/mal: the CALLBACK from the browser after
+    // the viewer approves, and ?connect=1 - what a TV shows as a QR code, because
+    // MAL has no device flow and a TV has no usable browser for this one.
+    //
+    // ONE ROUTER, TWO ARRIVALS (F2b). A link reaches this activity in exactly two
+    // shapes - the cold launch's own intent, and `onNewIntent` into the running
+    // singleTop activity - and each shape used to carry its own copy of this
+    // when. A copy is how one of them goes quiet: the cold one never logged a
+    // failed exchange, and neither said anything when the start link could not
+    // open MAL's page. Both arrivals now call the same function, so a shape can
+    // only lose the link if it stops calling it, which the contract test pins.
+    //
+    // The failure is VISIBLE (F2a): a scanned QR in a build with no MAL app id
+    // used to open the app and stop, silently. It now says so through the app's
+    // one feedback channel, which is drawn above whatever screen is showing.
+    val malFeedback = LocalKBFeedback.current
+
+    // The exchange is NOT run in the effect that noticed the link (F2b). The
+    // warm consumer right below clears `incomingIntent`, which restarts every
+    // effect keyed on it - and a coroutine cancelled at that point is a network
+    // exchange stopped mid-flight: the app comes back, nothing connects, and
+    // nothing is logged that says why. This scope is not keyed, so it survives
+    // the clear and finishes what the viewer already approved in the browser.
+    val malRouteScope = rememberCoroutineScope()
+
+    // One callback link, one exchange. MAL's code is single-use, and the same
+    // intent can be seen twice (a restart of the effect that read it, or the
+    // activity re-reading its own launch intent) - the second exchange would
+    // fail and report a failure for a connect that already worked.
+    //
+    // Start links are deliberately NOT deduped: the QR's link is a constant, so
+    // scanning it again has to open the browser again.
+    var handledMalCallback by remember { mutableStateOf<String?>(null) }
+
+    fun routeMalLink(link: String?) {
+        if (link == null) return
+        if (MalLinks.isCallback(link)) {
+            if (handledMalCallback == link) return
+            handledMalCallback = link
+            malRouteScope.launch {
                 val result = MalAuth.completeConnect(context, link)
                 if (result is MalAuth.ConnectResult.Failed) {
                     android.util.Log.w("MalLinks", "MAL connect failed: ${result.reason}")
                 }
             }
-            MalLinks.isStart(link) -> MalLinks.openAuthorize(context)
+            return
         }
+        if (!MalLinks.isStart(link)) return
+        val message = com.kennyb1201.kbstream.data.mal.malStartFailureMessage(
+            MalLinks.openAuthorize(context)
+        ) ?: return
+        android.util.Log.w("MalLinks", message)
+        val host = malFeedback
+        if (host != null) {
+            host.show(message, isError = true)
+        } else {
+            // No shell above this node (the player's own activities, or a
+            // preview): a system toast is worse on a TV but it is still not
+            // silence.
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // Warm arrival: the running activity was handed the link by onNewIntent.
+    LaunchedEffect(incomingIntent) {
+        routeMalLink(incomingIntent?.data?.toString() ?: return@LaunchedEffect)
     }
 
     // Warm deep links: an intent delivered to the already-running activity.
@@ -2136,13 +2187,10 @@ fun AppRoot(
     // reconciling the TV launcher's Continue Watching rail with the in-app
     // watch history (self-healing, cheap).
     LaunchedEffect(Unit) {
-        // A MAL link that arrived with the cold launch (the browser started us).
-        hostActivity?.intent?.data?.toString()?.let { link ->
-            when {
-                MalLinks.isCallback(link) -> MalAuth.completeConnect(context, link)
-                MalLinks.isStart(link) -> MalLinks.openAuthorize(context)
-            }
-        }
+        // A MAL link that arrived with the cold launch (the browser, or a QR
+        // scan, started us). The same router the warm arrival calls: one place
+        // decides what a MAL link means, so the two shapes cannot disagree.
+        routeMalLink(hostActivity?.intent?.data?.toString())
 
         val handledByExtras =
             applyLaunchIntentExtras(hostActivity?.intent)

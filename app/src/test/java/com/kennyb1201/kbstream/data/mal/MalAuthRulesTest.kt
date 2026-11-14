@@ -243,4 +243,39 @@ class MalAuthRulesTest {
         assertEquals("connected", MalConnectionState.Connected.label())
         assertEquals("needs reconnect", MalConnectionState.NeedsReconnect.label())
     }
+
+    // ── the start link's outcome (spec 2026-11-14, F2a) ────────────────────
+
+    @Test
+    fun `an opened start link owes the viewer no sentence`() {
+        // A QR that works must not add a message to the screen it just replaced.
+        assertNull(malStartFailureMessage(MalStartOutcome.Opened))
+    }
+
+    @Test
+    fun `a build with no app id says it is the build`() {
+        val message = malStartFailureMessage(MalStartOutcome.NotConfigured).orEmpty()
+        // The field report: the scan offered KBStream, the app opened, and the
+        // browser never did. The sentence has to land on the cause a viewer can
+        // act on - the phone's build - not on the scan or the code.
+        assertTrue("names the build", message.contains("in this build"))
+        assertTrue("names the missing app id", message.contains("app id"))
+        assertTrue("names the phone", message.contains("phone"))
+        assertTrue(
+            "and says what the code did do, so the scan is not the suspect",
+            message.contains("opened KBStream")
+        )
+        assertFalse("it is not a retry invitation", message.contains("try again"))
+    }
+
+    @Test
+    fun `a device with no browser says that instead`() {
+        val message = malStartFailureMessage(MalStartOutcome.NoBrowser).orEmpty()
+        assertTrue(message.contains("no browser"))
+        // The two failures must not share wording: one is a build, one is a device.
+        assertFalse(message.contains("app id"))
+        assertFalse(
+            message == malStartFailureMessage(MalStartOutcome.NotConfigured)
+        )
+    }
 }

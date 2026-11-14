@@ -52,22 +52,25 @@ internal object MalLinks {
     /**
      * Opens MAL's authorize page in whatever handles https on this device.
      *
-     * Returns false when nothing can (a TV with no browser): the caller then shows
-     * the start link as a QR code instead of a dead button. That is the v1 shape
-     * the spec allows, and it is why this returns a boolean rather than throwing.
+     * Returns WHAT HAPPENED rather than a Boolean (spec 2026-11-14, F2a). The two
+     * failures are different problems with different sentences - a build with no
+     * app id cannot start the flow at all, a device with no browser can - and the
+     * old `false` for both is why a scanned QR opened KBStream and then sat there
+     * silently. [MalStartOutcome] is also what the dialog's own button reads: a
+     * phone with no browser falls back to the QR, a phone in an unconfigured
+     * build does not pretend a QR would help.
      */
-    fun openAuthorize(context: Context): Boolean {
-        val url = MalAuth.beginConnect(context)
-        if (url == null) return false
+    fun openAuthorize(context: Context): MalStartOutcome {
+        val url = MalAuth.beginConnect(context) ?: return MalStartOutcome.NotConfigured
 
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         return runCatching {
             context.startActivity(intent)
-            true
+            MalStartOutcome.Opened
         }.getOrElse { error ->
             Log.i(TAG, "no browser for the MAL authorize page: ${error.javaClass.simpleName}")
-            false
+            MalStartOutcome.NoBrowser
         }
     }
 }

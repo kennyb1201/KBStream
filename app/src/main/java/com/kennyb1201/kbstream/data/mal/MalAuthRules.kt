@@ -28,6 +28,45 @@ import kotlin.random.Random
 internal const val MAL_AUTHORIZE_URL = "https://myanimelist.net/v1/oauth2/authorize"
 internal const val MAL_REDIRECT_URI = "kbstream://oauth/mal"
 
+/**
+ * What happened when this device tried to OPEN MAL's authorize page
+ * (spec 2026-11-14, F2a).
+ *
+ * The QR start link exists so a phone can run the round trip a TV cannot, so
+ * every way it can end in "the app opened and nothing else happened" has a name
+ * here. It used to be one Boolean: `openAuthorize` returned false for a build
+ * with no app id AND for a device with no browser, and neither said anything -
+ * which is the field report exactly. The scan offers KBStream, KBStream opens,
+ * the browser never appears, and no sentence anywhere says why.
+ */
+internal enum class MalStartOutcome {
+    Opened,
+
+    /** This build has no MAL client id, so there is no authorize URL to open. */
+    NotConfigured,
+
+    /** A configured build, on a device with nothing that handles https. */
+    NoBrowser
+}
+
+/**
+ * The sentence a start link that could not open the browser owes the viewer, or
+ * null when it opened.
+ *
+ * The not-configured case is a BUILD problem (see `MalConfig`), so it says that
+ * instead of inviting a retry that cannot work: the only fix is a build carrying
+ * the app id.
+ */
+internal fun malStartFailureMessage(outcome: MalStartOutcome): String? = when (outcome) {
+    MalStartOutcome.Opened -> null
+    MalStartOutcome.NotConfigured ->
+        "MyAnimeList is not configured in this build: the code opened KBStream, but " +
+            "there is no MAL app id to authorize. The phone needs KBStream built with " +
+            "the MAL app id."
+    MalStartOutcome.NoBrowser ->
+        "This device has no browser to open MyAnimeList's authorize page."
+}
+
 /** A parsed token response. Refresh tokens live a month, access tokens an hour. */
 internal data class MalToken(
     val accessToken: String,

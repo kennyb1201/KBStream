@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.anime.AniListConnectionState
+import com.kennyb1201.kbstream.ui.components.KBQrCode
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import kotlinx.coroutines.launch
@@ -94,14 +95,34 @@ internal fun AniListConnectDialog(
                         style = MaterialTheme.typography.labelMedium
                     )
                     else -> {
-                        Text(
-                            text = "1. Open this link on your phone (or any browser) and " +
-                                "approve KBStream:\n$authorizeUrl\n" +
-                                "2. AniList shows a token. Copy it and paste it below.",
-                            color = KBTextHi,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontSize = 12.sp
-                        )
+                        // The code and the link are the same URL (spec 2026-11-14,
+                        // F1). Typing it with a remote was the only way in before,
+                        // and it is a long URL that carries a client id - a phone
+                        // camera is that step without the keyboard. The text stays
+                        // beside it, for a viewer who would rather type it, and the
+                        // QR panel prints the URL itself as well.
+                        //
+                        // TV ONLY. On the phone this dialog opens the authorize
+                        // page in the browser, so a code there would be scanned by
+                        // the very device holding it.
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "1. Open this link on your phone (or any browser) " +
+                                    "and approve KBStream:\n$authorizeUrl\n" +
+                                    "2. AniList shows a token. Copy it and paste it below.",
+                                color = KBTextHi,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontSize = 12.sp,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (!phone) {
+                                KBQrCode(url = authorizeUrl)
+                            }
+                        }
                         Spacer(modifier = Modifier.height(8.dp))
                         AnimeDialogField(
                             phone = phone,
