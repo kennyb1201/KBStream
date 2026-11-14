@@ -8,6 +8,7 @@ import androidx.work.WorkerParameters
 import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.work.WorkPolicies
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 
@@ -31,19 +32,25 @@ class EpgRefreshWorker(
     @Volatile
     private var stoppedImported: Int = 0
 
-    override fun onStopped() {
-        val decision = stoppedDecision
-        if (decision != null) {
-            recordPass(
-                EpgRefreshDiagnostics.PassVerdict(
-                    decision = decision,
-                    sources = stoppedSources,
-                    imported = stoppedImported,
-                    stopped = true
-                )
+    /**
+     * Records a pass WorkManager stopped mid-import.
+     *
+     * This cannot be an `onStopped()` override: WorkManager 2.12 makes it final,
+     * and the build rejected the override outright. A stop reaches a
+     * [CoroutineWorker] as a cancellation of its coroutine, so the record is
+     * taken where that cancellation passes through [doWork]. Everything the run
+     * had decided by then is in the fields above.
+     */
+    private fun recordStoppedPass() {
+        val decision = stoppedDecision ?: return
+        recordPass(
+            EpgRefreshDiagnostics.PassVerdict(
+                decision = decision,
+                sources = stoppedSources,
+                imported = stoppedImported,
+                stopped = true
             )
-        }
-        super.onStopped()
+        )
     }
 
     /** The ACTIVE profile's scoped store, as the run reads it. */
@@ -81,7 +88,18 @@ class EpgRefreshWorker(
         com.kennyb1201.kbstream.data.reporting.CrashReporter.recordEvent("guide", "refresh: $line")
     }
 
-    override suspend fun doWork(): Result {
+    override suspend fun doWork(): Result = try {
+        runPass()
+    } catch (cancelled: CancellationException) {
+        // A timeout is a cut budget, not a stop: it has its own verdict (see
+        // importWithinBudget) and must not be reported as WorkManager stopping
+        // the pass.
+        if (cancelled !is TimeoutCancellationException) recordStoppedPass()
+        throw cancelled
+    }
+
+    /** One guide-refresh pass; [doWork] is its cancellation-safe shell. */
+    private suspend fun runPass(): Result {
         // WorkManager fires outside any profile context, so resolve the
         // ACTIVE profile's scoped store at run time - otherwise the worker
         // would always read the legacy/global config even after profiles

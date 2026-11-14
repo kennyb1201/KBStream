@@ -4441,9 +4441,16 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // muxer's DEFAULT flag, which on a dual-audio EN/RU release is the
         // Russian track. The stored pick is deliberately KEPT (the next source
         // may carry it again, and it is re-tried on every open) and the
-        // language preference stands until it resolves - which is exactly
-        // where the ExoPlayer engine ends up, its own automatic pass having
-        // applied the language before the bridge's remembered-track pass ran.
+        // language preference stands until it resolves.
+        //
+        // The ExoPlayer engine reaches the same end state through its OWN
+        // fall-through (PlayerTrackBridge.applyAudioFallThrough) - not through
+        // an automatic pass that ran earlier, which is what this comment used
+        // to claim and what PAW Patrol in French disproved: the bridge SKIPS
+        // its language pass whenever a signature exists. Both halves, and the
+        // rest of the audio-memory table, are pinned together by
+        // AudioMemoryParityContractTest; the table lives on
+        // PlayerTrackBridge.resolveSignature.
         // Reported: "mpv player keeps playing foreign language over english".
         if (audioTrackSignature.isBlank() || !view.applyRememberedAudioTrack(audioTrackSignature)) {
             view.selectAudioLanguage(effectiveAudioLanguage())

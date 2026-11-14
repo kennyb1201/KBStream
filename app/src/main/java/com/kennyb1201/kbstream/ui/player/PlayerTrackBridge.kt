@@ -239,6 +239,15 @@ internal object PlayerTrackBridge {
     @Volatile
     private var subtitleFallThroughApplied = false
 
+    /**
+     * One fall-through to the language pass per player instance, taken when a
+     * remembered AUDIO pick missed this file (see [applyAudioFallThrough]).
+     * The subtitle latch's twin, and separate from it: one memory missing must
+     * not consume the other's one attempt.
+     */
+    @Volatile
+    private var audioFallThroughApplied = false
+
     /** The player we already wired; [setPlayer] can repeat an instance. */
     @Volatile
     private var wiredPlayer: Player? = null
@@ -299,6 +308,7 @@ internal object PlayerTrackBridge {
         rememberedTrackApplied = false
         rememberedSubtitleTrackApplied = false
         subtitleFallThroughApplied = false
+        audioFallThroughApplied = false
 
         // Resolve global + override into the live tuning the processor reads.
         publishAudioTuning(context)
@@ -556,6 +566,7 @@ internal object PlayerTrackBridge {
         reportedAudioMissFor = null
         rememberedSubtitleTrackApplied = false
         subtitleFallThroughApplied = false
+        audioFallThroughApplied = false
         // The player may already be ready (rebuild after a source switch), in
         // which case a READY listener would never fire for this state.
         if (player.playbackState == Player.STATE_READY) applyOnReady(player)
@@ -574,7 +585,11 @@ internal object PlayerTrackBridge {
     /** One corrected pass over a ready player: languages, then the tracks. */
     private fun applyOnReady(player: Player) {
         reapplyLanguageSelection(player)
-        applyRememberedAudioTrack(player)
+        // A remembered audio pick this file does not carry must not leave the
+        // file's own default track in charge either - on a multi-audio release
+        // that default is often another language entirely (see
+        // [applyAudioFallThrough], and its subtitle twin below).
+        if (!applyRememberedAudioTrack(player)) applyAudioFallThrough(player)
         // A remembered pick this file does not carry must not leave the file's
         // own default track in charge (see [applySubtitleFallThrough]).
         if (!applyRememberedSubtitleTrack(player)) applySubtitleFallThrough(player)
@@ -640,6 +655,86 @@ internal object PlayerTrackBridge {
             "no text tracks"
         } else {
             "${tracks.size} text tracks [${tracks.joinToString(", ")}]"
+        }
+    }
+
+    /**
+     * Falls through to the language pass when a remembered audio pick existed but
+     * did not resolve in THIS file.
+     *
+     * Field case (2026-11-14, phone, ExoPlayer): PAW Patrol came up in French
+     * although the file carries English and the language is set to English. The
+     * pick had been made by hand on an earlier episode, and the episodes of one
+     * show do not lay their audio tracks out identically - the stored pick is the
+     * same positional fingerprint the subtitle side uses
+     * (`language|codecs|channels|index|trackCount`), so two files later it missed.
+     * [reapplyLanguageSelection] had already skipped the language pass on purpose
+     * (a remembered track must beat "the first English track", or "ENG DD+ 5.1"
+     * collapses to "ENG stereo"), and nothing followed the miss - so the muxer's
+     * own default track, the French one that sits first, played.
+     *
+     * This is [applySubtitleFallThrough]'s mirror, guard for guard, because the
+     * two memories fail in exactly the same way. The pick it runs is the very
+     * call [reapplyLanguageSelection] makes when no track is remembered: the
+     * language pass. That pass is also the "avoid known-wrong" step F1 asks for -
+     * when no track in the file names the preferred language, [applyLanguage]
+     * takes the first track NOT known to be the wrong one
+     * ([LanguageMatch.fallbackTrackIndex]), so an untagged track can still win
+     * over one tagged in another language.
+     *
+     * Every guard is load-bearing:
+     *  - only after a MISS with a non-blank stored signature. No signature is the
+     *    ordinary path, whose language pass already ran earlier in this pass;
+     *  - only once per player instance: a rebuffer's READY must not re-run it,
+     *    while a new player (source switch, rebuild) gets its own pass;
+     *  - never over a hand pick this session: [chooseAudioTrack] marks the
+     *    re-assert as used ([rememberedTrackApplied]), so that pick sticks (the
+     *    E-F1 latch discipline);
+     *  - a blank preferred language is "Auto" with nothing configured, and the
+     *    file's own default is deliberately left in charge - exactly as the
+     *    ordinary path leaves it;
+     *  - live is NOT skipped here, unlike subtitles: a channel's audio language is
+     *    a real choice, and [reapplyLanguageSelection] applies it too.
+     *
+     * The stored signature is NOT cleared on a miss: it is per show, and a miss in
+     * this file does not prove it wrong for the next one, which may share the
+     * layout it was written from. [rememberedTrackApplied] also stays false, so a
+     * retry with late-arriving tracks can still apply it - and that exact pick
+     * then wins over this pass. The miss itself is already reported once per file
+     * by [applyRememberedAudioTrack] ([noteAudioMemoryMiss]); this adds no second
+     * report, only the log line.
+     */
+    private fun applyAudioFallThrough(player: Player) {
+        if (audioTrackSignature.isBlank()) return
+        if (audioFallThroughApplied) return
+        // A hand pick this session sets that latch without applying anything.
+        if (rememberedTrackApplied) return
+        val language = effectiveAudioLanguage()
+        // "Auto" with no global default: leave the file's own choice alone, the
+        // same refusal [applyLanguage] makes for audio.
+        if (language.isBlank()) return
+        audioFallThroughApplied = true
+        Log.i(
+            TAG,
+            "remembered audio track '${audioTrackSignature}' did not match this file's " +
+                "${audioTrackLayout(player)}; fell through to '$language'"
+        )
+        applyLanguage(player, C.TRACK_TYPE_AUDIO, language)
+    }
+
+    /** This file's audio tracks as `language#position`, for the fall-through log. */
+    private fun audioTrackLayout(player: Player): String {
+        val tracks = mutableListOf<String>()
+        for (group in player.currentTracks.groups) {
+            if (group.type != C.TRACK_TYPE_AUDIO) continue
+            for (i in 0 until group.length) {
+                tracks += "${group.getTrackFormat(i).language ?: "untagged"}#${tracks.size}"
+            }
+        }
+        return if (tracks.isEmpty()) {
+            "no audio tracks"
+        } else {
+            "${tracks.size} audio tracks [${tracks.joinToString(", ")}]"
         }
     }
 
@@ -768,6 +863,38 @@ internal object PlayerTrackBridge {
     )
 
     /**
+     * AUDIO MEMORY PARITY (spec 2026-11-14) - the behaviour table BOTH engines
+     * must satisfy, pinned row by row by [AudioMemoryParityContractTest].
+     *
+     * The two engines carry parallel shells over this one resolver (Exo:
+     * `applyOnReady` / `reapplyLanguageSelection` / `applyRememberedAudioTrack`;
+     * MPV: `MpvPlayerActivity`'s file-open re-apply block and
+     * `MpvPlayerView.applyRememberedAudioTrack`), and they had already drifted
+     * once: the fall-through existed on MPV and not on Exo, which is how PAW
+     * Patrol came up in French two episodes after an English pick. What was
+     * shared all along was never the shell - it was this resolver. So the shells
+     * are pinned together, and a behaviour change to either one updates that
+     * test first; a change without a test change is a review failure.
+     *
+     *  1. A stored pick that resolves applies exactly - the picked "ENG DD+ 5.1
+     *     rather than ENG stereo" is not flattened to the first English track.
+     *  2. A stored pick that MISSES this file falls through to the language pass
+     *     for THIS file (Exo: [applyAudioFallThrough]; MPV: the
+     *     `audioTrackSignature.isBlank() || !applyRememberedAudioTrack(...)` arm
+     *     in its file-open re-apply).
+     *  3. A miss never deletes the pick; a later file that carries it re-applies
+     *     it.
+     *  4. A manual pick applies immediately and exactly, and no language pass
+     *     second-guesses it for the rest of the session.
+     *  5. "Default" clears the signature and applies the language at once.
+     *  6. No signature -> the language pass runs, with the avoid-known-wrong
+     *     fallback ([LanguageMatch.fallbackTrackIndex]) when no track in the file
+     *     names the preferred language.
+     *  7. The same pick is visible across engines: one store, one key derivation
+     *     ([com.kennyb1201.kbstream.data.player.PlayerTitlePrefs.titleKeyFor]).
+     *  8. A missed SUBTITLE pick falls through to the auto-pick on both engines
+     *     ([applySubtitleFallThrough]; MPV's `fallThroughToSubtitleAutoPick`).
+     *
      * Which of [tracks] a stored [signature] means, or null when none does.
      *
      * 1. Exact: the same language, codec and channel count — and, for a

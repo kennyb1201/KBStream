@@ -31,9 +31,10 @@ class GuideRefreshLandingContractTest {
     @Test
     fun `every pass exit records a verdict`() {
         assertEquals(
-            "fresh, defer, no-sources and the import pass: four exits, four records",
-            3,
-            countOf(worker, "recordPass(EpgRefreshDiagnostics.PassVerdict(")
+            "fresh, defer, no-sources, the import pass, and the stopped shell: five exits, " +
+                "five records",
+            5,
+            Regex("recordPass\\(\\s*EpgRefreshDiagnostics\\.PassVerdict").findAll(worker).count()
         )
         assertTrue(worker.contains("EpgRefreshDiagnostics.Decision.FRESH"))
         assertTrue(worker.contains("EpgRefreshDiagnostics.Decision.DEFER"))
@@ -47,11 +48,29 @@ class GuideRefreshLandingContractTest {
 
     @Test
     fun `a job WorkManager stops is recorded with how far it got`() {
-        assertTrue("the override exists", worker.contains("override fun onStopped()"))
-        val stopped = worker.substringAfter("override fun onStopped()").substringBefore("super.onStopped()")
+        // WorkManager 2.12 makes onStopped() final, so the stop is caught where a
+        // CoroutineWorker actually learns about it: the coroutine's cancellation,
+        // on its way out of the one suspend entry point.
+        assertTrue(
+            "the entry point wraps the pass in a cancellation shell",
+            worker.contains("override suspend fun doWork(): Result = try {") &&
+                worker.contains("private suspend fun runPass(): Result {")
+        )
+        val shell = worker.substringAfter("override suspend fun doWork(): Result = try {")
+            .substringBefore("private suspend fun runPass()")
+        assertTrue(
+            "the stop is recorded on the way out, and the cancellation still propagates",
+            shell.contains("recordStoppedPass()") && shell.contains("throw cancelled")
+        )
+        assertTrue(
+            "and a timeout stays a timeout, not a stop",
+            shell.contains("if (cancelled !is TimeoutCancellationException) recordStoppedPass()")
+        )
+        val recorder = worker.substringAfter("private fun recordStoppedPass()")
+            .substringBefore("private fun iptvPrefs()")
         assertTrue(
             "it records the stop, not silence - the branch that produced the 22-hour gap",
-            stopped.contains("stopped = true") && stopped.contains("recordPass(")
+            recorder.contains("stopped = true") && recorder.contains("recordPass(")
         )
         assertTrue(
             "and the loop publishes its progress for it to read",
