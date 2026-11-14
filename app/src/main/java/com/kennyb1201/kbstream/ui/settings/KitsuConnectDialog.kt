@@ -220,50 +220,21 @@ internal fun KitsuConnectDialog(
                 }
             )
             Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                AnimeDialogButton(
-                    phone = phone,
-                    onClick = {
-                        keyboard?.hide()
-                        onSaveUsername(username.trim().takeIf { it.isNotEmpty() })
-                    },
-                    // SAVE USERNAME absorbs the row's slack; CLEAR keeps its own
-                    // width, which is what stops CLEAR wrapping to "CLEA / R"
-                    // (spec 2026-11-14).
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(
-                        text = "SAVE USERNAME",
-                        maxLines = 1,
-                        softWrap = false,
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.labelLarge,
-                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
-                    )
+            // The row measures its own labels and stacks when both cannot fit:
+            // the weighted version clipped SAVE USERNAME's last E (spec
+            // 2026-11-14, amendment 3b). See AnimeUsernameActions.
+            AnimeUsernameActions(
+                phone = phone,
+                onSave = {
+                    keyboard?.hide()
+                    onSaveUsername(username.trim().takeIf { it.isNotEmpty() })
+                },
+                onClear = {
+                    keyboard?.hide()
+                    username = ""
+                    onSaveUsername(null)
                 }
-                AnimeDialogButton(
-                    phone = phone,
-                    onClick = {
-                        keyboard?.hide()
-                        username = ""
-                        onSaveUsername(null)
-                    }
-                ) {
-                    Text(
-                        text = "CLEAR",
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.labelLarge,
-                        // Never wraps, whatever width the row leaves it.
-                        maxLines = 1,
-                        softWrap = false,
-                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
-                    )
-                }
-            }
+            )
         }
     }
 }

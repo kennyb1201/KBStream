@@ -7,91 +7,143 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * No dialog button's label may wrap (spec 2026-11-14).
+ * The connect dialogs' username row, wired to a measurement (spec 2026-11-14,
+ * amendment 3b).
  *
- * Kenny's screenshot showed the AniList username row on his phone with CLEAR
- * drawn as "CLEA" over "R". Nothing about the row was misbehaving - a Row that
- * gives its children no weight measures the unweighted ones first, so SAVE
- * USERNAME's label plus its 18.dp padding ate the width and CLEAR's two-inch word
- * had nowhere to go. The same shape existed in Kitsu's dialog, because the two
- * rows were written from the same template.
- *
- * THE FIX IS AT THE CALL SITES, not in [AnimeDialogButton] (which already honours
- * a modifier on both surfaces): SAVE USERNAME takes the row's slack, CLEAR keeps
- * its own width, and every button label in these two dialogs is single-line. TV
- * is unchanged by construction - the weight only redistributes space a TV already
- * had - and the rows still raise the same button on both surfaces.
+ * This test used to pin the opposite: SAVE USERNAME weighted, CLEAR unweighted,
+ * every label single-line. That shipped and clipped the last E of SAVE USERNAME
+ * mid-glyph, because a weighted button is only as wide as the slack the row has
+ * left and the row at Kenny's font scale had none. The row is now one shared
+ * composable that measures its two labels at the device's scale and stacks when
+ * both do not fit, so the pins move with it: the dialogs must not build the row
+ * by hand again, and the shared row must keep the measurement, the stack, the
+ * tighter phone padding and the no-wrap guards.
  *
  * Pinned by reading the sources: a Compose layout cannot be measured from this
- * module's JVM tests, and the failure is visual and easy to reintroduce by
- * copy-paste.
+ * module's JVM tests, and the arithmetic itself is covered by
+ * [UsernameActionLayoutTest].
  */
 class AnimeConnectDialogButtonWrapContractTest {
 
     private val aniList by lazy { source(ANILIST) }
     private val kitsu by lazy { source(KITSU) }
+    private val row by lazy { source(USERNAME_ROW) }
+    private val layout by lazy { source(USERNAME_LAYOUT) }
 
     @Test
-    fun `the username row gives SAVE the slack and leaves CLEAR its own width`() {
+    fun `both dialogs hand the username row to the measured layout`() {
         listOf(aniList to "AniList", kitsu to "Kitsu").forEach { (dialog, name) ->
-            // Scoped to the username row's two buttons: the dialogs already use a
-            // weight elsewhere (the AniList link text beside its QR), and that is
-            // a different row.
-            val saveButton = dialog.substringBefore("text = \"SAVE USERNAME\"")
-                .substringAfterLast("AnimeDialogButton(")
             assertTrue(
-                "$name: SAVE USERNAME must absorb the row's slack",
-                saveButton.contains("modifier = Modifier.weight(1f)")
+                "$name: the username row must be the shared one - a hand-built row " +
+                    "is how it was starved twice",
+                dialog.contains("AnimeUsernameActions(\n                phone = phone,")
             )
-            val clearButton = dialog.substringBefore("text = \"CLEAR\"")
-                .substringAfterLast("AnimeDialogButton(")
             assertFalse(
-                "$name: CLEAR must keep its own width - weighting it too would " +
-                    "just split the starvation",
-                clearButton.contains("Modifier.weight(")
+                "$name: no label of its own in that row any more",
+                dialog.contains("text = \"SAVE USERNAME\"") || dialog.contains("text = \"CLEAR\"")
             )
+            // CLEAR's behaviour is unchanged: clear the field, clear the saved name.
             assertTrue(
-                "$name: the username row still fills the dialog width",
-                dialog.substringBefore("text = \"SAVE USERNAME\"")
-                    .substringAfterLast("Row(")
-                    .contains("Modifier.fillMaxWidth()")
+                "$name: CLEAR still clears the field and the saved username",
+                dialog.contains("onClear = {\n                    keyboard?.hide()\n                    username = \"\"")
             )
         }
     }
 
     @Test
-    fun `CLEAR is single-line in both dialogs`() {
-        listOf(aniList to "AniList", kitsu to "Kitsu").forEach { (dialog, name) ->
-            val clear = dialog.substringAfter("text = \"CLEAR\"")
-            assertTrue("$name: CLEAR must not wrap", clear.contains("maxLines = 1"))
-            assertTrue("$name: and must not soft-wrap either", clear.contains("softWrap = false"))
-        }
+    fun `the shared row measures its labels before it lays them out`() {
+        assertTrue("the labels are measured at the device's font scale", row.contains("rememberTextMeasurer()"))
+        assertTrue("against the width the dialog actually has", row.contains("BoxWithConstraints("))
+        assertTrue(
+            "and the fit is the tested arithmetic, not a guess about font sizes",
+            row.contains("UsernameActionLayout.fitsSideBySide(")
+        )
+        assertTrue(
+            "labels the width in dp, so the measurement and the padding are one unit",
+            row.contains("labelWidthDp(label")
+        )
     }
 
     @Test
-    fun `every button label in both dialogs is guarded against wrapping`() {
-        // Five labels each: DISCONNECT, CONNECT/CONNECTING, CANCEL, SAVE USERNAME,
-        // CLEAR. The guard is cheap, and the CONNECT/CANCEL row has the same
-        // starve-and-wrap hazard on a narrower display.
-        assertEquals(5, countOf(aniList, "softWrap = false"))
-        assertEquals(5, countOf(kitsu, "softWrap = false"))
+    fun `a row that cannot hold both labels stacks instead of clipping`() {
+        val sideBySide = row.indexOf("if (sideBySide)")
+        assertTrue("the row branches on the measurement", sideBySide >= 0)
+        val fitsBranch = row.indexOf("Row(", sideBySide)
+        val stackBranch = row.indexOf("Column(", sideBySide)
+        assertTrue("both labels fit: the row, as before", fitsBranch in (sideBySide + 1) until stackBranch)
+        assertTrue(
+            "do not fit: SAVE USERNAME full width above CLEAR full width, which " +
+                "cannot clip at any font scale (amendment 3b(c))",
+            stackBranch > fitsBranch
+        )
+        val stacked = row.substring(stackBranch)
+        assertTrue(
+            "stacked: SAVE USERNAME takes the whole width",
+            stacked.contains("onClick = onSave,\n                    modifier = Modifier.fillMaxWidth()")
+        )
+        assertTrue(
+            "stacked: and so does CLEAR, below it",
+            stacked.contains("onClick = onClear,\n                    modifier = Modifier.fillMaxWidth()")
+        )
     }
 
     @Test
-    fun `TV keeps its own layout - the fix has no surface branch`() {
-        listOf(aniList to "AniList", kitsu to "Kitsu").forEach { (dialog, name) ->
-            val saveToClear = dialog.substringAfter("text = \"SAVE USERNAME\"")
-                .substringBefore("text = \"CLEAR\"")
-            assertFalse(
-                "$name: the username row must not branch on the surface - both " +
-                    "draw the same buttons, and the weight only redistributes slack",
-                saveToClear.contains("if (phone)")
-            )
-            assertTrue(
-                "$name: and the button is still the shared one, raised with phone = phone",
-                dialog.contains("AnimeDialogButton(\n                    phone = phone,")
-            )
-        }
+    fun `no label in the row can wrap or be cut mid-glyph`() {
+        assertTrue(row.contains("maxLines = 1"))
+        assertTrue(row.contains("softWrap = false"))
+        assertTrue(
+            "a label that outgrows its button ellipsises; the measurement means " +
+                "this is a backstop, never the drawn state (amendment 3b(b))",
+            row.contains("overflow = TextOverflow.Ellipsis")
+        )
+        assertTrue(
+            "and a decided-width button constrains its label to the button's own width",
+            row.contains("if (fillsButton) Modifier.fillMaxWidth() else Modifier")
+        )
+    }
+
+    @Test
+    fun `the tight row is the phone's and the TV keeps the padding it shipped`() {
+        assertTrue(
+            "12.dp on the phone is the room the clip needed",
+            layout.contains("const val PHONE_PADDING_DP = 12f")
+        )
+        assertTrue(
+            "TV is verified unchanged (S3), so its row keeps 18.dp",
+            layout.contains("const val TV_PADDING_DP = 18f")
+        )
+        assertTrue(
+            "and the row asks the layout which surface it is on",
+            row.contains("UsernameActionLayout.paddingDp(phone)")
+        )
+        assertTrue(
+            "TV keeps its start-aligned label as well as its padding - the " +
+                "constraint is only for the phone's share of the row (S3)",
+            row.contains("fillsButton = phone")
+        )
+    }
+
+    @Test
+    fun `every other button label in both dialogs is still guarded against wrapping`() {
+        // Three labels each now - DISCONNECT, CONNECT/CONNECTING, CANCEL - because
+        // the username row's two moved into the shared composable.
+        assertEquals(3, countOf(aniList, "softWrap = false"))
+        assertEquals(3, countOf(kitsu, "softWrap = false"))
+        // The row's own labels are guarded once, where they are written.
+        assertEquals(1, countOf(row, "softWrap = false"))
+    }
+
+    @Test
+    fun `the fix is not a surface fork - TV draws the same shared row`() {
+        assertFalse(
+            "the row must not branch on the surface: TV has room, the phone gets " +
+                "the measured fit, and both draw the same buttons",
+            row.contains("if (phone)")
+        )
+        assertTrue(
+            "and every button is still the shared one, raised with phone = phone",
+            row.contains("AnimeDialogButton(\n                    phone = phone,")
+        )
     }
 
     // ── helpers ───────────────────────────────────────────────────────────
@@ -121,5 +173,7 @@ class AnimeConnectDialogButtonWrapContractTest {
     private companion object {
         const val ANILIST = "AniListConnectDialog.kt"
         const val KITSU = "KitsuConnectDialog.kt"
+        const val USERNAME_ROW = "AnimeUsernameActions.kt"
+        const val USERNAME_LAYOUT = "UsernameActionLayout.kt"
     }
 }
