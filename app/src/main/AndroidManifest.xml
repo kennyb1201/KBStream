@@ -257,6 +257,48 @@
                     android:scheme="kbstream"
                     android:host="assistant" />
             </intent-filter>
+            <!-- The trackers' OAuth callbacks (spec 2026-11-14, F1). Both used
+                 to be declared on VoiceSearchActivity, which handles a VIEW
+                 intent by parsing it as a title deep link and calling finish()
+                 on anything else - so a redirect from MAL or AniList was
+                 accepted, parsed, and thrown away, and the app came forward on
+                 a bare launcher intent with "no data" in the paste. They
+                 belong here: MainActivity is what routes these links
+                 (routeMalLink / routeAniListLink, warm through onNewIntent,
+                 cold from its own intent), and singleTop above keeps a warm
+                 callback on the running instance instead of a second copy. -->
+            <!-- MyAnimeList's OAuth callback (spec 2026-11-13, F1):
+                 kbstream://oauth/mal?code=...&state=... after the viewer approves
+                 on the web. The redirect_uri registered on MAL's app page is this
+                 exact scheme+host+path (MalConfig.REDIRECT_URI), and MAL refuses
+                 an authorize request that names anything else. The same filter
+                 receives ?connect=1, which a TV shows as a QR code so the PHONE
+                 can run the flow. BROWSABLE is what lets a browser hand the
+                 redirect back; DEFAULT is what makes the link resolvable at all. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="kbstream"
+                    android:host="oauth"
+                    android:pathPrefix="/mal" />
+            </intent-filter>
+            <!-- AniList's code-grant callback (spec 2026-11-14, F3):
+                 kbstream://oauth/anilist?code=...&state=... after the viewer
+                 approves on AniList. The redirect_uri registered on the app's
+                 AniList page is this exact scheme+host+path, and AniList rejects
+                 an authorize request naming anything else. BROWSABLE is what lets
+                 the browser hand the redirect back. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="kbstream"
+                    android:host="oauth"
+                    android:pathPrefix="/anilist" />
+            </intent-filter>
             <meta-data
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />
@@ -306,38 +348,6 @@
                 <data
                     android:scheme="kbstream"
                     android:host="title" />
-            </intent-filter>
-            <!-- MyAnimeList's OAuth callback (spec 2026-11-13, F1):
-                 kbstream://oauth/mal?code=...&state=... after the viewer approves
-                 on the web. The redirect_uri registered on MAL's app page is this
-                 exact scheme+host+path (MalConfig.REDIRECT_URI), and MAL refuses
-                 an authorize request that names anything else. The same filter
-                 receives ?connect=1, which a TV shows as a QR code so the PHONE
-                 can run the flow. BROWSABLE is what lets a browser hand the
-                 redirect back; DEFAULT is what makes the link resolvable at all. -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:scheme="kbstream"
-                    android:host="oauth"
-                    android:pathPrefix="/mal" />
-            </intent-filter>
-            <!-- AniList's code-grant callback (spec 2026-11-14, F3):
-                 kbstream://oauth/anilist?code=...&state=... after the viewer
-                 approves on AniList. The redirect_uri registered on the app's
-                 AniList page is this exact scheme+host+path, and AniList rejects
-                 an authorize request naming anything else. BROWSABLE is what lets
-                 the browser hand the redirect back. -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:scheme="kbstream"
-                    android:host="oauth"
-                    android:pathPrefix="/anilist" />
             </intent-filter>
             <meta-data
                 android:name="android.app.searchable"
