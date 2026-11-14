@@ -2,7 +2,6 @@ package com.kennyb1201.kbstream.data.anime
 
 import android.content.Context
 import android.util.Log
-import com.kennyb1201.kbstream.data.kitsu.KitsuClient
 import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
