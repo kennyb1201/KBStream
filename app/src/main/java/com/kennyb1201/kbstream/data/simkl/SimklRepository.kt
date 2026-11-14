@@ -542,6 +542,29 @@ class SimklRepository(
     }
 
     /**
+     * The connected account's display name, cached (spec 2026-11-14, F1).
+     *
+     * The Settings row has to name the account offline as well as online, and
+     * "which Simkl account is this" does not change between two entries of the
+     * pane - so the name is written once, beside the token, and read from here.
+     * It sits in the same encrypted, profile-scoped store as the token and is
+     * removed with it, which is what makes a reconnect-as-someone-else show the
+     * new name and never the old one.
+     */
+    fun accountName(): String? =
+        prefs?.getString(KEY_ACCOUNT_NAME, null)?.takeIf { it.isNotBlank() }
+
+    fun saveAccountName(name: String?) {
+        val trimmed = name?.trim()?.takeIf { it.isNotBlank() } ?: return
+        prefs?.edit()?.putString(KEY_ACCOUNT_NAME, trimmed)?.apply()
+    }
+
+    /** Drops the cached name with the session, so a sign-out cannot name an account. */
+    fun clearAccountName() {
+        prefs?.edit()?.remove(KEY_ACCOUNT_NAME)?.apply()
+    }
+
+    /**
      * Instance-level half of the profile-switch reset (called via the
      * companion's [Companion.clearTransientCaches]): clears the completed-
      * shows / completed-movies snapshots, which live per-instance.
@@ -614,6 +637,11 @@ class SimklRepository(
             ?.edit()
             ?.remove(
                 KEY_ACCESS_TOKEN
+            )
+            // The cached name belongs to the account that just left: keeping
+            // it would let a reconnect as someone else show the old name.
+            ?.remove(
+                KEY_ACCOUNT_NAME
             )
             ?.remove(
                 KEY_LAST_WATCHED_ACTIVITY_ALL
@@ -1358,6 +1386,12 @@ class SimklRepository(
      * Simkl they are looking at).
      */
     suspend fun getAccountInfo(): SimklUser? = getAccountInfoImpl()
+
+    /**
+     * The name the Settings row shows: the cache, then one read, then the cache
+     * again (spec 2026-11-14, F1). Never a token, an id or an email.
+     */
+    suspend fun accountDisplayName(): String? = accountDisplayNameImpl()
 
     internal suspend fun getAllShowItemsCached(
         accessToken: String,
@@ -3556,6 +3590,9 @@ class SimklRepository(
 
         private const val KEY_ACCESS_TOKEN =
             "access_token"
+
+        private const val KEY_ACCOUNT_NAME =
+            "account_name"
 
         private const val KEY_LAST_WATCHED_ACTIVITY_ALL =
             "last_watched_activity_all"

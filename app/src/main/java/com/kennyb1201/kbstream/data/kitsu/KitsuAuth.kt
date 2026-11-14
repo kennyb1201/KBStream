@@ -80,9 +80,14 @@ internal object KitsuAuth {
         store.save(token)
 
         // Best effort, and after the save: a failed identity read costs the
-        // viewer nothing, because the first write resolves it again.
-        val viewerId = fetchViewerId(token.accessToken)
-        if (viewerId != null) store.saveViewerId(viewerId)
+        // viewer nothing, because the first write resolves it again. The read
+        // returns the display name too, which is what the Settings row shows
+        // when it says WHICH account is connected (spec 2026-11-14, F1/F2).
+        val identity = fetchViewerIdentity(token.accessToken)
+        if (identity != null) {
+            store.saveViewerId(identity.id)
+            store.saveViewerName(identity.name)
+        }
 
         // The session travels now, not on the next bulk push: a sibling should
         // adopt it without waiting for a full sync. The read-back is the
@@ -166,9 +171,33 @@ internal object KitsuAuth {
         store.viewerId()?.let { return it }
 
         val token = accessToken(context) ?: return null
-        val id = fetchViewerId(token) ?: return null
-        store.saveViewerId(id)
-        return id
+        val identity = fetchViewerIdentity(token) ?: return null
+        store.saveViewerId(identity.id)
+        store.saveViewerName(identity.name)
+        return identity.id
+    }
+
+    /**
+     * The connected account's display name, for the Settings row (spec 2026-11-14).
+     *
+     * Cached first, and only then one authenticated read - the same discipline
+     * [com.kennyb1201.kbstream.data.mal.MalApiClient.viewerName] uses, because
+     * Settings is entered often and the identity of an account changes
+     * approximately never. A failed read returns null and the row falls back to
+     * "connected", so a name is never invented and a row is never blocked.
+     *
+     * Never an id and never the email the grant was made with: Kitsu's own
+     * `attributes.name` is the name the viewer sees on Kitsu itself.
+     */
+    suspend fun viewerName(context: Context): String? {
+        val store = KitsuTokenStore(context)
+        store.viewerName()?.let { return it }
+        if (!store.hasSession() || store.needsReconnect()) return null
+        val token = accessToken(context) ?: return null
+        val identity = fetchViewerIdentity(token) ?: return null
+        store.saveViewerId(identity.id)
+        store.saveViewerName(identity.name)
+        return identity.name
     }
 
     /**
@@ -299,8 +328,21 @@ internal object KitsuAuth {
         )
     }
 
-    /** `GET /users?filter[self]=true` under [accessToken]. Null on any failure. */
-    private suspend fun fetchViewerId(accessToken: String): String? =
+    /** What one identity read answers: the id every write needs, and the name a row shows. */
+    internal data class ViewerIdentity(val id: String, val name: String?)
+
+    /**
+     * `GET /users?filter[self]=true` under [accessToken]. Null on any failure.
+     *
+     * ONE request for both fields on purpose: the id and the display name come
+     * from the same object, and asking twice would be a second round-trip for a
+     * name the response already carried.
+     *
+     * A missing name is not a failure - the id is what the writes need - so an
+     * account with a blank `attributes.name` still yields its identity, with
+     * [ViewerIdentity.name] null and the row falling back to "connected".
+     */
+    private suspend fun fetchViewerIdentity(accessToken: String): ViewerIdentity? =
         withContext(Dispatchers.IO) {
             val request =
                 Request.Builder()
@@ -315,10 +357,14 @@ internal object KitsuAuth {
                 httpClient.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) return@use null
                     val json = JSONObject(response.body?.string().orEmpty())
-                    json.optJSONArray("data")
-                        ?.optJSONObject(0)
-                        ?.optString("id")
+                    val data = json.optJSONArray("data")?.optJSONObject(0) ?: return@use null
+                    val id = data.optString("id").trim().takeIf { it.isNotBlank() }
+                        ?: return@use null
+                    val name = data.optJSONObject("attributes")
+                        ?.optString("name")
+                        ?.trim()
                         ?.takeIf { it.isNotBlank() }
+                    ViewerIdentity(id = id, name = name)
                 }
             }.getOrNull()
         }

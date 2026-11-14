@@ -51,6 +51,13 @@ internal fun KitsuConnectDialog(
     state: KitsuConnectionState,
     currentUsername: String?,
     /**
+     * The connected account's name, when one resolved (spec 2026-11-14, F1).
+     * The dialog says WHICH account for the same reason the row does; null
+     * keeps today's copy, because a failed identity read must never block the
+     * connect or invent a name.
+     */
+    viewerName: String? = null,
+    /**
      * True on the phone, whose plate, buttons and fields are all the touch twins
      * (see [AnimeDialogPanel]).
      */
@@ -72,8 +79,14 @@ internal fun KitsuConnectDialog(
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
         AnimeDialogPanel(phone = phone, title = "Kitsu") {
+            val connectedAs = viewerName?.trim()?.takeIf { it.isNotEmpty() }
             Text(
-                text = "Kitsu: ${state.label}. " +
+                text = "Kitsu: ${state.label}" +
+                    (if (state == KitsuConnectionState.Connected && connectedAs != null) {
+                        " as $connectedAs"
+                    } else {
+                        ""
+                    }) + ". " +
                     if (state == KitsuConnectionState.Connected) {
                         "Progress and ratings are written to your Kitsu library. " +
                             "Disconnecting stops the writes and keeps everything local."

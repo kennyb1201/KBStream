@@ -1112,16 +1112,38 @@ fun SettingsScreen(
                     // picker in a section of its own.
                     SettingsSectionHeader("Trackers")
 
+                    // Both rows name the account they are connected to (spec
+                    // 2026-11-14, F1/F3): "connected as <name>" from the
+                    // session's own cached read, so the TV and the phone say the
+                    // same thing and an offline entry still does.
+                    val simklConnected = remember(profileRowKey, syncedRevision) {
+                        com.kennyb1201.kbstream.data.simkl.SimklRepository
+                            .getInstance(context).hasToken()
+                    }
+                    val simklAccount = rememberSimklAccountName(simklConnected, profileRowKey)
                     NavigationRow(
-                        label = "Simkl",
+                        label = if (simklConnected) {
+                            connectedAsLabel("Simkl", simklAccount)
+                        } else {
+                            "Simkl"
+                        },
                         description = "Connect your Simkl account for scrobbling",
                         onClick = onOpenSimkl
                     )
 
                     // The third tracker, beside the other: same row shape, its
                     // own page and its own token store (see TraktConnectScreen).
+                    val traktConnected = remember(profileRowKey, syncedRevision) {
+                        com.kennyb1201.kbstream.data.trakt.TraktRepository
+                            .getInstance(context).hasToken()
+                    }
+                    val traktAccount = rememberTraktAccountName(traktConnected, profileRowKey)
                     NavigationRow(
-                        label = "Trakt",
+                        label = if (traktConnected) {
+                            connectedAsLabel("Trakt", traktAccount)
+                        } else {
+                            "Trakt"
+                        },
                         description = "Connect your Trakt account to scrobble playback and sync watched state",
                         onClick = onOpenTrakt
                     )
@@ -1167,11 +1189,16 @@ fun SettingsScreen(
                             .getInstance(context)
                         bingecat.hasToken() && bingecat.mappedProfileId() == null
                     }
+                    // The mapped BingeCat profile's name, from the mapping's
+                    // own cached copy (spec 2026-11-14, F4) - no request, and a
+                    // re-map follows on the next entry to this pane.
+                    val bingecatProfileName = rememberBingeCatProfileName(profileRowKey)
                     NavigationRow(
-                        label = if (bingecatNeedsProfile) {
-                            "BingeCat — profile not selected"
-                        } else {
-                            "BingeCat"
+                        label = when {
+                            bingecatNeedsProfile -> "BingeCat — profile not selected"
+                            bingecatProfileName != null ->
+                                connectedAsLabel("BingeCat", bingecatProfileName)
+                            else -> "BingeCat"
                         },
                         description = if (bingecatNeedsProfile) {
                             "Connected to BingeCat, but this KBStream profile has no " +

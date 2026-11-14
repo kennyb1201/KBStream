@@ -108,6 +108,21 @@ internal class KitsuTokenStore(
         prefs?.edit()?.putString(KEY_VIEWER_ID, viewerId)?.apply()
     }
 
+    /**
+     * The connected account's DISPLAY name, as Settings shows it (spec 2026-11-14).
+     *
+     * Cached beside the id for the same reason everything else here is: the row
+     * has to answer on Settings entry without a network round-trip, and offline
+     * it must still name the account it is connected to. Never an id - the row's
+     * label is a name or it is the plain "connected".
+     */
+    fun viewerName(): String? = read()?.viewerName
+
+    fun saveViewerName(name: String?) {
+        if (name.isNullOrBlank()) return
+        prefs?.edit()?.putString(KEY_VIEWER_NAME, name)?.apply()
+    }
+
     fun refreshToken(): String? = read()?.refreshToken?.takeIf { it.isNotBlank() }
 
     fun needsReconnect(): Boolean = prefs?.getBoolean(KEY_NEEDS_RECONNECT, false) == true

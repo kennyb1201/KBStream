@@ -199,6 +199,28 @@ suspend fun SimklRepository.getWatchedCountsImpl(): SimklWatchedCounts? {
  * more than latency (this is how the user verifies WHICH profile's
  * Simkl they are looking at).
  */
+/**
+ * The name the Settings row shows (spec 2026-11-14, F1): cached first, then the
+ * existing `users/settings` read, then the cache again.
+ *
+ * The read is the one the connect screen already makes - no new endpoint, no new
+ * auth - and the cache is what keeps entering Settings from costing a Simkl call
+ * every time. A failed read returns null and the row keeps today's plain
+ * "Simkl"; a name is never invented and no id or email is ever shown. `name`
+ * first, `slug` as the fallback, because that is the order Simkl itself draws
+ * an account in.
+ */
+suspend fun SimklRepository.accountDisplayNameImpl(): String? {
+    accountName()?.let { return it }
+    if (!hasToken()) return null
+    val user = getAccountInfoImpl() ?: return null
+    val name = user.name?.trim()?.takeIf { it.isNotBlank() }
+        ?: user.slug?.trim()?.takeIf { it.isNotBlank() }
+        ?: return null
+    saveAccountName(name)
+    return name
+}
+
 suspend fun SimklRepository.getAccountInfoImpl(): SimklUser? {
     val accessToken =
         runCatching { trackedAccessToken() }.getOrNull()

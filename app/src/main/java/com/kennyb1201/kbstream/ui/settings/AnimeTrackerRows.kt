@@ -107,7 +107,11 @@ internal fun AnimeTrackerRows(
             // Same rule as the MAL row: a build with no app id says so, because
             // the Connect can do nothing and no setting can change that.
             AniListConnectionState.NotConfigured -> "AniList — not configured"
-            AniListConnectionState.Connected -> "AniList — connected"
+            // The row names the account it is connected to (spec 2026-11-14,
+            // F1). The name was already resolved for this row - it just sat in
+            // the description, where a viewer reads it as prose rather than as
+            // "which account am I on".
+            AniListConnectionState.Connected -> connectedAsLabel("AniList", aniListViewer)
             else -> animeTrackerRowLabel("AniList", aniListUsername)
         },
         when (aniListState) {
@@ -116,9 +120,8 @@ internal fun AnimeTrackerRows(
                     "here. The public-profile read still works: enter your AniList " +
                     "username to read a public anime list."
             AniListConnectionState.Connected ->
-                "Progress and ratings are written to your AniList list" +
-                    (aniListViewer?.let { " ($it)" } ?: "") +
-                    ". Open to disconnect, or to read a public profile instead."
+                "Progress and ratings are written to your AniList list. Open to " +
+                    "disconnect, or to read a public profile instead."
             else -> animeTrackerDescription("AniList", aniListUsername)
         },
         { aniListEditor = true }
@@ -176,9 +179,29 @@ internal fun AnimeTrackerRows(
     ) {
         KitsuAuth.connectionState(context)
     }
+    // The connected account's name, resolved once per state change and cached in
+    // the session store (spec 2026-11-14, F1/F2): the row has to say WHICH Kitsu
+    // account, and it has to say it offline from the cache. Same shape as MAL's
+    // row below - the read is cached-first, so entering Settings again costs
+    // nothing.
+    var kitsuViewer by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(
+        profileRowKey,
+        syncedRevision,
+        resumeRevision,
+        settledRevision,
+        kitsuRevision,
+        kitsuState
+    ) {
+        kitsuViewer = if (kitsuState == KitsuConnectionState.Connected) {
+            KitsuAuth.viewerName(context)
+        } else {
+            null
+        }
+    }
     row(
         if (kitsuState == KitsuConnectionState.Connected) {
-            "Kitsu — connected"
+            connectedAsLabel("Kitsu", kitsuViewer)
         } else {
             animeTrackerRowLabel("Kitsu", kitsuUsername)
         },
@@ -194,6 +217,7 @@ internal fun AnimeTrackerRows(
         KitsuConnectDialog(
             state = kitsuState,
             currentUsername = kitsuUsername,
+            viewerName = kitsuViewer,
             phone = phone,
             onDismiss = { kitsuEditor = false },
             onConnect = { email, password ->
