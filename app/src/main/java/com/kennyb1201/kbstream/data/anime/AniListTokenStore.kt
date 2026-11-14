@@ -121,4 +121,16 @@ internal class AniListTokenStore(
     }
 
     fun signedOut(): Boolean = prefs?.getBoolean(KEY_SIGNED_OUT, false) == true
+
+    /**
+     * Retires a lingering disconnect marker without touching the session.
+     *
+     * The cloud applier's same-session path: a pulled blob that equals what this
+     * device already holds must not leave a `signed_out` marker beside a live
+     * token, or the next bulk push republishes the marker as a disconnect and
+     * signs the account out everywhere.
+     */
+    fun clearSignedOutMarker() {
+        if (signedOut()) prefs?.edit()?.putBoolean(KEY_SIGNED_OUT, false)?.apply()
+    }
 }

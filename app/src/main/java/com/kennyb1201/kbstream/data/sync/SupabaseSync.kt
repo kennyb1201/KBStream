@@ -139,6 +139,19 @@ object SupabaseSync {
     private val _lastPushAtMs = MutableStateFlow(0L)
     val lastPushAtMs: StateFlow<Long> = _lastPushAtMs.asStateFlow()
 
+    /**
+     * The pref rows the last bulk push actually enqueued, comma-joined (spec
+     * 2026-11-13, F6.2).
+     *
+     * "Did the tracker session travel?" could not be answered from a paste: the
+     * auth blobs are skipped SILENTLY by design (a profile that never connected
+     * publishes nothing), so a capture showed the same thing whether the row was
+     * filtered out or the push never ran. This is what the diagnostics line reads
+     * to say which rows left this device. Keys only - no values.
+     */
+    private val _lastPushedPrefKeys = MutableStateFlow("")
+    val lastPushedPrefKeys: StateFlow<String> = _lastPushedPrefKeys.asStateFlow()
+
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
 
@@ -2433,6 +2446,7 @@ object SupabaseSync {
         val pid = currentProfileId()
         val blobs = PrefsPayloadBuilder.buildAll(context)
         if (!PushScopeRules.scopeStillActive(pid, currentProfileId())) return false
+        val published = mutableListOf<String>()
         blobs.forEach { (key, payload) ->
             // Belt-and-braces guard: an empty local profiles list must never
             // reach the cloud. A fresh device pushing before its first pull
@@ -2480,6 +2494,28 @@ object SupabaseSync {
             // [BingeCatAuthRules]).
             if (key == PrefsPayloadBuilder.KEY_BINGECAT_AUTH &&
                 !PrefsPayloadBuilder.hasBingeCatAuthToPublish(context)
+            ) {
+                return@forEach
+            }
+            // And the three later tracker sessions on that same rule, for the
+            // same reason: this bulk push runs on every sign-in / Sync now, and a
+            // profile that never connected Kitsu, MAL or AniList would otherwise
+            // publish its blanks over the account's session. A connect, a refresh
+            // and a deliberate disconnect each publish through their own auth
+            // object instead (see KitsuAuth / MalAuth / AniListAuth's
+            // publishAuthToSync).
+            if (key == PrefsPayloadBuilder.KEY_KITSU_AUTH &&
+                !PrefsPayloadBuilder.hasKitsuAuthToPublish(context)
+            ) {
+                return@forEach
+            }
+            if (key == PrefsPayloadBuilder.KEY_MAL_AUTH &&
+                !PrefsPayloadBuilder.hasMalAuthToPublish(context)
+            ) {
+                return@forEach
+            }
+            if (key == PrefsPayloadBuilder.KEY_ANILIST_AUTH &&
+                !PrefsPayloadBuilder.hasAnilistAuthToPublish(context)
             ) {
                 return@forEach
             }
@@ -2689,7 +2725,9 @@ object SupabaseSync {
                 }
             }
             enqueuePrefs(context, key, payload, pid)
+            published += key
         }
+        _lastPushedPrefKeys.value = published.joinToString(",")
         flushOutbox()
         return true
     }

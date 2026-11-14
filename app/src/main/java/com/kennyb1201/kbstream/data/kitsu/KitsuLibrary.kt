@@ -73,6 +73,22 @@ internal object KitsuLibrary {
     }
 
     /**
+     * The session this profile writes under just changed (the cloud applier
+     * adopted a sibling's login, or a pulled tombstone signed it out).
+     *
+     * The cached entry ids belong to the PREVIOUS account's Kitsu user, so a
+     * write that still held one would PATCH the other account's entry - or, after
+     * a tombstone, write under a grant the viewer took back. The `EntryGone`
+     * re-create path is a backstop only: it fires after a failed PATCH, which is
+     * a write the wrong account already felt.
+     *
+     * The parking state deliberately stays: it is a 429 clock, not account state.
+     */
+    fun onSyncedSessionChanged() {
+        entryIds.clear()
+    }
+
+    /**
      * A watched episode: the authoritative count, not an increment.
      *
      * The status follows the count ([KitsuWriteRules.progressStatus]): `completed`

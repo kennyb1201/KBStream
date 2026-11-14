@@ -84,6 +84,12 @@ internal object KitsuAuth {
         val viewerId = fetchViewerId(token.accessToken)
         if (viewerId != null) store.saveViewerId(viewerId)
 
+        // The session travels now, not on the next bulk push: a sibling should
+        // adopt it without waiting for a full sync. The read-back is the
+        // "the save actually happened" check - an unwritable store must publish
+        // nothing.
+        if (store.read() != null) publishAuthToSync(context)
+
         Log.i(TAG, "Kitsu connected for this profile")
         return ConnectResult.Connected
     }
@@ -140,6 +146,10 @@ internal object KitsuAuth {
                     viewerName = refreshed.viewerName ?: fresh?.viewerName
                 )
             )
+            // A refresh ROTATES the single-use refresh token, so the account
+            // copy is stale until this lands: a sibling left holding the
+            // consumed token is stranded at its next expiry.
+            publishAuthToSync(context)
             refreshed.accessToken
         }
     }
@@ -174,7 +184,30 @@ internal object KitsuAuth {
     /** Settings → Trackers → Kitsu → Disconnect. Local data is untouched. */
     fun disconnect(context: Context) {
         KitsuTokenStore(context).markSignedOut()
+        // The tombstone has no token to trip the bulk push's gate, so it is
+        // published here - otherwise the sibling keeps writing under a grant
+        // the viewer took back.
+        publishAuthToSync(context)
         Log.i(TAG, "Kitsu disconnected for this profile")
+    }
+
+    /**
+     * Publishes this profile's Kitsu session immediately, bypassing the bulk
+     * push's "nothing to publish" skip (spec 2026-11-13, F3).
+     *
+     * Wrapped so a sync failure can never fail the connect, refresh or
+     * disconnect it follows: the local session is already saved, and the next
+     * bulk push is the fallback.
+     */
+    private fun publishAuthToSync(context: Context) {
+        val appContext = context.applicationContext
+        runCatching {
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_KITSU_AUTH,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildKitsuAuth(appContext)
+            )
+        }
     }
 
     fun connectionState(context: Context): KitsuConnectionState {

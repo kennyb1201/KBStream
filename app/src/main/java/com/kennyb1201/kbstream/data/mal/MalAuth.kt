@@ -108,6 +108,10 @@ internal object MalAuth {
 
         store.save(token)
         store.clearPendingFlow()
+        // The session travels now, not on the next bulk push: a sibling should
+        // adopt it without re-running the browser flow. Only after the save
+        // actually landed - an unwritable store publishes nothing.
+        if (store.read() != null) publishAuthToSync(context)
         Log.i(TAG, "MAL connected for this profile")
         return ConnectResult.Connected
     }
@@ -155,14 +159,41 @@ internal object MalAuth {
             }
 
             MalTokenStore(context).save(refreshed)
+            // MAL's access token lives one hour and its refresh token is
+            // single-use: the account copy is stale the moment this rotates, and
+            // a sibling left holding the consumed token is stranded within the
+            // hour (spec 2026-11-13, F7/S4).
+            publishAuthToSync(context)
             refreshed.accessToken
         }
     }
 
     /** Settings → Trackers → MyAnimeList → Disconnect. Local data is untouched. */
     fun disconnect(context: Context) {
-        MalTokenStore(context).markSignedOut()
+        val cleared = MalTokenStore(context).markSignedOut()
+        // A tombstone for a session that SURVIVED would sign the account out on
+        // every OTHER device while this one stayed connected, so nothing is
+        // published unless the clear actually took (the Trakt disconnect rule).
+        if (cleared) publishAuthToSync(context)
         Log.i(TAG, "MAL disconnected for this profile")
+    }
+
+    /**
+     * Publishes this profile's MAL session immediately, bypassing the bulk
+     * push's "nothing to publish" skip (spec 2026-11-13, F3).
+     *
+     * Wrapped so a sync failure can never fail the connect, refresh or
+     * disconnect it follows.
+     */
+    private fun publishAuthToSync(context: Context) {
+        val appContext = context.applicationContext
+        runCatching {
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_MAL_AUTH,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildMalAuth(appContext)
+            )
+        }
     }
 
     fun connectionState(context: Context): MalConnectionState {

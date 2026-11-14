@@ -328,6 +328,236 @@ internal object BingeCatAuthRules {
 }
 
 /**
+ * The refresh token to keep when a leg with a ROTATING pair adopts a pulled
+ * session (Kitsu and MAL; [BingeCatAuthRules.adoptedRefreshToken] is the same
+ * decision for BingeCat).
+ *
+ * A blob can carry the same access token and an OLDER expiry - a stale echo of
+ * a session this device has already renewed - and taking that blob's refresh
+ * token would replace a working one with the token the provider consumed when
+ * it minted the newer pair. A blank incoming refresh token never erases a local
+ * one either: a sibling on an older build publishes it blank.
+ */
+internal fun adoptedRotatingRefreshToken(
+    incomingAccess: String?,
+    incomingRefresh: String?,
+    incomingExpiresAt: Long,
+    localAccess: String?,
+    localRefresh: String?,
+    localExpiresAt: Long
+): String? = when {
+    incomingRefresh.isNullOrBlank() -> localRefresh
+    localAccess == null -> incomingRefresh
+    localAccess == incomingAccess && incomingExpiresAt < localExpiresAt -> localRefresh
+    else -> incomingRefresh
+}
+
+/**
+ * Publish/apply rules for the Kitsu session blob.
+ *
+ * The shape is Trakt's ([TraktAuthRules]): the blob is a per-profile FULL
+ * REPLACE, so a profile that never connected Kitsu publishes nothing and only a
+ * deliberate disconnect publishes a tombstone. The session travels whole -
+ * access token (30 days), refresh token (rotates on use), expiry and viewer id -
+ * because a refresh on the sibling device consumes the refresh token this
+ * device holds, and an access-token-only blob would strand it at its next
+ * expiry (spec 2026-11-13, tracker auth sessions device-to-device).
+ *
+ * One rule differs from Trakt's because the grant differs: with NO local
+ * session an already-expired incoming session is still adopted. That looks like
+ * the BingeCat trap, and is not - the refresh token is the valuable half and it
+ * mints a fresh access token on first use, whereas refusing it would drop the
+ * login this row exists to share.
+ */
+internal object KitsuAuthRules {
+
+    /** Payload field marking a blank session as a deliberate sign-out. */
+    const val SIGNED_OUT_FIELD = "signed_out"
+
+    fun shouldPublish(accessToken: String?, signedOut: Boolean): Boolean =
+        !accessToken.isNullOrBlank() || signedOut
+
+    fun clearsSession(accessToken: String?, signedOut: Boolean): Boolean =
+        accessToken.isNullOrBlank() && signedOut
+
+    /**
+     * Whether a pulled session may replace the local one.
+     *
+     * Same access token: yes - a refresh on the other device rotated the pair
+     * and pushed the new expiry. No local session: yes, even when the incoming
+     * access token has already expired (the refresh token is what arrives), a
+     * case [MalAuthRules] shares. Different Kitsu account (both sides name a
+     * `viewer_id`): yes - a deliberate reconnect always wins. Otherwise adopt
+     * unless the incoming session has expired and the local one has not.
+     */
+    fun shouldAdopt(
+        incomingAccess: String?,
+        incomingExpiresAt: Long,
+        incomingAccountId: String?,
+        localAccess: String?,
+        localExpiresAt: Long,
+        localAccountId: String?,
+        nowMs: Long
+    ): Boolean {
+        if (incomingAccess.isNullOrBlank()) return false
+        if (localAccess == null) return true
+        if (localAccess == incomingAccess) return true
+        if (
+            !incomingAccountId.isNullOrBlank() &&
+            !localAccountId.isNullOrBlank() &&
+            incomingAccountId != localAccountId
+        ) {
+            return true
+        }
+        val incomingLive = incomingExpiresAt > nowMs
+        val localLive = localExpiresAt > nowMs
+        return incomingLive || !localLive
+    }
+
+    /** See [adoptedRotatingRefreshToken]. */
+    fun adoptedRefreshToken(
+        incomingAccess: String?,
+        incomingRefresh: String?,
+        incomingExpiresAt: Long,
+        localAccess: String?,
+        localRefresh: String?,
+        localExpiresAt: Long
+    ): String? = adoptedRotatingRefreshToken(
+        incomingAccess = incomingAccess,
+        incomingRefresh = incomingRefresh,
+        incomingExpiresAt = incomingExpiresAt,
+        localAccess = localAccess,
+        localRefresh = localRefresh,
+        localExpiresAt = localExpiresAt
+    )
+}
+
+/**
+ * Publish/apply rules for the MyAnimeList session blob.
+ *
+ * Kitsu's rules ([KitsuAuthRules]) exactly, with one deliberate omission: MAL
+ * keeps NO account identity in its store (nothing names the MAL user), so there
+ * is no different-account fast path. Inventing one - a user id derived from
+ * somewhere else, a name cached beside the token - would be a new credential
+ * field in the blob for a case the liveness rule already covers: a reconnect to
+ * another account is adopted because it is live.
+ *
+ * MAL's access token lives one hour and its refresh token one month, which makes
+ * this the leg where a refresh actually has to reach the sibling the same day
+ * (spec 2026-11-13, F7/S4).
+ */
+internal object MalAuthRules {
+
+    /** Payload field marking a blank session as a deliberate sign-out. */
+    const val SIGNED_OUT_FIELD = "signed_out"
+
+    fun shouldPublish(accessToken: String?, signedOut: Boolean): Boolean =
+        !accessToken.isNullOrBlank() || signedOut
+
+    fun clearsSession(accessToken: String?, signedOut: Boolean): Boolean =
+        accessToken.isNullOrBlank() && signedOut
+
+    /**
+     * Whether a pulled session may replace the local one (see
+     * [KitsuAuthRules.shouldAdopt]; the account half is absent here on purpose).
+     */
+    fun shouldAdopt(
+        incomingAccess: String?,
+        incomingExpiresAt: Long,
+        localAccess: String?,
+        localExpiresAt: Long,
+        nowMs: Long
+    ): Boolean {
+        if (incomingAccess.isNullOrBlank()) return false
+        if (localAccess == null) return true
+        if (localAccess == incomingAccess) return true
+        val incomingLive = incomingExpiresAt > nowMs
+        val localLive = localExpiresAt > nowMs
+        return incomingLive || !localLive
+    }
+
+    /** See [adoptedRotatingRefreshToken]. */
+    fun adoptedRefreshToken(
+        incomingAccess: String?,
+        incomingRefresh: String?,
+        incomingExpiresAt: Long,
+        localAccess: String?,
+        localRefresh: String?,
+        localExpiresAt: Long
+    ): String? = adoptedRotatingRefreshToken(
+        incomingAccess = incomingAccess,
+        incomingRefresh = incomingRefresh,
+        incomingExpiresAt = incomingExpiresAt,
+        localAccess = localAccess,
+        localRefresh = localRefresh,
+        localExpiresAt = localExpiresAt
+    )
+}
+
+/**
+ * Publish/apply rules for the AniList session blob.
+ *
+ * The shape is Kitsu's ([KitsuAuthRules]) minus the refresh half: AniList issues
+ * NO refresh token, so the blob carries the access token, its `exp`-derived
+ * deadline and the viewer id - and nothing else. A `needs_reconnect` verdict is
+ * local to the device whose call failed and never travels (see the spec's F7);
+ * a sibling reaches its own verdict when its own token expires.
+ *
+ * The one rule that must NOT be Kitsu's is the no-local case. Adopting an
+ * already-expired AniList token installs a session that reports "connected"
+ * while every call fails, with no refresh sibling to rescue it - the BingeCat
+ * build-253 failure shape - so an expired incoming token with nothing local is
+ * refused. An absent expiry (0) is still adopted, exactly like BingeCat's
+ * exception, or a session from a build that could not read `exp` would be
+ * dropped.
+ */
+internal object AniListAuthRules {
+
+    /** Payload field marking a blank session as a deliberate sign-out. */
+    const val SIGNED_OUT_FIELD = "signed_out"
+
+    fun shouldPublish(accessToken: String?, signedOut: Boolean): Boolean =
+        !accessToken.isNullOrBlank() || signedOut
+
+    fun clearsSession(accessToken: String?, signedOut: Boolean): Boolean =
+        accessToken.isNullOrBlank() && signedOut
+
+    /**
+     * Whether a pulled session may replace the local one.
+     *
+     * Same token: yes. No local session: only when the incoming token is not
+     * already expired (or carries no readable expiry). Different `viewer_id`
+     * (both sides named): yes - a deliberate reconnect always wins. Otherwise
+     * adopt unless the incoming session has expired and the local one has not.
+     */
+    fun shouldAdopt(
+        incomingAccess: String?,
+        incomingExpiresAt: Long,
+        incomingAccountId: String?,
+        localAccess: String?,
+        localExpiresAt: Long,
+        localAccountId: String?,
+        nowMs: Long
+    ): Boolean {
+        if (incomingAccess.isNullOrBlank()) return false
+        if (localAccess == null) {
+            return incomingExpiresAt <= 0L || incomingExpiresAt > nowMs
+        }
+        if (localAccess == incomingAccess) return true
+        if (
+            !incomingAccountId.isNullOrBlank() &&
+            !localAccountId.isNullOrBlank() &&
+            incomingAccountId != localAccountId
+        ) {
+            return true
+        }
+        val incomingLive = incomingExpiresAt > nowMs
+        val localLive = localExpiresAt > nowMs
+        return incomingLive || !localLive
+    }
+}
+
+/**
  * Merge rules for the per-profile BingeCat mapping row.
  *
  * The mapping (which BingeCat profile a KBStream profile reads) used to be

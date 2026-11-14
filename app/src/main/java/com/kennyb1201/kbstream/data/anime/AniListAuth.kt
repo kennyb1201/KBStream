@@ -75,6 +75,12 @@ internal object AniListAuth {
             )
         )
 
+        // The session travels now, not on the next bulk push: a sibling should
+        // adopt it without the viewer pasting a token on every device. There is
+        // no refresh half to drive a later publish, so this is the only moment
+        // the new grant reaches the account.
+        if (store.read() != null) publishAuthToSync(context)
+
         Log.i(TAG, "AniList connected for this profile")
         return ConnectResult.Connected
     }
@@ -116,7 +122,30 @@ internal object AniListAuth {
     /** Settings → Trackers → AniList → Disconnect. Local data is untouched. */
     fun disconnect(context: Context) {
         AniListTokenStore(context).markSignedOut()
+        // The tombstone has no token to trip the bulk push's gate, so it is
+        // published here - otherwise the sibling keeps writing under a grant
+        // the viewer took back.
+        publishAuthToSync(context)
         Log.i(TAG, "AniList disconnected for this profile")
+    }
+
+    /**
+     * Publishes this profile's AniList session immediately, bypassing the bulk
+     * push's "nothing to publish" skip (spec 2026-11-13, F3).
+     *
+     * Wrapped so a sync failure can never fail the connect or the disconnect it
+     * follows. There is no refresh call site: AniList issues no refresh grant, so
+     * a connect is the only time a token can change (F7).
+     */
+    private fun publishAuthToSync(context: Context) {
+        val appContext = context.applicationContext
+        runCatching {
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_ANILIST_AUTH,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildAnilistAuth(appContext)
+            )
+        }
     }
 
     fun connectionState(context: Context): AniListConnectionState {

@@ -1,12 +1,18 @@
 package com.kennyb1201.kbstream.data.sync
 
 import android.content.Context
+import com.kennyb1201.kbstream.data.anime.AniListToken
+import com.kennyb1201.kbstream.data.anime.AniListTokenStore
 import com.kennyb1201.kbstream.data.badges.BadgePackSyncRules
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.data.bingecat.BingeCatToken
 import com.kennyb1201.kbstream.data.bingecat.BingeCatTokenStore
+import com.kennyb1201.kbstream.data.kitsu.KitsuToken
+import com.kennyb1201.kbstream.data.kitsu.KitsuTokenStore
 import com.kennyb1201.kbstream.data.library.LibraryTombstones
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
+import com.kennyb1201.kbstream.data.mal.MalToken
+import com.kennyb1201.kbstream.data.mal.MalTokenStore
 import com.kennyb1201.kbstream.data.trakt.TraktToken
 import com.kennyb1201.kbstream.data.trakt.TraktTokenStore
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -132,6 +138,21 @@ private fun traktAuthStore(context: Context, profileId: String? = null) =
  */
 private fun bingecatAuthStore(context: Context, profileId: String? = null) =
     BingeCatTokenStore(context, profileId)
+
+/**
+ * The Kitsu session store, addressed the same way as [traktAuthStore]: the active
+ * profile by default, or [profileId] when the applier writes a sibling's copy.
+ */
+private fun kitsuAuthStore(context: Context, profileId: String? = null) =
+    KitsuTokenStore(context, profileId)
+
+/** The MAL session store, on the same rule as [kitsuAuthStore]. */
+private fun malAuthStore(context: Context, profileId: String? = null) =
+    MalTokenStore(context, profileId)
+
+/** The AniList session store, on the same rule as [kitsuAuthStore]. */
+private fun anilistAuthStore(context: Context, profileId: String? = null) =
+    AniListTokenStore(context, profileId)
 
 // The mapping row's LOCAL bookkeeping, next to the mapping itself but not inside
 // it: `BingeCatProfileMap`'s prefs name and keys are its own contract. These two
@@ -482,6 +503,30 @@ object PrefsPayloadBuilder {
     const val KEY_BINGECAT_AUTH = "bingecat_auth"
 
     /**
+     * The Kitsu session (spec 2026-11-13, tracker auth sessions
+     * device-to-device), on the Trakt rule (see [KitsuAuthRules]): a profile
+     * that never connected publishes nothing, only a deliberate disconnect
+     * publishes a tombstone, and the whole pair travels because a refresh
+     * rotates it. No Kitsu password is anywhere in it - that was used once and
+     * dropped.
+     */
+    const val KEY_KITSU_AUTH = "kitsu_auth"
+
+    /**
+     * The MyAnimeList session, on the Kitsu rule (see [MalAuthRules]). The
+     * in-flight PKCE values (`pending_verifier` / `pending_state`) are
+     * per-device flow state and NEVER travel: the builder does not read them.
+     */
+    const val KEY_MAL_AUTH = "mal_auth"
+
+    /**
+     * The AniList session, on the Kitsu rule minus the refresh half (see
+     * [AniListAuthRules]): AniList issues no refresh token, so the blob carries
+     * the access token and its `exp`-derived deadline, and nothing else.
+     */
+    const val KEY_ANILIST_AUTH = "anilist_auth"
+
+    /**
      * WHICH BingeCat profile this KBStream profile reads, beside the session
      * above (see [BingeCatProfileMapRules]).
      *
@@ -569,6 +614,12 @@ object PrefsPayloadBuilder {
         // And the BingeCat session, which used to be device-local by spec: the
         // same never-publish-a-blank rule applies (see [BingeCatAuthRules]).
         KEY_BINGECAT_AUTH to buildBingeCatAuth(context),
+        // The three later trackers, each on the same rule and each skipped by
+        // the push when this profile has nothing to say (see SupabaseSync's
+        // guards and KitsuAuthRules / MalAuthRules / AniListAuthRules).
+        KEY_KITSU_AUTH to buildKitsuAuth(context),
+        KEY_MAL_AUTH to buildMalAuth(context),
+        KEY_ANILIST_AUTH to buildAnilistAuth(context),
         // And the profile that session reads. Skipped by the push when this
         // profile never mapped anything and never deliberately unmapped (see
         // hasBingeCatProfileMapToPublish): an unmapped device publishing its
@@ -666,6 +717,92 @@ object PrefsPayloadBuilder {
     fun hasBingeCatAuthToPublish(context: Context): Boolean {
         val store = bingecatAuthStore(context)
         return BingeCatAuthRules.shouldPublish(store.accessToken(), store.isSignedOut())
+    }
+
+    /**
+     * True when this profile has something to say about its Kitsu session: a
+     * token to share, or a deliberate disconnect to propagate. A profile that
+     * never connected Kitsu publishes nothing - see [KitsuAuthRules].
+     */
+    fun hasKitsuAuthToPublish(context: Context): Boolean {
+        val store = kitsuAuthStore(context)
+        return KitsuAuthRules.shouldPublish(store.read()?.accessToken, store.signedOut())
+    }
+
+    /** The MAL session's half of the same gate - see [MalAuthRules]. */
+    fun hasMalAuthToPublish(context: Context): Boolean {
+        val store = malAuthStore(context)
+        return MalAuthRules.shouldPublish(store.accessToken(), store.isSignedOut())
+    }
+
+    /** The AniList session's half of the same gate - see [AniListAuthRules]. */
+    fun hasAnilistAuthToPublish(context: Context): Boolean {
+        val store = anilistAuthStore(context)
+        return AniListAuthRules.shouldPublish(store.read()?.accessToken, store.signedOut())
+    }
+
+    /**
+     * The profile's Kitsu session, as one blob.
+     *
+     * Everything the session needs travels - access token, refresh token,
+     * expiry, viewer id and name - because a refresh rotates the pair and an
+     * access token alone would strand the sibling at its next expiry. The
+     * password is not here and never was: the grant used it once, in memory.
+     */
+    fun buildKitsuAuth(context: Context): JsonObject {
+        val store = kitsuAuthStore(context)
+        val session = store.read()
+        // Tombstone only for a DELIBERATE disconnect: an empty store with no
+        // marker is "this profile never connected Kitsu", which must not erase
+        // a live session anywhere (see [KitsuAuthRules]).
+        val signedOut = session == null && store.signedOut()
+        return buildJsonObject {
+            put("updatedAt", System.currentTimeMillis())
+            put(KitsuTokenStore.KEY_ACCESS_TOKEN, session?.accessToken.orEmpty())
+            put(KitsuTokenStore.KEY_REFRESH_TOKEN, session?.refreshToken.orEmpty())
+            put(KitsuTokenStore.KEY_EXPIRES_AT, session?.expiresAtMs ?: 0L)
+            put(KitsuTokenStore.KEY_VIEWER_ID, session?.viewerId.orEmpty())
+            put(KitsuTokenStore.KEY_VIEWER_NAME, session?.viewerName.orEmpty())
+            put(KitsuAuthRules.SIGNED_OUT_FIELD, signedOut)
+        }
+    }
+
+    /**
+     * The profile's MAL session, on exactly the Kitsu shape ([buildKitsuAuth]).
+     *
+     * `pending_verifier` and `pending_state` are deliberately absent: they are
+     * this device's in-flight browser flow, not the session, and the store's own
+     * `markSignedOut()` already removes them.
+     */
+    fun buildMalAuth(context: Context): JsonObject {
+        val store = malAuthStore(context)
+        val session = store.read()
+        val signedOut = session == null && store.isSignedOut()
+        return buildJsonObject {
+            put("updatedAt", System.currentTimeMillis())
+            put(MalTokenStore.KEY_ACCESS_TOKEN, session?.accessToken.orEmpty())
+            put(MalTokenStore.KEY_REFRESH_TOKEN, session?.refreshToken.orEmpty())
+            put(MalTokenStore.KEY_EXPIRES_AT, session?.expiresAtMs ?: 0L)
+            put(MalAuthRules.SIGNED_OUT_FIELD, signedOut)
+        }
+    }
+
+    /**
+     * The profile's AniList session, with NO refresh field because AniList
+     * issues no refresh token (see [AniListAuthRules]).
+     */
+    fun buildAnilistAuth(context: Context): JsonObject {
+        val store = anilistAuthStore(context)
+        val session = store.read()
+        val signedOut = session == null && store.signedOut()
+        return buildJsonObject {
+            put("updatedAt", System.currentTimeMillis())
+            put(AniListTokenStore.KEY_ACCESS_TOKEN, session?.accessToken.orEmpty())
+            put(AniListTokenStore.KEY_EXPIRES_AT, session?.expiresAtMs ?: 0L)
+            put(AniListTokenStore.KEY_VIEWER_ID, session?.viewerId ?: 0)
+            put(AniListTokenStore.KEY_VIEWER_NAME, session?.viewerName.orEmpty())
+            put(AniListAuthRules.SIGNED_OUT_FIELD, signedOut)
+        }
     }
 
     /**
@@ -1442,7 +1579,7 @@ object PrefsPayloadBuilder {
      * staging). The probes below are the builders' own reads, addressed to
      * [profileId] instead of the active profile:
      *
-     *  - the three sessions go through the same "has something to say" rules the
+     *  - the six sessions go through the same "has something to say" rules the
      *    push uses, so a profile that never connected a tracker retires nothing;
      *  - taste signals and hidden titles expose a profile-addressed read of their
      *    stored blob;
@@ -1479,6 +1616,25 @@ object PrefsPayloadBuilder {
             )
         ) {
             keys += KEY_BINGECAT_AUTH
+        }
+
+        // The three later trackers, behind the same "has something to say"
+        // gates the push uses: a profile that never connected one retires
+        // nothing. A key missing here would leave a deleted profile's session in
+        // the cloud.
+        val kitsu = kitsuAuthStore(context, profileId)
+        if (KitsuAuthRules.shouldPublish(kitsu.read()?.accessToken, kitsu.signedOut())) {
+            keys += KEY_KITSU_AUTH
+        }
+
+        val mal = malAuthStore(context, profileId)
+        if (MalAuthRules.shouldPublish(mal.accessToken(), mal.isSignedOut())) {
+            keys += KEY_MAL_AUTH
+        }
+
+        val anilist = anilistAuthStore(context, profileId)
+        if (AniListAuthRules.shouldPublish(anilist.read()?.accessToken, anilist.signedOut())) {
+            keys += KEY_ANILIST_AUTH
         }
 
         if (com.kennyb1201.kbstream.data.library.TasteSignals
@@ -1538,14 +1694,15 @@ object PrefsPayloadBuilder {
  *
  * m25's unfinished half: deleting a profile purged its history and watched rows
  * but left every `p:<profileId>:*` row in `sync_prefs` behind - including the
- * live Simkl, Trakt and BingeCat sessions, which are the credentials the finding
- * names. A delete is a newer WRITE here, like every other delete in this file
+ * live Simkl, Trakt, BingeCat, Kitsu, MAL and AniList sessions, which are the
+ * credentials the finding names. A delete is a newer WRITE here, like every
+ * other delete in this file
  * (see [HistoryTombstoneRules]): the row is replaced, never cloud-deleted, so a
  * sibling that still holds its copy pulls the replacement and drops it too.
  *
  * Two shapes, both the tree's own:
  *
- *  - the three auth rows take their builder's deliberate-disconnect blob (blank
+ *  - the six auth rows take their builder's deliberate-disconnect blob (blank
  *    tokens plus the signed-out marker), so [PrefsPayloadApplier]'s existing
  *    handlers clear the tokens on every device rather than storing a blank
  *    session that looks connected;
@@ -1588,6 +1745,30 @@ internal object PrefsRowTombstones {
             put(BingeCatTokenStore.KEY_EXPIRES_AT, 0L)
             put(BingeCatTokenStore.KEY_SCOPE, "")
             put(BingeCatAuthRules.SIGNED_OUT_FIELD, true)
+        }
+        PrefsPayloadBuilder.KEY_KITSU_AUTH -> buildJsonObject {
+            put("updatedAt", now)
+            put(KitsuTokenStore.KEY_ACCESS_TOKEN, "")
+            put(KitsuTokenStore.KEY_REFRESH_TOKEN, "")
+            put(KitsuTokenStore.KEY_EXPIRES_AT, 0L)
+            put(KitsuTokenStore.KEY_VIEWER_ID, "")
+            put(KitsuTokenStore.KEY_VIEWER_NAME, "")
+            put(KitsuAuthRules.SIGNED_OUT_FIELD, true)
+        }
+        PrefsPayloadBuilder.KEY_MAL_AUTH -> buildJsonObject {
+            put("updatedAt", now)
+            put(MalTokenStore.KEY_ACCESS_TOKEN, "")
+            put(MalTokenStore.KEY_REFRESH_TOKEN, "")
+            put(MalTokenStore.KEY_EXPIRES_AT, 0L)
+            put(MalAuthRules.SIGNED_OUT_FIELD, true)
+        }
+        PrefsPayloadBuilder.KEY_ANILIST_AUTH -> buildJsonObject {
+            put("updatedAt", now)
+            put(AniListTokenStore.KEY_ACCESS_TOKEN, "")
+            put(AniListTokenStore.KEY_EXPIRES_AT, 0L)
+            put(AniListTokenStore.KEY_VIEWER_ID, 0)
+            put(AniListTokenStore.KEY_VIEWER_NAME, "")
+            put(AniListAuthRules.SIGNED_OUT_FIELD, true)
         }
         else -> buildJsonObject {
             put("updatedAt", now)
@@ -1711,10 +1892,11 @@ object PrefsPayloadApplier {
 
         // A retired row is a deleted profile's tombstone, not a value (see
         // [PrefsRowTombstones]): applying it as data would write blanks into
-        // stores that are already being wiped with the profile. The three auth
+        // stores that are already being wiped with the profile. The six auth
         // keys are the exception and they are NOT retired - they carry their
         // builders' disconnect blobs, which the handlers below already clear
-        // with, so a sibling's tokens go with them.
+        // with, so a sibling's tokens go with them. (Six, not three, since
+        // Kitsu, MAL and AniList were enrolled - the reason is unchanged.)
         if (PrefsRowTombstones.isRetired(payload)) return
 
         when (prefKey) {
@@ -1729,6 +1911,12 @@ object PrefsPayloadApplier {
                 applyTraktAuth(context, payload, profileId, live)
             PrefsPayloadBuilder.KEY_BINGECAT_AUTH ->
                 applyBingeCatAuth(context, payload, profileId, live)
+            PrefsPayloadBuilder.KEY_KITSU_AUTH ->
+                applyKitsuAuth(context, payload, profileId, live)
+            PrefsPayloadBuilder.KEY_MAL_AUTH ->
+                applyMalAuth(context, payload, profileId, live)
+            PrefsPayloadBuilder.KEY_ANILIST_AUTH ->
+                applyAnilistAuth(context, payload, profileId, live)
             PrefsPayloadBuilder.KEY_BINGECAT_PROFILE_MAP ->
                 applyBingeCatProfileMap(context, payload, profileId, live)
             PrefsPayloadBuilder.KEY_API_KEYS ->
@@ -2663,6 +2851,260 @@ object PrefsPayloadApplier {
     }
 
     /**
+     * One pulled Kitsu session (spec 2026-11-13, F2).
+     *
+     * Three shapes, the same three Trakt has: a tombstoned blank signs this
+     * profile out, a live session is adopted when it may replace the local one
+     * ([KitsuAuthRules.shouldAdopt]), and an unchanged session only retires a
+     * stale marker. The full pair is written because a refresh on the other
+     * device rotated it; adopting the access token alone would strand this
+     * device at its next expiry.
+     */
+    private fun applyKitsuAuth(
+        context: Context,
+        payload: JsonObject,
+        profileId: String?,
+        live: Boolean
+    ) {
+        fun text(key: String): String =
+            (payload[key] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+
+        val access = text(KitsuTokenStore.KEY_ACCESS_TOKEN)
+        val refresh = text(KitsuTokenStore.KEY_REFRESH_TOKEN)
+        val expiresAt = text(KitsuTokenStore.KEY_EXPIRES_AT).toLongOrNull() ?: 0L
+        val viewerId = text(KitsuTokenStore.KEY_VIEWER_ID).takeIf { it.isNotBlank() }
+        val viewerName = text(KitsuTokenStore.KEY_VIEWER_NAME).takeIf { it.isNotBlank() }
+        val signedOut = text(KitsuAuthRules.SIGNED_OUT_FIELD) == "true"
+
+        val store = kitsuAuthStore(context, profileId)
+        val local = store.read()
+
+        if (access.isBlank()) {
+            if (!KitsuAuthRules.clearsSession(access, signedOut)) return
+            // Nothing to sign out of: a profile that never connected must not
+            // record a tombstone it would then republish forever.
+            if (local == null && !store.signedOut()) return
+            store.markSignedOut()
+            AuthSyncTrace.record(PrefsPayloadBuilder.KEY_KITSU_AUTH, profileId, AuthSyncTrace.TOMBSTONED)
+            if (live) resetKitsuStateAfterSessionChange()
+            return
+        }
+
+        val adopt = KitsuAuthRules.shouldAdopt(
+            incomingAccess = access,
+            incomingExpiresAt = expiresAt,
+            incomingAccountId = viewerId,
+            localAccess = local?.accessToken,
+            localExpiresAt = local?.expiresAtMs ?: 0L,
+            localAccountId = local?.viewerId,
+            nowMs = System.currentTimeMillis()
+        )
+        if (!adopt) {
+            AuthSyncTrace.record(
+                PrefsPayloadBuilder.KEY_KITSU_AUTH,
+                profileId,
+                AuthSyncTrace.REFUSED_STALE
+            )
+            return
+        }
+
+        val nextRefresh = KitsuAuthRules.adoptedRefreshToken(
+            incomingAccess = access,
+            incomingRefresh = refresh,
+            incomingExpiresAt = expiresAt,
+            localAccess = local?.accessToken,
+            localRefresh = local?.refreshToken,
+            localExpiresAt = local?.expiresAtMs ?: 0L
+        )
+        val nextViewerId = viewerId ?: local?.viewerId
+        val nextViewerName = viewerName ?: local?.viewerName
+        val unchanged = local?.accessToken == access &&
+            local.refreshToken == nextRefresh &&
+            local.expiresAtMs == expiresAt &&
+            local.viewerId == nextViewerId &&
+            local.viewerName == nextViewerName
+        if (unchanged) {
+            // Same session: just retire a lingering disconnect marker so it
+            // cannot be republished over the live token on the next push.
+            store.clearSignedOutMarker()
+            return
+        }
+
+        store.save(
+            KitsuToken(
+                accessToken = access,
+                refreshToken = nextRefresh,
+                expiresAtMs = expiresAt,
+                viewerId = nextViewerId,
+                viewerName = nextViewerName
+            )
+        )
+        AuthSyncTrace.record(PrefsPayloadBuilder.KEY_KITSU_AUTH, profileId, AuthSyncTrace.ADOPTED)
+        if (live) resetKitsuStateAfterSessionChange()
+    }
+
+    /**
+     * One pulled MAL session, on the Kitsu shape ([applyKitsuAuth]).
+     *
+     * No reset hook follows an adoption, and the absence is the answer rather
+     * than an omission: MAL's write path addresses `my_list_status` by TITLE, so
+     * it keeps no `animeId -> entry id` map that could belong to the previous
+     * account (unlike the Kitsu and AniList libraries). Nothing derived is
+     * cached for a session change to invalidate - state `none`.
+     */
+    private fun applyMalAuth(
+        context: Context,
+        payload: JsonObject,
+        profileId: String?,
+        live: Boolean
+    ) {
+        fun text(key: String): String =
+            (payload[key] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+
+        val access = text(MalTokenStore.KEY_ACCESS_TOKEN)
+        val refresh = text(MalTokenStore.KEY_REFRESH_TOKEN)
+        val expiresAt = text(MalTokenStore.KEY_EXPIRES_AT).toLongOrNull() ?: 0L
+        val signedOut = text(MalAuthRules.SIGNED_OUT_FIELD) == "true"
+
+        val store = malAuthStore(context, profileId)
+        val local = store.read()
+
+        if (access.isBlank()) {
+            if (!MalAuthRules.clearsSession(access, signedOut)) return
+            if (local == null && !store.isSignedOut()) return
+            store.markSignedOut()
+            AuthSyncTrace.record(PrefsPayloadBuilder.KEY_MAL_AUTH, profileId, AuthSyncTrace.TOMBSTONED)
+            return
+        }
+
+        val adopt = MalAuthRules.shouldAdopt(
+            incomingAccess = access,
+            incomingExpiresAt = expiresAt,
+            localAccess = local?.accessToken,
+            localExpiresAt = local?.expiresAtMs ?: 0L,
+            nowMs = System.currentTimeMillis()
+        )
+        if (!adopt) {
+            AuthSyncTrace.record(
+                PrefsPayloadBuilder.KEY_MAL_AUTH,
+                profileId,
+                AuthSyncTrace.REFUSED_STALE
+            )
+            return
+        }
+
+        val nextRefresh = MalAuthRules.adoptedRefreshToken(
+            incomingAccess = access,
+            incomingRefresh = refresh,
+            incomingExpiresAt = expiresAt,
+            localAccess = local?.accessToken,
+            localRefresh = local?.refreshToken,
+            localExpiresAt = local?.expiresAtMs ?: 0L
+        )
+        val unchanged = local?.accessToken == access &&
+            local.refreshToken == nextRefresh &&
+            local.expiresAtMs == expiresAt
+        if (unchanged) {
+            store.clearSignedOutMarker()
+            return
+        }
+
+        store.save(
+            MalToken(
+                accessToken = access,
+                refreshToken = nextRefresh,
+                expiresAtMs = expiresAt
+            )
+        )
+        AuthSyncTrace.record(PrefsPayloadBuilder.KEY_MAL_AUTH, profileId, AuthSyncTrace.ADOPTED)
+    }
+
+    /**
+     * One pulled AniList session, on the Kitsu shape (see [applyKitsuAuth]).
+     *
+     * There is no refresh half to preserve: AniList issues no refresh token, so
+     * the blob is the token, its deadline and the identity. An expired incoming
+     * token with nothing local is refused before it lands (see
+     * [AniListAuthRules.shouldAdopt]) - a session that reports "connected" while
+     * every call fails is worse than no session.
+     */
+    private fun applyAnilistAuth(
+        context: Context,
+        payload: JsonObject,
+        profileId: String?,
+        live: Boolean
+    ) {
+        fun text(key: String): String =
+            (payload[key] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+
+        val access = text(AniListTokenStore.KEY_ACCESS_TOKEN)
+        val expiresAt = text(AniListTokenStore.KEY_EXPIRES_AT).toLongOrNull() ?: 0L
+        val viewerId = text(AniListTokenStore.KEY_VIEWER_ID).toIntOrNull()?.takeIf { it > 0 }
+        val viewerName = text(AniListTokenStore.KEY_VIEWER_NAME).takeIf { it.isNotBlank() }
+        val signedOut = text(AniListAuthRules.SIGNED_OUT_FIELD) == "true"
+
+        val store = anilistAuthStore(context, profileId)
+        val local = store.read()
+
+        if (access.isBlank()) {
+            if (!AniListAuthRules.clearsSession(access, signedOut)) return
+            if (local == null && !store.signedOut()) return
+            store.markSignedOut()
+            AuthSyncTrace.record(
+                PrefsPayloadBuilder.KEY_ANILIST_AUTH,
+                profileId,
+                AuthSyncTrace.TOMBSTONED
+            )
+            if (live) resetAniListStateAfterSessionChange()
+            return
+        }
+
+        val adopt = AniListAuthRules.shouldAdopt(
+            incomingAccess = access,
+            incomingExpiresAt = expiresAt,
+            incomingAccountId = viewerId?.toString(),
+            localAccess = local?.accessToken,
+            localExpiresAt = local?.expiresAtMs ?: 0L,
+            localAccountId = local?.viewerId?.toString(),
+            nowMs = System.currentTimeMillis()
+        )
+        if (!adopt) {
+            AuthSyncTrace.record(
+                PrefsPayloadBuilder.KEY_ANILIST_AUTH,
+                profileId,
+                AuthSyncTrace.REFUSED_STALE
+            )
+            return
+        }
+
+        val nextViewerId = viewerId ?: local?.viewerId
+        val nextViewerName = viewerName ?: local?.viewerName
+        val unchanged = local?.accessToken == access &&
+            local.expiresAtMs == expiresAt &&
+            local.viewerId == nextViewerId &&
+            local.viewerName == nextViewerName
+        if (unchanged) {
+            store.clearSignedOutMarker()
+            return
+        }
+
+        store.save(
+            AniListToken(
+                accessToken = access,
+                expiresAtMs = expiresAt,
+                viewerId = nextViewerId,
+                viewerName = nextViewerName
+            )
+        )
+        AuthSyncTrace.record(
+            PrefsPayloadBuilder.KEY_ANILIST_AUTH,
+            profileId,
+            AuthSyncTrace.ADOPTED
+        )
+        if (live) resetAniListStateAfterSessionChange()
+    }
+
+    /**
      * One pulled BingeCat mapping: which BingeCat profile this KBStream profile
      * reads, from the account (see [BingeCatProfileMapRules]).
      *
@@ -2780,6 +3222,37 @@ object PrefsPayloadApplier {
                 .onSyncedSessionChanged()
         }.onFailure {
             android.util.Log.w(TAG, "bingecat reset after synced session change failed: ${it.message}")
+        }
+    }
+
+    /**
+     * The Kitsu session just changed on the on-screen profile (F5).
+     *
+     * The library's `animeId -> entry id` cache belongs to the PREVIOUS account,
+     * so a leftover id would PATCH the other account's entry - or, after a
+     * tombstone, write under a dead grant. Local history, resume rows and watched
+     * markers are the viewer's and stay untouched.
+     */
+    private fun resetKitsuStateAfterSessionChange() {
+        runCatching {
+            com.kennyb1201.kbstream.data.kitsu.KitsuLibrary.onSyncedSessionChanged()
+        }.onFailure {
+            android.util.Log.w(TAG, "kitsu reset after synced session change failed: ${it.message}")
+        }
+    }
+
+    /**
+     * The AniList session just changed on the on-screen profile (F5).
+     *
+     * Same hazard as Kitsu's, with no re-create backstop: a cached
+     * `mediaId -> list-entry id` from the previous account can make a
+     * `DeleteMediaListEntry` delete the wrong account's entry outright.
+     */
+    private fun resetAniListStateAfterSessionChange() {
+        runCatching {
+            com.kennyb1201.kbstream.data.anime.AniListLibrary.onSyncedSessionChanged()
+        }.onFailure {
+            android.util.Log.w(TAG, "anilist reset after synced session change failed: ${it.message}")
         }
     }
 

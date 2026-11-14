@@ -42,6 +42,19 @@ internal object AniListLibrary {
         entryIds.clear()
     }
 
+    /**
+     * The session this profile writes under just changed (the cloud applier
+     * adopted a sibling's login, or a pulled tombstone signed it out).
+     *
+     * The cached list-entry ids belong to the PREVIOUS account, and there is no
+     * re-create backstop on the delete path: a `DeleteMediaListEntry` carrying a
+     * stale id can DELETE the wrong account's entry outright. Clearing here is
+     * the fix; the next write resolves its own id again.
+     */
+    fun onSyncedSessionChanged() {
+        entryIds.clear()
+    }
+
     /** True when the shared client is parked after a 429. */
     fun parked(nowMs: Long = System.currentTimeMillis()): Boolean = AniListClient.parked(nowMs)
 

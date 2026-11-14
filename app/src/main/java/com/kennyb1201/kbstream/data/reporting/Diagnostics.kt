@@ -23,6 +23,7 @@ import com.kennyb1201.kbstream.data.iptv.markerMatchesGuideFile
 import com.kennyb1201.kbstream.data.library.TasteRatingSubmission
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
+import com.kennyb1201.kbstream.data.sync.AuthSyncTrace
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
@@ -57,6 +58,19 @@ object Diagnostics {
 
     /** A cache entry or database smaller than this is not worth naming. */
     private const val STORAGE_MIN_BYTES = 1L * 1024 * 1024
+
+    /** How many pull outcomes the `sync auth:` line carries before it stops. */
+    private const val MAX_AUTH_SYNC_EVENTS = 6
+
+    /** The session rows the `sync auth:` line reports on (never the TVDB token). */
+    private val AUTH_SYNC_KEYS = setOf(
+        "simkl_auth",
+        "trakt_auth",
+        "bingecat_auth",
+        "kitsu_auth",
+        "mal_auth",
+        "anilist_auth"
+    )
 
     /** Entries named per storage line, before the rest is summed as `other`. */
     private const val MAX_CACHE_ENTRIES = 8
@@ -114,6 +128,12 @@ object Diagnostics {
         report.appendLine(profileLine())
         report.appendLine(cleanupLine(app))
         report.appendLine(syncLine())
+        // The tracker sessions' half of the sync section: which auth rows this
+        // device published on its last push, and what it did with each pulled
+        // one. The blobs are skipped silently when a profile never connected a
+        // leg, so without this line a capture reads the same whether the row was
+        // filtered out or the whole sync was broken (spec 2026-11-13, F6.2/F6.3).
+        report.appendLine(authSyncLine())
         // The MDBList key's day, as the interceptor sees it. The spend was
         // previously invisible: it lived in SharedPreferences and only the
         // budget guard read it, so "the key ran out again" could not be
@@ -609,6 +629,27 @@ object Diagnostics {
     }
 
     /**
+     * What the tracker sessions did with the account (spec 2026-11-13).
+     *
+     * Two facts a paste could not show before: the auth rows this device
+     * published on its last push, and the outcome of each session pull this
+     * process saw ([AuthSyncTrace]). Keys, profile labels and outcomes only -
+     * never a token, a viewer name or an account id.
+     */
+    private fun authSyncLine(): String {
+        val profiles = ProfileManager.profiles.value
+        val published = SupabaseSync.lastPushedPrefKeys.value
+            .split(',')
+            .filter { it in AUTH_SYNC_KEYS }
+        val pulled = AuthSyncTrace.events().takeLast(MAX_AUTH_SYNC_EVENTS).map { event ->
+            val who = event.profileId?.let { profileLabel(profiles, it) } ?: "global"
+            "${event.key.removeSuffix("_auth")}=$who/${event.outcome}"
+        }
+        return "sync auth: published=${published.joinToString(",").ifEmpty { "none" }} " +
+            "pulled=${pulled.joinToString(",").ifEmpty { "none" }}"
+    }
+
+    /**
      * Where the app's bytes actually are.
      *
      * "Why is KBStream using 1.6 GB?" was previously unanswerable from the
@@ -1005,8 +1046,15 @@ object Diagnostics {
         )
         profiles.forEach { profile ->
             val marker = if (profile.id == activeId) "*" else " "
+            // The three later tracker sessions sit beside Simkl's for the reason
+            // this line exists: "connected here, false there" is what tells
+            // "never connected on this device" apart from "connected but not
+            // syncing" (spec 2026-11-13, F6.1). Connected yes/no only.
             lines += "  marker$marker${profileLabel(profiles, profile.id)}: " +
                 "simkl=${simklConnected(context, profile.id)}" +
+                " kitsu=${kitsuConnected(context, profile.id)}" +
+                " mal=${malConnected(context, profile.id)}" +
+                " anilist=${anilistConnected(context, profile.id)}" +
                 " overrides=${overridesCount(context, profile.id)}" +
                 " cache=${watchedCacheCounts(context, profile.id)}"
         }
@@ -1057,6 +1105,25 @@ object Diagnostics {
             ProfileStorage.prefsName(profileId, "simkl_auth"),
             legacyPlaintext = true
         ).getString("access_token", null)?.isNotBlank() == true
+    }.getOrDefault(false)
+
+    /** Kitsu's half of the per-profile session line, read from its own store. */
+    private fun kitsuConnected(context: Context, profileId: String): Boolean = runCatching {
+        com.kennyb1201.kbstream.data.kitsu.KitsuTokenStore(context, profileId).hasSession()
+    }.getOrDefault(false)
+
+    /** MAL's half, same rule as [simklConnected]. */
+    private fun malConnected(context: Context, profileId: String): Boolean = runCatching {
+        com.kennyb1201.kbstream.data.mal.MalTokenStore(context, profileId).hasSession()
+    }.getOrDefault(false)
+
+    /**
+     * AniList's half. A session whose JWT has expired still counts as present:
+     * this line reports what the STORE holds, and the row's own state
+     * (needs-reconnect) is a different question.
+     */
+    private fun anilistConnected(context: Context, profileId: String): Boolean = runCatching {
+        com.kennyb1201.kbstream.data.anime.AniListTokenStore(context, profileId).hasSession()
     }.getOrDefault(false)
 
     private fun addonLine(context: Context): String {

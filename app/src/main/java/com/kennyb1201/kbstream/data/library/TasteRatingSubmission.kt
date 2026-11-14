@@ -590,7 +590,8 @@ object TasteRatingSubmission {
             // Kitsu's grant IS its access token, and it rotates: a refreshed
             // token is a different grant, which re-opens the leg without a
             // reconnect - exactly the behaviour Trakt and Simkl get from their
-            // own stores.
+            // own stores. A token ADOPTED from the account (the sync applier's
+            // write) is read the same way, so it re-opens the leg on its own.
             TasteRatingTracker.KITSU -> KitsuAuth.accessTokenSnapshot(app)
             // AniList's grant is its access token. A token pasted after a
             // reconnect is a different grant, which re-opens the leg - and there
