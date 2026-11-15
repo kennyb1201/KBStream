@@ -85,14 +85,22 @@ class ScrollSmoothnessContractTest {
         val trim = app.substringAfter("override fun onTrimMemory(level: Int) {")
             .substringBefore("private fun trimLevelName")
         val critical = trim.indexOf("ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL")
-        val clear = trim.indexOf("releaseImageMemoryCache(this)")
-        assertTrue("the clear is still there, under the critical guard", clear > 0)
+        // F4 of the 2026-11-15 scrolling round-two spec: CRITICAL trims HALF the
+        // bitmap cache (biggest first) instead of clearing it. The full clear is
+        // onLowMemory now - the level that means the process is about to die.
+        val graded = trim.indexOf("trimImageMemoryCache(this)")
+        assertTrue("the graded trim is under the critical guard", graded > 0)
         assertTrue(
             "F2: RUNNING_LOW is a hint, and on these boxes it fires during " +
-                "ordinary browsing - clearing ~40 MB of decoded art there is the " +
-                "scroll/wipe/re-decode loop the field reports as jank. The clear " +
-                "now waits for RUNNING_CRITICAL",
-            critical in 0 until clear
+                "ordinary browsing - releasing ~40 MB of decoded art there is the " +
+                "scroll/wipe/re-decode loop the field reports as jank. The " +
+                "release now waits for RUNNING_CRITICAL",
+            critical in 0 until graded
+        )
+        assertTrue(
+            "and CRITICAL must not clear the whole cache any more: that is what " +
+                "blanked the rail being scrolled",
+            !trim.contains("releaseImageMemoryCache(this)")
         )
         assertTrue(
             "the level is still recorded, which is the evidence that a wipe " +
