@@ -28,6 +28,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
+import com.kennyb1201.kbstream.data.home.PinnedRailsSpec
 import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
 import com.kennyb1201.kbstream.data.library.TasteProfileStore
 import com.kennyb1201.kbstream.data.widget.CwWidgetPublisher
@@ -11446,14 +11447,60 @@ private suspend fun calculateEpisodesRemaining(
                 // back empty while Wi-Fi was still coming up has to be retried.
                 landscapeLookupMemo.clear()
 
+                // PAINT FIRST (spec 2026-11-15, Home cold start F1): the pinned
+                // rails as the previous session left them, on screen before a
+                // single request goes out. This is the Detail pattern applied to
+                // Home - what is already known is painted, the network refines it
+                // in place below (`pinnedDeferred`).
+                //
+                // It is the whole cold-start fix: in 0.9.329 a cold Home spent
+                // 35.5s resolving this batch over the network and painted nothing
+                // until it landed (`homeload: pinned=35490ms`,
+                // `railsReady=37764ms`). The snapshot is one synchronous
+                // preferences read - no request, no wait - so what it paints
+                // costs the first frame nothing.
+                //
+                // Nothing here gates on the warm either (see
+                // `startup.pinnedWarm`): the snapshot is used as it stands, and a
+                // launch with nothing cached paints skeletons instead of waiting
+                // 35 seconds for a better answer.
+                val pinnedSnapshotScope =
+                    HomePinnedSnapshot.scopeOf(
+                        profileId = profileIdAtStart.orEmpty(),
+                        kidsCeiling = tmdbRepository.kidsMaxAge() != null
+                    )
+                val cachedPinnedRails =
+                    HomePinnedSnapshot.load(
+                        getApplication<Application>(),
+                        pinnedSnapshotScope
+                    )
+                // The keys the snapshot owns, so the refine can replace exactly
+                // those rails (a rail that no longer exists disappears with
+                // them) and never touch a catalog rail.
+                val cachedPinnedKeys =
+                    cachedPinnedRails.map { rail -> railKeyOf(rail) }.toSet()
+                if (cachedPinnedRails.isNotEmpty()) {
+                    publishPinnedInPlace(
+                        pinnedRails = cachedPinnedRails,
+                        buildEpochAtStart = buildEpochAtStart
+                    )
+                    // home.pinned is the CACHED publish now - the moment rails
+                    // are on screen without the network. home.pinnedRefined (see
+                    // pinnedDeferred below) is the deepened batch landing.
+                    PerfTrace.record(
+                        "home.pinned",
+                        android.os.SystemClock.elapsedRealtime() - buildStartedAtMs
+                    )
+                }
+
                 // The pinned "Top ... Today" rails are loaded inside the
                 // fan-out's own scope, BESIDE the catalog requests rather than
                 // before them. They used to be awaited here, which put their
                 // whole latency ahead of the first catalog request ever being
                 // made - on a cold start, seconds of a fast network doing
-                // nothing. Every catalog rail still waits for them before it
-                // publishes (see below), so what the viewer sees first is
-                // unchanged: only sooner.
+                // nothing. No catalog rail waits for them any more either (the
+                // paint-first publish above already put them on screen), so the
+                // first catalog row is limited by its own fetch alone.
                 var pinned: List<Rail> = emptyList()
 
                 // The fan-out is timed from HERE, before the pinned rails are
@@ -11489,7 +11536,7 @@ private suspend fun calculateEpisodesRemaining(
 
                             if (
                                 "catalog" !in addon.resources ||
-                                addon.manifestUrl == TOP_TODAY_MANIFEST_URL
+                                addon.manifestUrl == PinnedRailsSpec.MANIFEST_URL
                             ) {
                                 return@mapNotNull null
                             }
@@ -11600,11 +11647,46 @@ private suspend fun calculateEpisodesRemaining(
                                 landscapeCards
                             )
 
-                            // When the pinned rails LANDED, measured from the
-                            // build start. They now run beside the catalog
-                            // fan-out, so this no longer includes it.
+                            // The refined pinned batch is in hand: publish it in
+                            // place (same slots, same order, same keys, no rail
+                            // moving down) and record the landing the viewer did
+                            // not wait for. The gap between home.pinned and
+                            // home.pinnedRefined is the refine time paint-first
+                            // bought back.
+                            //
+                            // Stale-profile guard: a batch built for the profile
+                            // the viewer just left is never published.
+                            if (buildEpochAtStart == railBuildEpoch) {
+                                publishPinnedInPlace(
+                                    pinnedRails = rails,
+                                    buildEpochAtStart = buildEpochAtStart,
+                                    replacing = cachedPinnedKeys
+                                )
+                                // The next cold start paints from THIS batch, not
+                                // from the one before it.
+                                HomePinnedSnapshot.save(
+                                    getApplication<Application>(),
+                                    pinnedSnapshotScope,
+                                    rails
+                                )
+                            }
+
+                            // With nothing cached there was no paint-first publish
+                            // above, so this landing IS the pinned paint: it
+                            // carries home.pinned as well, and the paste has the
+                            // number either way (negatively: it is the old
+                            // behaviour's figure, which is the one that has to
+                            // fall).
+                            if (cachedPinnedRails.isEmpty()) {
+                                PerfTrace.record(
+                                    "home.pinned",
+                                    android.os.SystemClock.elapsedRealtime() -
+                                        buildStartedAtMs
+                                )
+                            }
+
                             PerfTrace.record(
-                                "home.pinned",
+                                "home.pinnedRefined",
                                 android.os.SystemClock.elapsedRealtime() -
                                     buildStartedAtMs
                             )
@@ -11621,23 +11703,18 @@ private suspend fun calculateEpisodesRemaining(
                                     landscapeCards
                                 )?.let { rail ->
 
-                                    // The fetch above needed no such wait -
-                                    // it started with the pinned rails - but
-                                    // the PUBLISH does, and not because of the
-                                    // order of the appends: the pinned rows are
-                                    // never streamed. They land in the single
-                                    // publish at the end of this build
-                                    // (finalRails), which REPLACES the list, so
-                                    // a row streamed before it is moved down.
-                                    // Waiting here means the first catalog row
-                                    // appears at about the moment the pinned
-                                    // batch is ready, rather than appearing and
-                                    // then moving. It costs no fetch time (that
-                                    // is already done) and, whenever the pinned
-                                    // batch is the slower half, no latency
-                                    // either - see home.firstRail.
-                                    pinnedDeferred.await()
-
+                                    // No wait on the pinned batch any more: it
+                                    // is already on screen (the cached publish at
+                                    // the top of this build) and the refined batch
+                                    // REPLACES ITS OWN SLOTS in place
+                                    // (publishPinnedInPlace), so a catalog row
+                                    // streaming now is never moved down by it.
+                                    //
+                                    // This wait is what put the first catalog row
+                                    // behind a cold pinned batch - 35.5s on the
+                                    // 0.9.329 report - even though the row's own
+                                    // fetch had long since returned.
+                                    //
                                     // Stale-profile guard (see the final
                                     // publish below): never stream a
                                     // previous profile's rows back in.
@@ -12110,6 +12187,39 @@ private suspend fun calculateEpisodesRemaining(
      */
     private fun railKeyOf(addonName: String, catalogId: String?, type: String): String =
         catalogRailKey(addonName, catalogId, type)
+
+    /**
+     * Publishes [pinnedRails] as the head of Home, in their own slots, without
+     * disturbing anything else on screen (spec 2026-11-15, Home cold start F1).
+     *
+     * Called twice per build: once with the CACHED batch at the start (the
+     * paint-first publish), once with the deepened batch when `pinnedDeferred`
+     * lands (the refine). Both times the pinned rows are the head of the list -
+     * that is where the final publish draws them too (`pinned + catalog rails`) -
+     * so "in place" means the same slots in the same order, filled with better
+     * items. The refine also passes the keys it is replacing, which is how a rail
+     * that no longer exists in the new batch stops being drawn instead of being
+     * left behind as a stale head row.
+     *
+     * [buildEpochAtStart] is the build's own epoch: a batch that resolves for the
+     * profile the viewer just left never reaches the screen.
+     */
+    private fun publishPinnedInPlace(
+        pinnedRails: List<Rail>,
+        buildEpochAtStart: Int,
+        replacing: Set<String> = emptySet()
+    ) {
+        if (buildEpochAtStart != railBuildEpoch) return
+        if (pinnedRails.isEmpty()) return
+        _rails.update { current ->
+            PinnedRailMerge.merge(
+                current = current,
+                pinned = pinnedRails,
+                replacing = replacing,
+                keyOf = { rail -> railKeyOf(rail) }
+            )
+        }
+    }
 
 
     /**
@@ -12768,16 +12878,14 @@ private suspend fun calculateEpisodesRemaining(
         landscapeCards: Boolean
     ) {
 
-        val baseUrl = TOP_TODAY_MANIFEST_URL
-            .substringBefore("/manifest.json")
-            .removeSuffix("/")
+        val baseUrl = PinnedRailsSpec.baseUrl
 
         // Pinned rails load in parallel (previously sequential — with the
         // request semaphore tightened this serialized the whole home load),
-        // preserving TOP_TODAY_CATALOGS order in the result list.
+        // preserving PinnedRailsSpec.catalogs order in the result list.
         coroutineScope {
 
-            TOP_TODAY_CATALOGS
+            PinnedRailsSpec.catalogs
                 .map {
                     (
                         catalogId,
@@ -12822,14 +12930,14 @@ private suspend fun calculateEpisodesRemaining(
 
                             val rail =
                                 Rail(
-                                    addonName = TOP_TODAY_ADDON_NAME,
+                                    addonName = PinnedRailsSpec.ADDON_NAME,
                                     catalogName = formatCatalogName(catalogName),
                                     type = type,
                                     items = filteredMetas,
                                     catalogId = catalogId,
                                     baseUrl = baseUrl,
                                     landscapeArt = previousLandscapeArt[
-                                        railKeyOf(TOP_TODAY_ADDON_NAME, catalogId, type)
+                                        railKeyOf(PinnedRailsSpec.ADDON_NAME, catalogId, type)
                                     ] ?: emptyMap(),
                                     // The row is a ranking - "Top Movies
                                     // Today" - and the add-on states it in
@@ -12839,7 +12947,7 @@ private suspend fun calculateEpisodesRemaining(
 
                             railInfo[railKeyOf(rail)] =
                                 RailInfo(
-                                    addonName = TOP_TODAY_ADDON_NAME,
+                                    addonName = PinnedRailsSpec.ADDON_NAME,
                                     catalogId = catalogId,
                                     catalogType = type,
                                     catalogRawName = catalogName,
@@ -13629,9 +13737,6 @@ private suspend fun calculateEpisodesRemaining(
         private const val GUEST_ADDON_NAME =
             "KBStream Guest Picks"
 
-        private const val TOP_TODAY_ADDON_NAME =
-            "TMDB Top Today"
-
         /**
          * Items one built catalog rail draws. A single discover page, capped
          * here so a catalog whose rules are deliberately broad ("anything
@@ -13639,23 +13744,5 @@ private suspend fun calculateEpisodesRemaining(
          */
         private const val CUSTOM_CATALOG_RAIL_LIMIT = 20
 
-        private const val TOP_TODAY_MANIFEST_URL =
-            "https://toptoday.llamayu.com/landscapeTags=true|landscapeLogos=true|landscapeRanked=false|portraitTags=true|portraitLogos=false|portraitRanked=true|posterLang=en|digitalOnly=true|listLang=en/manifest.json"
-
-        private val TOP_TODAY_CATALOGS =
-            listOf(
-
-                Triple(
-                    "top_movies_today",
-                    "movie",
-                    "Top Movies Today"
-                ),
-
-                Triple(
-                    "top_shows_today",
-                    "series",
-                    "Top Shows Today"
-                )
-            )
     }
 }

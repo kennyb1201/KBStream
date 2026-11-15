@@ -1907,6 +1907,65 @@ class TmdbRepository private constructor(context: Context) :
     // failed; an empty list means the query legitimately has no results.
     // ------------------------------------------------------------------
 
+    /**
+     * Raw /discover pages, by the exact query that asked for them (spec
+     * 2026-11-15, Home cold start F2).
+     *
+     * The launch warm (`HomePinnedWarm`) asks for the pinned rails' first pages
+     * through [discoverKB], and the rail build asks for the SAME pages a moment
+     * later; without a cache the build simply re-requests them and the warm buys
+     * nothing. Cache the RAW page and the build inherits it as a head start
+     * rather than a second budget.
+     *
+     * RAW, not the finished list: [discoverKB] applies the kids ceiling and the
+     * digital-release pass to what it returns, and those are per-profile (and
+     * per-toggle) answers - caching the filtered page would hand one profile's
+     * ceiling to the next, exactly the mistake [railPageCache] is documented to
+     * avoid. Filtering therefore still runs on every call.
+     */
+    private val discoverPageCache =
+        ConcurrentHashMap<DiscoverPageKey, Pair<Long, List<TmdbDiscoverItem>>>()
+
+    /** Short: a discover page is a popularity ordering, not a fact. */
+    private val discoverPageTtlMs = 10L * 60L * 1000L
+
+    /** Bound, so a long browsing session cannot grow the map without end. */
+    private val discoverPageCacheMaxEntries = 512
+
+    /** The exact shape of a /discover ask: same key, same page. */
+    data class DiscoverPageKey(
+        val mediaType: String,
+        val page: Int,
+        val sortBy: String?,
+        val filters: com.kennyb1201.kbstream.data.kb.KBFilters?
+    )
+
+    /**
+     * One raw discover page, from [discoverPageCache] while it is fresh.
+     *
+     * A failure is never cached - `null` means the request itself failed, and the
+     * next attempt is entitled to a real answer - and neither is an empty page
+     * (cheap to re-ask; caching it would blank the rail for the TTL if it was a
+     * transient server-side empty).
+     */
+    private suspend fun cachedDiscoverPage(
+        key: DiscoverPageKey,
+        load: suspend () -> List<TmdbDiscoverItem>
+    ): List<TmdbDiscoverItem>? {
+        val now = System.currentTimeMillis()
+        discoverPageCache[key]?.let { (storedAt, items) ->
+            if (now - storedAt < discoverPageTtlMs) return items
+        }
+        val fresh = runCatchingCancellable { load() }.getOrNull() ?: return null
+        if (fresh.isNotEmpty()) {
+            if (discoverPageCache.size >= discoverPageCacheMaxEntries) {
+                discoverPageCache.clear()
+            }
+            discoverPageCache[key] = now to fresh
+        }
+        return fresh
+    }
+
     /** Generic /discover with the full KB filter-builder parameter set. */
     suspend fun discoverKB(
         mediaType: String,
@@ -1926,7 +1985,16 @@ class TmdbRepository private constructor(context: Context) :
         // watch-provider chips use. Sent only with a release type, so a catalog
         // that has none keeps asking exactly what it asked before.
         val releaseRegion = filters?.withReleaseType?.let { filters.watchRegion }
-        return runCatchingCancellable {
+        // One request per distinct query per TTL, whoever asks it first - the
+        // launch warm or the rail build (see discoverPageCache).
+        val raw = cachedDiscoverPage(
+            DiscoverPageKey(
+                mediaType = mediaType.lowercase(),
+                page = page,
+                sortBy = sortBy,
+                filters = filters
+            )
+        ) {
             if (isTv) {
                 api.discoverTvGeneric(
                     apiKey = apiKey,
@@ -1992,7 +2060,8 @@ class TmdbRepository private constructor(context: Context) :
                     region = releaseRegion
                 )
             }.results
-        }.getOrNull()
+        }
+        return raw
             ?.let { items ->
                 // Kids Mode: this is the raw loader behind every KB
                 // folder rail, so the ceiling check runs here once and

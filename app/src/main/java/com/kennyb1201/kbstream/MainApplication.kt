@@ -273,6 +273,29 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                     )
                 }
             }
+            // Pinned rail warm: the catalog warm above covers the add-on
+            // catalogs, but Home's PINNED rows are the ones a cold start really
+            // waits on - 35.5s of a 37.7s rail build in the 0.9.329 report. This
+            // asks for their first pages through the same cached fetches the rail
+            // build reads (AddonRepository.getCatalog for the Top Today feed,
+            // TmdbRepository.discoverKB for the viewer's own catalogs), bounded to
+            // page 1, TMDB and the feed only. Nested launch for the same reason as
+            // the catalog warm: the steps after it are disk work that must not
+            // queue behind a fetch, and the paint itself never waits for this - the
+            // cached publish uses the cache as it stands.
+            startupScope.launch {
+                runCatchingCancellable {
+                    PerfTrace.timedSuspend("startup.pinnedWarm") {
+                        com.kennyb1201.kbstream.data.home.HomePinnedWarm
+                            .warm(this@MainApplication)
+                    }
+                }.onFailure { error ->
+                    CrashReporter.recordNonFatal(
+                        error,
+                        mapOf("source" to "app_create_pinned_warm")
+                    )
+                }
+            }
             // Home rails pinned to a Library list: check that the list still
             // exists at the service that holds it. A list deleted on a website
             // has no event behind it - the absence from a read is the only
