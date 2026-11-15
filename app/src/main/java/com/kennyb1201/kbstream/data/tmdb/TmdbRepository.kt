@@ -760,6 +760,21 @@ class TmdbRepository private constructor(context: Context) :
      */
     private val MAX_DETAIL_ENTRIES = 150
     private val MAX_SEASON_ENTRIES = 200
+
+    /**
+     * Where this session's DETAIL lookups were answered from (spec 2026-11-15,
+     * F1).
+     *
+     * The paste carries `detail.load total=2513ms` and `tmdb: detail=150/150`,
+     * and those two numbers cannot say whether a slow open was a NETWORK fetch
+     * (the title was never seen), a DISK row (it was seen, then evicted), or a
+     * memory hit that simply had a slow tail behind it. Those three lead to
+     * three different fixes, so they are counted separately and printed in
+     * [cacheStats] beside the sizes.
+     */
+    private val detailMemoryHits = java.util.concurrent.atomic.AtomicInteger()
+    private val detailDiskHits = java.util.concurrent.atomic.AtomicInteger()
+    private val detailFetches = java.util.concurrent.atomic.AtomicInteger()
     private val MAX_RESOLUTION_ENTRIES = 500
     private val MAX_REVIEW_ENTRIES = 300
 
@@ -835,7 +850,13 @@ class TmdbRepository private constructor(context: Context) :
             " imdbRes=${imdbResolutionMemoryCache.size}/$MAX_RESOLUTION_ENTRIES" +
             " tmdbRes=${tmdbResolutionMemoryCache.size}/$MAX_RESOLUTION_ENTRIES" +
             " extIds=${externalIdsMemoryCache.size}/$MAX_RESOLUTION_ENTRIES" +
-            " reviews=${reviewsCache.size}/$MAX_REVIEW_ENTRIES"
+            " reviews=${reviewsCache.size}/$MAX_REVIEW_ENTRIES" +
+            // Where this session's detail lookups came from - see the three
+            // counters' own note. `net` climbing on a warm session is the
+            // eviction signal F3 is about; `disk` alone means the title was
+            // remembered and only its memory copy had been evicted.
+            " detailSrc=mem:${detailMemoryHits.get()}" +
+            " disk:${detailDiskHits.get()} net:${detailFetches.get()}"
 
     private fun pruneImdbCacheOnce() {
         if (cachePruned.compareAndSet(false, true)) {
@@ -1060,11 +1081,24 @@ class TmdbRepository private constructor(context: Context) :
         if (!forceRefresh) {
             val cached = detailCache[key]
             if (cached != null && now - cached.first < detailCacheTtlMs) {
+                // F3 (spec 2026-11-15): a HIT re-stamps the entry, so the cache
+                // orders by when a title was last READ and not only by when it
+                // was first fetched. [evictOldest] drops the lowest stamp, and
+                // with insert-only stamps it dropped exactly the titles the
+                // session opened early and then came back to - the ones the
+                // viewer is most likely to reopen - while a title fetched once
+                // during a browse and never looked at again stayed. Nothing
+                // about the cap changes: the map holds the same number of
+                // entries, they are just chosen by use.
+                detailCache[key] = now to cached.second
+                detailMemoryHits.incrementAndGet()
                 return cached.second
             }
             if (!full) {
                 val railCached = railDetailCache[key]
                 if (railCached != null && now - railCached.first < detailCacheTtlMs) {
+                    railDetailCache[key] = now to railCached.second
+                    detailMemoryHits.incrementAndGet()
                     return railCached.second
                 }
             }
@@ -1089,6 +1123,7 @@ class TmdbRepository private constructor(context: Context) :
             if (parsed != null) {
                 detailCache[key] = now to parsed
                 railDetailCache[key] = now to parsed
+                detailDiskHits.incrementAndGet()
                 return parsed
             }
         }
@@ -1105,6 +1140,7 @@ class TmdbRepository private constructor(context: Context) :
                     // Only the rail map: this object has no cast, trailer or
                     // recommendations, and must never answer a `full` caller.
                     railDetailCache[key] = now to parsed
+                    detailDiskHits.incrementAndGet()
                     return parsed
                 }
             }
@@ -1138,6 +1174,7 @@ class TmdbRepository private constructor(context: Context) :
         // memory cache, after which every caller - the Detail screen included -
         // got "no TMDB metadata" for the rest of the session and could never
         // retry. Only a real answer is remembered, in memory and on disk.
+        detailFetches.incrementAndGet()
         if (result != null) {
             detailCache[key] = now to result
             // The slim memory entry holds the PROJECTION, not the response:

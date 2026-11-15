@@ -1590,6 +1590,24 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
             // sometimes takes a while" is otherwise only a feeling, and the
             // numbers are what turn it into a phase worth fixing.
             val loadStartedAt = SystemClock.elapsedRealtime()
+            // F1 (spec 2026-11-15): first paint, beside `detail.load`. The
+            // existing figure times the WHOLE load - refine tail, Simkl, tracker
+            // sets and episode orders included - so a 2.5s open reads the same
+            // whether the page appeared in 200ms and then filled in, or sat on
+            // its loading card for the lot. This is the moment the loading card
+            // comes down (the best proxy a ViewModel has for "the viewer can see
+            // the title"), recorded once per load, and the tail is measured as
+            // whatever is left after it.
+            var firstPaintAt = -1L
+            fun markFirstPaint() {
+                if (firstPaintAt >= 0) return
+                firstPaintAt = SystemClock.elapsedRealtime() - loadStartedAt
+                PerfTrace.record(
+                    "detail.firstPaint",
+                    firstPaintAt,
+                    ok = _error.value == null
+                )
+            }
             _isLoading.value = true
             _error.value = null
 
@@ -1684,7 +1702,16 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 mediaType = normalizedType
                 Log.e("KBStream", "detail load start type=$normalizedType id=$id initialSeason=$initialSeason")
 
-                val addonsDeferred = async { addonManager.getEnabledAddons() }
+                val addonsDeferred = async {
+                    val startedAt = SystemClock.elapsedRealtime()
+                    val addons = addonManager.getEnabledAddons()
+                    PerfTrace.record(
+                        "detail.addons",
+                        SystemClock.elapsedRealtime() - startedAt,
+                        ok = true
+                    )
+                    addons
+                }
                 // Cached (12h memory / 30d disk), like every other screen's
                 // TMDB fetch. This call was UNCACHED, so a revisit after the
                 // 60s freshness window redid the whole TMDB round-trip - and
@@ -1693,7 +1720,8 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 // ever spared a reopen inside its own minute; the cache is what
                 // makes later revisits instant too.
                 val tmdbDeferred = async {
-                    runCatchingCancellable {
+                    val fetchStartedAt = SystemClock.elapsedRealtime()
+                    val fetched = runCatchingCancellable {
                         // full = true: THIS is the screen that reads the bulk
                         // (cast, trailer, keywords, reviews), and the object
                         // published to _tmdbDetail is what every one of those
@@ -1714,6 +1742,17 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                                 ?.takeIf { it.isNotBlank() && it.trim() != id.trim() }
                         )
                     }
+                    val tmdbFetchMs = SystemClock.elapsedRealtime() - fetchStartedAt
+                    // F1's dominant leg, timed where it happens: a memory hit is
+                    // a millisecond, a disk row is a JSON parse, and a network
+                    // fetch is the only one that can be seconds. The cache's own
+                    // counters (TmdbRepository.cacheStats) say which it was.
+                    PerfTrace.record(
+                        "detail.tmdb",
+                        tmdbFetchMs,
+                        ok = fetched.getOrNull() != null
+                    )
+                    fetched
                 }
 
                 // 1. Await structural and history components first so watched data is guaranteed ready
@@ -1817,6 +1856,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                     if (!isDeepLinkAutoPlay) {
                         _isLoading.value = false
+                        markFirstPaint()
                     }
                 }
 
@@ -1869,12 +1909,21 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                     simklRepository.hasToken()
                 ) {
                     val tmdbShowId = tmdbDetailResult.getOrNull()?.id
+                    val simklStartedAt = SystemClock.elapsedRealtime()
                     runCatchingCancellable {
                         simklRepository.getWatchedEpisodesForShowByImdb(imdbId = id, tmdbId = tmdbShowId)
                     }.onSuccess { episodes ->
                         _simklWatchedEpisodes.value = episodes
                         _simklSeriesWatched.value = episodes.isNotEmpty()
                         simklKeysReadFor = id
+                        // After the publish, so the state's own contract (the
+                        // three lines above, assignment only on success) keeps
+                        // its shape and the timer stays out of it.
+                        PerfTrace.record(
+                            "detail.simkl",
+                            SystemClock.elapsedRealtime() - simklStartedAt,
+                            ok = true
+                        )
                     }
                 } else {
                     _simklWatchedEpisodes.value = emptySet()
@@ -2312,16 +2361,34 @@ for ((metaAddon, response, error) in probeResults) {
                 Log.e("KBStream", "detail load failed", e)
             } finally {
                 _isLoading.value = false
+                // A load that never reached the early paint (no TMDB record, a
+                // kids block, a failure) still stops being a spinner here, so
+                // this is the fallback first paint - and the only one on those
+                // paths.
+                markFirstPaint()
                 // Hand the state to the freshness gate - but only if this load
                 // produced a usable page. A failed one has to retry, and the
                 // kids-mode block deliberately empties the detail.
                 loadedDetailKey = if (_error.value == null) detailKey else null
                 loadedDetailAtMs = SystemClock.elapsedRealtime()
+                val loadTotalMs = SystemClock.elapsedRealtime() - loadStartedAt
                 PerfTrace.record(
                     label = "detail.load",
-                    ms = SystemClock.elapsedRealtime() - loadStartedAt,
+                    ms = loadTotalMs,
                     ok = _error.value == null
                 )
+                // What the page spent AFTER it was visible: episodes, tracker
+                // sets, episode orders, Simkl, the hero art. F1's second half -
+                // "the page feels slow after it paints" - is this number, and
+                // it is the only one that can say whether the tail or the paint
+                // is the thing to fix.
+                if (firstPaintAt >= 0) {
+                    PerfTrace.record(
+                        "detail.tail",
+                        loadTotalMs - firstPaintAt,
+                        ok = _error.value == null
+                    )
+                }
                 Log.e("KBStream", "detail load finished type=$type id=$id")
             }
         }

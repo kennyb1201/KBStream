@@ -283,6 +283,19 @@ object Diagnostics {
         // [DetailTrace]). Absent until something on Detail has been moved on,
         // so the rest of a report is unchanged.
         DetailTrace.lines().forEach { report.appendLine("detail: $it") }
+        // F1 (spec 2026-11-15): the detail load's legs in ONE line - first paint,
+        // the TMDB fetch, the addons list, the Simkl round-trip, and the tail
+        // that ran after the page was visible. `detail.load` alone cannot say
+        // whether a 2.5s open was a slow paint or a slow tail, and the perf
+        // summary above ranks by total, so on a busy session its top six can
+        // push every one of these out. Absent until a detail page has loaded.
+        PerfTrace.latestByPrefix("detail.").takeIf { it.isNotEmpty() }?.let { legs ->
+            report.appendLine(
+                "detailload: " + legs.joinToString(" ") { (label, ms) ->
+                    "${label.removePrefix("detail.")}=${ms}ms"
+                }
+            )
+        }
         // The season poster's own runs, right beside the Detail state it belongs
         // to: which key re-ran the effect, what fanart and TMDB answered, whether
         // the URL was set / kept / cleared, and what the header image's request
