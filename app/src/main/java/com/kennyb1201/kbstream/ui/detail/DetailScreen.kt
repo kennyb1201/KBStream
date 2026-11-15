@@ -6271,9 +6271,20 @@ fun DetailScreen(
                                                         seasonPosterRetry++
                                                     }
                                                 },
+                                                // 84dp, not the old 54dp (spec
+                                                // 2026-11-15): at density 2.00
+                                                // on a 1080p TV that is ~168px
+                                                // wide instead of ~108, still
+                                                // inside the 300x450 decode
+                                                // below, so no re-fetch and no
+                                                // new cache entry. The 2:3
+                                                // shape, the clip and the
+                                                // non-focusable draw are
+                                                // unchanged - prominence comes
+                                                // from size, not chrome.
                                                 modifier = Modifier
                                                     .padding(start = 12.dp, top = 14.dp)
-                                                    .width(54.dp)
+                                                    .width(84.dp)
                                                     .aspectRatio(2f / 3f)
                                                     .clip(KBShapeSmall)
                                             )
