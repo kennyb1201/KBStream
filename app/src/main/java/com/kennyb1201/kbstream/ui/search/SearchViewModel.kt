@@ -18,6 +18,7 @@ import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
 import com.kennyb1201.kbstream.data.library.TastePlacement
 import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.library.placementOf
+import com.kennyb1201.kbstream.data.reporting.SearchRunTrace
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbTitlePage
@@ -925,6 +926,12 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         }
 
         val cached = searchCache.get(normalized)
+        // F1 (spec 2026-11-15, search speedup): the run starts here - the
+        // keystroke that won the debounce (or the repeat this cache answers).
+        SearchRunTrace.markSubmitted(
+            cached = cached != null,
+            debounce = SEARCH_DEBOUNCE_MS
+        )
         if (cached != null) {
             // A repeat inside the TTL: no wave is re-fired, and the rails are
             // back before the next keystroke could land (F4/S5). The add-on
@@ -933,6 +940,10 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             // cached titles were de-duped with.
             searchJob = viewModelScope.launch {
                 restoreCachedSearch(normalized, cached)
+                // The cached answer IS the titles leg this time, and it is
+                // recorded as such: a repeat inside the TTL is the one case
+                // where a fast search says nothing about the network.
+                SearchRunTrace.onTitlesPublished(cached.titles.size)
                 launchAddonSearch(normalized, CompletableDeferred(cached.tmdbDedup))
             }
             return
@@ -991,24 +1002,38 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                         }
                         .getOrNull()
 
+                // Each wave is timed on its own (spec 2026-11-15, search
+                // speedup F1): the merge awaits ALL of these, so the slowest
+                // one gates the titles rail - and which one that is cannot be
+                // guessed from the total.
                 val tmdbMoviesDeferred = async {
-                    tmdbTitlePage("Movie search") {
-                        tmdbRepository.searchMoviesPage(normalized, page = 1)
+                    SearchRunTrace.timedLeg("movies") {
+                        tmdbTitlePage("Movie search") {
+                            tmdbRepository.searchMoviesPage(normalized, page = 1)
+                        }
                     }
                 }
                 val tmdbTvDeferred = async {
-                    tmdbTitlePage("TV search") {
-                        tmdbRepository.searchTvPage(normalized, page = 1)
+                    SearchRunTrace.timedLeg("tv") {
+                        tmdbTitlePage("TV search") {
+                            tmdbRepository.searchTvPage(normalized, page = 1)
+                        }
                     }
                 }
                 val personDeferred = async {
-                    tmdbWave("Person search") { tmdbRepository.searchPersonOrNull(normalized) }
+                    SearchRunTrace.timedLeg("person") {
+                        tmdbWave("Person search") { tmdbRepository.searchPersonOrNull(normalized) }
+                    }
                 }
                 val studioDeferred = async {
-                    tmdbWave("Studio search") { tmdbRepository.searchCompanyOrNull(normalized) }
+                    SearchRunTrace.timedLeg("studio") {
+                        tmdbWave("Studio search") { tmdbRepository.searchCompanyOrNull(normalized) }
+                    }
                 }
                 val collectionDeferred = async {
-                    tmdbWave("Collection search") { tmdbRepository.searchCollectionOrNull(normalized) }
+                    SearchRunTrace.timedLeg("collection") {
+                        tmdbWave("Collection search") { tmdbRepository.searchCollectionOrNull(normalized) }
+                    }
                 }
                 // Sixth wave: the keyword lookup. A keyword word is not a
                 // title, so no amount of movie/TV search will ever find
@@ -1016,7 +1041,9 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 // one tap opens its Tag page (F1/F2). It is its own wave, so a
                 // failure here leaves the other five untouched (F3).
                 val keywordDeferred = async {
-                    tmdbWave("Keyword search") { tmdbRepository.searchKeywordsOrNull(normalized) }
+                    SearchRunTrace.timedLeg("keyword") {
+                        tmdbWave("Keyword search") { tmdbRepository.searchKeywordsOrNull(normalized) }
+                    }
                 }
 
                 // The de-dupe index the add-on rails consult, built from page
@@ -1097,6 +1124,10 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 )
                 titlesQuery = normalized
                 publishTitles()
+                // The titles leg closes at the publish, not at the last await:
+                // what the viewer waits for is the row, and the merge is part of
+                // that wait.
+                SearchRunTrace.onTitlesPublished(mergedTitles.size)
                 // M10 (audit): the person CARD prints up to three known-for
                 // TITLE names under the name, and a search for an adult
                 // performer therefore put adult titles in plain text on a kids
@@ -1499,6 +1530,12 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             // profile this is the same list it always was.
             val publishedGroups = withKidsCeiling(visibleGroups)
             _addonResultGroups.value = publishedGroups
+            // The add-on leg closes here (spec 2026-11-15, search speedup F1):
+            // this is the publish the viewer sees, and the separate path is why
+            // titles and add-ons have a leg each.
+            SearchRunTrace.onAddonsPublished(
+                publishedGroups.size
+            )
             // These rails are part of the badge picture now: recompute the
             // ownership answers over the TMDB titles AND these add-on hits
             // before the preload below merges their keys.

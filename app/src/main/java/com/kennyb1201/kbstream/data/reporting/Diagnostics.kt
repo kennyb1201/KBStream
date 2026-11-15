@@ -207,6 +207,7 @@ object Diagnostics {
         // the perf summary's ranking below is most likely to crowd out.
         startupLine()?.let { report.appendLine(it) }
         playbackLine()?.let { report.appendLine(it) }
+        searchLine()?.let { report.appendLine(it) }
         // The recovery ladder in between the two lines around it: which decoder
         // failure happened, and whether the session changed engines. Absent on a
         // session whose player never had a decoder problem (see
@@ -550,6 +551,40 @@ object Diagnostics {
             "${label.removePrefix("startup.")}=${ms}ms"
         }
         return "startup: $breakdown"
+    }
+
+    /**
+     * What the last search run cost, leg by leg (spec 2026-11-15, search
+     * speedup F1).
+     *
+     * Search had no measurement at all, so "search feels slow" could only be
+     * blamed on a guess: the debounce, the six TMDB waves, the add-on probes and
+     * the merge are four different costs with four different fixes. The titles
+     * leg is submit → built-in rails on screen (debounce + slowest TMDB wave +
+     * merge, which is why the waves are printed apart), the add-on leg is submit
+     * → the add-on rails, and `debounce` is printed as a constant so a slow
+     * figure can be attributed rather than assumed. `cached` says the repeat was
+     * answered without firing a wave at all.
+     *
+     * Absent until something has been searched this session.
+     */
+    private fun searchLine(): String? {
+        val facts = SearchRunTrace.facts() ?: return null
+        fun ms(value: Long): String = if (value >= 0L) "${value}ms" else "\u2014"
+        return buildString {
+            append("search: titles=").append(ms(facts.titlesMs))
+            append(" addon=").append(ms(facts.addonMs))
+            append(" debounce=").append(facts.debounceMs).append("ms")
+            append(" merge=addon-parallel")
+            if (facts.legs.isNotEmpty()) {
+                append(" legs=").append(
+                    facts.legs.joinToString(",") { (name, legMs) -> "$name:${legMs}ms" }
+                )
+            }
+            if (facts.titlesCount >= 0) append(" titles-count=").append(facts.titlesCount)
+            if (facts.addonGroups >= 0) append(" addon-groups=").append(facts.addonGroups)
+            append(" cached=").append(if (facts.cached) "yes" else "no")
+        }
     }
 
     /**
