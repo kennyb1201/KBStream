@@ -1,7 +1,6 @@
 package com.kennyb1201.kbstream.ui.player
 
 import java.io.File
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -29,7 +28,7 @@ class SeasonChipFocusHighlightContractTest {
 
     @Test
     fun `the platform's own focus highlight is off on the chip`() {
-        val layout = read("app/src/main/res/layout/picker_season_chip.xml", "ui/player")
+        val layout = read("app/src/main/res/layout/picker_season_chip.xml")
         assertTrue(
             "the layout turns it off - it defaults to TRUE on API 26+ and is " +
                 "painted after the foreground",
@@ -132,7 +131,7 @@ class SeasonChipFocusHighlightContractTest {
         }
     }
 
-    private fun read(relative: String, unused: String = ""): String {
+    private fun read(relative: String): String {
         val prefixes = listOf("", "app/src/main/java/com/kennyb1201/kbstream/", "app/src/main/")
         var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
         while (dir != null) {

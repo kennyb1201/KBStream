@@ -1,6 +1,5 @@
 package com.kennyb1201.kbstream.ui.player
 
-import kotlin.math.abs
 import kotlin.math.pow
 
 /**
@@ -68,7 +67,4 @@ internal object SeasonChipContrast {
 
     /** True when [fill] is too light for a near-white outline to show. */
     fun isLight(fill: Int): Boolean = relativeLuminance(fill) > 0.5
-
-    /** How far apart two colours' luminances are, for callers that only need a hint. */
-    fun luminanceGap(a: Int, b: Int): Double = abs(relativeLuminance(a) - relativeLuminance(b))
 }
