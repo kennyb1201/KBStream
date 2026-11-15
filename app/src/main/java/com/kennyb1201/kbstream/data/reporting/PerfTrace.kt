@@ -27,6 +27,12 @@ internal object PerfTrace {
     /** Calls at or above this are worth naming in the summary. */
     private const val SLOW_MS = 1_200L
 
+    /**
+     * The phase labels that are pinned out of the ring (see [startupPinned]).
+     * A trailing dot, so `startup.mainCreate` is one and `startupFoo` is not.
+     */
+    private const val STARTUP_PREFIX = "startup."
+
     private data class Sample(
         val label: String,
         val ms: Long,
@@ -43,6 +49,32 @@ internal object PerfTrace {
 
     private val lock = Any()
     private val samples = ArrayDeque<Sample>()
+
+    /**
+     * The launch phases, kept beside the ring so they survive it filling
+     * (spec 2026-11-15).
+     *
+     * The ring holds [MAX_SAMPLES] samples, and a cold start fills it long before
+     * the report can be taken: Home's artwork lookups alone ran to 291 in the
+     * field paste that prompted this, and every one of them evicted a `startup.*`
+     * phase the report was supposed to carry. The 323 cold-start paste has no
+     * `startup:` line at all for exactly that reason - a diagnostics gap caused
+     * by the diagnostics ring, not by the build.
+     *
+     * Bounded by construction rather than by a cap: the labels are the handful of
+     * `startupStep` calls in MainApplication, so this holds a fixed few entries
+     * however long the session runs. Per-PROCESS, deliberately: nothing here
+     * outlives the process, so the line always describes THIS launch and never a
+     * phase from a previous one. And [reset] (the "clear diagnostics" button)
+     * does not empty it - the launch phases are facts about this process that
+     * clearing the ring cannot make untrue, and dropping them would remove the
+     * only cold-start evidence the report has.
+     *
+     * Nothing else changes for the ring itself: [add] still appends and still
+     * evicts, and [record]'s slow-sample forward still fires once per slow
+     * sample, so pinning adds no second Sentry event.
+     */
+    private val startupPinned = LinkedHashMap<String, Long>()
 
     /**
      * Label to the most recent host seen under it, for labels whose name does
@@ -127,9 +159,27 @@ internal object PerfTrace {
     /** The ring's one insertion point; both recorders go through it. */
     private fun add(sample: Sample) {
         synchronized(lock) {
+            // Pin the launch phases before anything can evict them. Only this
+            // prefix: `playback.*` and the sports lines read the ring and keep
+            // reading it, unchanged (spec 2026-11-15 says so explicitly).
+            if (sample.label.startsWith(STARTUP_PREFIX)) {
+                startupPinned[sample.label] = sample.ms
+            }
             samples.addLast(sample)
             while (samples.size > MAX_SAMPLES) samples.removeFirst()
         }
+    }
+
+    /**
+     * The launch phases recorded by this process, newest value per label, in
+     * first-seen order - the same shape [latestByPrefix] returns, but read from
+     * the pin so it survives the ring filling.
+     *
+     * Empty only when no `startup.*` label has been recorded yet (the first
+     * moments of a launch), which is why the report falls back to the ring.
+     */
+    fun pinnedStartup(): List<Pair<String, Long>> = synchronized(lock) {
+        startupPinned.entries.map { it.key to it.value }
     }
 
     /** Times [block] under [label], recording even when it throws. */

@@ -521,7 +521,15 @@ object Diagnostics {
      * re-created its activity).
      */
     private fun startupLine(): String? {
-        val phases = PerfTrace.latestByPrefix("startup.")
+        // From the PIN, not the ring (spec 2026-11-15). The ring holds 400
+        // samples and a cold start overflows it before Settings can open - the
+        // 323 paste carries `perf: samples=400` and no startup line at all - so
+        // reading the phases from the ring meant the report lost them exactly on
+        // the launches worth reporting. The ring is still the fallback for the
+        // one case the pin cannot cover: a report taken before any phase has
+        // run, where an absent line is the truth.
+        val pinned = PerfTrace.pinnedStartup()
+        val phases = if (pinned.isNotEmpty()) pinned else PerfTrace.latestByPrefix("startup.")
         if (phases.isEmpty()) return null
         val breakdown = phases.joinToString(" ") { (label, ms) ->
             "${label.removePrefix("startup.")}=${ms}ms"
