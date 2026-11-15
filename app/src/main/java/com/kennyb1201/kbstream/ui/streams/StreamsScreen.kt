@@ -71,6 +71,9 @@ import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.debrid.TorBoxCloudPicker
 import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
+import com.kennyb1201.kbstream.data.player.PlayedLinkCache
+import com.kennyb1201.kbstream.data.player.SourcePickMemory
+import com.kennyb1201.kbstream.streamNavigationKey
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.data.player.BingeGroupMemory
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
@@ -219,6 +222,30 @@ fun StreamsScreen(
      */
     val resolveScope = rememberCoroutineScope()
 
+    /**
+     * Writes down the row the viewer pressed, and drops the played-link replay
+     * entry for this episode (spec 2026-11-15).
+     *
+     * The forget is as important as the write: [PlayedLinkCache] replays the
+     * link that last STARTED for three hours without resolving at all, so a
+     * stale entry would put the old source back in front of the viewer and the
+     * memory would never be consulted. Once the viewer has chosen by hand, the
+     * cache's answer is known to be wrong - so it goes, and the next Play
+     * resolves fresh and honours the pick.
+     */
+    fun rememberManualPick(selected: Stream) {
+        SourcePickMemory.remember(context, parentId, season, episode, selected)
+        PlayedLinkCache.forget(context, streamNavigationKey(contentType, streamId))
+    }
+
+    /**
+     * The one hand-off for an explicit row press.
+     *
+     * It is also the one place a manual pick is WRITTEN DOWN (spec 2026-11-15):
+     * this is the viewer choosing a source by hand, and it used to be lost the
+     * moment the player closed. Only this path writes - auto-play's own pick and
+     * the error walk are not quality choices.
+     */
     fun selectSource(
         selected: Stream,
         allSources: List<Stream>,
@@ -231,6 +258,7 @@ fun StreamsScreen(
         // A cloud row needs the same preparation a hash row does (its link is
         // minted from the account on the press) - see TorBoxResolve.
         if (!TorBoxResolve.needsPreparation(selected)) {
+            rememberManualPick(selected)
             onStreamSelected(selected, allSources, addons, selectedAddon)
             return
         }
@@ -244,6 +272,9 @@ fun StreamsScreen(
                 ).show()
                 return@launch
             }
+            // The row the viewer PRESSED, not the link it resolved to: the next
+            // resolve returns the row, and that is what the match looks for.
+            rememberManualPick(selected)
             onStreamSelected(
                 resolved,
                 // Unpressed cloud rows keep their reference out of the player's
@@ -298,7 +329,10 @@ fun StreamsScreen(
             // The set this install's ranker was built with (see
             // DebridAddons.forDevice): the learned bitrate gate must never
             // reach a debrid row.
-            debridAddons = DebridAddons.forDevice(context)
+            debridAddons = DebridAddons.forDevice(context),
+            // The show, so an episode the viewer picked a source for by hand
+            // starts on that source again (spec 2026-11-15).
+            parentId = parentId
         )
 
     /*

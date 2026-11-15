@@ -56,6 +56,7 @@ import com.kennyb1201.kbstream.data.player.PlayedLinkCache
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
 import com.kennyb1201.kbstream.data.player.PlayerTrackMemory
+import com.kennyb1201.kbstream.data.player.SourcePickMemory
 import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
@@ -2759,6 +2760,28 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     }
 
     /**
+     * Writes down a source the viewer picked from this player's SOURCES list,
+     * and drops the played-link replay entry for this episode (spec 2026-11-15).
+     *
+     * The player's own picker is the second half of the report: the link was
+     * switched here, the viewer backed out to Detail and pressed Play, and the
+     * old source started again. Without this, an in-player switch would still
+     * not survive the trip back.
+     *
+     * The forget mirrors [invalidateCachedLinkBeforeFirstFrame]: the replay
+     * cache would otherwise start the link that last STARTED, without resolving,
+     * so the pick would never even be consulted.
+     */
+    private fun rememberManualSourcePick(stream: Stream) {
+        if (parentId.isNotBlank()) {
+            SourcePickMemory.remember(this, parentId, season, episode, stream)
+        }
+        intent.getStringExtra("played_link_key")?.let { key ->
+            PlayedLinkCache.forgetForProfile(this, key, sessionProfileId)
+        }
+    }
+
+    /**
      * Opens the picker on [mode], filled from mpv's own state.
      *
      * The rows come from the same two places the main player's do: the ranked
@@ -2784,6 +2807,14 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                             // 2026-10-27). It now asks TorBox for the link and
                             // switches to that, the same call the streams screen
                             // makes for the same row (see resolveAndSwitch).
+                            // A press here is the viewer's own choice, exactly
+                            // as a press on the streams picker's row is - so it
+                            // is written down (spec 2026-11-15), and the
+                            // three-hour replay entry for this episode goes with
+                            // it. Everything else that reaches switchToSource
+                            // (the error walk, auto recovery) is not a choice
+                            // and writes nothing.
+                            rememberManualSourcePick(stream)
                             if (stream.url.isNullOrBlank()) {
                                 resolveAndSwitch(stream)
                             } else {

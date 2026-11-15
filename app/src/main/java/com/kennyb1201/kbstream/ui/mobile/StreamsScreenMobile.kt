@@ -42,6 +42,8 @@ import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.debrid.TorBoxCloudPicker
 import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
+import com.kennyb1201.kbstream.data.player.PlayedLinkCache
+import com.kennyb1201.kbstream.data.player.SourcePickMemory
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.download.DownloadGate
 import com.kennyb1201.kbstream.data.download.DownloadGates
@@ -189,6 +191,18 @@ fun StreamsScreenMobile(
         // nothing when the card is pressed.
         val resolveScope = rememberCoroutineScope()
 
+        /**
+         * Writes down the row the viewer pressed, and drops the played-link
+         * replay entry for this episode - see the television picker's own note
+         * (spec 2026-11-15). The forget matters as much as the write: the
+         * three-hour replay would otherwise start the OLD source without ever
+         * resolving, and the pick would never be consulted.
+         */
+        fun rememberManualPick(selected: Stream) {
+            SourcePickMemory.remember(context, parentId, season, episode, selected)
+            PlayedLinkCache.forget(context, routeKey)
+        }
+
         fun selectSource(
             selected: Stream,
             allSources: List<Stream>,
@@ -201,6 +215,7 @@ fun StreamsScreenMobile(
             // A cloud row needs the same preparation a hash row does (its link
             // is minted from the account on the press) - see TorBoxResolve.
             if (!TorBoxResolve.needsPreparation(selected)) {
+                rememberManualPick(selected)
                 onStreamSelected(selected, allSources, addons, selectedAddon)
                 return
             }
@@ -214,6 +229,7 @@ fun StreamsScreenMobile(
                     ).show()
                     return@launch
                 }
+                rememberManualPick(selected)
                 onStreamSelected(
                     resolved,
                     // Unpressed cloud rows keep their reference out of the
@@ -267,7 +283,9 @@ fun StreamsScreenMobile(
                 binge = bingeIdentity,
                 addonOf = { stream ->
                     sourceAddons.getOrNull(streams.indexOfFirst { it === stream })
-                }
+                },
+                // The show, for the viewer's remembered pick (spec 2026-11-15).
+                parentId = parentId
             )
 
         /*

@@ -46,6 +46,25 @@ internal object AutoPlayQuality {
     }
 
     /**
+     * Whether [stream] may be started under [cap] at all.
+     *
+     * The same test [cappedPick] applies to its own pick: no ceiling, or a
+     * resolution that declares itself at or under it. A stream that declares
+     * nothing passes - an unlabeled file is not evidence of a big one, which is
+     * the rule [cappedPick] already follows for its own unlabeled head.
+     *
+     * This exists for the remembered manual pick (spec 2026-11-15): the viewer's
+     * own press is honoured ahead of the ranking, but not past their own
+     * ceiling. The ceiling is their other quality choice, and a remembered pick
+     * that breaks it falls back to the ranker rather than starting anyway.
+     */
+    fun atOrUnderCap(stream: Stream, cap: Int): Boolean {
+        if (cap == CAP_AUTO) return true
+        val rank = StreamRanker.resolutionRank(stream)
+        return rank == 0 || rank <= capRank(cap)
+    }
+
+    /**
      * The source auto-play should actually start, given the pick the episode
      * rules already made and the viewer's ceiling.
      *

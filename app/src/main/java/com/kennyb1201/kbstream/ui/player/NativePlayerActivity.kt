@@ -119,6 +119,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
 import com.kennyb1201.kbstream.data.player.PlayerTrackMemory
+import com.kennyb1201.kbstream.data.player.SourcePickMemory
 import com.kennyb1201.kbstream.data.player.SubtitleBitmapProofs
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
@@ -11905,6 +11906,21 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
     }
 
+    /**
+     * Writes down a source the viewer picked from this player's SOURCES list,
+     * and drops the played-link replay entry for this episode (spec 2026-11-15)
+     * - see the mpv player's own note. This engine draws the same picker, so a
+     * switch made here has to survive the trip back to Detail the same way.
+     */
+    private fun rememberManualSourcePick(stream: Stream) {
+        if (parentId.isNotBlank()) {
+            SourcePickMemory.remember(this, parentId, season, episode, stream)
+        }
+        intent.getStringExtra("played_link_key")?.let { key ->
+            PlayedLinkCache.forgetForProfile(this, key, sessionProfileId)
+        }
+    }
+
     private fun showPicker(mode: PickerMode) {
         // The rows are built BEFORE anything becomes visible, and an empty list
         // abandons the whole call. The order used to be the other way round -
@@ -11939,6 +11955,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                             // Every refusal keeps the picker open and says why,
                             // so a failed resolve is not a press that did
                             // nothing.
+                            // A press here is the viewer's own choice, exactly
+                            // as a press on the streams picker's row is - so it
+                            // is written down (spec 2026-11-15), together with
+                            // dropping the three-hour replay entry for this
+                            // episode. Auto recovery and the error walk reach
+                            // switchToSource too; neither writes.
+                            rememberManualSourcePick(stream)
                             if (stream.url.isNullOrBlank()) {
                                 resolveAndSwitch(stream)
                             } else {

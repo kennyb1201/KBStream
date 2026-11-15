@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.domain.streamengine
 
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.player.BingeGroupMemory
+import com.kennyb1201.kbstream.data.player.SourcePickMemory
 
 /**
  * THE auto-play pick, in one place, for every surface that starts an episode by
@@ -107,10 +108,34 @@ internal object AutoplayPick {
         runtimeMinutes: Int?,
         binge: Binge,
         addonOf: (Stream) -> String?,
-        debridAddons: Set<String> = emptySet()
+        debridAddons: Set<String> = emptySet(),
+        /**
+         * The show this episode belongs to, for the viewer's remembered pick
+         * (spec 2026-11-15). Null writes and reads nothing, so a caller that
+         * cannot name the show behaves exactly as before.
+         */
+        parentId: String? = null
     ): Stream? {
         val cap = com.kennyb1201.kbstream.data.settings.AppPreferences
             .getEffectiveAutoPlayQuality(context)
+        // The viewer's own pick for THIS episode, when this resolve still
+        // offers it. Checked before the ranking because a manual press is not a
+        // ranking outcome: the ranker puts a cached debrid copy above a better
+        // HTTP link by design, and that is exactly why the viewer had to switch
+        // by hand in the first place. The memory never invents a link - a pick
+        // the fresh list no longer carries falls through to the ranker below.
+        val rememberedPick = SourcePickMemory.recall(
+            context = context,
+            parentId = parentId,
+            season = season,
+            episode = episode,
+            fresh = remaining
+        )
+        // ... and it is still their ceiling's business (F3): a pick that breaks
+        // it falls back to the ranker like any other row above the ceiling.
+        if (rememberedPick != null && AutoPlayQuality.atOrUnderCap(rememberedPick, cap)) {
+            return rememberedPick
+        }
         // A blank identity answers false for every row (see [preferBinge]), so
         // the tier's own order stands untouched.
         val preferBinge = preferBinge(binge, addonOf)

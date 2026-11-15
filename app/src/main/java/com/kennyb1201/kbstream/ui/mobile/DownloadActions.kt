@@ -335,7 +335,9 @@ internal fun autoplayPickFor(
     /** The binge identity to continue, when the caller has one (spec C19). */
     binge: AutoplayPick.Binge = AutoplayPick.Binge(),
     /** The add-on behind each row, by identity; null when unknown. */
-    addonOf: (Stream) -> String? = { null }
+    addonOf: (Stream) -> String? = { null },
+    /** The show, for the viewer's remembered pick (spec 2026-11-15). */
+    parentId: String? = null
 ): Stream? = AutoplayPick.pick(
     context = context,
     remaining = sources,
@@ -347,7 +349,8 @@ internal fun autoplayPickFor(
     // Read here rather than taken as a parameter, so the one phone entry point
     // cannot be called without it: a debrid row is never gated by the learned
     // bitrate ceiling (see DebridAddons.forDevice).
-    debridAddons = DebridAddons.forDevice(context)
+    debridAddons = DebridAddons.forDevice(context),
+    parentId = parentId
 )
 
 /** The line under a download's title on the Downloads screen. */

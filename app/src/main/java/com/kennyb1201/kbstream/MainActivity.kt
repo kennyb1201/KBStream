@@ -1833,7 +1833,10 @@ fun AppRoot(
                 // The same set the resolve's ranker speaks for (see
                 // DebridAddons): a debrid pick is never gated by the learned
                 // bitrate ceiling.
-                debridAddons = DebridAddons.forDevice(context)
+                debridAddons = DebridAddons.forDevice(context),
+                // The show, so a source the viewer picked by hand for this
+                // episode is the one this launch starts (spec 2026-11-15).
+                parentId = pending.parentId
             )
         }
         // Warm the cached-answer memo for the WHOLE candidate set in one request
