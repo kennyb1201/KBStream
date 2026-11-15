@@ -214,6 +214,28 @@ class DetailSeasonChangeDownContractTest {
     // ── §3: what must not change ──────────────────────────────────────────
 
     @Test
+    fun `the chain's landing asks the season chip before the target card`() {
+        val chipAsk = seasonOrEpisode.indexOf("val seasonRequester = season?.let {")
+        val cardAsk = seasonOrEpisode.indexOf("val episodeNum = targetEpisodeNumber")
+        assertTrue(
+            "2026-11-15 amendment, S1: DOWN into the episode section lands on the " +
+                "SEASON CHIP first. It is the section's entry and it is composed " +
+                "whenever the section is, so it answers on the first frame - where " +
+                "the card path scrolls and retries for fifteen frames (about 700ms " +
+                "with the scroll's own delay) before it can answer false, and a " +
+                "press that spends that long with nothing moving is the press the " +
+                "viewer repeats and the repeat cancels mid-flight",
+            chipAsk in 0 until cardAsk
+        )
+        assertTrue(
+            "and the card is still asked when the chip row cannot take it - the " +
+                "section is never given up on while it has something focusable",
+            cardAsk > chipAsk &&
+                seasonOrEpisode.contains("episodeFocusRequesters[season to episodeNum]")
+        )
+    }
+
+    @Test
     fun `the chain's own landing keeps its contract for its other caller`() {
         assertTrue(
             "the season-chip fallback stays in focusSeasonOrEpisode: the GENRE->EPISODES " +

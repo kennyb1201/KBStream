@@ -99,7 +99,19 @@ class DetailTraceDiagnosticsContractTest {
             detail.contains("} finally {") &&
                 detail.substringAfter("} finally {").contains("DetailTrace.note(")
         )
-        val vias = listOf("\"toggle\"", "\"chain\"", "\"geometry\"", "\"edge\"")
+        // 2026-11-15: `edge` is gone from the vocabulary. A move that named a row
+        // and placed it nowhere is `blocked`; one a newer press cancelled is
+        // `cancelled`; one the chain had no row for is `none` (the default, and
+        // the one build 322's paste mistook for a verdict).
+        val vias =
+            listOf(
+                "\"toggle\"",
+                "\"chain\"",
+                "\"geometry\"",
+                "\"blocked\"",
+                "\"cancelled\"",
+                "\"none\""
+            )
         vias.forEach { via ->
             assertTrue("the via field names $via", detail.contains("tracedVia = $via"))
         }

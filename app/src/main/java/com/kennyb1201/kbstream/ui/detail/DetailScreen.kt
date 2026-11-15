@@ -207,6 +207,7 @@ import com.kennyb1201.kbstream.ui.theme.kbAccentIndexState
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.ui.components.StudioChip
 import com.kennyb1201.kbstream.ui.mobile.DetailScreenMobile
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -2709,9 +2710,20 @@ fun DetailScreen(
     }
 
     /**
-     * Puts focus on the episode card the page is aimed at - or, with no target
-     * episode, on the season chip the viewer is inside - and reports whether
-     * the focus actually landed.
+     * Puts focus on the episode section's SEASON CHIP - the row's entry, and the
+     * one thing in the section that is always there to take a press - and, only
+     * when the chip row cannot take it, on the episode card the page is aimed
+     * at. Reports whether the focus actually landed.
+     *
+     * The order is the amendment to spec 2026-11-14 (build 322's paste). It used
+     * to ask for the target CARD first, and that path scrolls the episode row
+     * and then retries for the whole [RETURN_FOCUS_STEPS] budget - about 700ms
+     * with the scroll's own delay - before it can answer. On the field build a
+     * DOWN from the keywords row spent that long with nothing moving, so the
+     * viewer pressed again, and a second press cancels the move in flight (see
+     * `startFocusMove`): the walk's trace shows the move stopped with the row it
+     * named and no landing, which is the "DOWN dies on keywords" report. The
+     * chips answer on the first ask, so the section is reached in a frame.
      *
      * Both branches keep the same two-step shape [focusSeasonChip] was fixed
      * to use: the request is retried while the lazy rail composes the card, and
@@ -2740,6 +2752,35 @@ fun DetailScreen(
             season = currentSeason.value
             waitedForSeason += 1
         }
+        // The section's entry, and the row the ring draws: the chip for the
+        // season on screen. It is composed whenever the section is, so this ask
+        // lands on the first frame - which is what makes a DOWN out of the rows
+        // above it a move the viewer can see instead of a press that spends a
+        // second failing.
+        val seasonRequester = season?.let {
+            seasonFocusRequesters[it]
+        }
+
+        if (seasonRequester != null) {
+            var attempts = 0
+            while (attempts < RETURN_FOCUS_STEPS) {
+                if (
+                    runCatching {
+                        seasonRequester.requestFocus()
+                    }.getOrDefault(false)
+                ) {
+                    return true
+                }
+                delay(RETURN_FOCUS_DELAY_MS)
+                attempts++
+            }
+        }
+
+        // Only then the card the page is aimed at, for a section whose chip row
+        // exists but will not take the focus (a season swap mid-flight keeps the
+        // old row composed for a frame). Same shape as before: the episode row is
+        // lazy, so an off-screen card is not composed and requestFocus() would
+        // silently no-op - scroll it in first, then retry while it composes.
         val episodeNum = targetEpisodeNumber
 
         val episodeRequester =
@@ -2750,9 +2791,6 @@ fun DetailScreen(
             }
 
         if (episodeRequester != null) {
-            // The episode row is lazy, so an off-screen target card isn't
-            // composed yet and requestFocus() would silently no-op. Scroll it
-            // into view first, then retry the focus while the row composes.
             val targetIndex = targetEpisodeIndex
             if (targetIndex >= 0) {
                 runCatching { episodesRowState.scrollToItem(targetIndex) }
@@ -2764,26 +2802,6 @@ fun DetailScreen(
                 if (
                     runCatching {
                         episodeRequester.requestFocus()
-                    }.getOrDefault(false)
-                ) {
-                    return true
-                }
-                delay(RETURN_FOCUS_DELAY_MS)
-                attempts++
-            }
-            return false
-        }
-
-        val seasonRequester = season?.let {
-            seasonFocusRequesters[it]
-        }
-
-        if (seasonRequester != null) {
-            var attempts = 0
-            while (attempts < RETURN_FOCUS_STEPS) {
-                if (
-                    runCatching {
-                        seasonRequester.requestFocus()
                     }.getOrDefault(false)
                 ) {
                     return true
@@ -3318,7 +3336,12 @@ fun DetailScreen(
         // visible as one that never landed.
         var tracedTarget: DetailRow? = null
         var tracedLanded = false
-        var tracedVia = "edge"
+        // NOT "edge". This default is what build 322's paste printed for a DOWN
+        // the chain had named a row for - see the cancel arm below - and an
+        // "edge" label on a move that never reached a verdict sent the first
+        // reading of that paste after the wrong link entirely. A move that stops
+        // early now says so.
+        var tracedVia = "none"
         // F2 (detail-down-wait): the loading state the press ARRIVED in, taken
         // before the wait can change it - a move that started loading and ended
         // loaded is exactly the evidence the next paste needs, and reading the
@@ -3474,18 +3497,24 @@ fun DetailScreen(
             // for every frame of it. The second attempt runs after the settle,
             // with a fresh reveal, and only for a press that is mid-page - a real
             // edge has nowhere to aim and is still consumed where it is.
-            if (!DetailFocusChain.isPageEdge(from, direction, settledRows)) {
-                val secondAsk =
-                    if (target == DetailRow.MEDIA && direction == DetailFocusDirection.DOWN) {
-                        focusMediaStrip(from)
-                    } else {
-                        focusRow(target, fromColumn, from, direction, settledRows)
-                    }
-                if (secondAsk) {
-                    tracedVia = "chain"
-                    tracedLanded = true
-                    return true
+            // NOT gated on an edge verdict. A target the chain found IS the proof
+            // that this page has a row that way ([DetailFocusChain.nextRow] only
+            // ever answers with a row it exists on), so a second, independent
+            // presence read can never be allowed to call the press the end of the
+            // page and skip the retry that follows. The two reads are one snapshot
+            // here - `settledRows` - and that is the point: an edge verdict that
+            // contradicts the row the press just aimed at is a bug, and this is
+            // where it used to be able to happen.
+            val secondAsk =
+                if (target == DetailRow.MEDIA && direction == DetailFocusDirection.DOWN) {
+                    focusMediaStrip(from)
+                } else {
+                    focusRow(target, fromColumn, from, direction, settledRows)
                 }
+            if (secondAsk) {
+                tracedVia = "chain"
+                tracedLanded = true
+                return true
             }
 
             // Nothing landed - not the row the press aimed at, not any row beyond
@@ -3511,13 +3540,20 @@ fun DetailScreen(
             // landing for a DOWN press that has a row below it; the row below is
             // (see [DetailFocusChain.toggleDownRow] for the toggle's own press).
             //
-            // The edge rule is untouched: a press at a REAL edge - DOWN off the
-            // last row, UP off the header or the genres - is still consumed where
-            // it is.
-            tracedVia =
-                if (DetailFocusChain.isPageEdge(from, direction, settledRows)) "edge"
-                else "geometry"
+            // A press at a REAL edge never reaches this line: the chain answers
+            // null instead of a target and the move returns there, so the focus
+            // stays where it is - unchanged. Reaching here means the page HAS a
+            // row that way and nothing would take the focus, which is a miss to
+            // name, not an edge to disguise as one.
+            tracedVia = "blocked"
             return false
+        } catch (cancelled: CancellationException) {
+            // A newer press cancels the move in flight ([startFocusMove]), and a
+            // cancel is neither a landing nor an edge. It is still a line - the
+            // press happened - and naming it is what stops a cancelled move being
+            // read as "the chain had nowhere to go".
+            tracedVia = "cancelled"
+            throw cancelled
         } finally {
             DetailTrace.note(
                 "detail move $from $direction -> ${tracedTarget ?: "none"} " +

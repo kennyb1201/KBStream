@@ -93,7 +93,7 @@ class DetailRowWaitOnFailContractTest {
         )
         val wait = move.slice(
             "if (rowsStillArriving() || DetailFocusChain.exists(target, settledRows)) {",
-            "if (!DetailFocusChain.isPageEdge(from, direction, settledRows)) {"
+            "val secondAsk ="
         )
         assertTrue(
             "exactly one re-ask inside the wait: the first failed landing, then one " +
@@ -130,8 +130,16 @@ class DetailRowWaitOnFailContractTest {
             move.contains("val toggleLanded = focusOverviewToggle()")
         )
         assertTrue(
-            "the edge verdict still ends the move exactly as it did",
-            move.contains("if (DetailFocusChain.isPageEdge(from, direction, settledRows)) \"edge\"")
+            "the edge still ends the move exactly as it did - the chain answers null " +
+                "and nothing is attempted, so the focus stays put",
+            move.contains("nextRow(from, direction, settledRows) ?: return false")
+        )
+        assertTrue(
+            "and 2026-11-15: a target that placed nowhere is `blocked`, a cancelled " +
+                "move is `cancelled`, and neither can borrow the `edge` label any more",
+            move.contains("tracedVia = \"blocked\"") &&
+                move.contains("tracedVia = \"cancelled\"") &&
+                !move.contains("tracedVia = \"edge\"")
         )
         assertTrue(
             "and the audit's UP fix still runs BEFORE the wait, so an UP that lost " +
@@ -147,7 +155,7 @@ class DetailRowWaitOnFailContractTest {
             .substringBefore("tracedVia = \"chain\"")
         val wait = move.slice(
             "if (rowsStillArriving() || DetailFocusChain.exists(target, settledRows)) {",
-            "if (!DetailFocusChain.isPageEdge(from, direction, settledRows)) {"
+            "val secondAsk ="
         )
         assertTrue(
             "the Media row's DOWN is still the strip, first time and on the retry - " +
@@ -190,7 +198,7 @@ class DetailRowWaitOnFailContractTest {
     @Test
     fun `a real edge still ends the move without waiting`() {
         val gate = "if (rowsStillArriving() || DetailFocusChain.exists(target, settledRows)) {"
-        val wait = move.slice(gate, "if (!DetailFocusChain.isPageEdge(from, direction, settledRows)) {")
+        val wait = move.slice(gate, "val secondAsk =")
         assertTrue(
             "F3: one bounded wait and nothing else - no second loop, no raised budget",
             wait.count("while (") == 1 &&

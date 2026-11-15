@@ -209,24 +209,40 @@ class DetailGenreTrapAndSeeMoreTest {
             !move.contains("val toggleLanded = focusOverviewToggle()") &&
                 Regex("focusOverviewToggle\\(\\)").findAll(move).count() == 1
         )
-        val secondAsk =
-            move.indexOf("if (!DetailFocusChain.isPageEdge(from, direction, settledRows)) {")
+        val secondAsk = move.indexOf("val secondAsk =")
         val fallThrough =
             move.indexOf("val fellThrough = fallThroughIfMidPage(from, direction, settledRows)")
         assertTrue(
             "instead, the row the press aimed at is asked again, with the presence " +
-                "that settled, before the platform's search gets the press",
+                "that settled and with no edge verdict in front of it, before the " +
+                "platform's search gets the press",
             secondAsk in 0 until fallThrough &&
-                move.substringAfter(
-                    "if (!DetailFocusChain.isPageEdge(from, direction, settledRows)) {"
-                ).substringBefore("val fellThrough").contains(
-                    "focusRow(target, fromColumn, from, direction, settledRows)"
-                )
+                move.substringAfter("val secondAsk =")
+                    .substringBefore("val fellThrough")
+                    .contains("focusRow(target, fromColumn, from, direction, settledRows)")
         )
         assertTrue(
             "and the edge still ends the move: a press with nowhere to aim is still " +
-                "consumed where it is",
-            move.contains("if (DetailFocusChain.isPageEdge(from, direction, settledRows)) \"edge\"")
+                "consumed where it is - the chain answers null and the move returns " +
+                "before any landing is attempted",
+            move.contains("nextRow(from, direction, settledRows) ?: return false")
+        )
+        assertTrue(
+            "2026-11-15 amendment: a move that named a row and placed it nowhere is " +
+                "labelled `blocked`, never `edge` - and one that was cancelled by a " +
+                "newer press says `cancelled`. Build 322's paste showed the old " +
+                "default (`edge`) on a row the chain had named, which read as a " +
+                "verdict and sent the first diagnosis after the wrong link",
+            move.contains("tracedVia = \"blocked\"") &&
+                move.contains("catch (cancelled: CancellationException) {") &&
+                move.contains("tracedVia = \"cancelled\"") &&
+                move.contains("var tracedVia = \"none\"") &&
+                !move.contains("tracedVia = \"edge\"")
+        )
+        assertTrue(
+            "and the second ask is not gated on an edge verdict at all: a target the " +
+                "chain found is the proof that the page has a row that way",
+            !move.contains("if (!DetailFocusChain.isPageEdge(from, direction, settledRows)) {")
         )
 
         val ask = member("suspend fun focusOverviewToggle(): Boolean {", "suspend fun focusTopOfPage(")
