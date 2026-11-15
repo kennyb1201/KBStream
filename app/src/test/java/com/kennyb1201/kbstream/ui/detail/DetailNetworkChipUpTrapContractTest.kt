@@ -98,7 +98,7 @@ class DetailNetworkChipUpTrapContractTest {
             "the row a press lands on is the nearest one that exists, walked " +
                 "from the one list",
             move.contains(
-                "val target = DetailFocusChain.nextRow(from, direction, presence) ?: return false"
+                "val target = DetailFocusChain.nextRow(from, direction, settledRows) ?: return false"
             )
         )
         assertFalse(

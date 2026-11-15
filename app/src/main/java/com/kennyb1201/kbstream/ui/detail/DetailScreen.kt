@@ -3338,7 +3338,14 @@ fun DetailScreen(
                 return true
             }
 
-            val target = DetailFocusChain.nextRow(from, direction, presence) ?: return false
+            // F2 (2026-11-14): the TARGET is read from the settled rows too, not
+            // just the toggle stop above. The pressing rail is not always the one
+            // composed last - the genre chips live in the fixed header and are
+            // composed before the list has said what it holds - so a captured
+            // presence can name the wrong row for this press, and the chain then
+            // walks to a row the page does not have (or steps over one it does).
+            // The same F7 staleness the toggle's own DOWN already guards.
+            val target = DetailFocusChain.nextRow(from, direction, settledRows) ?: return false
             tracedTarget = target
             // The press's own intent, recorded where every chain move passes:
             // the episode effects stop placing the focus once the viewer has
@@ -3360,7 +3367,7 @@ fun DetailScreen(
                 Log.w(
                     TAG,
                     "GENRE DOWN stepped over KEYWORDS: hasKeywordsRow=" +
-                        "${presence.hasKeywordsRow}, target=$target, visibleKeys=" +
+                        "${settledRows.hasKeywordsRow}, target=$target, visibleKeys=" +
                         detailListState.layoutInfo.visibleItemsInfo.map { it.key }
                 )
             }
@@ -3423,7 +3430,7 @@ fun DetailScreen(
             // The retry re-runs the landing for the SAME target with the presence
             // that settled, because the row the press aimed at is still the row
             // it means; nothing below it was ever asked for.
-            if (rowsStillArriving() || DetailFocusChain.exists(target, presence)) {
+            if (rowsStillArriving() || DetailFocusChain.exists(target, settledRows)) {
                 var waited = 0
                 // A press that arrived while the page was loading stops the
                 // moment the load does. A press that arrived on a settled page
@@ -3456,6 +3463,31 @@ fun DetailScreen(
                 }
             }
 
+            // F2 (2026-11-14): the row the press aimed at gets one more honest
+            // attempt before the press is handed to the platform. The reported
+            // cycle turned on this link - DOWN from the genres would not land the
+            // tag rail, and the press ended on the overview's toggle, whose own
+            // DOWN sent it back up to the genres. The first attempt runs while
+            // the route is still being composed and its budget can be spent on
+            // the wrong frame: the list had just been scrolled (up the page and
+            // back), so the rail it aims at may have been between compositions
+            // for every frame of it. The second attempt runs after the settle,
+            // with a fresh reveal, and only for a press that is mid-page - a real
+            // edge has nowhere to aim and is still consumed where it is.
+            if (!DetailFocusChain.isPageEdge(from, direction, settledRows)) {
+                val secondAsk =
+                    if (target == DetailRow.MEDIA && direction == DetailFocusDirection.DOWN) {
+                        focusMediaStrip(from)
+                    } else {
+                        focusRow(target, fromColumn, from, direction, settledRows)
+                    }
+                if (secondAsk) {
+                    tracedVia = "chain"
+                    tracedLanded = true
+                    return true
+                }
+            }
+
             // Nothing landed - not the row the press aimed at, not any row beyond
             // it - and this is where the press used to be swallowed with the
             // focus unmoved. Only the two real edges of the page may still do
@@ -3463,33 +3495,27 @@ fun DetailScreen(
             // geometric search, which is a move the viewer can see, rather than a
             // key the page took and did nothing with (see
             // [fallThroughIfMidPage]).
-            val fellThrough = fallThroughIfMidPage(from, direction, presence)
+            val fellThrough = fallThroughIfMidPage(from, direction, settledRows)
             tracedVia = "geometry"
             tracedLanded = fellThrough
             if (fellThrough) return true
 
-            // And when the platform's search finds nothing either, a mid-page
-            // DOWN still has one honest landing: the overview's toggle. It is on
-            // screen, focusable, and its own DOWN routes back to the genres, so a
-            // press that ends there is a visible move rather than a dead remote -
-            // the reported trap on a title whose episode section was not ready to
-            // be placed (see [focusOverviewToggle]).
+            // F2 (2026-11-14): the fall-through NO LONGER ends on the overview's
+            // toggle. It used to - "a mid-page DOWN still has one honest
+            // landing" - and that arm is what closed the reported cycle: the
+            // toggle is drawn INSIDE the list, below the genre chips, so a press
+            // that lands there has moved DOWN a row but holds a stop whose own
+            // DOWN climbs back UP to the genres. Two stops and no third: DOWN
+            // from the genres reached no further than the toggle, and DOWN from
+            // the toggle reached no further than the genres. The toggle is not a
+            // landing for a DOWN press that has a row below it; the row below is
+            // (see [DetailFocusChain.toggleDownRow] for the toggle's own press).
             //
             // The edge rule is untouched: a press at a REAL edge - DOWN off the
             // last row, UP off the header or the genres - is still consumed where
-            // it is, which is why the edge is asked again here rather than
-            // trusting the fall-through's false to mean "mid-page".
-            if (
-                direction == DetailFocusDirection.DOWN &&
-                !DetailFocusChain.isPageEdge(from, direction, presence)
-            ) {
-                val toggleLanded = focusOverviewToggle()
-                tracedVia = "toggle"
-                tracedLanded = toggleLanded
-                return toggleLanded
-            }
+            // it is.
             tracedVia =
-                if (DetailFocusChain.isPageEdge(from, direction, presence)) "edge"
+                if (DetailFocusChain.isPageEdge(from, direction, settledRows)) "edge"
                 else "geometry"
             return false
         } finally {
@@ -3855,9 +3881,14 @@ fun DetailScreen(
                     )
                     false
                 } else {
+                    // F2 (2026-11-14): the row UNDER the toggle, not the genres
+                    // painted above it. See [DetailFocusChain.toggleDownRow] for
+                    // the two-stop cycle this closes: a DOWN out of the toggle
+                    // used to climb back up to the genre chips, which sent the
+                    // next DOWN straight back to the toggle.
                     startFocusMove {
                         moveFocusVertical(
-                            DetailRow.HEADER,
+                            DetailFocusChain.toggleDownRow(settled),
                             DetailFocusDirection.DOWN,
                             0,
                             latestRowPresence.value
@@ -5867,8 +5898,24 @@ fun DetailScreen(
                                                 // D-pad route onto it at all (see
                                                 // [focusOverviewToggle]).
                                                 .focusRequester(overviewToggleRequester)
+                                                // E1 (2026-11-14): the arrival the
+                                                // reported cycle turned on. A DOWN
+                                                // from the genres that lands HERE
+                                                // reads in the move line as
+                                                // `via=geometry`, which cannot say
+                                                // WHICH view the search found - so
+                                                // the toggle says when it took the
+                                                // focus, and the next paste names
+                                                // the link in one line.
+                                                .onFocusChanged {
+                                                    if (it.isFocused) {
+                                                        DetailTrace.note(
+                                                            "detail toggle took the focus"
+                                                        )
+                                                    }
+                                                }
                                                 // UP is the header, DOWN is the
-                                                // first row this page has, in
+                                                // first row BELOW the toggle, in
                                                 // this toggle's borrowed
                                                 // position (see
                                                 // overviewToggleVerticalFocus).

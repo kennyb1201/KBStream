@@ -86,9 +86,15 @@ class DetailToggleDownTrapContractTest {
                 "not the composition-time one - with the stale list, HEADER+DOWN " +
                 "read as a page edge and the press had nowhere to go",
             toggleHandler.contains(
-                "moveFocusVertical( DetailRow.HEADER, DetailFocusDirection.DOWN, " +
-                    "0, latestRowPresence.value ?: settled )"
+                "moveFocusVertical( DetailFocusChain.toggleDownRow(settled), " +
+                    "DetailFocusDirection.DOWN, 0, latestRowPresence.value ?: settled )"
             )
+        )
+        assertTrue(
+            "and 2026-11-14 changes WHERE that DOWN lands: the row under the toggle, " +
+                "not the genre chips painted above it - see DetailFocusChainTest," +
+                "toggleDownRow",
+            toggleHandler.contains("DetailFocusChain.toggleDownRow(settled)")
         )
     }
 
@@ -132,11 +138,12 @@ class DetailToggleDownTrapContractTest {
     @Test
     fun `a press the page can place is consumed and moved`() {
         assertTrue(
-            "the kept branch runs the move through the chain's HEADER position and " +
+            "the kept branch runs the move from the row BELOW the toggle and " +
                 "returns true",
             toggleHandler.contains(
-                "} else { startFocusMove { moveFocusVertical( DetailRow.HEADER, " +
-                    "DetailFocusDirection.DOWN, 0, latestRowPresence.value ?: settled )"
+                "} else { startFocusMove { moveFocusVertical( " +
+                    "DetailFocusChain.toggleDownRow(settled), DetailFocusDirection.DOWN, " +
+                    "0, latestRowPresence.value ?: settled )"
             )
         )
     }
@@ -202,9 +209,11 @@ class DetailToggleDownTrapContractTest {
     @Test
     fun `UP out of the first row still lands on the toggle`() {
         assertEquals(
-            "the declaration, the UP route and the DOWN last resort: the toggle " +
-                "is still the UP-only stop, and only its DOWN changed",
-            3,
+            "the declaration and the UP route: the toggle is the UP-only stop for " +
+                "ARRIVAL, and the DOWN last resort is gone (spec 2026-11-14, F2 - a " +
+                "mid-page DOWN no longer ends on the toggle, which is what closed the " +
+                "genre/View-more cycle)",
+            2,
             Regex("focusOverviewToggle\\(\\)").findAll(detail).count()
         )
         assertTrue(

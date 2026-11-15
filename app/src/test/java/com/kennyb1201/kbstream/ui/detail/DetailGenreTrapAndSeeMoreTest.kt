@@ -194,25 +194,39 @@ class DetailGenreTrapAndSeeMoreTest {
         )
     }
 
-    // ── T3: the fall-through lands on the toggle ───────────────────────────
+    // ── T3: the fall-through does NOT land on the toggle (2026-11-14) ──────
 
     @Test
-    fun `a DOWN press the chain cannot place lands on the overview toggle`() {
+    fun `a DOWN press the chain cannot place no longer lands on the overview toggle`() {
         val move = member("suspend fun moveFocusVertical(", "fun detailRowVerticalFocus(")
-        val fallThrough = move.indexOf("val fellThrough = fallThroughIfMidPage(from, direction, presence)")
-        val toggle = move.indexOf("val toggleLanded = focusOverviewToggle()")
         assertTrue(
-            "the platform's search is tried first and the toggle is the stop " +
-                "after it, so the existing default search keeps its primacy",
-            fallThrough in 0 until toggle
+            "F2: the DOWN last resort onto the toggle is gone. It was what closed " +
+                "the reported cycle - the toggle is drawn INSIDE the list, below the " +
+                "genre chips, and its own DOWN climbs back up to them, so the pair " +
+                "was genre -> View more -> genre with the tag rail one press below. " +
+                "The UP route is the one that stays, so the toggle is asked exactly " +
+                "once in this function",
+            !move.contains("val toggleLanded = focusOverviewToggle()") &&
+                Regex("focusOverviewToggle\\(\\)").findAll(move).count() == 1
+        )
+        val secondAsk =
+            move.indexOf("if (!DetailFocusChain.isPageEdge(from, direction, settledRows)) {")
+        val fallThrough =
+            move.indexOf("val fellThrough = fallThroughIfMidPage(from, direction, settledRows)")
+        assertTrue(
+            "instead, the row the press aimed at is asked again, with the presence " +
+                "that settled, before the platform's search gets the press",
+            secondAsk in 0 until fallThrough &&
+                move.substringAfter(
+                    "if (!DetailFocusChain.isPageEdge(from, direction, settledRows)) {"
+                ).substringBefore("val fellThrough").contains(
+                    "focusRow(target, fromColumn, from, direction, settledRows)"
+                )
         )
         assertTrue(
-            "and only mid-page: a press at a real edge is still consumed where " +
-                "it is, which is why the edge is asked again here",
-            move.contains(
-                "direction == DetailFocusDirection.DOWN && " +
-                    "!DetailFocusChain.isPageEdge(from, direction, presence)"
-            )
+            "and the edge still ends the move: a press with nowhere to aim is still " +
+                "consumed where it is",
+            move.contains("if (DetailFocusChain.isPageEdge(from, direction, settledRows)) \"edge\"")
         )
 
         val ask = member("suspend fun focusOverviewToggle(): Boolean {", "suspend fun focusTopOfPage(")
@@ -303,12 +317,14 @@ class DetailGenreTrapAndSeeMoreTest {
             )
         )
         assertTrue(
-            "and DOWN is the genres, through HEADER's chain position - asked with " +
-                "the presence that landed, the captured one being only the " +
-                "fallback for a press that arrives before anything has",
+            "and DOWN is the first row BELOW the toggle - asked with the presence " +
+                "that landed, the captured one being only the fallback for a press " +
+                "that arrives before anything has. It used to be the genres, through " +
+                "HEADER's borrowed position, which is a row painted ABOVE the toggle " +
+                "and the other half of the reported cycle",
             toggleHandler.contains(
-                "moveFocusVertical( DetailRow.HEADER, DetailFocusDirection.DOWN, 0, " +
-                    "latestRowPresence.value ?: settled )"
+                "moveFocusVertical( DetailFocusChain.toggleDownRow(settled), " +
+                    "DetailFocusDirection.DOWN, 0, latestRowPresence.value ?: settled )"
             )
         )
         assertTrue(
@@ -324,10 +340,10 @@ class DetailGenreTrapAndSeeMoreTest {
     fun `exactly one place routes onto the toggle, and it is the UP walk`() {
         val asks = Regex("focusOverviewToggle\\(\\)").findAll(detail).count()
         assertEquals(
-            "the declaration, the UP route, and the DOWN last resort - a third " +
-                "caller would be a second route onto the toggle, which the report " +
-                "asked not to add",
-            3,
+            "the declaration and the UP route - a third caller would be a second " +
+                "route onto the toggle, which the report asked not to add, and the " +
+                "DOWN last resort of 2026-11-14's spec is gone",
+            2,
             asks
         )
         assertEquals(

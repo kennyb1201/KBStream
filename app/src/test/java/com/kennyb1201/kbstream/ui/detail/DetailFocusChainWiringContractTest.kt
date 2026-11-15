@@ -188,7 +188,7 @@ class DetailFocusChainWiringContractTest {
     fun `the move reads the chain and lands through focusRow`() {
         assertTrue(
             detail.contains(
-                "val target = DetailFocusChain.nextRow(from, direction, presence) ?: return false"
+                "val target = DetailFocusChain.nextRow(from, direction, settledRows) ?: return false"
             )
         )
         assertTrue(
@@ -196,7 +196,7 @@ class DetailFocusChainWiringContractTest {
                 "landed nowhere is what the page has to notice (see the fall-through " +
                 "to the default search below)",
             detail.contains("val landed = if (target == DetailRow.MEDIA") &&
-                detail.contains("focusRow(target, fromColumn, from, direction, presence)")
+                detail.contains("focusRow(target, fromColumn, from, direction, settledRows)")
         )
         assertTrue(
             "and the one row the move does NOT land through focusRow is the " +
@@ -569,7 +569,7 @@ class DetailFocusChainWiringContractTest {
         assertTrue(
             "the unlanded move hands the press to the page's one fall-through " +
                 "rather than consuming it",
-            move.contains("val fellThrough = fallThroughIfMidPage(from, direction, presence)") &&
+            move.contains("val fellThrough = fallThroughIfMidPage(from, direction, settledRows)") &&
                 move.contains("if (fellThrough) return true")
         )
         assertTrue(

@@ -643,4 +643,47 @@ class DetailFocusChainTest {
             )
         )
     }
+
+    // ── DOWN out of the toggle goes DOWN (spec 2026-11-14) ────────────────
+
+    @Test
+    fun `DOWN out of the toggle is the row below it, not the genres above it`() {
+        assertEquals(
+            "the reported cycle: DOWN from the genres fell through to the toggle, " +
+                "and DOWN from the toggle climbed back to the genres. The toggle is " +
+                "drawn under the genre chips, so the row BELOW it is the tag rail - " +
+                "the row the press that landed there was aiming at",
+            DetailRow.KEYWORDS,
+            DetailFocusChain.toggleDownRow(presence(genre = true, keywords = true))
+        )
+        assertEquals(
+            "and on a title with no tags it is the episode section, which is where a " +
+                "DOWN from the genres would have gone anyway - the Dark Marvels page " +
+                "walks the same rows, one stop further down",
+            DetailRow.EPISODES,
+            DetailFocusChain.toggleDownRow(presence(genre = true, episodes = true))
+        )
+        assertEquals(
+            "past the rails the chain steps over: a page with no tags and no episodes " +
+                "lands on its next real row rather than skipping it",
+            DetailRow.PEOPLE,
+            DetailFocusChain.toggleDownRow(presence(genre = true, people = true))
+        )
+    }
+
+    @Test
+    fun `a page with nothing below the genres still moves DOWN off the toggle`() {
+        assertEquals(
+            "the one page this would otherwise strand: genres and nothing else. The " +
+                "fallback is the genres themselves - a real move, not a key taken and " +
+                "nothing done with it",
+            DetailRow.GENRE,
+            DetailFocusChain.toggleDownRow(presence(genre = true))
+        )
+        assertEquals(
+            "and on a page with no genre row either, the first row the page does have",
+            DetailRow.MEDIA,
+            DetailFocusChain.toggleDownRow(presence(media = true))
+        )
+    }
 }

@@ -87,7 +87,7 @@ class DetailTopFallThroughContractTest {
         val arm = move.indexOf(
             "if (target == DetailRow.HEADER && direction == DetailFocusDirection.UP) {"
         )
-        val edge = move.indexOf("val fellThrough = fallThroughIfMidPage(from, direction, presence)")
+        val edge = move.indexOf("val fellThrough = fallThroughIfMidPage(from, direction, settledRows)")
 
         assertTrue("the landing's own answer is read first", landed >= 0)
         assertTrue(

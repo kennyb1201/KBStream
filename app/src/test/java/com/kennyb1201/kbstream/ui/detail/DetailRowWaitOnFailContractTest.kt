@@ -62,7 +62,7 @@ class DetailRowWaitOnFailContractTest {
                 "target the chain found is a row this page has, and the chips it " +
                 "cannot reach yet are one composition late, not one load late",
             move.contains(
-                "if (rowsStillArriving() || DetailFocusChain.exists(target, presence)) {"
+                "if (rowsStillArriving() || DetailFocusChain.exists(target, settledRows)) {"
             )
         )
         assertTrue(
@@ -92,11 +92,13 @@ class DetailRowWaitOnFailContractTest {
             move.contains("focusRow(target, fromColumn, from, direction, settled)")
         )
         val wait = move.slice(
-            "if (rowsStillArriving() || DetailFocusChain.exists(target, presence)) {",
-            "val fellThrough = fallThroughIfMidPage("
+            "if (rowsStillArriving() || DetailFocusChain.exists(target, settledRows)) {",
+            "if (!DetailFocusChain.isPageEdge(from, direction, settledRows)) {"
         )
         assertTrue(
-            "exactly one re-ask: the first failed landing, then one retry",
+            "exactly one re-ask inside the wait: the first failed landing, then one " +
+                "retry - the second, post-settle attempt of 2026-11-14's F2 is a " +
+                "separate step and is pinned in DetailGenreTrapAndSeeMoreTest",
             wait.count("focusRow(") == 1 && wait.count("focusMediaStrip(") == 1
         )
         assertTrue(
@@ -109,9 +111,9 @@ class DetailRowWaitOnFailContractTest {
     }
 
     @Test
-    fun `the wait sits before the toggle, edge and geometry tail`() {
+    fun `the wait sits before the retry, edge and geometry tail`() {
         val waitAt =
-            move.indexOf("if (rowsStillArriving() || DetailFocusChain.exists(target, presence)) {")
+            move.indexOf("if (rowsStillArriving() || DetailFocusChain.exists(target, settledRows)) {")
         assertTrue("the wait exists", waitAt > 0)
         assertTrue(
             "F1: it runs after the landing it rescues",
@@ -121,13 +123,15 @@ class DetailRowWaitOnFailContractTest {
             "and before the fall-through that used to be the end of a loading press",
             waitAt < move.indexOf("val fellThrough = fallThroughIfMidPage(")
         )
-        assertTrue(
-            "before the toggle fallback, which is unchanged",
-            waitAt < move.indexOf("val toggleLanded = focusOverviewToggle()")
+        assertFalse(
+            "the toggle fallback after the search is gone (spec 2026-11-14, F2): a " +
+                "mid-page DOWN never ends on the overview, which is what made the " +
+                "genre/View-more pair a cycle instead of a walk",
+            move.contains("val toggleLanded = focusOverviewToggle()")
         )
         assertTrue(
             "the edge verdict still ends the move exactly as it did",
-            move.contains("if (DetailFocusChain.isPageEdge(from, direction, presence)) \"edge\"")
+            move.contains("if (DetailFocusChain.isPageEdge(from, direction, settledRows)) \"edge\"")
         )
         assertTrue(
             "and the audit's UP fix still runs BEFORE the wait, so an UP that lost " +
@@ -142,8 +146,8 @@ class DetailRowWaitOnFailContractTest {
         val firstAsk = move.substringAfter("val landed =")
             .substringBefore("tracedVia = \"chain\"")
         val wait = move.slice(
-            "if (rowsStillArriving() || DetailFocusChain.exists(target, presence)) {",
-            "val fellThrough = fallThroughIfMidPage("
+            "if (rowsStillArriving() || DetailFocusChain.exists(target, settledRows)) {",
+            "if (!DetailFocusChain.isPageEdge(from, direction, settledRows)) {"
         )
         assertTrue(
             "the Media row's DOWN is still the strip, first time and on the retry - " +
@@ -185,8 +189,8 @@ class DetailRowWaitOnFailContractTest {
 
     @Test
     fun `a real edge still ends the move without waiting`() {
-        val gate = "if (rowsStillArriving() || DetailFocusChain.exists(target, presence)) {"
-        val wait = move.slice(gate, "val fellThrough = fallThroughIfMidPage(")
+        val gate = "if (rowsStillArriving() || DetailFocusChain.exists(target, settledRows)) {"
+        val wait = move.slice(gate, "if (!DetailFocusChain.isPageEdge(from, direction, settledRows)) {")
         assertTrue(
             "F3: one bounded wait and nothing else - no second loop, no raised budget",
             wait.count("while (") == 1 &&
@@ -196,7 +200,7 @@ class DetailRowWaitOnFailContractTest {
         assertTrue(
             "and a real edge never reaches it: no row that way is still answered " +
                 "where it always was, before the wait",
-            move.indexOf("nextRow(from, direction, presence) ?: return false") in
+            move.indexOf("nextRow(from, direction, settledRows) ?: return false") in
                 0 until move.indexOf(gate)
         )
         assertFalse(

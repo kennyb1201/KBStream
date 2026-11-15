@@ -234,9 +234,11 @@ internal object DetailFocusChain {
     /**
      * Whether the overview's "View more" toggle may KEEP a DOWN press.
      *
-     * The toggle borrows [DetailRow.HEADER]'s chain position, so its DOWN is the
-     * first row this page has. The reported trap - "DOWN does nothing after
-     * going up", Dark Marvels - was that press being kept unconditionally: the
+     * The toggle borrows [DetailRow.HEADER]'s chain position for its UP; its DOWN
+     * asks the chain from BELOW the genres - the first row this page has inside
+     * the list ([toggleDownRow]), not the chips painted above it. The reported
+     * trap - "DOWN does nothing after going up", Dark Marvels - was that press
+     * being kept unconditionally: the
      * toggle's handler was composed before the seasons landed, its captured
      * [presence] said the page had no rows below, the chain answered null, the
      * fall-through read HEADER+DOWN as a page edge, and the key had already been
@@ -260,4 +262,34 @@ internal object DetailFocusChain {
     ): Boolean =
         rowsStillArriving ||
             nextRow(DetailRow.HEADER, DetailFocusDirection.DOWN, presence) != null
+
+    /**
+     * Where a DOWN out of the overview's "View more" toggle goes: the first row
+     * BELOW the toggle, which is the first row INSIDE the list - the tag rail on
+     * a title with tags, the episode section on one without.
+     *
+     * Not [DetailRow.GENRE], and that is the fix for the reported cycle. The
+     * toggle borrows [DetailRow.HEADER]'s chain position because UP out of it is
+     * the header (PLAY), and that is right. Its DOWN was borrowed too, and that
+     * was wrong: the toggle is not the header. It is drawn at the END of the
+     * overview block, INSIDE the list, so the genre chips it was sent back to are
+     * painted ABOVE it - the press moves up the screen while asking to go down.
+     *
+     * The reported trap (TCL, 2026-11-14, History's Greatest Heists): DOWN from
+     * the genres could not land the tag rail and fell through to the toggle, and
+     * DOWN from the toggle climbed back to the genres - round and round, with the
+     * tag rail one press below and unreachable. Two stops, both honest on their
+     * own, and no way out of the pair. Whatever else is wrong with the genre ->
+     * tags landing, the pair cannot close any more: DOWN from the toggle is the
+     * row underneath it.
+     *
+     * Falls back to [DetailRow.HEADER]'s DOWN - today's answer, the genres - for
+     * the one page this would otherwise strand: a title with nothing at all below
+     * the genres. There the genres are the only row the page has, and landing
+     * there is a real move rather than a key taken and nothing done with it.
+     */
+    fun toggleDownRow(presence: DetailRowPresence): DetailRow =
+        nextRow(DetailRow.GENRE, DetailFocusDirection.DOWN, presence)
+            ?: nextRow(DetailRow.HEADER, DetailFocusDirection.DOWN, presence)
+            ?: DetailRow.GENRE
 }
