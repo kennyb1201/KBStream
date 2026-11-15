@@ -269,12 +269,15 @@ class SportsHubDeepDiveContractTest {
                 "rolled over, which is the only window a Pacific evening's finished " +
                 "games are in",
             scoreboard.contains("EspnCacheRules.earlierViewerDay(now)") &&
-                scoreboard.contains("fetch(leaguePath, day)")
+                // The read is a helper now because it also carries the league's
+                // second subdivision window (FCS, spec 2026-11-14); the day it
+                // is asked for is unchanged.
+                scoreboard.contains("?.let { day -> readWindow(leaguePath, day) }")
         )
         assertTrue(
             "the two windows are merged by id, so a game in both is not listed twice",
-            scoreboard.contains("filter { game -> fetched.none { it.id == game.id } }") &&
-                scoreboard.contains("val fresh = if (viewerDayGames.isEmpty()) fetched else fetched + viewerDayGames")
+            scoreboard.contains("filter { game -> base.none { it.id == game.id } }") &&
+                scoreboard.contains("val fresh = if (viewerDayGames.isEmpty()) base else base + viewerDayGames")
         )
         assertTrue(
             "and the carry-over now compares against both windows, so it only " +

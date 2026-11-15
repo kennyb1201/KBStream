@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.sports
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Test
 
 /**
@@ -104,6 +105,52 @@ class EspnCacheRulesTest {
                 nowMs = now
             )
         )
+    }
+
+    // ── The second window (college football's FCS slate) ─────────────────
+
+    @Test
+    fun `two windows become one list, primary first, matched by id`() {
+        // The FCS window rides behind the default one: a game in both is ONE
+        // game, and the copy that stays is the default window's - the one the
+        // endpoint answered for the viewer's own day.
+        val primary = game(id = "fbs", dateMs = espnDateMs("2026-11-15T20:00Z"), GameState.UPCOMING)
+        val shared = game(id = "shared", dateMs = espnDateMs("2026-11-15T21:00Z"), GameState.LIVE)
+        val staleCopy = game(id = "shared", dateMs = espnDateMs("2026-11-15T21:00Z"), GameState.UPCOMING)
+        val fcs = game(id = "fcs", dateMs = espnDateMs("2026-11-15T22:00Z"), GameState.LIVE)
+
+        val merged = EspnCacheRules.mergeSubdivision(listOf(primary, shared), listOf(staleCopy, fcs))
+
+        assertEquals(listOf("fbs", "shared", "fcs"), merged.map { it.id })
+        assertSame(shared, merged[1])
+    }
+
+    @Test
+    fun `an empty or absent second window leaves the slate exactly as it was`() {
+        val primary = listOf(game(id = "fbs", dateMs = 1L, GameState.LIVE))
+
+        assertSame(primary, EspnCacheRules.mergeSubdivision(primary, emptyList()))
+    }
+
+    @Test
+    fun `a failed FCS read keeps tonight's games and drops older finals`() {
+        // S5: the tab must not blank when the second window fails. It keeps what
+        // it last showed while that is still worth showing - a game in progress,
+        // or one dated today - and does not resurrect yesterday's finals.
+        val now = espnDateMs("2026-11-15T04:00Z") // 11 PM ET on the 14th
+        val liveLastNight = game(id = "live-old", dateMs = espnDateMs("2026-11-14T02:00Z"), GameState.LIVE)
+        val finalTonight = game(id = "final-today", dateMs = espnDateMs("2026-11-15T01:00Z"), GameState.FINAL)
+        val finalLastNight = game(id = "final-old", dateMs = espnDateMs("2026-11-14T02:00Z"), GameState.FINAL)
+        val undated = game(id = "undated", dateMs = 0L, GameState.UPCOMING)
+        val stillListed = game(id = "fresh", dateMs = espnDateMs("2026-11-15T01:00Z"), GameState.LIVE)
+
+        val carried = EspnCacheRules.carryStaleSubdivision(
+            cached = listOf(liveLastNight, finalTonight, finalLastNight, undated, stillListed),
+            fresh = listOf(stillListed),
+            nowMs = now
+        )
+
+        assertEquals(listOf("live-old", "final-today"), carried.map { it.id })
     }
 
     private val hour = 60L * 60_000L

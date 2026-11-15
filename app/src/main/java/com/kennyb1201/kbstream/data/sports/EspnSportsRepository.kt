@@ -64,6 +64,10 @@ class EspnSportsRepository(
     /**
      * The games in [leaguePath], live/upcoming/final, newest event order as
      * ESPN sends it. Empty on a failure with nothing cached.
+     *
+     * College football is ONE list drawn from TWO windows: the default
+     * scoreboard is the FBS division, and the FCS slate (group 81) is only
+     * there under `?groups=81` - see [fcsWindow].
      */
     suspend fun scoreboard(leaguePath: String): List<SportsGame> {
         val cached = scoreboards[leaguePath]
@@ -82,6 +86,27 @@ class EspnSportsRepository(
             return cached?.value.orEmpty()
         }
         failed -= leaguePath
+        // ESPN's default college-football scoreboard is the FBS division; a game
+        // between two FCS sides is only in the `groups=81` window, so both are
+        // read and merged into the one list the hub and the guide already share.
+        // That is the whole of the gap Kenny hit on 2026-11-14: Idaho State at
+        // Montana was live, 7-7, and in neither place, because nothing ever
+        // asked for the window it lived in.
+        val base = if (leaguePath == COLLEGE_FOOTBALL) {
+            EspnCacheRules.mergeSubdivision(
+                fetched,
+                // A failed second window keeps what the tab showed a minute ago
+                // instead of dropping a third of the slate: stale beats empty
+                // here for the reason it does for the whole list.
+                fcsWindow() ?: EspnCacheRules.carryStaleSubdivision(
+                    cached?.value.orEmpty(),
+                    fetched,
+                    now
+                )
+            )
+        } else {
+            fetched
+        }
         // A viewer west of Eastern watches the feed's day roll over in the
         // middle of their evening, and from that moment the default window is
         // tomorrow's: tonight's finished games are on a day the endpoint has
@@ -91,13 +116,10 @@ class EspnSportsRepository(
         // with the default window's copy winning because it is the one the
         // endpoint just answered.
         val viewerDayGames = EspnCacheRules.earlierViewerDay(now)
-            ?.let { day ->
-                fetch(leaguePath, day)
-                    ?.let { body -> parseScoreboardOrNull(body, leaguePath) }
-            }
+            ?.let { day -> readWindow(leaguePath, day) }
             .orEmpty()
-            .filter { game -> fetched.none { it.id == game.id } }
-        val fresh = if (viewerDayGames.isEmpty()) fetched else fetched + viewerDayGames
+            .filter { game -> base.none { it.id == game.id } }
+        val fresh = if (viewerDayGames.isEmpty()) base else base + viewerDayGames
         // And a game still in play after midnight Eastern belongs to ESPN's
         // PREVIOUS day window too, which the default request stops asking for
         // the moment the day rolls over - so a 10:30 PM ET tip simply vanished
@@ -109,10 +131,7 @@ class EspnSportsRepository(
         val carried = EspnCacheRules
             .carryOverDay(cached?.value.orEmpty(), fresh, now)
             ?.let { day ->
-                fetch(leaguePath, day)
-                    ?.let { body -> parseScoreboardOrNull(body, leaguePath) }
-                    .orEmpty()
-                    .filter { game -> fresh.none { it.id == game.id } }
+                readWindow(leaguePath, day).filter { game -> fresh.none { it.id == game.id } }
             }
             .orEmpty()
         val merged = if (carried.isEmpty()) fresh else fresh + carried
@@ -248,13 +267,55 @@ class EspnSportsRepository(
 
     /**
      * The scoreboard body, for the default (Eastern "today") window or for one
-     * named ESPN day - `dates=20261023`, the form the endpoint accepts.
+     * named ESPN day - `dates=20261023`, the form the endpoint accepts - and for
+     * one subdivision `groups`.
      */
-    private suspend fun fetch(leaguePath: String, day: String? = null): String? =
-        httpGet(
-            SCOREBOARD_BASE + leaguePath + "/scoreboard" + (day?.let { "?dates=$it" } ?: ""),
-            "scoreboard $leaguePath" + (day?.let { " ($it)" } ?: "")
-        )
+    private suspend fun fetch(
+        leaguePath: String,
+        day: String? = null,
+        groups: String? = null,
+    ): String? {
+        val query = listOfNotNull(day?.let { "dates=$it" }, groups?.let { "groups=$it" })
+        val url = SCOREBOARD_BASE + leaguePath + "/scoreboard" +
+            if (query.isEmpty()) "" else "?" + query.joinToString("&")
+        val what = "scoreboard $leaguePath" +
+            (day?.let { " ($it)" } ?: "") +
+            (groups?.let { " groups=$it" } ?: "")
+        return httpGet(url, what)
+    }
+
+    /**
+     * The FCS window of the college-football scoreboard, or null when it could
+     * not be read.
+     *
+     * Group 81 is ESPN's FCS division (80 is FBS, the default window). A game
+     * between two FCS sides is in this body and not the default one, and a
+     * browser check against the live feed on 2026-11-14 had to be used to find
+     * that out: the app's own requests could never show it, because the app
+     * never sent the parameter. One extra request per refresh, only for college
+     * football, and the body parses with the same reader as every other
+     * scoreboard.
+     */
+    private suspend fun fcsWindow(day: String? = null): List<SportsGame>? =
+        fetch(COLLEGE_FOOTBALL, day, groups = FCS_GROUPS)
+            ?.let { body -> parseScoreboardOrNull(body, COLLEGE_FOOTBALL) }
+
+    /**
+     * One named ESPN day's slate, with the FCS window merged in for college
+     * football.
+     *
+     * These reads are extras - they keep a game that outlived its day window on
+     * its tab - so a body that will not parse answers an empty list here, as the
+     * inline reads they replace did: a failed extra must never take the slate
+     * with it.
+     */
+    private suspend fun readWindow(leaguePath: String, day: String): List<SportsGame> {
+        val main = fetch(leaguePath, day)
+            ?.let { body -> parseScoreboardOrNull(body, leaguePath) }
+            .orEmpty()
+        if (leaguePath != COLLEGE_FOOTBALL) return main
+        return EspnCacheRules.mergeSubdivision(main, fcsWindow(day).orEmpty())
+    }
 
     private suspend fun fetchStandings(leaguePath: String): String? =
         httpGet(
@@ -292,6 +353,12 @@ class EspnSportsRepository(
     companion object {
         private const val TAG = "ESPN_SPORTS"
         private const val SCOREBOARD_BASE = "https://site.api.espn.com/apis/site/v2/sports/"
+
+        /** The one league drawn from two subdivisions (see [fcsWindow]). */
+        private const val COLLEGE_FOOTBALL = "football/college-football"
+
+        /** ESPN's FCS group; 80 is FBS, which the default window already is. */
+        private const val FCS_GROUPS = "81"
 
         /**
          * The standings host, which is deliberately NOT the scoreboard's: the
@@ -1107,6 +1174,48 @@ internal object EspnCacheRules {
         zone: java.time.ZoneId = java.time.ZoneId.systemDefault(),
     ): String? =
         viewerDay(dateMs, zone).takeIf { it < espnDay(dateMs) }
+
+    /**
+     * Two windows of one league's slate as a single list: the primary window
+     * first, then whatever it did not already carry, matched by event id.
+     *
+     * The primary's copy wins a duplicate because it is the window the endpoint
+     * answered for the viewer's own day - the precedence the viewer-day merge
+     * already uses. One game is one card in the hub and one cell in the guide,
+     * whichever windows it appeared in.
+     */
+    fun mergeSubdivision(
+        primary: List<SportsGame>,
+        extra: List<SportsGame>,
+    ): List<SportsGame> =
+        if (extra.isEmpty()) {
+            primary
+        } else {
+            primary + extra.filter { game -> primary.none { it.id == game.id } }
+        }
+
+    /**
+     * What a failed FCS read leaves on the tab: last time's copy of the games the
+     * primary window does not carry, while they are still worth showing.
+     *
+     * "Still worth showing" is a game in progress, or one dated on today's ESPN
+     * day. A transient failure during the evening therefore keeps tonight's
+     * scores on the tab and on its guide cells, while a window that stays broken
+     * past midnight cannot resurrect yesterday's finals. The scores are as old as
+     * the last good read, which is the bargain the whole slate already makes when
+     * its own fetch fails.
+     */
+    fun carryStaleSubdivision(
+        cached: List<SportsGame>,
+        fresh: List<SportsGame>,
+        nowMs: Long,
+    ): List<SportsGame> {
+        val today = espnDay(nowMs)
+        return cached.filter { game ->
+            fresh.none { it.id == game.id } &&
+                (game.state == GameState.LIVE || (game.dateMs > 0L && espnDay(game.dateMs) == today))
+        }
+    }
 
     /**
      * The ESPN day whose slate must also be read, or null when today's is enough.
