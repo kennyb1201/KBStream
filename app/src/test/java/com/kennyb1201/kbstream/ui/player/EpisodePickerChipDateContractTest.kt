@@ -58,19 +58,19 @@ class EpisodePickerChipDateContractTest {
     fun `the ring contrasts with the fill it sits on`() {
         val style = chipStyle.substringAfter("fun apply(")
         assertTrue(
-            "kb_text_hi on the accent-filled selected chip, where an accent ring " +
-                "would disappear",
-            chipStyle.contains("if (selected) {") &&
-                chipStyle.contains("ContextCompat.getColor(context, R.color.kb_text_hi)")
+            "the ring is chosen from its FILL now (spec 2026-11-15's second " +
+                "attempt replaced the state rule: near-white on the accent was " +
+                "2:1 and could not read)",
+            chipStyle.contains("SeasonChipContrast.ringColor(")
         )
         assertTrue(
-            "and the accent on every other chip - the THEMED one, because the " +
-                "player's walk no longer reaches the chip",
-            chipStyle.contains("} else {") && chipStyle.contains("themeAccentColor(context)")
+            "from the THEMED accent, because the player's walk no longer reaches " +
+                "the chip",
+            chipStyle.contains("accent = themeAccentColor(context)")
         )
         assertTrue(
             "the selected fill is still the accent",
-            style.contains("selected -> accent")
+            style.contains("selected -> themeAccentColor(context)")
         )
         assertTrue(
             "and its text is still kb_void",

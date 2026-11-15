@@ -99,13 +99,44 @@ class SeasonChipStyleTest {
     }
 
     @Test
-    fun `the selected chip's ring is kb_text_hi, not the accent it sits on`() {
+    fun `the selected chip's ring contrasts with the accent it sits on`() {
+        // Second attempt (spec 2026-11-15): the ring used to be kb_text_hi here,
+        // which is 2.0:1 on the field's Emerald - drawn, and invisible. The ring
+        // is chosen from the fill now, and on an accent fill that is the void.
         moveTheme()
         val ring = SeasonChipStyle.ring(context, selected = true)
+        val color = stroke(ring).second
 
         assertEquals(
-            ContextCompat.getColor(context, R.color.kb_text_hi),
-            stroke(ring).second
+            "the dark ring on the accent-filled chip",
+            ContextCompat.getColor(context, R.color.kb_void),
+            color
+        )
+        val fill = SeasonChipStyle.fillFor(context, selected = true, focused = true)
+        assertTrue(
+            "and it reads against that fill",
+            SeasonChipContrast.contrastRatio(fill, color) >=
+                SeasonChipContrast.MIN_RING_CONTRAST
+        )
+        assertTrue(
+            "while the near-white the old rule drew does not",
+            SeasonChipContrast.contrastRatio(
+                fill,
+                ContextCompat.getColor(context, R.color.kb_text_hi)
+            ) < SeasonChipContrast.MIN_RING_CONTRAST
+        )
+    }
+
+    @Test
+    fun `the chip turns the platform's own focus highlight off`() {
+        // The proven cause of "white pill, no ring": View.draw() paints the
+        // default focus highlight AFTER the foreground, so it covered both.
+        val view = android.view.LayoutInflater.from(context)
+            .inflate(R.layout.picker_season_chip, null)
+        val chip = view.findViewById<TextView>(R.id.picker_season_chip)
+        assertTrue(
+            "the layout switched the framework highlight off",
+            !chip.isDefaultFocusHighlightEnabled
         )
     }
 

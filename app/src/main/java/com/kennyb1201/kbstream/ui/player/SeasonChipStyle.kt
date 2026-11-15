@@ -16,6 +16,20 @@ import com.kennyb1201.kbstream.ui.theme.themeAccentColor
  * missing in the field (spec 2026-11-15), so it is the thing that has to be
  * testable.
  *
+ * THE RING WAS HIDDEN BY THE PLATFORM, NOT BY THIS CODE (spec 2026-11-15,
+ * second attempt). The first fix moved the ring from the background stroke to
+ * the foreground, and the field verdict was that no outline shows on any chip -
+ * and that the pill is WHITE, a fill this file cannot draw: the palette has no
+ * white, `themeAccentColor` falls back to brass, and the theme walk already skips
+ * the chip. What draws it is the PLATFORM: a focusable view whose focus indicator
+ * the framework does not recognise gets `drawDefaultFocusHighlight`, and
+ * `View.draw()` paints that highlight at step 7 - AFTER `onDrawForeground` (step
+ * 6), which is where a foreground ring lives. So the system's light rounded rect
+ * covered the fill and drew over the 2dp ring, which is both symptoms at once.
+ * The chip now turns that highlight off at its source (the layout, plus the
+ * adapter's bind) - a foreground ring was the right half of the first fix, one
+ * draw step short of the whole.
+ *
  * THE RING IS A FOREGROUND, NOT A STROKE ON THE BACKGROUND (spec 2026-11-15, F2).
  * The chip's background is rebuilt by [apply] on every bind and every focus
  * change, and it is also the one property the player's theme walk replaces -
@@ -42,7 +56,7 @@ internal object SeasonChipStyle {
     fun apply(chip: TextView, selected: Boolean, focused: Boolean) {
         val context = chip.context
         val density = context.resources.displayMetrics.density
-        val accent = themeAccentColor(context)
+        val fill = fillFor(context, selected, focused)
         chip.setTextColor(
             when {
                 selected -> ContextCompat.getColor(context, R.color.kb_void)
@@ -53,45 +67,65 @@ internal object SeasonChipStyle {
         chip.background = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = CORNER_DP * density
-            setColor(
-                when {
-                    selected -> accent
-                    focused -> themedTone(context, R.color.kb_surface_raised)
-                    else -> themedTone(context, R.color.kb_surface)
-                }
-            )
+            setColor(fill)
             // Kept as well as the foreground ring: this is the same 2dp stroke in
             // the same place, so the two coincide exactly and neither looks like a
             // second outline. A background stroke is the chip's own, drawn on the
             // chip it belongs to - the walk replacing the background with a
             // faithful copy leaves it there.
-            if (focused) setStroke((RING_DP * density).toInt().coerceAtLeast(1), ringColor(context, selected))
+            if (focused) setStroke((RING_DP * density).toInt().coerceAtLeast(1), ringFor(context, fill))
         }
+    }
+
+    /**
+     * The chip's fill for its two states (spec 2026-11-15, F2).
+     *
+     * Selected is the themed accent - never a resolved XML colour, never
+     * whatever the theme walk leaves behind (the walk skips the chip entirely) -
+     * and the two unselected states stay the tones they always were.
+     */
+    fun fillFor(context: Context, selected: Boolean, focused: Boolean): Int = when {
+        selected -> themeAccentColor(context)
+        focused -> themedTone(context, R.color.kb_surface_raised)
+        else -> themedTone(context, R.color.kb_surface)
     }
 
     /**
      * The focused chip's ring: the 2dp stroke, and nothing else.
      *
-     * The colour has to read on both fills - the accent on the surface chip, and
-     * kb_text_hi on the accent-filled selected chip, where an accent ring would
-     * be invisible.
+     * Its colour comes from [ringFor], i.e. from the fill it will sit on: the
+     * accent on the dark unselected chips, and the contrasting extreme on an
+     * accent-filled selected one.
      */
-    fun ring(context: Context, selected: Boolean): GradientDrawable {
+    fun ring(context: Context, selected: Boolean): GradientDrawable =
+        outline(context, ringFor(context, fillFor(context, selected, focused = true)))
+
+    /** The 2dp outline in [color], transparent inside - the chip's own ring. */
+    private fun outline(context: Context, color: Int): GradientDrawable {
         val density = context.resources.displayMetrics.density
         return GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = CORNER_DP * density
             setColor(Color.TRANSPARENT)
-            setStroke((RING_DP * density).toInt().coerceAtLeast(1), ringColor(context, selected))
+            setStroke((RING_DP * density).toInt().coerceAtLeast(1), color)
         }
     }
 
-    private fun ringColor(context: Context, selected: Boolean): Int =
-        if (selected) {
-            ContextCompat.getColor(context, R.color.kb_text_hi)
-        } else {
-            themeAccentColor(context)
-        }
+    /**
+     * The ring that reads on [fill] (spec 2026-11-15, F3).
+     *
+     * The old rule picked by state (near-white on the selected chip), which is how
+     * the ring became invisible on a pale fill - and on a WHITE fill, which the
+     * platform's focus highlight was painting over the whole chip, unreadable by
+     * construction. The choice is made from the fill now: the accent where it
+     * reads, the void or the near-white where it does not.
+     */
+    private fun ringFor(context: Context, fill: Int): Int = SeasonChipContrast.ringColor(
+        fill = fill,
+        accent = themeAccentColor(context),
+        dark = ContextCompat.getColor(context, R.color.kb_void),
+        light = ContextCompat.getColor(context, R.color.kb_text_hi)
+    )
 
     /**
      * A chrome tone through the same mapping the player's theme walk uses, so the

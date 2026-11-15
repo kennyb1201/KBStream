@@ -45,6 +45,14 @@ class SeasonStripAdapter(
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
         val view = LayoutInflater.from(parent.context)
             .inflate(R.layout.picker_season_chip, parent, false)
+        // THE FRAMEWORK'S OWN FOCUS HIGHLIGHT IS OFF, AND THAT IS THE FIX (spec
+        // 2026-11-15, second attempt). View.draw() paints it at step 7, after the
+        // foreground (step 6) - so on a focused chip it covered both the accent
+        // fill and the 2dp ring this adapter sets, which is the field's white pill
+        // with no outline. Set in the layout as well; set here so a layout edit
+        // cannot quietly bring the white pill back.
+        view.findViewById<TextView>(R.id.picker_season_chip)
+            .setDefaultFocusHighlightEnabled(false)
         return ViewHolder(view)
     }
 

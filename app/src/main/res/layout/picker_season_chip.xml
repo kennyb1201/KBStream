@@ -5,7 +5,16 @@
      chip per season, so it has to stay one line tall however many seasons the
      show has. SeasonStripAdapter owns the colours (accent when selected, dim
      when not, brighter while focused), the same way PickerAdapter owns the
-     episode rows'. -->
+     episode rows'.
+
+     THE PLATFORM MUST NOT DRAW ITS OWN FOCUS HIGHLIGHT (spec 2026-11-15, second
+     attempt). defaultFocusHighlightEnabled defaults to true on API 26+, and
+     View.draw() paints that highlight at step 7 - after the foreground, which is
+     where this chip's 2dp ring lives. A focused chip therefore got a light
+     rounded rect from the system over its fill and over its ring: the field's
+     "the pill is WHITE and there is no outline", from a code path that can draw
+     neither white nor nothing. The ring below is the chip's own; the framework's
+     is switched off so only one of them can ever be drawn. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="wrap_content"
     android:layout_height="wrap_content"
@@ -17,6 +26,7 @@
         android:id="@+id/picker_season_chip"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:defaultFocusHighlightEnabled="false"
         android:focusable="true"
         android:focusableInTouchMode="true"
         android:fontFamily="@font/inter_medium"
