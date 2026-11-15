@@ -115,7 +115,8 @@ class DetailNetworkChipUpTrapContractTest {
                 "default search, or the network rail's restorer would move the " +
                 "focus a second time",
             source.contains(
-                "startFocusMove { moveFocusVertical(row, direction, column, presence) } true"
+                "startFocusMove(row, direction, presence) { " +
+                    "moveFocusVertical(row, direction, column, presence) } true"
             )
         )
         assertTrue(
@@ -130,7 +131,8 @@ class DetailNetworkChipUpTrapContractTest {
                 "instead of dying on the chip",
             source.contains("if (rowsStillArriving()) {") &&
                 source.contains(
-                    "startFocusMove { awaitRowsThenMove(row, direction, column, presence) }"
+                    "startFocusMove(row, direction, presence) { " +
+                        "awaitRowsThenMove(row, direction, column, presence) }"
                 )
         )
         assertFalse(

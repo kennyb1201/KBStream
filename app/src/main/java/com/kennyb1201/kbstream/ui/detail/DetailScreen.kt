@@ -745,8 +745,12 @@ fun DetailScreen(
     // for anymore (see [focusByGeometry]).
     val focusManager = LocalFocusManager.current
 
-    // The vertical move in flight, if any (see [startFocusMove]).
+    // The vertical move in flight, if any (see [startFocusMove]), the direction
+    // the press that started it asked for, and a generation so a cancelled move's
+    // own cleanup cannot clear the one that replaced it.
     var focusMoveInFlight by remember { mutableStateOf<Job?>(null) }
+    var focusMoveDirection by remember { mutableStateOf<DetailFocusDirection?>(null) }
+    var focusMoveGeneration by remember { mutableStateOf(0) }
 
     /**
      * The overview's "View more" toggle: the page's UP-only stop, and the
@@ -797,13 +801,69 @@ fun DetailScreen(
      * the middle of one. Two moves in flight then race each other: a DOWN that
      * is still retrying a rail it could not land on would finish AFTER the
      * viewer had already pressed UP, and snap them back down to where they came
-     * from. A move only ever answers the press that started it, so the newest
-     * press cancels the older one and the focus ends up where the last press
-     * asked for it.
+     * from. A move only ever answers the press that started it, so a press in the
+     * OPPOSITE direction cancels the older one and the focus ends up where the
+     * last press asked for it.
+     *
+     * A press in the SAME direction is not a new instruction, and cancelling it is
+     * what kept the episode section out of reach (spec 2026-11-15, third round):
+     * the move into it has to ask its season chip a frame at a time, so a viewer
+     * pressing at his normal cadence killed it and restarted it until he stopped.
+     * The same direction now coalesces into the move in flight (see
+     * [DetailFocusMoveRules]) and the paste says so with `via=coalesced`, which is
+     * what leaves `via=cancelled` meaning "the viewer reversed".
      */
-    fun startFocusMove(move: suspend () -> Unit) {
-        focusMoveInFlight?.cancel()
-        focusMoveInFlight = scope.launch { move() }
+    fun startFocusMove(
+        from: DetailRow,
+        direction: DetailFocusDirection,
+        presence: DetailRowPresence? = null,
+        move: suspend () -> Unit
+    ) {
+        val inFlight = focusMoveInFlight
+        when (DetailFocusMoveRules.decide(inFlight?.isActive == true, focusMoveDirection, direction)) {
+            // THE SAME INTENT, RESTATED (spec 2026-11-15, third round). A repeat
+            // press while the move is still retrying is not a new instruction -
+            // it is the same one, and the move already heading there is the one
+            // it wants. Cancelling here is what killed the KEYWORDS -> EPISODES
+            // move five times in one paste: the section's chip takes a frame at
+            // a time to answer, the next press arrives inside that window, and
+            // the move restarts from nothing, forever.
+            DetailFocusMoveRules.Decision.COALESCE -> {
+                val target = (presence ?: latestRowPresence.value)?.let {
+                    DetailFocusChain.nextRow(from, direction, latestRowPresence.value ?: it)
+                }
+                // Named, so the next paste can tell a repeat from a reversal: a
+                // `coalesced` line means the press agreed with the move, and
+                // `cancelled` now only ever follows an opposite press.
+                DetailTrace.note(
+                    "detail move $from $direction -> ${target ?: "none"} " +
+                        "landed=pending via=coalesced"
+                )
+            }
+
+            // A new intent - the first press, or a REVERSAL. The cancel is the
+            // design reason this exists: a DOWN still retrying must never land
+            // after the viewer pressed UP and snap them back down.
+            DetailFocusMoveRules.Decision.LAUNCH,
+            DetailFocusMoveRules.Decision.CANCEL_AND_LAUNCH -> {
+                inFlight?.cancel()
+                val generation = ++focusMoveGeneration
+                val job = scope.launch {
+                    try {
+                        move()
+                    } finally {
+                        // Only if nothing newer has taken over: a cancelled move
+                        // finishes AFTER its replacement was handed out.
+                        if (focusMoveGeneration == generation) {
+                            focusMoveInFlight = null
+                            focusMoveDirection = null
+                        }
+                    }
+                }
+                focusMoveInFlight = job
+                focusMoveDirection = direction
+            }
+        }
     }
 
     /**
@@ -3548,10 +3608,11 @@ fun DetailScreen(
             tracedVia = "blocked"
             return false
         } catch (cancelled: CancellationException) {
-            // A newer press cancels the move in flight ([startFocusMove]), and a
-            // cancel is neither a landing nor an edge. It is still a line - the
+            // An OPPOSITE press cancels the move in flight ([startFocusMove]), and
+            // a cancel is neither a landing nor an edge. It is still a line - the
             // press happened - and naming it is what stops a cancelled move being
-            // read as "the chain had nowhere to go".
+            // read as "the chain had nowhere to go". Since the same-direction
+            // press coalesces, this line now only ever follows a reversal.
             tracedVia = "cancelled"
             throw cancelled
         } finally {
@@ -3656,11 +3717,15 @@ fun DetailScreen(
             // same as a page that ends here, and consuming it is the reported
             // dead press (see [awaitRowsThenMove]).
             if (rowsStillArriving()) {
-                startFocusMove { awaitRowsThenMove(row, direction, column, presence) }
+                startFocusMove(row, direction, presence) {
+                    awaitRowsThenMove(row, direction, column, presence)
+                }
             }
             true
         } else {
-            startFocusMove { moveFocusVertical(row, direction, column, presence) }
+            startFocusMove(row, direction, presence) {
+                moveFocusVertical(row, direction, column, presence)
+            }
             true
         }
     }
@@ -3774,7 +3839,7 @@ fun DetailScreen(
         nonRailVerticalFocus(
             onUp = {},
             onDown = {
-                startFocusMove {
+                startFocusMove(DetailRow.HEADER, DetailFocusDirection.DOWN, presence) {
                     moveFocusVertical(
                         DetailRow.HEADER,
                         DetailFocusDirection.DOWN,
@@ -3808,7 +3873,7 @@ fun DetailScreen(
     fun seasonChipVerticalFocus(presence: DetailRowPresence): (KeyEvent) -> Boolean =
         nonRailVerticalFocus(
             onUp = {
-                startFocusMove {
+                startFocusMove(DetailRow.EPISODES, DetailFocusDirection.UP, presence) {
                     moveFocusVertical(
                         DetailRow.EPISODES,
                         DetailFocusDirection.UP,
@@ -3818,7 +3883,7 @@ fun DetailScreen(
                 }
             },
             onDown = {
-                startFocusMove {
+                startFocusMove(DetailRow.EPISODES, DetailFocusDirection.DOWN, presence) {
                     // The episode cards under the chip are what this press
                     // means, and when they are still arriving it must not be
                     // a press that does nothing: the same rule as every other
@@ -3882,7 +3947,7 @@ fun DetailScreen(
             // is started here because the key is already ours (F1c) - UP from
             // the toggle finds the genres or PLAY above it in the fixed header.
             onUp = {
-                startFocusMove {
+                startFocusMove(DetailRow.HEADER, DetailFocusDirection.UP, presence) {
                     val landed =
                         focusTopOfPage() || focusByGeometry(DetailFocusDirection.UP)
                     // E3: the toggle's own outcome, readable without the move
@@ -3922,7 +3987,7 @@ fun DetailScreen(
                     // the two-stop cycle this closes: a DOWN out of the toggle
                     // used to climb back up to the genre chips, which sent the
                     // next DOWN straight back to the toggle.
-                    startFocusMove {
+                    startFocusMove(DetailRow.HEADER, DetailFocusDirection.DOWN, settled) {
                         moveFocusVertical(
                             DetailFocusChain.toggleDownRow(settled),
                             DetailFocusDirection.DOWN,
@@ -6826,7 +6891,9 @@ fun DetailScreen(
                                             )
                                             false
                                         } else {
-                                            startFocusMove {
+                                            // The chips are one half of the
+                                            // EPISODES row; this press is its UP.
+                                            startFocusMove(DetailRow.EPISODES, DetailFocusDirection.UP) {
                                                 // The chip is the press's real
                                                 // target - but it is a lazy
                                                 // row's card, and the ask can
@@ -7862,7 +7929,7 @@ fun DetailScreen(
                                             // cards, in the column the section
                                             // remembers (see
                                             // focusFirstMediaCard).
-                                            startFocusMove {
+                                            startFocusMove(DetailRow.MEDIA, DetailFocusDirection.DOWN) {
                                                 // F3: the row's own handoff is the
                                                 // first resort, the platform's
                                                 // search the second - a cards
@@ -8014,7 +8081,7 @@ fun DetailScreen(
                                                     mediaCardFocus(
                                                         cardIndex,
                                                         onFocusStrip = {
-                                                            startFocusMove {
+                                                            startFocusMove(DetailRow.MEDIA, DetailFocusDirection.UP) {
                                                                 // F3: strip first,
                                                                 // geometry second -
                                                                 // a strip the

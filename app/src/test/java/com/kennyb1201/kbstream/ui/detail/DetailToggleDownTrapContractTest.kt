@@ -141,9 +141,9 @@ class DetailToggleDownTrapContractTest {
             "the kept branch runs the move from the row BELOW the toggle and " +
                 "returns true",
             toggleHandler.contains(
-                "} else { startFocusMove { moveFocusVertical( " +
-                    "DetailFocusChain.toggleDownRow(settled), DetailFocusDirection.DOWN, " +
-                    "0, latestRowPresence.value ?: settled )"
+                "} else { startFocusMove(DetailRow.HEADER, DetailFocusDirection.DOWN, " +
+                    "settled) { moveFocusVertical( DetailFocusChain.toggleDownRow(settled), " +
+                    "DetailFocusDirection.DOWN, 0, latestRowPresence.value ?: settled )"
             )
         )
     }
@@ -221,7 +221,8 @@ class DetailToggleDownTrapContractTest {
                 "the focus now moves the press anyway instead of keeping it (the UP " +
                 "trap's F1b, see DetailTopFallThroughContractTest)",
             toggleHandler.contains(
-                "onUp = { startFocusMove { val landed = focusTopOfPage() || " +
+                "onUp = { startFocusMove(DetailRow.HEADER, DetailFocusDirection.UP, " +
+                    "presence) { val landed = focusTopOfPage() || " +
                     "focusByGeometry(DetailFocusDirection.UP)"
             )
         )

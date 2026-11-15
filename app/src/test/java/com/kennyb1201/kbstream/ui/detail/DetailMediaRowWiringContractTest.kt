@@ -360,7 +360,9 @@ class DetailMediaRowWiringContractTest {
                 "with the focus left on the card - and both internal handoffs now " +
                 "fall through to the geometric search when their own landing " +
                 "fails (the vertical-focus audit's F3)",
-            screen.contains("onFocusStrip = { startFocusMove {") &&
+            screen.contains(
+                "onFocusStrip = { startFocusMove(DetailRow.MEDIA, DetailFocusDirection.UP) {"
+            ) &&
                 screen.contains("focusMediaStrip( DetailRow.MEDIA )") &&
                 screen.contains("if (!landed) { focusByGeometry( DetailFocusDirection.UP ) }")
         )

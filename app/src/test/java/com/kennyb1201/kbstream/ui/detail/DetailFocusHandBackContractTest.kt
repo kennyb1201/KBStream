@@ -206,20 +206,34 @@ class DetailFocusHandBackContractTest {
     @Test
     fun `only one vertical move is in flight at a time`() {
         assertTrue(
-            "a move cancels the one before it, so a press that arrives while a " +
-                "rail is still being retried cannot be undone a moment later by " +
-                "the older move finishing",
+            "a move in the OPPOSITE direction cancels the one before it, so a " +
+                "press that arrives while a rail is still being retried cannot be " +
+                "undone a moment later by the older move finishing - and a press " +
+                "in the SAME direction coalesces instead (spec 2026-11-15, third " +
+                "round: cancelling a repeat is what kept the episode section out " +
+                "of reach)",
             detail.contains("var focusMoveInFlight by remember") &&
-                detail.contains("fun startFocusMove(move: suspend () -> Unit)") &&
-                detail.contains("focusMoveInFlight?.cancel() focusMoveInFlight = scope.launch { move() }")
+                detail.contains("fun startFocusMove(") &&
+                detail.contains("DetailFocusMoveRules.decide(") &&
+                detail.contains("inFlight?.cancel()") &&
+                detail.contains("scope.launch {")
         )
         assertTrue(
             "and every press that starts a move goes through it: the chain's " +
                 "own handler, the Media strip's DOWN and a card's UP back to the " +
                 "strip",
-            detail.contains("startFocusMove { moveFocusVertical(row, direction, column, presence) }") &&
-                detail.contains("startFocusMove { val landed = focusFirstMediaCard()") &&
-                detail.contains("startFocusMove { val landed = focusMediaStrip(")
+            detail.contains(
+                "startFocusMove(row, direction, presence) { " +
+                    "moveFocusVertical(row, direction, column, presence) }"
+            ) &&
+                detail.contains(
+                    "startFocusMove(DetailRow.MEDIA, DetailFocusDirection.DOWN) { " +
+                        "val landed = focusFirstMediaCard()"
+                ) &&
+                detail.contains(
+                    "startFocusMove(DetailRow.MEDIA, DetailFocusDirection.UP) { " +
+                        "val landed = focusMediaStrip("
+                )
         )
         assertFalse(
             "the bare launches are what let two moves overlap",

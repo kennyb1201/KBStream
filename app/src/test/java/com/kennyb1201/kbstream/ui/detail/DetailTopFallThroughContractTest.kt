@@ -133,7 +133,8 @@ class DetailTopFallThroughContractTest {
         assertTrue(
             "F1b: the toggle's UP is still the header, and its failure now moves",
             toggleHandler.contains(
-                "onUp = { startFocusMove { val landed = focusTopOfPage() || " +
+                "onUp = { startFocusMove(DetailRow.HEADER, DetailFocusDirection.UP, " +
+                    "presence) { val landed = focusTopOfPage() || " +
                     "focusByGeometry(DetailFocusDirection.UP)"
             )
         )
@@ -141,7 +142,7 @@ class DetailTopFallThroughContractTest {
             "F1c: it runs INSIDE the move coroutine - the handler consumed the key, " +
                 "so \"return false and let the default search run\" is not available " +
                 "any more (see focusByGeometry's own doc)",
-            toggleHandler.contains("startFocusMove { val landed = focusTopOfPage()")
+            toggleHandler.contains("startFocusMove(DetailRow.HEADER, DetailFocusDirection.UP, presence) { val landed = focusTopOfPage()")
         )
         assertTrue(
             "and UP is still consumed by the page: the toggle has no unowned UP to " +

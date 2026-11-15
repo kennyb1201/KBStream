@@ -168,7 +168,8 @@ class DetailGenreTrapAndSeeMoreTest {
                 "wait is started BEFORE the press is consumed",
             edgeArm in 0 until handler.indexOf("if (rowsStillArriving()) {") &&
                 handler.contains(
-                    "startFocusMove { awaitRowsThenMove(row, direction, column, presence) }"
+                    "startFocusMove(row, direction, presence) { " +
+                        "awaitRowsThenMove(row, direction, column, presence) }"
                 )
         )
 
@@ -328,7 +329,8 @@ class DetailGenreTrapAndSeeMoreTest {
                 "refuses now runs the geometric search rather than keeping the key " +
                 "(the 2026-11-08 UP trap, see DetailTopFallThroughContractTest)",
             toggleHandler.contains(
-                "onUp = { startFocusMove { val landed = focusTopOfPage() || " +
+                "onUp = { startFocusMove(DetailRow.HEADER, DetailFocusDirection.UP, " +
+                    "presence) { val landed = focusTopOfPage() || " +
                     "focusByGeometry(DetailFocusDirection.UP)"
             )
         )

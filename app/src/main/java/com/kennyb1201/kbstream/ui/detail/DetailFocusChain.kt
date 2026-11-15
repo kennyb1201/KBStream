@@ -293,3 +293,63 @@ internal object DetailFocusChain {
             ?: nextRow(DetailRow.HEADER, DetailFocusDirection.DOWN, presence)
             ?: DetailRow.GENRE
 }
+
+/**
+ * What a new vertical press does to the move already in flight (spec 2026-11-15,
+ * third round at the KEYWORDS -> EPISODES trap).
+ *
+ * The page keeps ONE move at a time, and it cancels the old one on every press -
+ * which is right for a reversal and wrong for a repeat. The move into the episode
+ * section takes frames: it has to ask the section's season chip while the lazy
+ * row composes it. On build 329's paste that move was cancelled five times in a
+ * row, each cancel a KEYWORDS DOWN from the viewer, each one starting the same
+ * move again: `landed=false via=cancelled`, five times, focus never leaving the
+ * keywords. The focus was not refusing to go anywhere - the press was killing its
+ * own instruction every time it restated it.
+ *
+ * So the press's DIRECTION, not its target, decides:
+ *
+ *  - the same direction as the move in flight is the same intent restated. The
+ *    move is already heading where the press wants to go, so it is left alone -
+ *    no cancel, no second move, no possible snap-back (both presses named the
+ *    same direction).
+ *  - the opposite direction is a new instruction, and the cancel stays exactly as
+ *    it was: a DOWN still retrying must never land after the viewer pressed UP.
+ *  - no move at all is a new move, whether the last one landed a moment ago or
+ *    this is the first press of the walk.
+ *
+ * Pure on purpose: the rule is the whole bug, and this way a JVM test can pin it
+ * without a page, a key event or a device.
+ */
+internal object DetailFocusMoveRules {
+
+    /** What [decide] says the press should do. */
+    enum class Decision {
+        /** Nothing in flight: start the move. */
+        LAUNCH,
+
+        /** A move the other way is in flight: cancel it, then start this one. */
+        CANCEL_AND_LAUNCH,
+
+        /** The same press again: keep the move that is already heading there. */
+        COALESCE
+    }
+
+    /**
+     * The decision for a [press] arriving while [inFlight] does (or does not)
+     * hold a live move in [inFlightDirection].
+     *
+     * [inFlight] is the job's own liveness, not merely "a move was started": a
+     * move that has landed leaves nothing to coalesce into, and the next press in
+     * the same direction is the next row the viewer wants.
+     */
+    fun decide(
+        inFlight: Boolean,
+        inFlightDirection: DetailFocusDirection?,
+        press: DetailFocusDirection
+    ): Decision = when {
+        !inFlight -> Decision.LAUNCH
+        inFlightDirection == press -> Decision.COALESCE
+        else -> Decision.CANCEL_AND_LAUNCH
+    }
+}

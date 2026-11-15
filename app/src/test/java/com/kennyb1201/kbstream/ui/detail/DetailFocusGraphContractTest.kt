@@ -100,7 +100,9 @@ class DetailFocusGraphContractTest {
                 "CARD only: after a season change the chip is already focused, so " +
                 "a landing that can answer with the chip is a press that reports " +
                 "success and moves nothing",
-            seasonHandler.contains("startFocusMove {") &&
+            seasonHandler.contains(
+                "startFocusMove(DetailRow.EPISODES, DetailFocusDirection.DOWN, presence) {"
+            ) &&
                 seasonHandler.contains("if (!focusEpisodeCard())")
         )
         assertTrue(

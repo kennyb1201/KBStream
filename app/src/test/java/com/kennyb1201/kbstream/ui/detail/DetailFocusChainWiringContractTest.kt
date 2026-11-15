@@ -149,16 +149,22 @@ class DetailFocusChainWiringContractTest {
         assertTrue(
             "the decision and the move both read the chain",
             detail.contains("DetailFocusChain.nextRow(row, direction, presence) == null") &&
+                // The press's own direction is handed to the move now, so a
+                // repeat can coalesce instead of cancelling (spec 2026-11-15).
                 detail.contains(
-                    "startFocusMove { moveFocusVertical(row, direction, column, presence) } true"
+                    "startFocusMove(row, direction, presence) { " +
+                        "moveFocusVertical(row, direction, column, presence) } true"
                 )
         )
         assertTrue(
-            "and the move is started as the page's ONE in-flight move, so a " +
-                "press that arrives while a rail is still being retried cancels " +
-                "the older move instead of two of them racing for the focus",
-            detail.contains("fun startFocusMove(move: suspend () -> Unit)") &&
-                detail.contains("focusMoveInFlight?.cancel()")
+            "and the move is started as the page's ONE in-flight move: an " +
+                "OPPOSITE press cancels it (so a DOWN still retrying never lands " +
+                "after an UP), while a press in the SAME direction coalesces into " +
+                "it - cancelling a repeat is what killed the keywords -> episodes " +
+                "move five times in one paste (spec 2026-11-15, third round)",
+            detail.contains("fun startFocusMove(") &&
+                detail.contains("DetailFocusMoveRules.decide(") &&
+                detail.contains("inFlight?.cancel()")
         )
         assertTrue(
             "a press this row's own set does not cover is not consumed: the " +
@@ -175,7 +181,8 @@ class DetailFocusChainWiringContractTest {
                 "DetailFocusChain.nextRow(row, direction, presence) == null) {"
             ) && detail.contains("if (rowsStillArriving()) {") &&
                 detail.contains(
-                    "startFocusMove { awaitRowsThenMove(row, direction, column, presence) }"
+                    "startFocusMove(row, direction, presence) { " +
+                        "awaitRowsThenMove(row, direction, column, presence) }"
                 )
         )
         assertFalse(

@@ -71,7 +71,8 @@ class DetailVerticalAuditContractTest {
         assertTrue(
             "and the press is still consumed by the page, because the move is already " +
                 "running inside it",
-            up.contains("startFocusMove {") && cardFocus.contains("onFocusStrip() true")
+            up.contains("startFocusMove(DetailRow.MEDIA, DetailFocusDirection.UP) {") &&
+                cardFocus.contains("onFocusStrip() true")
         )
     }
 
@@ -195,7 +196,10 @@ class DetailVerticalAuditContractTest {
         )
         assertTrue(
             "F2: the toggle's UP still falls through",
-            detail.contains("onUp = { startFocusMove { val landed = focusTopOfPage() ||")
+            detail.contains(
+                "onUp = { startFocusMove(DetailRow.HEADER, DetailFocusDirection.UP, " +
+                    "presence) { val landed = focusTopOfPage() ||"
+            )
         )
         assertEquals(
             "T6: the page still has its eleven rows - no row was added to route around " +
