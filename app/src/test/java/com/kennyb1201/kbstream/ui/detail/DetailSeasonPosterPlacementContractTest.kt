@@ -81,8 +81,11 @@ class DetailSeasonPosterPlacementContractTest {
             detail.contains("fanart.seasonPosterAnswer(") &&
                 detail.contains("SeasonPosterMemory.Decision.REPLACE -> seasonPosterUrl = answer.url")
         )
+        // The width is the one thing a later spec was allowed to move: the
+        // 2026-11-15 poster spec drew it at 84dp. Everything else here is the
+        // art, the shape, the crop and the decode, which that spec left alone.
         listOf(
-            ".width(54.dp)",
+            ".width(84.dp)",
             ".aspectRatio(2f / 3f)",
             ".clip(KBShapeSmall)",
             "contentScale = ContentScale.Crop",

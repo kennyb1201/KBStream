@@ -136,7 +136,13 @@ class PlayerDeepDiveContractTest {
     @Test
     fun `a hash row pressed in either engine's own picker is prepared, not skipped`() {
         listOf("the native player" to native, "the mpv player" to mpv).forEach { (who, src) ->
-            val row = window(src, "isSelected = stream.url == currentUrl", 1_400)
+            // The window has to reach the row's onClick, and both engines' rows
+            // have grown since: the native one now spells out the manual-pick note
+            // (spec 2026-11-15) between the row's label and the branch, which put
+            // the resolver 1_575 characters past the marker. Sized to the row, not
+            // to the shortest version of it, and it still stops well short of the
+            // next picker branch (PickerMode.AUDIO), which has no resolver in it.
+            val row = window(src, "isSelected = stream.url == currentUrl", 2_000)
             assertTrue(
                 "$who must not open a row with no URL of its own directly",
                 row.contains("stream.url.isNullOrBlank()")
