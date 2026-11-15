@@ -1,11 +1,9 @@
 package com.kennyb1201.kbstream.ui.player
 
-import android.graphics.drawable.GradientDrawable
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
-import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
 import com.kennyb1201.kbstream.R
 
@@ -62,8 +60,20 @@ class SeasonStripAdapter(
         // THE RING IS THE D-PAD'S (spec 2026-11-14, F1(e)): a touch leaves the
         // tapped chip focused (it is focusableInTouchMode), and a ring left on it
         // read as a selection that never happened.
-        fun restyle(focused: Boolean) =
-            applyChipStyle(chip, item.isSelected, focused && !chip.isInTouchMode)
+        fun restyle(focused: Boolean) {
+            val dpad = focused && !chip.isInTouchMode
+            SeasonChipStyle.apply(chip, item.isSelected, dpad)
+            // THE RING IS THE CHIP'S FOREGROUND (spec 2026-11-15, F2). It used to
+            // be a stroke on the background, and the background is the one thing
+            // the player's theme walk replaces wholesale - a copy of the shape
+            // with its fill rewritten. The rows survive that because they are
+            // rebuilt from a selector; the chip's is built by hand, so a pass
+            // after the focus restyle could replace the ring away and nothing
+            // re-ran the restyle, because no focus change followed. A foreground
+            // is never part of that walk: the ring now sits above the fill, where
+            // only this listener can put it or take it away.
+            chip.foreground = if (dpad) SeasonChipStyle.ring(chip.context, item.isSelected) else null
+        }
         restyle(chip.isFocused)
         chip.setOnFocusChangeListener { _, focused -> restyle(focused) }
         // The focused view is the CHIP, not the root, and a center press calls
@@ -133,45 +143,4 @@ class SeasonStripAdapter(
     /** True when a chip this adapter owns currently holds the D-pad. */
     fun hasChipFocus(parent: RecyclerView): Boolean =
         parent.findFocus()?.id == R.id.picker_season_chip
-
-    private fun applyChipStyle(chip: TextView, selected: Boolean, focused: Boolean) {
-        val context = chip.context
-        val density = context.resources.displayMetrics.density
-        val accent = ContextCompat.getColor(context, R.color.kb_accent)
-        chip.setTextColor(
-            when {
-                selected -> ContextCompat.getColor(context, R.color.kb_void)
-                focused -> ContextCompat.getColor(context, R.color.kb_text_hi)
-                else -> ContextCompat.getColor(context, R.color.kb_text_lo)
-            }
-        )
-        chip.background = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            // KBShapeChip's 10dp, the radius every chip in the app wears.
-            cornerRadius = 10 * density
-            setColor(
-                when {
-                    selected -> accent
-                    focused -> ContextCompat.getColor(context, R.color.kb_surface_raised)
-                    else -> ContextCompat.getColor(context, R.color.kb_surface)
-                }
-            )
-            // FOCUS IS A RING, ALWAYS (spec 2026-11-12). The old rule stroked
-            // only when the chip was focused AND not selected, so the most
-            // common landing - scrolling up onto the season already loaded -
-            // drew exactly the same chip focused or not, and 1dp at a sofa's
-            // distance read as nothing. 2dp is the episode rows' own weight
-            // (picker_item_bg's state_focused).
-            //
-            // The colour has to read on both fills: the accent ring on the
-            // surface-raised chip, and kb_text_hi on the accent-filled selected
-            // chip, where an accent ring would be invisible.
-            if (focused) {
-                setStroke(
-                    (2 * density).toInt(),
-                    if (selected) ContextCompat.getColor(context, R.color.kb_text_hi) else accent
-                )
-            }
-        }
-    }
 }

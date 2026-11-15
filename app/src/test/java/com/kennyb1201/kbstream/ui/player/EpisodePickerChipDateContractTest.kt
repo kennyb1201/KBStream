@@ -26,6 +26,7 @@ import org.junit.Test
 class EpisodePickerChipDateContractTest {
 
     private val strip by lazy { source(SEASON_STRIP) }
+    private val chipStyle by lazy { source(CHIP_STYLE) }
     private val adapter by lazy { source(PICKER_ADAPTER) }
     private val picker by lazy { source(PLAYER_PICKER) }
     private val rowXml by lazy { source(ROW_XML) }
@@ -34,11 +35,13 @@ class EpisodePickerChipDateContractTest {
 
     @Test
     fun `a focused chip always wears a 2dp ring, selected or not`() {
-        val style = strip.substringAfter("private fun applyChipStyle(")
-            .substringBefore("}\n}")
+        // The style moved out of the adapter into SeasonChipStyle (spec
+        // 2026-11-15): the ring is now the chip's foreground as well as its
+        // background stroke, and it has to be buildable without a RecyclerView.
+        val style = chipStyle.substringAfter("fun apply(")
         assertTrue(
             "the stroke is drawn for EVERY focused chip",
-            style.contains("if (focused) {\n                setStroke(")
+            style.contains("if (focused) setStroke(")
         )
         assertFalse(
             "and not only for an unselected one - that is what left the loaded " +
@@ -47,22 +50,24 @@ class EpisodePickerChipDateContractTest {
         )
         assertTrue(
             "2dp, the weight the episode rows' own focus state uses",
-            style.contains("(2 * density).toInt()")
+            chipStyle.contains("RING_DP = 2f") && style.contains("(RING_DP * density).toInt()")
         )
         assertFalse("1dp is what was invisible", style.contains("(1 * density).toInt()"))
     }
 
     @Test
     fun `the ring contrasts with the fill it sits on`() {
-        val style = strip.substringAfter("private fun applyChipStyle(")
+        val style = chipStyle.substringAfter("fun apply(")
         assertTrue(
             "kb_text_hi on the accent-filled selected chip, where an accent ring " +
                 "would disappear",
-            style.contains("if (selected) ContextCompat.getColor(context, R.color.kb_text_hi)")
+            chipStyle.contains("if (selected) {") &&
+                chipStyle.contains("ContextCompat.getColor(context, R.color.kb_text_hi)")
         )
         assertTrue(
-            "and the accent on every other chip",
-            style.contains("else accent")
+            "and the accent on every other chip - the THEMED one, because the " +
+                "player's walk no longer reaches the chip",
+            chipStyle.contains("} else {") && chipStyle.contains("themeAccentColor(context)")
         )
         assertTrue(
             "the selected fill is still the accent",
@@ -206,6 +211,7 @@ class EpisodePickerChipDateContractTest {
 
     private companion object {
         const val SEASON_STRIP = "java/com/kennyb1201/kbstream/ui/player/SeasonStripAdapter.kt"
+        const val CHIP_STYLE = "java/com/kennyb1201/kbstream/ui/player/SeasonChipStyle.kt"
         const val PICKER_ADAPTER = "java/com/kennyb1201/kbstream/ui/player/PickerAdapter.kt"
         const val PLAYER_PICKER = "java/com/kennyb1201/kbstream/ui/player/PlayerEpisodePicker.kt"
         const val ROW_XML = "res/layout/picker_item.xml"

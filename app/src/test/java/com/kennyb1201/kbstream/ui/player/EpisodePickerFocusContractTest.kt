@@ -22,6 +22,7 @@ import org.junit.Test
 class EpisodePickerFocusContractTest {
 
     private val strip by lazy { source("ui/player/SeasonStripAdapter.kt") }
+    private val chipStyle by lazy { source("ui/player/SeasonChipStyle.kt") }
     private val native by lazy { source("ui/player/NativePlayerActivity.kt") }
     private val mpv by lazy { source("ui/player/MpvPlayerActivity.kt") }
     private val menu by lazy { source("ui/player/PickerEpisodeMenu.kt") }
@@ -51,8 +52,16 @@ class EpisodePickerFocusContractTest {
             strip.contains("focused && !chip.isInTouchMode")
         )
         assertTrue(
-            "the 2dp ring itself is untouched - the bug was never the ring",
-            strip.contains("(2 * density).toInt()")
+            "the 2dp ring itself is untouched - the bug was never the ring (it lives " +
+                "in SeasonChipStyle since spec 2026-11-15, still 2dp)",
+            chipStyle.contains("RING_DP = 2f") && chipStyle.contains("(RING_DP * density).toInt()")
+        )
+        assertTrue(
+            "and a tap cannot leave it behind: the ring is put on the chip's " +
+                "foreground only while the D-pad holds it, and taken off otherwise",
+            strip.contains(
+                "chip.foreground = if (dpad) SeasonChipStyle.ring(chip.context, item.isSelected) else null"
+            )
         )
     }
 

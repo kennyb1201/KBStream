@@ -116,6 +116,14 @@ internal fun retintPlayerChrome(root: View, context: Context) {
  */
 internal fun retintPlayerChromeView(view: View, context: Context) {
     if (!chromeThemeMoved(context)) return
+    // THE SEASON CHIP IS NOT CHROME (spec 2026-11-15). Its fill, its text and its
+    // focus ring are state - built by SeasonStripAdapter from the selected and
+    // focused flags - so there is no XML drawable here to re-theme, and a copy
+    // replacing it would be a copy of something the adapter owns: at best a
+    // no-op, at worst the pass this ring used to disappear under. The adapter
+    // resolves the themed tones itself ([themedChromeColor]), so the chip follows
+    // AMOLED and the accent without this walk touching it.
+    if (view.id == R.id.picker_season_chip) return
     val xmlAccent = ContextCompat.getColor(context, R.color.kb_accent)
     val accent = themeAccentColor(context)
     if (accent != xmlAccent) retintAccentView(view, accent, xmlAccent)
@@ -474,7 +482,7 @@ internal fun themedRippleFlash(context: Context, contentFill: Int?): Int {
  * not against the chosen accent: a rebuild is only needed when the two differ,
  * and matching the chosen colour would also hit its own fill on a second pass.
  */
-private fun themedChromeColor(context: Context, argb: Int): Int? {
+internal fun themedChromeColor(context: Context, argb: Int): Int? {
     val amoled = AppPreferences.getAmoledBlack(context)
     val rgb = argb and 0x00FFFFFF
     val alpha = argb and 0xFF000000.toInt()
