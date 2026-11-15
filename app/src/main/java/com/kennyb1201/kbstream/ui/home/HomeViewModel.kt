@@ -12381,7 +12381,7 @@ private suspend fun calculateEpisodesRemaining(
      */
     private fun publishPinnedInPlace(
         pinnedRails: List<Rail>,
-        buildEpochAtStart: Int,
+        buildEpochAtStart: Long,
         replacing: Set<String> = emptySet()
     ) {
         if (buildEpochAtStart != railBuildEpoch) return
