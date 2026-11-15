@@ -296,6 +296,26 @@ object Diagnostics {
                 }
             )
         }
+        // F1 (spec 2026-11-15, Home art): the landscape-art lookup's parts, the
+        // same shape. `home.artLookup`'s 493ms average is the whole lookup from
+        // the memo check to the answer; `artWait` is the semaphore queue and
+        // `artFetch` is the work behind it, and `src` counts how many lookups
+        // were answered from memory, from the 30-day disk row, over the network,
+        // or by another card's fetch already in flight. Averages alone could not
+        // say which of those the half-second was. Absent until a rail with
+        // landscape art has resolved.
+        val artLegs = PerfTrace.latestByPrefix("home.art")
+        if (artLegs.isNotEmpty()) {
+            report.appendLine(
+                "homeart: " + artLegs.joinToString(" ") { (label, ms) ->
+                    "${label.removePrefix("home.art")}=${ms}ms"
+                } +
+                    " src mem=${PerfTrace.count("home.artSrc.mem")}" +
+                    " disk=${PerfTrace.count("home.artSrc.disk")}" +
+                    " net=${PerfTrace.count("home.artSrc.net")}" +
+                    " shared=${PerfTrace.count("home.artSrc.shared")}"
+            )
+        }
         // The season poster's own runs, right beside the Detail state it belongs
         // to: which key re-ran the effect, what fanart and TMDB answered, whether
         // the URL was set / kept / cleared, and what the header image's request

@@ -292,6 +292,74 @@ class HomeViewModel(
         landscapeLookupMemo[key] = art
     }
 
+    /**
+     * The empty art answers this device has already learned, across builds
+     * (spec 2026-11-15, F5).
+     *
+     * [landscapeLookupMemo] makes a title with no TMDB art free for the length
+     * of ONE build, and then the build ends and the same title pays the same
+     * ~500ms lookup again next session - the field paste's `home.artEmpty n=2
+     * total=989ms`. These entries outlive the build, keyed like the memo, and
+     * carry the window [LandscapeArtEmptyStore.TTL_MS] says: an empty answer is
+     * trusted for a fortnight and then asked once more, because art is not a
+     * permanent fact.
+     *
+     * Art is NOT stored here - only "there was nothing", which is the answer
+     * that costs a round trip and can never fill a card.
+     */
+    private val landscapeEmptyAnswers =
+        java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    @Volatile
+    private var landscapeEmptyAnswersLoaded = false
+
+    private val landscapeEmptyPrefs: SharedPreferences
+        get() = getApplication<Application>()
+            .getSharedPreferences(
+                com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                    getApplication(), PREFS_LANDSCAPE_EMPTY
+                ),
+                Context.MODE_PRIVATE
+            )
+
+    /** Reads the stored empties once per process, dropping what has expired. */
+    private fun loadLandscapeEmptyAnswers() {
+        if (landscapeEmptyAnswersLoaded) return
+        landscapeEmptyAnswersLoaded = true
+        val kept = runCatching {
+            com.kennyb1201.kbstream.data.memory.LandscapeArtEmptyStore.prune(
+                com.kennyb1201.kbstream.data.memory.LandscapeArtEmptyStore.parse(
+                    landscapeEmptyPrefs.getString(PREFS_LANDSCAPE_EMPTY_ROWS, null)
+                ),
+                System.currentTimeMillis()
+            )
+        }.getOrDefault(emptyMap())
+        landscapeEmptyAnswers.putAll(kept)
+    }
+
+    /** Records [key] as art-less, and writes the bounded blob back. */
+    private fun rememberLandscapeEmptyAnswer(key: String) {
+        val now = System.currentTimeMillis()
+        com.kennyb1201.kbstream.data.memory.LandscapeArtEmptyStore.remember(
+            landscapeEmptyAnswers,
+            key,
+            now
+        )
+        runCatching {
+            landscapeEmptyPrefs.edit()
+                .putString(
+                    PREFS_LANDSCAPE_EMPTY_ROWS,
+                    com.kennyb1201.kbstream.data.memory.LandscapeArtEmptyStore.serialize(
+                        com.kennyb1201.kbstream.data.memory.LandscapeArtEmptyStore.prune(
+                            landscapeEmptyAnswers,
+                            now
+                        )
+                    )
+                )
+                .apply()
+        }
+    }
+
     private val watchedRefreshMutex =
         Mutex()
 
@@ -11068,20 +11136,55 @@ private suspend fun calculateEpisodesRemaining(
             return remembered
         }
 
+        // F5: an answer this device already learned across builds. Checked
+        // before the semaphore, because the whole point is never to queue for
+        // a lookup that is known to come back empty.
+        loadLandscapeEmptyAnswers()
+        if (
+            com.kennyb1201.kbstream.data.memory.LandscapeArtEmptyStore.isRemembered(
+                landscapeEmptyAnswers,
+                key,
+                System.currentTimeMillis()
+            )
+        ) {
+            PerfTrace.record("home.artEmptyReuse", 0L)
+            val empty: Pair<String?, String?> = null to null
+            rememberLandscapeLookup(key, empty)
+            return empty
+        }
+
         val startedAtMs =
             android.os.SystemClock.elapsedRealtime()
 
-        val detail =
+        // F1 (spec 2026-11-15): the parts of the 493ms, timed apart. `startedAt`
+        // to `acquiredAt` is the SEMAPHORE QUEUE - a rail of cards behind six
+        // permits - and `acquiredAt` to the answer is the lookup itself. Those
+        // two want different fixes, and the average in the paste could not tell
+        // them apart.
+        var acquiredAtMs = startedAtMs
+        var lookupSource = "unknown"
+
+        val fetched =
             landscapeArtSemaphore.withPermit {
+                acquiredAtMs = android.os.SystemClock.elapsedRealtime()
 
                 runCatchingCancellable {
 
                     tmdbRepository.fetchEnrichedMetaCached(
                         imdbId = request.id,
-                        type = request.type
+                        type = request.type,
+                        // Where the answer came from - mem, disk, net, or another
+                        // card's fetch already in flight - counted at the one
+                        // place that knows (see the parameter's own note).
+                        onSource = { lookupSource = it }
                     )
-                }.getOrNull()
+                }
             }
+
+        val detail = fetched.getOrNull()
+
+        PerfTrace.record("home.artWait", acquiredAtMs - startedAtMs)
+        PerfTrace.recordCount("home.artSrc.$lookupSource", 1)
 
         val art =
             detail.landscapeArtUrls()
@@ -11097,6 +11200,11 @@ private suspend fun calculateEpisodesRemaining(
             // were remembered rather than asked for again - the misses the
             // repository deliberately does not cache.
             PerfTrace.record("home.artEmpty", elapsedMs)
+            // F5: so the next session does not pay it again - but only an
+            // ANSWER is evidence. A fetch that failed says nothing about the
+            // title's art, and remembering it for a fortnight would keep the
+            // backdrop off a card that has one.
+            if (fetched.isSuccess) rememberLandscapeEmptyAnswer(key)
         }
 
         rememberLandscapeLookup(key, art)
@@ -13257,6 +13365,14 @@ private suspend fun calculateEpisodesRemaining(
          * cost before the memo existed.
          */
         private const val LANDSCAPE_MEMO_MAX_KEYS = 2_000
+
+        /**
+         * The persisted empty-art answers' prefs file and row (spec 2026-11-15,
+         * F5). Profile-scoped, like every other small home pref, so one
+         * profile's learned empties cannot answer for another's rails.
+         */
+        private const val PREFS_LANDSCAPE_EMPTY = "landscape_art_empty"
+        private const val PREFS_LANDSCAPE_EMPTY_ROWS = "empty_rows"
 
         // Dwell before hero network resolution kicks in (see resolveHeroMeta).
         // 150ms: still rides out fast D-pad scrolls (one focus event per

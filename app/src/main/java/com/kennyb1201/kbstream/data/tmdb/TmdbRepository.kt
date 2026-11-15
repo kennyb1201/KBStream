@@ -1068,7 +1068,19 @@ class TmdbRepository private constructor(context: Context) :
          * `Transient`/null, and a concurrent fetch of the same key is still
          * shared rather than duplicated.
          */
-        forceRefresh: Boolean = false
+        forceRefresh: Boolean = false,
+        /**
+         * Where the answer came from: "mem", "disk", "net" (a request this call
+         * made) or "shared" (another caller's already-running request, see
+         * [enrichedFetchInFlight]).
+         *
+         * For the diagnostics (spec 2026-11-15, Home art F1): a card's art
+         * lookup is 493ms on average in the field, and the paste could not say
+         * whether that was a network fetch, a disk parse after an eviction, or a
+         * memory hit with a slow queue in front of it. Counted at the one place
+         * that knows, rather than inferred from timings elsewhere.
+         */
+        onSource: ((String) -> Unit)? = null
     ): TmdbDetail? {
         val key = "${normalizeType(type)}:$imdbId"
         val now = System.currentTimeMillis()
@@ -1092,6 +1104,7 @@ class TmdbRepository private constructor(context: Context) :
                 // entries, they are just chosen by use.
                 detailCache[key] = now to cached.second
                 detailMemoryHits.incrementAndGet()
+                onSource?.invoke("mem")
                 return cached.second
             }
             if (!full) {
@@ -1099,6 +1112,7 @@ class TmdbRepository private constructor(context: Context) :
                 if (railCached != null && now - railCached.first < detailCacheTtlMs) {
                     railDetailCache[key] = now to railCached.second
                     detailMemoryHits.incrementAndGet()
+                    onSource?.invoke("mem")
                     return railCached.second
                 }
             }
@@ -1124,6 +1138,7 @@ class TmdbRepository private constructor(context: Context) :
                 detailCache[key] = now to parsed
                 railDetailCache[key] = now to parsed
                 detailDiskHits.incrementAndGet()
+                onSource?.invoke("disk")
                 return parsed
             }
         }
@@ -1141,6 +1156,7 @@ class TmdbRepository private constructor(context: Context) :
                     // recommendations, and must never answer a `full` caller.
                     railDetailCache[key] = now to parsed
                     detailDiskHits.incrementAndGet()
+                    onSource?.invoke("disk")
                     return parsed
                 }
             }
@@ -1151,12 +1167,17 @@ class TmdbRepository private constructor(context: Context) :
         // putIfAbsent closes the window between the check and the registration,
         // so two callers that both missed the cache cannot both start a
         // fetch).
+        // Said before the wait so the caller can report where the answer came
+        // from; the `?.let` shape below is the coalescing rule itself.
+        if (enrichedFetchInFlight[key] != null) onSource?.invoke("shared")
         enrichedFetchInFlight[key]?.let { pending -> return pending.await() }
 
         val deferred = CompletableDeferred<TmdbDetail?>()
         enrichedFetchInFlight.putIfAbsent(key, deferred)?.let { pending ->
+            onSource?.invoke("shared")
             return pending.await()
         }
+        onSource?.invoke("net")
 
         val result = try {
             runCatchingCancellable {
