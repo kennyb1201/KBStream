@@ -1561,8 +1561,15 @@ private fun LeagueBody(
         )
     }
     val final = remember(section.games, favoriteKeys) {
+        // Newest first, and capped (spec 2026-11-15, F2): the merge already drops
+        // finals past the seven-day window, so this holds a heavy weekend inside
+        // it - many followed teams, many finals - rather than the accumulation the
+        // field saw. The cap is applied to the DATE order (newest kept), and the
+        // favorites sort runs after it, so a followed team's final is never the
+        // one dropped in favour of a stranger's. The section's count is the
+        // capped size, so the cap is visible rather than hidden.
         SportsGameOrder.favoritesFirst(
-            section.games.filter { it.state == GameState.FINAL }.sortedByDescending { it.dateMs },
+            SportsFinalWindowRules.finalCards(section.games.filter { it.state == GameState.FINAL }),
             favoriteKeys
         )
     }

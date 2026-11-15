@@ -89,6 +89,7 @@ import com.kennyb1201.kbstream.ui.sports.LeagueSection
 import com.kennyb1201.kbstream.ui.sports.LeagueView
 import com.kennyb1201.kbstream.ui.sports.LineupStatus
 import com.kennyb1201.kbstream.ui.sports.SportsDetailRules
+import com.kennyb1201.kbstream.ui.sports.SportsFinalWindowRules
 import com.kennyb1201.kbstream.ui.sports.SportsGameOrder
 import com.kennyb1201.kbstream.ui.sports.SportsHubViewModel
 import com.kennyb1201.kbstream.ui.sports.SportsReopenRules
@@ -819,8 +820,12 @@ private fun LeagueBodyMobile(
         SportsGameOrder.upcoming(section.games.filter { it.state == GameState.UPCOMING }),
         favoriteKeys
     )
+    // Newest first and capped, the same rule the TV body draws (spec 2026-11-15,
+    // F2): the age-out lives in the merge, so both surfaces lost the stale finals
+    // together - this keeps the two sections identical rather than leaving the
+    // phone to render an uncapped list of the same games.
     val final = SportsGameOrder.favoritesFirst(
-        section.games.filter { it.state == GameState.FINAL }.sortedByDescending { it.dateMs },
+        SportsFinalWindowRules.finalCards(section.games.filter { it.state == GameState.FINAL }),
         favoriteKeys
     )
 

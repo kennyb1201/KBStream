@@ -127,9 +127,13 @@ class SportsHubFavoritesContractTest {
             hubFlat.contains(
                 "SportsGameOrder.upcoming(section.games.filter { it.state == GameState.UPCOMING })"
             ) &&
+                // The FINAL group is still cut (and date-ordered) before the
+                // favorites sort runs; the cut now also caps the section and is
+                // the rule's own call (spec 2026-11-15: newest first, at most
+                // twenty, so the star still leads and the tail is bounded).
                 hubFlat.contains(
-                    "section.games.filter { it.state == GameState.FINAL }" +
-                        ".sortedByDescending { it.dateMs }"
+                    "SportsFinalWindowRules.finalCards(" +
+                        "section.games.filter { it.state == GameState.FINAL })"
                 )
         )
         assertTrue(

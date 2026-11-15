@@ -1244,6 +1244,21 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             section
         }
+    }.let { section ->
+        // A FINAL past its window is history, not a score to check (spec
+        // 2026-11-15). The field: the 2026 World Series final was still the first
+        // card in Favorites' FINAL section eighteen days on, because nothing in
+        // the hub had any notion of a final getting old - the section carries
+        // whatever games it is handed, and ESPN's offseason scoreboard for the
+        // league keeps answering the season's last day.
+        //
+        // Dropped HERE, where a section's games are built, rather than at draw
+        // time: this list is the source of truth for the Favorites tab AND every
+        // league tab, so one filter is the fix for all of them. Silent on
+        // purpose - no tombstone, no per-game line; the section simply no longer
+        // carries it. LIVE and UPCOMING are never touched.
+        val kept = SportsFinalWindowRules.keepCurrent(section.games, System.currentTimeMillis())
+        if (kept.size == section.games.size) section else section.copy(games = kept)
     }
 
     // ── The bridge to the playlist ───────────────────────────────────
