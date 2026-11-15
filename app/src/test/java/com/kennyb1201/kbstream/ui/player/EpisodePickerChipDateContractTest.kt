@@ -25,7 +25,6 @@ import org.junit.Test
  */
 class EpisodePickerChipDateContractTest {
 
-    private val strip by lazy { source(SEASON_STRIP) }
     private val chipStyle by lazy { source(CHIP_STYLE) }
     private val adapter by lazy { source(PICKER_ADAPTER) }
     private val picker by lazy { source(PLAYER_PICKER) }
@@ -210,7 +209,6 @@ class EpisodePickerChipDateContractTest {
     }
 
     private companion object {
-        const val SEASON_STRIP = "java/com/kennyb1201/kbstream/ui/player/SeasonStripAdapter.kt"
         const val CHIP_STYLE = "java/com/kennyb1201/kbstream/ui/player/SeasonChipStyle.kt"
         const val PICKER_ADAPTER = "java/com/kennyb1201/kbstream/ui/player/PickerAdapter.kt"
         const val PLAYER_PICKER = "java/com/kennyb1201/kbstream/ui/player/PlayerEpisodePicker.kt"
