@@ -1508,6 +1508,33 @@ class HomeViewModel(
             null
         }
 
+    /**
+     * Waits out the art tier's dwell (spec 2026-11-15, scrolling round two F2).
+     *
+     * The hero's resolution has two tiers. META - title, year, rating, synopsis,
+     * cast, the trailer key - lands after [HERO_RESOLVE_DWELL_MS], as it always
+     * has. ART - the backdrop and clearlogo URLs, which are what makes the screen
+     * decode a 1280x720 bitmap - lands only once the focus has been still for
+     * [HERO_ART_DWELL_MS].
+     *
+     * 600ms sits above a rail walk step (a held repeat is ~30-100ms, a deliberate
+     * step ~300ms) and above the glow settle (220ms), and below a viewer's pause
+     * (~1s), so a walk pays the meta resolve per card and the decode only where
+     * the viewer stops.
+     *
+     * The gate needs no timer of its own: this runs inside `heroResolveJob`, which
+     * [resolveHeroMeta] cancels the moment focus moves, so a step that does not
+     * survive the dwell never reaches the publish below. The old art stays up in
+     * the meantime - the hold-over the method already keeps for exactly this
+     * reason - so nothing flashes and nothing blanks while a walk passes through.
+     */
+    private suspend fun awaitHeroArtDwell(startedAtMs: Long) {
+        val remaining =
+            HERO_ART_DWELL_MS -
+                (android.os.SystemClock.elapsedRealtime() - startedAtMs)
+        if (remaining > 0) delay(remaining)
+    }
+
     fun resolveHeroMeta(
         item: MetaPreview?,
         baseUrl: String? = null
@@ -1556,8 +1583,15 @@ class HomeViewModel(
                 // every transitively-focused title launched a full meta +
                 // detail + artwork chain before being canceled, wasting
                 // requests and starving the ones that mattered. Focus that
-                // survives 250ms is a deliberate stop — resolve it fully.
+                // survives 150ms is a deliberate stop - resolve it fully.
+                val resolveStartedAtMs = android.os.SystemClock.elapsedRealtime()
                 delay(HERO_RESOLVE_DWELL_MS)
+
+                // F3 (spec 2026-11-15, scrolling round two): the cards AFTER
+                // this one in its own rail, warmed at hero size into the memory
+                // cache while the viewer is still looking at this one. See
+                // [warmHeroLookahead].
+                warmHeroLookahead(item)
 
                 coroutineScope {
                     val addonMetaDeferred = async {
@@ -1670,6 +1704,14 @@ class HomeViewModel(
                     // (year, synopsis, cast) still lands with finalMeta.
                     launch {
                         val earlyArt = artworkDeferred.await()
+                        // F2 (spec 2026-11-15, scrolling round two): the art
+                        // FETCH runs here, in parallel and at meta time, but its
+                        // result is HELD until the focus has been still for
+                        // [HERO_ART_DWELL_MS]. A rail walk then pays the meta
+                        // resolve per card and the 1280x720 decode only where
+                        // the viewer actually stops - the old art stays up in
+                        // the meantime, so nothing flashes and nothing blanks.
+                        awaitHeroArtDwell(resolveStartedAtMs)
                         earlyArt?.backdropUrl
                             ?.takeIf { it.isNotBlank() }
                             ?.let { _heroBackdropUrl.value = it }
@@ -1861,6 +1903,12 @@ Log.d(
                     // resolvedLogo/resolvedBackdrop are resolved independently above (TMDB
                     // + heroArtwork), so publish them on their own state regardless of
                     // whether finalMeta exists, instead of losing them via the ?.copy() above.
+                    // Art is the SLOW tier (F2, spec 2026-11-15): the same dwell
+                    // gate as the early publish above, so a resolve that lands a
+                    // full set inside a walk step still leaves the walking art
+                    // alone. At rest this is a no-op wait - the dwell has already
+                    // passed - and the published set is byte-identical.
+                    awaitHeroArtDwell(resolveStartedAtMs)
                     _heroBackdropUrl.value = resolvedBackdrop
                     _heroBackdropPicture.value = resolvedBackdropPicture
                     _heroLogoUrl.value = resolvedLogo
@@ -2570,6 +2618,133 @@ Log.d(
             }
         }
     }
+
+    /**
+     * The hero-size bitmap of [artwork], decoded INTO THE MEMORY CACHE (spec
+     * 2026-11-15, scrolling round two F3).
+     *
+     * This is the difference [warmHeroArtImages] does not make: that one warms
+     * the IMAGE BYTES into Coil's disk cache with the memory policy disabled, so
+     * the title still pays a 1280x720 decode from disk on its first hero draw.
+     * The lookahead's whole point is that the decode has already happened when the
+     * focus lands, so the hero swaps art in one frame.
+     *
+     * Memory-only, one size, no HTML/network policy games: the request is the
+     * hero's own (`Size(1280, 720)`), so the cache entry it writes is the entry the
+     * hero reads. A title with no backdrop warms nothing.
+     */
+    private suspend fun warmHeroArtBitmap(artwork: HeroArtwork?) {
+        val url = artwork?.backdropUrl?.takeIf { it.isNotBlank() } ?: return
+        val application = getApplication<Application>()
+        runCatchingCancellable {
+            coil3.SingletonImageLoader.get(application).execute(
+                coil3.request.ImageRequest.Builder(application)
+                    .data(url)
+                    .size(HERO_LOOKAHEAD_BITMAP_WIDTH, HERO_LOOKAHEAD_BITMAP_HEIGHT)
+                    .build()
+            )
+        }
+    }
+
+    /**
+     * Warms the cards AFTER [item] in its own rail, at hero size, into the memory
+     * cache (spec 2026-11-15, scrolling round two F3).
+     *
+     * Called once per hero resolve, from inside the dwell job, for the
+     * [HERO_LOOKAHEAD_CARDS] cards that follow the focused one - the direction a
+     * rail walk travels. Bounded and polite by construction:
+     *
+     *  - it shares [heroArtPrefetchSemaphore] (2 permits) and
+     *    [heroArtPrefetchInFlight], so it can never hold the TMDB/OkHttp capacity
+     *    the foreground needs and never warms the same card twice;
+     *  - it is a `viewModelScope` launch of its own, NOT a child of the resolve
+     *    job: a walk step that cancels the hero resolve must not cancel the warm
+     *    it already started (that warm is for the card the walk is heading to),
+     *    and leaving Home drops it with the ViewModel;
+     *  - it touches TMDB artwork only - never MDBList, never a tracker.
+     *
+     * The 60-card metadata + disk-byte warm in [prefetchHeroArt] is unchanged:
+     * this is the near field, that is the backlog.
+     */
+    private fun warmHeroLookahead(item: MetaPreview) {
+        val rail =
+            _rails.value.firstOrNull { rail -> rail.items.any { it.id == item.id } }
+                ?: return
+        val index =
+            rail.items.indexOfFirst {
+                it.id == item.id && it.type.equals(item.type, ignoreCase = true)
+            }
+        if (index < 0) return
+        val ahead = rail.items
+            .drop(index + 1)
+            .filter { it.id.isNotBlank() }
+            .distinctBy { "${it.type}:${it.id}" }
+            .take(HERO_LOOKAHEAD_CARDS)
+        if (ahead.isEmpty()) return
+
+        viewModelScope.launch {
+            ahead.forEach { next ->
+                val key = "${next.type}:${next.id}"
+                if (!heroArtPrefetchInFlight.add(key)) return@forEach
+                try {
+                    val artwork = heroArtPrefetchSemaphore.withPermit {
+                        resolveHeroArtworkForPrefetch(next)
+                    }
+                    warmHeroArtBitmap(artwork)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // Best-effort: the focus path resolves it properly.
+                } finally {
+                    heroArtPrefetchInFlight.remove(key)
+                }
+            }
+        }
+    }
+
+    /**
+     * The hero artwork for one preview, by id shape - the same chain
+     * [prefetchHeroArt] runs per card, in one place so the lookahead cannot resolve
+     * a title differently from the backlog.
+     */
+    private suspend fun resolveHeroArtworkForPrefetch(item: MetaPreview): HeroArtwork? =
+        try {
+            val detail = when {
+                item.id.startsWith("tmdb:", ignoreCase = true) ->
+                    item.id.substringAfter(":").toIntOrNull()
+                        ?.let { tmdbRepository.getDetailByTmdbId(it, item.type) }
+
+                item.id.startsWith("tt", ignoreCase = true) ->
+                    tmdbRepository.fetchEnrichedMetaCached(item.id, item.type)
+
+                item.id.toIntOrNull() != null ->
+                    item.id.toIntOrNull()
+                        ?.let { tmdbRepository.getDetailByTmdbId(it, item.type) }
+
+                else -> null
+            }
+
+            val tmdbId = when {
+                item.id.startsWith("tmdb:", ignoreCase = true) ->
+                    item.id.substringAfter(":").toIntOrNull()
+                item.id.toIntOrNull() != null -> item.id.toIntOrNull()
+                else -> detail?.id
+            }
+
+            if (tmdbId != null && tmdbId > 0) {
+                tmdbHeroArtworkRepository.resolve(
+                    id = "tmdb:$tmdbId",
+                    type = item.type,
+                    tmdbId = tmdbId
+                )
+            } else {
+                null
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
 
     private fun findBaseUrlForMeta(item: MetaPreview): String {
         return _rails.value.firstOrNull { rail ->
@@ -13488,6 +13663,28 @@ private suspend fun calculateEpisodesRemaining(
         // artwork+detail are cached/aggressive enough to absorb the extra
         // in-flight requests.
         private const val HERO_RESOLVE_DWELL_MS = 150L
+
+        /**
+         * How long the focus must be STILL before the hero's ART publishes (spec
+         * 2026-11-15, scrolling round two F2).
+         *
+         * The meta tier keeps [HERO_RESOLVE_DWELL_MS]; this is the art tier - the
+         * backdrop and clearlogo, i.e. the 1280x720 decode. Longer than a walk
+         * step (~300ms) and than the glow settle (220ms), shorter than a
+         * deliberate pause (~1s).
+         */
+        private const val HERO_ART_DWELL_MS = 600L
+
+        /** Cards after the focused one whose hero art the lookahead warms (F3). */
+        private const val HERO_LOOKAHEAD_CARDS = 3
+
+        /**
+         * The size the hero actually draws at - the same `Size(1280, 720)`
+         * [HeroBackdropArt] asks for. The lookahead must write the SAME cache
+         * entry, or the hero re-decodes anyway.
+         */
+        private const val HERO_LOOKAHEAD_BITMAP_WIDTH = 1280
+        private const val HERO_LOOKAHEAD_BITMAP_HEIGHT = 720
 
         private const val TMDB_MAX_CONCURRENT_LOOKUPS =
             5

@@ -16,6 +16,7 @@ import coil3.svg.SvgDecoder
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
+import com.kennyb1201.kbstream.data.memory.trimImageMemoryCache
 import com.kennyb1201.kbstream.data.reporting.ImageLoadTrace
 import com.kennyb1201.kbstream.data.reporting.CrashReporter
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
@@ -634,8 +635,15 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             // onLowMemory(), which are the two levels that mean the process is
             // actually in trouble; the 64 MB cap is what keeps the cache from
             // being the trouble in the first place.
+            //
+            // F4 of the 2026-11-15 scrolling round-two spec: CRITICAL now gives
+            // back HALF the bitmap cache instead of all of it. The `clear()` that
+            // used to run here is the mid-scroll wipe the paste kept showing - the
+            // rail on screen then re-decoded as the viewer kept moving. A full
+            // clear is still what onLowMemory() does, and that is the level that
+            // means the process itself is about to die.
             if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
-                releaseImageMemoryCache(this)
+                trimImageMemoryCache(this)
                 MemoryPressure.releaseBrowsingCaches()
                 // The trailer pre-warm's WebView is the reclaimable half of the
                 // PO-token layer: a cached token is a string, a live page is a

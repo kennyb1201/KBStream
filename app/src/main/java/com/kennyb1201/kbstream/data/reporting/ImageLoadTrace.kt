@@ -49,6 +49,18 @@ internal object ImageLoadTrace {
     /** Distinct decode sizes kept. Six names the surfaces; more is a log. */
     private const val MAX_SIZES = 6
 
+    /**
+     * Where "hero-size" starts, in DECODED pixels (spec 2026-11-15, scrolling
+     * round two F1).
+     *
+     * The hero asks for 1280x720 ([HeroBackdropArt]); a rail tile is a few hundred
+     * wide. 960 is above every tile size the app requests and below the hero's, so
+     * a decode at or above it is a hero draw - the count the dig could not get from
+     * `decoded at:`, which keeps only six sizes and so says nothing about how often
+     * one of them repeated.
+     */
+    const val HERO_DECODE_MIN_WIDTH = 960
+
     /** Trim levels kept, newest last. Levels repeat, so this counts. */
     private const val MAX_TRIMS = 4
 
@@ -58,6 +70,13 @@ internal object ImageLoadTrace {
     private var diskDecodes = 0
     private var networkDecodes = 0
     private var otherDecodes = 0
+
+    // F1 of the scrolling round-two spec: two counts the size list could not
+    // carry. A hero decode is the 1280x720 re-decode a rail walk pays per card;
+    // a rail disk decode is a newly-visible card's tile coming off the disk
+    // because the memory cache no longer had it.
+    private var heroDecodes = 0
+    private var railDiskDecodes = 0
 
     /** "WxH" -> count, first-seen order kept (LinkedHashMap). */
     private val sizes = LinkedHashMap<String, Int>()
@@ -78,6 +97,14 @@ internal object ImageLoadTrace {
             // six slots in one tile's dimensions and hide the surfaces that
             // really did decode.
             if (source == Source.MEMORY || width <= 0 || height <= 0) return
+            // The two counts the size list cannot carry (spec 2026-11-15, F1).
+            // Classified by DECODED width, not by URL or call site, so it costs
+            // no call-site plumbing and counts what was actually decoded.
+            if (width >= HERO_DECODE_MIN_WIDTH) {
+                heroDecodes++
+            } else if (source == Source.DISK) {
+                railDiskDecodes++
+            }
             val key = "${width}x$height"
             sizes[key] = (sizes[key] ?: 0) + 1
             while (sizes.size > MAX_SIZES) {
@@ -122,6 +149,13 @@ internal object ImageLoadTrace {
             out += "loads: memory=$memoryHits disk=$diskDecodes " +
                 "network=$networkDecodes other=$otherDecodes"
         }
+        // The scroll session's two counts (spec 2026-11-15, F1): how many hero
+        // decodes the walk paid, and how many rail cards had to be decoded off
+        // the disk. Both are read as "the fix must bring this down", which is
+        // why they are counts rather than sizes.
+        if (heroDecodes > 0 || railDiskDecodes > 0) {
+            out += "scroll: heroDecodes=$heroDecodes cardDiskDecodes=$railDiskDecodes"
+        }
         if (sizes.isNotEmpty()) {
             out += "decoded at: " +
                 sizes.entries.joinToString(", ") { "${it.key} x${it.value}" }
@@ -140,6 +174,8 @@ internal object ImageLoadTrace {
             diskDecodes = 0
             networkDecodes = 0
             otherDecodes = 0
+            heroDecodes = 0
+            railDiskDecodes = 0
             sizes.clear()
             trims.clear()
         }

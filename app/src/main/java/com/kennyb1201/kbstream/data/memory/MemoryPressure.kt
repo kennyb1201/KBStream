@@ -69,6 +69,12 @@ object MemoryPressure {
     private val imageReleases = AtomicInteger(0)
     private val browsingReleases = AtomicInteger(0)
 
+    // A graded trim and a full clear are different events with different costs
+    // (spec 2026-11-15, scrolling round two F4): the paste has to be able to say
+    // which one it saw, because a clear is the one that blanks the rail.
+    private val imageTrims = AtomicInteger(0)
+    private val imageClears = AtomicInteger(0)
+
     /** Called by a cache owner as it is constructed. */
     fun register(owner: CacheOwner) {
         tracked.add(WeakReference(owner))
@@ -98,6 +104,13 @@ object MemoryPressure {
     /** Called by [releaseImageMemoryCache] so the bitmap half is counted too. */
     internal fun noteImageCacheReleased() {
         imageReleases.incrementAndGet()
+        imageClears.incrementAndGet()
+    }
+
+    /** Called by [trimImageMemoryCache]: a graded trim, not a clear. */
+    internal fun noteImageCacheTrimmed() {
+        imageReleases.incrementAndGet()
+        imageTrims.incrementAndGet()
     }
 
     /**
@@ -109,7 +122,11 @@ object MemoryPressure {
         val images = imageReleases.get()
         val browsing = browsingReleases.get()
         if (images == 0 && browsing == 0) return null
-        return "releases: images=$images browsing=$browsing"
+        // trims vs clears (F4, spec 2026-11-15): `images=` stays the total, so
+        // an older paste still reads the same way, and the split says which kind
+        // of release it was. A session that only trimmed shows `clears=0`.
+        return "releases: images=$images browsing=$browsing" +
+            " trims=${imageTrims.get()} clears=${imageClears.get()}"
     }
 
     /**
@@ -149,5 +166,48 @@ internal fun releaseImageMemoryCache(context: Context) {
     runCatching {
         SingletonImageLoader.get(context.applicationContext).memoryCache?.clear()
         MemoryPressure.noteImageCacheReleased()
+    }
+}
+
+/**
+ * Gives back HALF the decoded-bitmap cache, biggest bitmaps first (spec
+ * 2026-11-15, scrolling round two F4).
+ *
+ * This is the RUNNING_CRITICAL response now. `clear()` is what made a pressure
+ * event mid-scroll re-decode the rail the viewer was looking at, including cards
+ * they had just scrolled past; a graded trim keeps those and drops the largest
+ * entries - hero-size backdrops - which are the ones the hero re-decodes anyway
+ * the next time focus moves.
+ *
+ * `trimToSize` is the backstop behind the chosen evictions: if the loader did not
+ * report entry sizes (some decoders do not), the chosen list cannot reach the
+ * target and the cache trims itself to the same half by its own order.
+ */
+internal fun trimImageMemoryCache(context: Context) {
+    runCatching {
+        val cache = SingletonImageLoader.get(context.applicationContext).memoryCache
+            ?: return
+        val resident = cache.size
+        if (resident <= 0) return
+
+        // The Keys, not their strings: `remove` matches the whole key (key +
+        // extras), and a rebuilt Key with the same string would not match.
+        val keys = cache.keys.toList()
+        val entries = keys.map { key ->
+            val image = cache.get(key)?.image
+            ImageCacheTrim.Entry(
+                width = image?.width ?: 0,
+                height = image?.height ?: 0,
+                sizeBytes = image?.size ?: 0L
+            )
+        }
+        ImageCacheTrim.evictIndices(entries, resident).forEach { index ->
+            runCatching { cache.remove(keys[index]) }
+        }
+        val half = resident / 2
+        if (cache.size > half) {
+            runCatching { cache.trimToSize(half) }
+        }
+        MemoryPressure.noteImageCacheTrimmed()
     }
 }
