@@ -12312,8 +12312,33 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private fun reassertPickerFocus() {
         if (!isPickerShowing) return
         val remembered = pickerLastFocus
-        if (remembered != null && remembered.isShown && remembered.requestFocus()) return
-        pickerList.getChildAt(0)?.requestFocus()
+        // A rebind (a season switch, a menu refresh) detaches the view focus was
+        // on. Asking a detached view for focus answers false and used to end the
+        // whole reassert, which is the hole: the stale reference was the reason
+        // the guard fell through, and focus stayed on the pill it was pulled
+        // back from. So the reference is dropped and re-resolved below.
+        if (
+            remembered != null &&
+            remembered.isAttachedToWindow &&
+            remembered.isShown &&
+            remembered.requestFocus()
+        ) {
+            return
+        }
+        pickerLastFocus = null
+        // The panel's own views, in the order a viewer would look: the row they
+        // were on has gone, so the list's first row, then the loaded season's
+        // chip (which draws the ring the strip's holder cannot), then the strip
+        // itself, and finally the scrim - the standing parking spot from
+        // 8314055d7, focusable on purpose and inside this window. The fallback
+        // must NEVER be null: a trap whose last resort is nothing is not a trap,
+        // and the overlay's cast row is exactly what it leaves focused.
+        if (pickerList.getChildAt(0)?.requestFocus() == true) return
+        if (seasonStripAdapter?.focusSelected(pickerSeasons) == true) {
+            if (pickerSeasons.findFocus() != null || pickerSeasons.requestFocus()) return
+        }
+        if (pickerSeasons.requestFocus()) return
+        scrim.requestFocus()
     }
 
     // --- Settings Panel ---

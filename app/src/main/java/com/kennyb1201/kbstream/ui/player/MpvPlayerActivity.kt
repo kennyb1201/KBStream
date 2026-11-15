@@ -3051,7 +3051,34 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private fun reassertPickerFocus() {
         if (!pickerOpen) return
         val remembered = pickerLastFocus
-        if (remembered != null && remembered.isShown && remembered.requestFocus()) return
+        // A rebind detaches the view focus was on, and asking that stale view
+        // for focus answers false - so the reference is dropped and re-resolved
+        // instead of being the reason this guard does nothing (spec 2026-11-14,
+        // F2; the main player's copy carries the same note).
+        if (
+            remembered != null &&
+            remembered.isAttachedToWindow &&
+            remembered.isShown &&
+            remembered.requestFocus()
+        ) {
+            return
+        }
+        pickerLastFocus = null
+        val list = pickerList
+        if (list != null && list.visibility == View.VISIBLE && list.getChildAt(0)?.requestFocus() == true) {
+            return
+        }
+        // The loaded season's chip draws the ring; the strip's own holder does
+        // not, so it is asked only once the chip could not take it.
+        val strip = pickerSeasons
+        if (strip != null && strip.visibility == View.VISIBLE) {
+            if (seasonStripAdapter?.focusSelected(strip) == true) {
+                if (strip.findFocus() != null || strip.requestFocus()) return
+            }
+            if (strip.requestFocus()) return
+        }
+        // Never null on this engine either: the container always holds the list
+        // or the strip, so a press that walked out still lands inside the panel.
         pickerContainer?.let { focusFirstPill(it) }
     }
 

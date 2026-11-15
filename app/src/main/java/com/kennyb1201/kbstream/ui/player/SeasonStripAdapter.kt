@@ -72,6 +72,28 @@ class SeasonStripAdapter(
         // F1(c)). The root keeps one too, for a touch on the chip's margin.
         chip.setOnClickListener { item.onClick() }
         holder.itemView.setOnClickListener { item.onClick() }
+        // THE STRIP'S OWN EDGES (spec 2026-11-14, F2). DOWN is wired through
+        // nextFocusDownId; LEFT at the first chip, RIGHT at the last and UP
+        // anywhere had no edge at all, so the press fell to focus search, which
+        // walks the whole window and finds the cast row of the overlay drawn
+        // behind the panel - the field report: the ring jumped out of the strip
+        // and the next OK opened an actor page mid-episode. Consuming those
+        // presses holds the ring on the end chip; the decision itself is the
+        // shared, tested [PickerDpadRules.holdsWithinStrip], so the two engines
+        // cannot answer differently.
+        chip.setOnKeyListener { _, keyCode, event ->
+            if (event.action != android.view.KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+            val direction = when (keyCode) {
+                android.view.KeyEvent.KEYCODE_DPAD_LEFT -> StripDirection.LEFT
+                android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> StripDirection.RIGHT
+                android.view.KeyEvent.KEYCODE_DPAD_UP -> StripDirection.UP
+                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> StripDirection.DOWN
+                else -> StripDirection.OTHER
+            }
+            val position = holder.bindingAdapterPosition
+            if (position < 0) return@setOnKeyListener false
+            PickerDpadRules.holdsWithinStrip(direction, position, items.lastIndex)
+        }
     }
 
     override fun getItemCount() = items.size
