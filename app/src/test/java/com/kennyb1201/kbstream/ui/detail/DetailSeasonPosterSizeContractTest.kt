@@ -72,11 +72,14 @@ class DetailSeasonPosterSizeContractTest {
     }
 
     @Test
-    fun `the phone's poster is not part of this`() {
+    fun `the phone's poster is its own spec, not this one`() {
+        // The phone has its own season poster and its own spec (72dp, moved next
+        // to its heading). What this test guards is that the TV's 84dp did not
+        // leak into it: the two surfaces are sized by separate landings.
         val phone = read("ui/mobile/DetailScreenMobile.kt")
         assertTrue(
             "the phone keeps its own width",
-            phone.contains(".width(48.dp)\n                                                .aspectRatio(2f / 3f)")
+            phone.contains(".width(72.dp)\n                                                .aspectRatio(2f / 3f)")
         )
         assertFalse(
             "and did not inherit the TV's bump",

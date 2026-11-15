@@ -2175,13 +2175,19 @@ fun DetailScreenMobile(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
+                                // The heading sizes to its own text, so the
+                                // season's poster can hang directly off it - the
+                                // same move the TV made (spec 2026-11-15). It used
+                                // to take weight(1f), which pushed the poster to
+                                // the far right edge of the row, away from the
+                                // section it belongs to.
                                 MobileSectionHeader(
-                                    if (episodesLoading) "Episodes…" else "Episodes",
-                                    modifier = Modifier.weight(1f)
+                                    if (episodesLoading) "Episodes…" else "Episodes"
                                 )
-                                // The season's own poster beside the heading
-                                // that already follows the chips. No poster of
-                                // its own = nothing drawn here, never the show's.
+                                // The season's own poster immediately right of the
+                                // heading, bigger (72dp - spec 2026-11-15). No
+                                // poster of its own = nothing drawn here, never
+                                // the show's.
                                 mobileSeasonPosterUrl?.let { poster ->
                                     // Re-keyed on the retry so a failed draw gets
                                     // exactly one more request instead of a
@@ -2208,14 +2214,25 @@ fun DetailScreenMobile(
                                                     mobileSeasonPosterRetry++
                                                 }
                                             },
+                                            // Start padding, not end: the poster
+                                            // hangs off the heading now instead of
+                                            // sitting at the screen edge. It stays
+                                            // vertically centred against the
+                                            // heading, and the request is the raw
+                                            // URL - Coil decodes at the target, so
+                                            // a wider draw re-fetches nothing.
                                             modifier = Modifier
-                                                .padding(end = 16.dp)
-                                                .width(48.dp)
+                                                .padding(start = 12.dp)
+                                                .width(72.dp)
                                                 .aspectRatio(2f / 3f)
                                                 .clip(KBShapeSmall)
                                         )
                                     }
                                 }
+                                // The row still fills the width, so the column
+                                // below never shifts; the heading stays at the
+                                // screen edge.
+                                Spacer(Modifier.weight(1f))
                             }
                             // The season chips own the row now. The episode
                             // area's LIST/RAIL choice is a Settings row
