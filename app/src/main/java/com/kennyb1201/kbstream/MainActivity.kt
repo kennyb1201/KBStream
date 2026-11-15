@@ -1641,6 +1641,13 @@ fun AppRoot(
 
     LaunchedEffect(pendingAutoPlay) {
         val pending = pendingAutoPlay ?: return@LaunchedEffect
+        // This effect IS the wait that follows the Play press (spec 2026-11-15,
+        // Play-to-first-frame F1): the add-on probes, the TorBox mint and the
+        // "Finding sources" splash all run below, and none of it was inside any
+        // playback figure - those start when the player is created, which is
+        // after this. Stamped here and closed in the player (see
+        // PlaybackSessionTrace), so the report can add the two halves up.
+        com.kennyb1201.kbstream.data.player.PlaybackSessionTrace.markPressed()
         // Mark the target as auto-played up front so the picker can never
         // auto-select it again if we fall through to it (no playable source).
         autoPlayedStreamKeys =

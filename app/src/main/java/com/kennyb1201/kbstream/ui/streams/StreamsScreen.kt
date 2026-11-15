@@ -252,6 +252,10 @@ fun StreamsScreen(
         addons: List<String?>,
         selectedAddon: String?
     ) {
+        // A picker press is a Play press for the report's purposes, and it is
+        // stamped HERE, before the TorBox mint below: the mint is part of the
+        // wait the viewer is watching (spec 2026-11-15, Play-to-first-frame F1).
+        com.kennyb1201.kbstream.data.player.PlaybackSessionTrace.markPressed()
         if (selected.drm?.licenseUrl != null) {
             PlayerEngine.clearLaunchAnime()
         }

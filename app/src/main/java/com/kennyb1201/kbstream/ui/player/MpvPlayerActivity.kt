@@ -1071,6 +1071,17 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // and a player is the screen where a navy edge is most obvious.
         applyPlayerWindowTone(this)
 
+        // The play-to-player leg (spec 2026-11-15, Play-to-first-frame F1).
+        // This engine has no `playback.source_ready` / `playback.first_frame`
+        // split - it has no equivalent hooks wired yet - so the report marks the
+        // session `engine=mpv` and says the split is Exo-only rather than
+        // printing a dash with no explanation. The resolve leg it CAN measure is
+        // the same on both engines, and it is the half that was invisible.
+        com.kennyb1201.kbstream.data.player.PlaybackSessionTrace.beginSession(
+            engine = "mpv",
+            kind = launchSourceKind()
+        )
+
         // Kids Mode: a daily limit or bedtime that lands mid-film has to end
         // the playback it is counting. The lock overlay lives in MainActivity,
         // behind this Activity, so without this the film simply ran to the end.
@@ -2772,6 +2783,24 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      * cache would otherwise start the link that last STARTED, without resolving,
      * so the pick would never even be consulted.
      */
+    /**
+     * "debrid" or "http" for the link this session was launched with, by the
+     * ranker's own rule - the same reading the ExoPlayer engine reports, so the
+     * two engines' lines can be compared.
+     */
+    private fun launchSourceKind(): String =
+        if (
+            com.kennyb1201.kbstream.domain.streamengine.StreamRanker.isDebridServed(
+                com.kennyb1201.kbstream.data.addon.Stream(
+                    url = intent.getStringExtra("stream_url")
+                )
+            )
+        ) {
+            "debrid"
+        } else {
+            "http"
+        }
+
     private fun rememberManualSourcePick(stream: Stream) {
         if (parentId.isNotBlank()) {
             SourcePickMemory.remember(this, parentId, season, episode, stream)

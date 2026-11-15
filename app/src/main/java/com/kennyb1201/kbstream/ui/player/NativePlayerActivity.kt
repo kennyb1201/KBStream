@@ -6174,6 +6174,27 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * from the error path only; the session still walks its remaining cached
      * sources (the error ladder), and only a FUTURE replay re-resolves fresh.
      */
+    /**
+     * "debrid" or "http" for the link this session was launched with, by the
+     * ranker's own rule (a debrid host, or a debrid completion tag in its text).
+     *
+     * Read from the launch URL rather than from the picked row on purpose: what
+     * the report needs to know is which side of the socket the timed figures
+     * came from, and a resolved hash row is a debrid link by the time it plays.
+     */
+    private fun launchSourceKind(): String =
+        if (
+            com.kennyb1201.kbstream.domain.streamengine.StreamRanker.isDebridServed(
+                com.kennyb1201.kbstream.data.addon.Stream(
+                    url = intent.getStringExtra("stream_url")
+                )
+            )
+        ) {
+            "debrid"
+        } else {
+            "http"
+        }
+
     private fun invalidateCachedLinkBeforeFirstFrame() {
         if (firstFrameRendered || linkCacheInvalidated) return
         val cacheKey = intent.getStringExtra("played_link_key") ?: return
@@ -6191,6 +6212,15 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         videoTrackPresent = false
         firstFrameRendered = false
         startupTraceStartMs = System.currentTimeMillis()
+        // The leg BEFORE this clock (spec 2026-11-15, Play-to-first-frame F1):
+        // everything above - the add-on probes, the TorBox mint, the whole
+        // "Finding sources" splash - happens while this player does not exist,
+        // so no figure here ever included it. Closed at the point this clock
+        // starts, so resolve + (this -> first frame) is the wait that was felt.
+        com.kennyb1201.kbstream.data.player.PlaybackSessionTrace.beginSession(
+            engine = "exo",
+            kind = launchSourceKind()
+        )
         firstReadyAtMs = 0L
         blackVideoNoticeShown = false
         // Invalidate any black-video recovery scheduled for the previous

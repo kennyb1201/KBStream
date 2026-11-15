@@ -209,6 +209,10 @@ fun StreamsScreenMobile(
             addons: List<String?>,
             selectedAddon: String?
         ) {
+            // Stamped before the TorBox mint below, which is part of the wait
+            // the viewer is watching (see the TV picker's note, spec 2026-11-15
+            // Play-to-first-frame F1).
+            com.kennyb1201.kbstream.data.player.PlaybackSessionTrace.markPressed()
             if (selected.drm?.licenseUrl != null) {
                 PlayerEngine.clearLaunchAnime()
             }

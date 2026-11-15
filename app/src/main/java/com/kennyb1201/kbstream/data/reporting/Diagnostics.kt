@@ -569,8 +569,12 @@ object Diagnostics {
         // every zap that recorded one.
         val zapWarm = PerfTrace.sumMs("live.prefetch_warm")
         val zapCount = PerfTrace.count("live.prefetch_warm")
+        // The play-to-player leg and the session's own facts (spec 2026-11-15,
+        // Play-to-first-frame F1): read from the trace rather than the ring, so
+        // a long session cannot evict the launch this line is describing.
+        val session = com.kennyb1201.kbstream.data.player.PlaybackSessionTrace.facts()
         if (ready == null && firstFrame == null && zapReady == null &&
-            stalls == 0 && rebuilds == 0 && zapCount == 0
+            stalls == 0 && rebuilds == 0 && zapCount == 0 && session == null
         ) {
             return null
         }
@@ -585,6 +589,28 @@ object Diagnostics {
             }
             append(" rebuilds=").append(rebuilds)
             if (zapCount > 0) append(" zaps-warm=").append(zapWarm).append("/").append(zapCount)
+            // Everything above starts at player creation, so it is the SECOND
+            // half of the wait. This is the first: the press, the probes, the
+            // TorBox mint, the "Finding sources" splash. A dash means the
+            // launch had no press to measure from (a handoff, a zap, a
+            // download), not that the leg was skipped silently.
+            append(" resolve=").append(
+                session?.resolveMs?.takeIf { it >= 0L }?.let { "${it}ms" }
+                    ?: PerfTrace.latestByPrefix("playback.resolve").firstOrNull()
+                        ?.second?.let { "${it}ms" }
+                    ?: "\u2014"
+            )
+            // Which engine and which kind of link produced those figures: the
+            // split is instrumented on the ExoPlayer engine only, and a debrid
+            // CDN and a hoster link fail differently, so a line without these
+            // invites the wrong diagnosis.
+            session?.let { facts ->
+                append(" engine=").append(facts.engine)
+                append(" src=").append(facts.kind)
+                if (facts.engine != "exo" && ready == null && firstFrame == null) {
+                    append(" split=exo-only")
+                }
+            }
         }
     }
 
