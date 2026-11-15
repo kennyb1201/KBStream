@@ -125,6 +125,17 @@ object Diagnostics {
 
         report.appendLine(deviceLine(app))
         report.appendLine(memoryLine())
+        // F1 of the 2026-11-14 scrolling spec. Three facts the report could not
+        // state before, and the whole argument over what to fix needs all
+        // three: the pixels the UI is actually rendering at (a 4K framebuffer
+        // is four times the fill-rate of 1080p), what the decoded-bitmap cache
+        // is holding against its cap, and what the loader actually did on the
+        // way to a paste - served from memory, decoded from disk, or fetched,
+        // at what sizes. "My scrolling is janky" used to be answered from the
+        // log of a build nobody could read; this is the line that answers it.
+        report.appendLine(displayLine(app))
+        imageCacheLine(app)?.let { report.appendLine(it) }
+        ImageLoadTrace.lines().forEach { report.appendLine("image: $it") }
         report.appendLine(accountLine())
         report.appendLine(profileLine())
         report.appendLine(cleanupLine(app))
@@ -428,6 +439,44 @@ object Diagnostics {
             }
         }
     }
+
+    /**
+     * The display the UI is drawing into, and the panel it is drawing for.
+     *
+     * Two numbers, deliberately apart. `ui` is the app's own configuration in
+     * pixels: what Compose lays out and what every glow, scrim and upscaled
+     * bitmap has to fill. `panel` is the display mode the TV is in. On a 4K
+     * output they differ from a 1080p one by four times the pixels, which is
+     * the fill-rate half of the scrolling problem (spec 2026-11-14, cause 3) -
+     * and it is a fact about THIS session, not about the model of TV.
+     */
+    private fun displayLine(context: Context): String {
+        val ui = context.resources.displayMetrics
+        val mode = runCatching {
+            val manager = context.getSystemService(Context.DISPLAY_SERVICE)
+                as? android.hardware.display.DisplayManager
+            manager?.getDisplay(android.view.Display.DEFAULT_DISPLAY)?.mode
+        }.getOrNull()
+        val panel = mode?.let {
+            "${it.physicalWidth}x${it.physicalHeight}@${String.format("%.1f", it.refreshRate)}Hz"
+        } ?: "?"
+        return "display: ui=${ui.widthPixels}x${ui.heightPixels} " +
+            "density=${String.format("%.2f", ui.density)} panel=$panel"
+    }
+
+    /**
+     * The decoded-bitmap cache against its cap, read from the live loader.
+     *
+     * A cap printed beside its size is the only way to tell a cache that is
+     * doing its job from one the trim path kept emptying (see [ImageLoadTrace]
+     * for the decode side of the same question). Null when the loader has not
+     * been built yet, which keeps a cold report as short as it was.
+     */
+    private fun imageCacheLine(context: Context): String? = runCatching {
+        val cache = coil3.SingletonImageLoader.get(context.applicationContext)
+            .memoryCache ?: return@runCatching null
+        "image cache: ${cache.size / 1_048_576}MB of ${cache.maxSize / 1_048_576}MB"
+    }.getOrNull()
 
     /**
      * The launch phase by phase, in the order they happen.

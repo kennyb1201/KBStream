@@ -155,10 +155,11 @@ fun LandscapeCard(
     // Null on Modern and on every surface that is not a Home rail: the card then
     // reports nothing and behaves exactly as it always has.
     val spotlightFocus = com.kennyb1201.kbstream.ui.home.LocalSpotlightCardFocus.current
-    var spotlightFocused by remember { mutableStateOf(false) }
-    var spotlightBounds by remember {
-        mutableStateOf(androidx.compose.ui.geometry.Rect.Zero)
-    }
+    // F5 of the 2026-11-14 scrolling spec, the same change PosterCard carries:
+    // the bounds are measured on every layout into a PLAIN field, not Compose
+    // state, and read once - when the card takes focus. Writing state here
+    // invalidated every card in a scrolling rail on every frame.
+    val spotlightBounds = remember { CardBoundsHolder() }
     // The card's own node, so the panel's pills can send UP back to it.
     val spotlightCardRequester = remember { androidx.compose.ui.focus.FocusRequester() }
     val spotlightModifier =
@@ -168,12 +169,13 @@ fun LandscapeCard(
             Modifier
                 .focusRequester(spotlightCardRequester)
                 .onGloballyPositioned { coordinates ->
-                    spotlightBounds = coordinates.boundsInRoot()
-                    if (spotlightFocused) spotlightFocus.updateBounds(spotlightBounds)
+                    spotlightBounds.rect = coordinates.boundsInRoot()
                 }
                 .onFocusChanged { state ->
-                    spotlightFocused = state.isFocused
-                    if (state.isFocused) spotlightFocus.cardRequester = spotlightCardRequester
+                    if (state.isFocused) {
+                        spotlightFocus.cardRequester = spotlightCardRequester
+                        spotlightFocus.updateBounds(spotlightBounds.rect)
+                    }
                     spotlightFocus.onCardFocus(state.isFocused) {
                         com.kennyb1201.kbstream.ui.home.SpotlightCardSnapshot(
                             title = contentDescription ?: fallbackTitle,
@@ -183,7 +185,7 @@ fun LandscapeCard(
                             isWatched = isWatched,
                             isPartiallyWatched = isPartiallyWatched,
                             airDate = airDate,
-                            bounds = spotlightBounds
+                            bounds = spotlightBounds.rect
                         )
                     }
                 }

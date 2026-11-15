@@ -216,10 +216,13 @@ fun PosterCard(
     // every surface that is not a Home rail, in which case this card reports
     // nothing and behaves exactly as it always has.
     val spotlightFocus = com.kennyb1201.kbstream.ui.home.LocalSpotlightCardFocus.current
-    var spotlightFocused by remember { mutableStateOf(false) }
-    var spotlightBounds by remember {
-        mutableStateOf(androidx.compose.ui.geometry.Rect.Zero)
-    }
+    // F5 of the 2026-11-14 scrolling spec: the card's bounds are measured on
+    // every layout but are NOT Compose state any more. A `mutableStateOf` write
+    // here invalidated this card on every scroll frame - the bounds change
+    // continuously while a list moves - and the value is only ever READ when
+    // the card takes focus, which is when the panel is placed. So it lives in a
+    // plain holder, written by layout and read by the focus callback.
+    val spotlightBounds = remember { CardBoundsHolder() }
     // The card's own node, so the panel's pills can send UP back to it - the
     // only way out of the row that does not collapse the panel by accident.
     val spotlightCardRequester = remember { androidx.compose.ui.focus.FocusRequester() }
@@ -233,12 +236,16 @@ fun PosterCard(
                 // at a moment the card is blurred.
                 .focusRequester(spotlightCardRequester)
                 .onGloballyPositioned { coordinates ->
-                    spotlightBounds = coordinates.boundsInRoot()
-                    if (spotlightFocused) spotlightFocus.updateBounds(spotlightBounds)
+                    spotlightBounds.rect = coordinates.boundsInRoot()
                 }
                 .onFocusChanged { state ->
-                    spotlightFocused = state.isFocused
-                    if (state.isFocused) spotlightFocus.cardRequester = spotlightCardRequester
+                    if (state.isFocused) {
+                        spotlightFocus.cardRequester = spotlightCardRequester
+                        // Where the card is NOW, not where it was when the
+                        // snapshot was last copied - a rail that settled under
+                        // a held focus still opens the panel at the card.
+                        spotlightFocus.updateBounds(spotlightBounds.rect)
+                    }
                     spotlightFocus.onCardFocus(state.isFocused) {
                         com.kennyb1201.kbstream.ui.home.SpotlightCardSnapshot(
                             title = contentDescription,
@@ -248,7 +255,7 @@ fun PosterCard(
                             isWatched = isWatched,
                             isPartiallyWatched = isPartiallyWatched,
                             airDate = airDate,
-                            bounds = spotlightBounds
+                            bounds = spotlightBounds.rect
                         )
                     }
                 }
@@ -340,4 +347,18 @@ fun PosterCard(
         }
         
     }
+}
+
+/**
+ * A card's bounds in the root, held WITHOUT Compose state.
+ *
+ * Spotlight's panel is placed from the focused card's bounds, and it needs them
+ * at one moment: the focus change. Measuring into a `mutableStateOf` (which is
+ * what this replaced) wrote on every layout pass - and a scrolling list lays out
+ * continuously - so every card in a moving rail invalidated itself per frame for
+ * a value nothing read until the D-pad stopped. Plain field, no invalidation,
+ * read from the focus callback (spec 2026-11-14, F5).
+ */
+internal class CardBoundsHolder {
+    var rect: androidx.compose.ui.geometry.Rect = androidx.compose.ui.geometry.Rect.Zero
 }

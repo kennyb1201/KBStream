@@ -7029,6 +7029,11 @@ fun HomeScreen(
                                     trailerAutoplay = spotlightTrailerAutoplay,
                                     heroHeight = spotlightHeroItemHeight,
                                     pillFocusRequester = spotlightHeroPillRequester,
+                                    // F4 (2026-11-14): the Ken Burns sweep holds
+                                    // while the rails list is moving. Passed as a
+                                    // lambda so the read happens inside the
+                                    // billboard rather than recomposing the Home.
+                                    scrollHeld = { railListState.isScrollInProgress },
                                     // No card to restore is a fresh entry, and
                                     // the hero owns its landing (spec
                                     // 2026-11-13, F1 - see

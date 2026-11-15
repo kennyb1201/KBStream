@@ -251,7 +251,11 @@ class SpotlightScrollHeroContractTest {
         assertTrue(
             "reports its focus, its bounds and its own node",
             landscape.contains("onCardFocus(state.isFocused)") &&
-                landscape.contains("spotlightFocus.updateBounds(spotlightBounds)") &&
+                // Repointed by the 2026-11-14 scrolling spec (F5): the bounds
+                // live in a plain holder now, so they are read at the moment
+                // they are reported instead of being Compose state written on
+                // every scroll frame.
+                landscape.contains("spotlightFocus.updateBounds(spotlightBounds.rect)") &&
                 landscape.contains("spotlightFocus.cardRequester = spotlightCardRequester")
         )
         assertTrue(

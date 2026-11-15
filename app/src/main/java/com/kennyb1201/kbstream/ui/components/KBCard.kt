@@ -3,12 +3,14 @@ package com.kennyb1201.kbstream.ui.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -28,6 +30,7 @@ import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
+import kotlinx.coroutines.delay
 
 /**
  * Minimum hold duration (ms) between KeyDown and KeyUp for Select/Enter to
@@ -38,6 +41,22 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
  * Timestamp-based detection works no matter how the platform reports it.
  */
 private const val LONG_PRESS_THRESHOLD_MS = 450L
+
+/**
+ * How long a card must hold the focus before its glow is worth painting.
+ *
+ * The glow is a BLURRED SHADOW behind the card, re-rasterized on every frame of
+ * the focus-scale animation. On a TV, scrolling IS focus movement: a held D-pad
+ * moves focus every 100-150 ms, so a rail walk asked for one full-screen blur
+ * per card per step, at 3840×2160 on the boxes the 2026-11-14 scrolling spec was
+ * written on (see F4). Scale-only at first is nearly free and reads the same at
+ * a glance; the glow is what a viewer looks at once the focus has STOPPED, so
+ * it is deferred to then.
+ *
+ * 220 ms: longer than a repeat press, shorter than a viewer's pause. Purposeful
+ * stopped focus keeps today's look, one fifth of a second late.
+ */
+private const val FOCUS_GLOW_SETTLE_MS = 220L
 
 @Composable
 fun KBCard(
@@ -66,6 +85,25 @@ fun KBCard(
     // Whether the current press has already fired onLongClick, so the
     // matching KeyUp can be swallowed instead of also firing onClick.
     var longPressTriggered by remember { mutableStateOf(false) }
+
+    // F4 of the 2026-11-14 scrolling spec: the glow waits for the focus to
+    // SETTLE. While a D-pad walk is moving focus from card to card, this flag is
+    // false at every step, so the blurred shadow is never rasterized for a card
+    // the viewer is about to leave - the scale (cheap, transform-only) still
+    // animates, which is the beat the walk reads. 220 ms after the focus stops,
+    // the glow arms and the card looks exactly as it always did at rest.
+    var focused by remember { mutableStateOf(false) }
+    var glowArmed by remember { mutableStateOf(false) }
+    LaunchedEffect(focused) {
+        if (!focused) {
+            // Blurring disarms immediately: a card that loses focus must not
+            // keep a shadow it is no longer earning.
+            glowArmed = false
+            return@LaunchedEffect
+        }
+        delay(FOCUS_GLOW_SETTLE_MS)
+        glowArmed = true
+    }
 
     Card(
         onClick = onClick,
@@ -96,11 +134,20 @@ fun KBCard(
             )
         ),
         glow = CardDefaults.glow(
-            focusedGlow = Glow(elevationColor = KBAccent, elevation = KBFocusGlow)
+            focusedGlow = Glow(
+                elevationColor = KBAccent,
+                // Zero elevation draws no shadow at all, which is the whole
+                // point: the deferred half of the focus treatment costs
+                // nothing until the focus has settled (see
+                // [FOCUS_GLOW_SETTLE_MS]).
+                elevation = if (glowArmed) KBFocusGlow else 0.dp
+            )
         ),
         // onPreviewKeyEvent runs on the way DOWN the tree, before Card's own
         // internal clickable sees the event, so we get first refusal on it.
-        modifier = modifier.onPreviewKeyEvent { event ->
+        modifier = modifier
+            .onFocusChanged { focused = it.isFocused }
+            .onPreviewKeyEvent { event ->
             val isSelectKey =
                 event.key.nativeKeyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
                     event.key.nativeKeyCode == android.view.KeyEvent.KEYCODE_ENTER

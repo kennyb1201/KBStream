@@ -16,6 +16,7 @@ import coil3.svg.SvgDecoder
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
+import com.kennyb1201.kbstream.data.reporting.ImageLoadTrace
 import com.kennyb1201.kbstream.data.reporting.CrashReporter
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.reporting.PlaybackDeathMarker
@@ -497,6 +498,35 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             // KB badge packs commonly ship .svg chip art; without this
             // decoder those badges silently fail to render (blank chips).
             .components { add(SvgDecoder.Factory()) }
+            // F1 of the 2026-11-14 scrolling spec: one count per completed
+            // request, by where its pixels came from and how big the bitmap
+            // actually was. A session's paste can then tell a warm scroll (hits
+            // high, decodes few) from one that re-decoded every card, and can
+            // say which sizes the surfaces really asked for - which is the
+            // evidence the full-resolution hero bug had no line for (see
+            // [ImageLoadTrace]). One branch and one increment per image, not
+            // per frame.
+            .eventListener(
+                object : coil3.EventListener() {
+                    override fun onSuccess(
+                        request: coil3.request.ImageRequest,
+                        result: coil3.request.SuccessResult
+                    ) {
+                        ImageLoadTrace.noteImage(
+                            source = when (result.dataSource) {
+                                coil3.decode.DataSource.MEMORY_CACHE ->
+                                    ImageLoadTrace.Source.MEMORY
+
+                                coil3.decode.DataSource.DISK -> ImageLoadTrace.Source.DISK
+                                coil3.decode.DataSource.NETWORK -> ImageLoadTrace.Source.NETWORK
+                                else -> ImageLoadTrace.Source.OTHER
+                            },
+                            width = result.image.width,
+                            height = result.image.height
+                        )
+                    }
+                }
+            )
             .build()
     }
 
@@ -527,7 +557,14 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                 as? ActivityManager
                 ?: return 48L * 1024 * 1024
         val heapBytes = activityManager.memoryClass.toLong() * 1024 * 1024
-        return (heapBytes * 15 / 100).coerceIn(24L * 1024 * 1024, 64L * 1024 * 1024)
+        // 25%, not 15% (spec 2026-11-14, F2): the cache has to hold a rail's
+        // worth of tiles on the boxes this is for, and 15% of a 256 MB class is
+        // 38 MB - a Home screen plus a Detail page is more than that, so the
+        // cache turned over during a scroll and every tile that came back was a
+        // decode. The 64 MB cap is unchanged and still what makes it
+        // survivable; a smaller class now reaches the cap instead of stopping
+        // short of it.
+        return (heapBytes * 25 / 100).coerceIn(24L * 1024 * 1024, 64L * 1024 * 1024)
     }
 
     /**
@@ -560,10 +597,22 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         runCatching {
-            if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
-                releaseImageMemoryCache(this)
-            }
+            // F1 of the 2026-11-14 scrolling spec: every delivery is recorded
+            // with its own name, because the report could not tell "the cache
+            // was wiped mid-scroll" from "the cache was wiped after the viewer
+            // left" and the two need opposite fixes (see [ImageLoadTrace]).
+            ImageLoadTrace.noteTrim(trimLevelName(level))
+            // F2: the bitmap cache no longer goes at RUNNING_LOW. On the boxes
+            // this is for that level fires during ordinary browsing - it is a
+            // hint, not an emergency - and dropping ~40 MB of decoded art there
+            // bought nothing back that the browse session was not about to
+            // need again: scroll, wipe, re-decode the same tiles from disk,
+            // scroll, wipe. It now goes at RUNNING_CRITICAL and on
+            // onLowMemory(), which are the two levels that mean the process is
+            // actually in trouble; the 64 MB cap is what keeps the cache from
+            // being the trouble in the first place.
             if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+                releaseImageMemoryCache(this)
                 MemoryPressure.releaseBrowsingCaches()
                 // The trailer pre-warm's WebView is the reclaimable half of the
                 // PO-token layer: a cached token is a string, a live page is a
@@ -574,6 +623,25 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                 }
             }
         }
+    }
+
+    /**
+     * The platform's trim level, spelled for the diagnostics paste.
+     *
+     * The two RUNNING_* halves are deprecated in API 35 (the platform stopped
+     * delivering them in API 34) but they still arrive on the TV builds this is
+     * read from, so they are named rather than dropped.
+     */
+    @Suppress("DEPRECATION")
+    private fun trimLevelName(level: Int): String = when (level) {
+        ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE -> "RUNNING_MODERATE"
+        ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> "RUNNING_LOW"
+        ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> "RUNNING_CRITICAL"
+        ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN -> "UI_HIDDEN"
+        ComponentCallbacks2.TRIM_MEMORY_BACKGROUND -> "BACKGROUND"
+        ComponentCallbacks2.TRIM_MEMORY_MODERATE -> "MODERATE"
+        ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> "COMPLETE"
+        else -> "LEVEL_$level"
     }
 
     private fun scheduleSimklPeriodicSync() {

@@ -722,6 +722,10 @@ fun HomeScreenMobile(
                             trailerDelayMs = heroTrailerDelayMs,
                             trailerMuted = heroTrailerMuted,
                             trailerAutoplay = heroTrailerAutoplay,
+                            // F4: a list scroll holds the Ken Burns sweep. The
+                            // lambda keeps the read inside the billboard, so
+                            // the Home is not recomposed per scroll.
+                            scrollHeld = { listState.isScrollInProgress },
                             // Play asks the Detail page to press its own Play:
                             // the request carries this title's id, and Detail's
                             // existing handler does the resolving (see
@@ -2211,6 +2215,22 @@ internal fun MobileBillboard(
     trailerMuted: Boolean,
     trailerAutoplay: Boolean = true,
     /**
+     * Whether a SCROLL is in flight over the surface the hero sits in (spec
+     * 2026-11-14, F4).
+     *
+     * A lambda rather than a Boolean on purpose: the state read has to happen
+     * inside THIS composable's scope. Read at the call site, every scroll start
+     * and stop would recompose the whole Home list to hand one flag down; read
+     * here, it recomposes the billboard - which is the thing that has to pause.
+     *
+     * The sweep is a 1280x720 bitmap scaled to fill the hero and re-transformed
+     * every frame, so it is GPU fill-rate while it runs - and on a 4K output that
+     * is four times the pixels of 1080p. A viewer scrolling the rails past it is
+     * not watching this, so it holds still until the scroll settles; the 10s
+     * duration is unchanged, and so is the screensaver's own pace.
+     */
+    scrollHeld: () -> Boolean = { false },
+    /**
      * A fixed hero height, for the TV Home.
      *
      * The phone sizes the frame by width (16:10), which on a television asks
@@ -2805,6 +2825,9 @@ internal fun MobileBillboard(
     // screen nobody is looking at, and the fill never advances under a pause.
     val sweepPaused = reducedMotion ||
         backgrounded ||
+        // F4: a scroll over the hero (the rail list on a TV, the page on the
+        // phone) holds the sweep until it settles.
+        scrollHeld() ||
         pagerState.isScrollInProgress ||
         playbackPageKey != null ||
         playback != null ||

@@ -116,6 +116,16 @@ internal fun SpotlightHeroSection(
     /** UP from a focused pill opens the top bar (F6, Spotlight only). */
     onOpenTopBar: () -> Unit = {},
     /**
+     * Whether the rails list is scrolling right now (spec 2026-11-14, F4).
+     *
+     * The sweep is re-transformed every frame and the hero is still on screen
+     * for the first part of a scroll, so it holds while the list moves and
+     * resumes when it settles; the page's 10s pace is unchanged. A lambda so
+     * the read happens in the billboard: at the call site it would recompose
+     * the whole Home on every scroll start and stop.
+     */
+    scrollHeld: () -> Boolean = { false },
+    /**
      * The Play pill's own node, owned by the Home.
      *
      * The hero's item leaves and re-enters composition as it scrolls, so the
@@ -270,6 +280,7 @@ internal fun SpotlightHeroSection(
 
     MobileBillboard(
         heroHeight = heroHeight,
+        scrollHeld = scrollHeld,
         firstPillFocusRequester = firstPillFocus,
         pages = pages,
         cycleMs = billboardCycleMs,
