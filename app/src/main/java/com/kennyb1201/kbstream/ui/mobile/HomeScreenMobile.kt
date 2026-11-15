@@ -2226,8 +2226,8 @@ internal fun MobileBillboard(
      * The sweep is a 1280x720 bitmap scaled to fill the hero and re-transformed
      * every frame, so it is GPU fill-rate while it runs - and on a 4K output that
      * is four times the pixels of 1080p. A viewer scrolling the rails past it is
-     * not watching this, so it holds still until the scroll settles; the 10s
-     * duration is unchanged, and so is the screensaver's own pace.
+     * not watching this, so it holds still until the scroll settles. The 10s
+     * duration is unchanged.
      */
     scrollHeld: () -> Boolean = { false },
     /**
