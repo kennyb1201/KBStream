@@ -19,16 +19,23 @@ import java.util.concurrent.ConcurrentHashMap
  * [ConcurrentHashMap] walks a snapshot, so entries may be removed during the
  * walk. Callers only invoke this from a path that already serializes their
  * writers, so there is no competing pruner.
+ *
+ * Returns how many entries it dropped, so the cache that evicts can report the
+ * RATE beside its size (spec 2026-11-15, rail/season cache F1): a cache sitting
+ * at its cap all session reads the same whether it drops one entry or a
+ * thousand, and only the second number says whether the cap is costing
+ * re-fetches.
  */
 internal fun <V> evictOldest(
     cache: ConcurrentHashMap<String, V>,
     stamp: (V) -> Long,
     max: Int
-) {
+): Int {
     val over = cache.size - max
-    if (over <= 0) return
+    if (over <= 0) return 0
     cache.entries
         .sortedBy { stamp(it.value) }
         .take(over)
         .forEach { cache.remove(it.key) }
+    return over
 }

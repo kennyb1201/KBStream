@@ -775,6 +775,29 @@ class TmdbRepository private constructor(context: Context) :
     private val detailMemoryHits = java.util.concurrent.atomic.AtomicInteger()
     private val detailDiskHits = java.util.concurrent.atomic.AtomicInteger()
     private val detailFetches = java.util.concurrent.atomic.AtomicInteger()
+
+    /**
+     * The same counts, per cache, for the two the rail/season spec owns (spec
+     * 2026-11-15):
+     *
+     *  - `railSrc` counts answers that came from the RAIL projection of an
+     *    enriched response ([railDetailCache], or its disk row). The counters
+     *    above count every enriched answer whatever map served it, so with a
+     *    cache full at 150/150 the paste could not say whether a rail card was
+     *    costing a fetch or a memory read.
+     *  - `seasonSrc` does the same for the season-episode lists behind Detail's
+     *    EPISODES section and the Upcoming walk.
+     *  - `evicted` counts ENTRIES dropped by [pruneMemoryCaches], which is the
+     *    other half of the rate question: a cache at its cap that never drops
+     *    anything is a working cap, and one that churns is a re-fetch factory.
+     */
+    private val railMemoryHits = java.util.concurrent.atomic.AtomicInteger()
+    private val railDiskHits = java.util.concurrent.atomic.AtomicInteger()
+    private val seasonMemoryHits = java.util.concurrent.atomic.AtomicInteger()
+    private val seasonDiskHits = java.util.concurrent.atomic.AtomicInteger()
+    private val seasonFetches = java.util.concurrent.atomic.AtomicInteger()
+    private val railEvictions = java.util.concurrent.atomic.AtomicInteger()
+    private val seasonEvictions = java.util.concurrent.atomic.AtomicInteger()
     private val MAX_RESOLUTION_ENTRIES = 500
     private val MAX_REVIEW_ENTRIES = 300
 
@@ -789,10 +812,11 @@ class TmdbRepository private constructor(context: Context) :
      */
     private fun pruneMemoryCaches() {
         // Every map here keeps its timestamp in Pair.first, which is the stamp
-        // evictOldest orders by.
+        // evictOldest orders by. The returns are the three in-scope caches'
+        // eviction counts, for the diagnostics rate (spec 2026-11-15).
         evictOldest(detailCache, { it.first }, MAX_DETAIL_ENTRIES)
-        evictOldest(railDetailCache, { it.first }, MAX_DETAIL_ENTRIES)
-        evictOldest(seasonEpisodesCache, { it.first }, MAX_SEASON_ENTRIES)
+        railEvictions.addAndGet(evictOldest(railDetailCache, { it.first }, MAX_DETAIL_ENTRIES))
+        seasonEvictions.addAndGet(evictOldest(seasonEpisodesCache, { it.first }, MAX_SEASON_ENTRIES))
         evictOldest(imdbResolutionMemoryCache, { it.first }, MAX_RESOLUTION_ENTRIES)
         evictOldest(tmdbResolutionMemoryCache, { it.first }, MAX_RESOLUTION_ENTRIES)
         evictOldest(externalIdsMemoryCache, { it.first }, MAX_RESOLUTION_ENTRIES)
@@ -856,7 +880,16 @@ class TmdbRepository private constructor(context: Context) :
             // eviction signal F3 is about; `disk` alone means the title was
             // remembered and only its memory copy had been evicted.
             " detailSrc=mem:${detailMemoryHits.get()}" +
-            " disk:${detailDiskHits.get()} net:${detailFetches.get()}"
+            " disk:${detailDiskHits.get()} net:${detailFetches.get()}" +
+            // The two caches this spec owns, counted by the map that answered
+            // (spec 2026-11-15, rail/season F1): `net` here is the re-fetch
+            // rate the cap decision needs, and `evicted` is the churn that
+            // causes it. Both are per session, so the next paste can compare
+            // them with the sizes printed above.
+            " railSrc=mem:${railMemoryHits.get()} disk:${railDiskHits.get()}" +
+            " seasonSrc=mem:${seasonMemoryHits.get()}" +
+            " disk:${seasonDiskHits.get()} net:${seasonFetches.get()}" +
+            " evicted=rail:${railEvictions.get()} season:${seasonEvictions.get()}"
 
     private fun pruneImdbCacheOnce() {
         if (cachePruned.compareAndSet(false, true)) {
@@ -1112,6 +1145,7 @@ class TmdbRepository private constructor(context: Context) :
                 if (railCached != null && now - railCached.first < detailCacheTtlMs) {
                     railDetailCache[key] = now to railCached.second
                     detailMemoryHits.incrementAndGet()
+                    railMemoryHits.incrementAndGet()
                     onSource?.invoke("mem")
                     return railCached.second
                 }
@@ -1156,6 +1190,7 @@ class TmdbRepository private constructor(context: Context) :
                     // recommendations, and must never answer a `full` caller.
                     railDetailCache[key] = now to parsed
                     detailDiskHits.incrementAndGet()
+                    railDiskHits.incrementAndGet()
                     onSource?.invoke("disk")
                     return parsed
                 }
@@ -2320,6 +2355,19 @@ class TmdbRepository private constructor(context: Context) :
         if (cached != null && now - cached.first < seasonEpisodesCacheTtlMs) {
             val named = cached.second.namedEpisodesOnly()
             if (seasonEpisodesAreAnAnswer(named)) {
+                // A hit re-stamps, exactly as the detail and rail caches do
+                // (spec 2026-11-15, rail/season F2). [evictOldest] drops the
+                // lowest stamp, so with insert-only stamps this cache evicted
+                // by AGE OF FIRST FETCH: the show the viewer opens every
+                // evening went first, while a show looked at once a week ago
+                // and never again stayed. The cap does not move - the same 200
+                // entries, chosen by when they were last READ.
+                //
+                // Not re-stamped when the list is not an answer: a cached
+                // failure is skipped and re-fetched, and keeping it young would
+                // be protecting the entry that is wrong.
+                seasonEpisodesCache[key] = now to cached.second
+                seasonMemoryHits.incrementAndGet()
                 return seasonWithOrderNumbers(named, season, orderCatalogue)
             }
         }
@@ -2336,10 +2384,12 @@ class TmdbRepository private constructor(context: Context) :
             val named = parsed?.namedEpisodesOnly()
             if (named != null && seasonEpisodesAreAnAnswer(named)) {
                 seasonEpisodesCache[key] = now to named
+                seasonDiskHits.incrementAndGet()
                 return seasonWithOrderNumbers(named, season, orderCatalogue)
             }
         }
 
+        seasonFetches.incrementAndGet()
         val seasonDetail = api.getSeasonDetail(tvId, season, apiKey)
 
         // TMDB files a "- Specials" row numbered 0 inside a regular

@@ -43,6 +43,22 @@ class CacheEvictionTest {
     }
 
     @Test
+    fun `the number of dropped entries is reported`() {
+        // The rate, for the cache specs (2026-11-15 rail/season F1): a cache
+        // sitting at its cap all session reads the same whether it drops one
+        // entry or a thousand, and only this number says whether the cap is
+        // costing re-fetches. Off by one either way here would under-report the
+        // churn that the cap decision is based on.
+        val cache = ConcurrentHashMap<String, Long>()
+        (1..6).forEach { index -> cache["k$index"] = index.toLong() }
+
+        assertEquals("six entries into a cap of two drops four", 4, evictOldest(cache, { it }, 2))
+        assertEquals(2, cache.size)
+        assertEquals("and a cache already inside its cap drops nothing", 0, evictOldest(cache, { it }, 2))
+        assertEquals(0, evictOldest(ConcurrentHashMap<String, Long>(), { it }, 5))
+    }
+
+    @Test
     fun `only the excess above the cap is dropped`() {
         val cache = ConcurrentHashMap<String, Long>()
         cache["a"] = 1L
