@@ -296,6 +296,21 @@ object Diagnostics {
                 }
             )
         }
+        // F1/S5 (spec 2026-11-15, Home load): the load's split, from the pin for
+        // the same reason the startup phases are pinned - Home's own artwork
+        // lookups fill the 400-sample ring before the report can be taken, so
+        // reading this from the ring meant the figures were missing exactly on
+        // the cold entry worth reporting. The ring is the fallback for a report
+        // taken before Home has started building.
+        val homeLegs = PerfTrace.pinnedHome().takeIf { it.isNotEmpty() }
+            ?: PerfTrace.latestByPrefix("home.")
+        if (homeLegs.isNotEmpty()) {
+            report.appendLine(
+                "homeload: " + homeLegs.joinToString(" ") { (label, ms) ->
+                    "${label.removePrefix("home.")}=${ms}ms"
+                }
+            )
+        }
         // F1 (spec 2026-11-15, Home art): the landscape-art lookup's parts, the
         // same shape. `home.artLookup`'s 493ms average is the whole lookup from
         // the memo check to the answer; `artWait` is the semaphore queue and

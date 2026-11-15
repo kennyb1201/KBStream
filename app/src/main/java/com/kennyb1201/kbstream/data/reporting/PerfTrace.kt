@@ -33,6 +33,19 @@ internal object PerfTrace {
      */
     private const val STARTUP_PREFIX = "startup."
 
+    /**
+     * The Home-load legs, pinned for the same reason (spec 2026-11-15, Home load
+     * F1/S5).
+     *
+     * `home.railsReady` is the headline number of that spec (8641ms on a cold
+     * TCL, quoted in the code), and the split that decides what to do about it -
+     * firstRail, pinned, catalogRails, railsReady, refreshAll - is exactly the
+     * kind of evidence the 400-sample ring eats before the report is taken: the
+     * same eviction that lost the startup phases, from the same 291 artwork
+     * lookups Home generates after launch.
+     */
+    private const val HOME_PREFIX = "home."
+
     private data class Sample(
         val label: String,
         val ms: Long,
@@ -75,6 +88,9 @@ internal object PerfTrace {
      * sample, so pinning adds no second Sentry event.
      */
     private val startupPinned = LinkedHashMap<String, Long>()
+
+    /** [startupPinned] for the `home.*` legs - bounded for the same reason. */
+    private val homePinned = LinkedHashMap<String, Long>()
 
     /**
      * Label to the most recent host seen under it, for labels whose name does
@@ -165,6 +181,12 @@ internal object PerfTrace {
             if (sample.label.startsWith(STARTUP_PREFIX)) {
                 startupPinned[sample.label] = sample.ms
             }
+            // The Home-load legs, for the same reason (spec 2026-11-15). Its
+            // label set is fixed too - the handful of `home.*` records in
+            // HomeViewModel - so this is bounded by construction as well.
+            if (sample.label.startsWith(HOME_PREFIX)) {
+                homePinned[sample.label] = sample.ms
+            }
             samples.addLast(sample)
             while (samples.size > MAX_SAMPLES) samples.removeFirst()
         }
@@ -180,6 +202,18 @@ internal object PerfTrace {
      */
     fun pinnedStartup(): List<Pair<String, Long>> = synchronized(lock) {
         startupPinned.entries.map { it.key to it.value }
+    }
+
+    /**
+     * The Home-load legs recorded by this process, newest value per label, in
+     * first-seen order - the split the Home load spec needs, read from the pin
+     * so a long session cannot evict it.
+     *
+     * Empty only when nothing has recorded a `home.*` label yet (Home has not
+     * started building), which is why the report falls back to the ring.
+     */
+    fun pinnedHome(): List<Pair<String, Long>> = synchronized(lock) {
+        homePinned.entries.map { it.key to it.value }
     }
 
     /** Times [block] under [label], recording even when it throws. */
