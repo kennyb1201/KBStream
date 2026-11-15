@@ -272,6 +272,12 @@ fun GuideScreenMobile(
                 )
             )
         }
+        // Guide entry starts here, for the entry-speed measurement (spec
+        // 2026-11-15, guide grid entry F1) - the same stamp the television
+        // screen makes, so the phone's entry is measurable too.
+        LaunchedEffect(Unit) {
+            com.kennyb1201.kbstream.data.iptv.GuideEntryTrace.markEntry()
+        }
         // F4a: the grid's span is fixed at [GRID_SPAN_HOURS] now, so the old
         // per-profile zoom key is cleared once on open rather than left in the
         // store for a future read to find and misread.

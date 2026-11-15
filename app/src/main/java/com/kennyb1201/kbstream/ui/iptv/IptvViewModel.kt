@@ -1194,6 +1194,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             // has been read, and marking only non-empty answers would re-read
             // that window on every scroll instead.
             result.onSuccess { loaded ->
+                // The entry leg (spec 2026-11-15, guide grid entry F1): the first
+                // answer that carries programs is the first row on screen. A
+                // failed read never reaches here, so a dead read cannot be
+                // reported as a fast entry.
+                com.kennyb1201.kbstream.data.iptv.GuideEntryTrace.onFirstRows(
+                    channels = loaded.size,
+                    programs = loaded.values.sumOf { it.size }
+                )
                 missing.forEach { gridWindowReads += gridWindowKey(it.id, windowStart, windowEnd) }
                 while (gridWindowReads.size > GRID_WINDOW_READ_MEMORY) {
                     val eldest = gridWindowReads.iterator()

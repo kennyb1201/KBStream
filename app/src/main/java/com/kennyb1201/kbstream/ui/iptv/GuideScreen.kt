@@ -328,6 +328,12 @@ fun GuideScreen(
      */
     var gridEntryFocusArmed by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
+        // Guide entry starts here, for the entry-speed measurement (spec
+        // 2026-11-15, guide grid entry F1): the leg ends at the first window
+        // answer that carries programs, in IptvViewModel. The list view marks it
+        // too - the grid is what the spec is about, but an entry that opens on
+        // the list and is toggled to the grid is still one entry.
+        com.kennyb1201.kbstream.data.iptv.GuideEntryTrace.markEntry()
         // F2c: coming back from a player is not guide entry. The marker is
         // consumed either way, so a stale one cannot disarm a later entry.
         val fromPlayback = viewModel.consumeGuidePlaybackReturn()
