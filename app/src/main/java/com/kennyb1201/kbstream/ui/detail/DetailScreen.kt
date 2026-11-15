@@ -1846,11 +1846,60 @@ fun DetailScreen(
     val mediaVideos = remember(tmdbDetail) {
         tmdbDetail?.videos?.results.orEmpty()
     }
-    val mediaBackdrops = remember(tmdbDetail) {
-        tmdbDetail?.images?.backdrops.orEmpty()
+    // fanart.tv's own art for this title (spec 2026-11-15, fanart in the Media
+    // rail F1/F2). The bundle is the one the clearlogo and season-poster
+    // surfaces already fetch - one title, one fanart call however many surfaces
+    // want its art - so the rail costs no extra request and never triggers a
+    // sweep of its own.
+    //
+    // Nothing waits on it: the pages below are TMDB's exactly as they were, and
+    // the fanart entries append when (and only when) the bundle answers. No key,
+    // offline, a proven miss, a failure - all four leave the rail as today's
+    // TMDB-only rail.
+    var fanartMediaArt by remember(type, id) {
+        mutableStateOf<com.kennyb1201.kbstream.data.fanart.FanartArt?>(null)
     }
-    val mediaPosters = remember(tmdbDetail) {
-        tmdbDetail?.images?.posters.orEmpty()
+    val mediaArtContext = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(tmdbDetail?.id, normalizedType) {
+        val artId = tmdbDetail?.id ?: return@LaunchedEffect
+        val isMovie = normalizedType == "movie"
+        // fanart's id spaces: a movie by its TMDB id, a show by its TVDB id -
+        // the same twin the clearlogo fallback resolves, through the same call.
+        val fanartTwin = if (isMovie) {
+            artId
+        } else {
+            runCatching {
+                com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+                    .getInstance(mediaArtContext)
+                    .resolveTvdbId(artId, "series")
+            }.getOrNull()
+        }
+        fanartMediaArt = com.kennyb1201.kbstream.data.fanart.FanartArtRepository
+            .getInstance(mediaArtContext)
+            .art(
+                kind = if (isMovie) {
+                    com.kennyb1201.kbstream.data.fanart.FanartKind.Movie
+                } else {
+                    com.kennyb1201.kbstream.data.fanart.FanartKind.Tv
+                },
+                id = fanartTwin
+            )
+    }
+    // The merged pages (F1/F3): TMDB's images in TMDB's order, then fanart's.
+    // The tab strip counts THESE, so a title with no TMDB backdrops but fanart
+    // backgrounds now offers the page, and a page with nothing from either
+    // source still is not offered.
+    val mediaBackdrops = remember(tmdbDetail, fanartMediaArt) {
+        DetailMediaArt.backdrops(
+            tmdb = tmdbDetail?.images?.backdrops.orEmpty(),
+            fanart = fanartMediaArt
+        )
+    }
+    val mediaPosters = remember(tmdbDetail, fanartMediaArt) {
+        DetailMediaArt.posters(
+            tmdb = tmdbDetail?.images?.posters.orEmpty(),
+            fanart = fanartMediaArt
+        )
     }
 
     /**
@@ -1899,8 +1948,9 @@ fun DetailScreen(
     val mediaCards = remember(mediaTab, mediaVideos, mediaBackdrops, mediaPosters, animeThemes, mediaThemeArt) {
         when (mediaTab) {
             MediaTab.TRAILERS -> DetailMediaRow.trailers(mediaVideos)
-            MediaTab.BACKDROPS -> DetailMediaRow.backdrops(mediaBackdrops)
-            MediaTab.POSTERS -> DetailMediaRow.posters(mediaPosters)
+            // Already projected: the merged pages ARE the card lists (F1/F2).
+            MediaTab.BACKDROPS -> mediaBackdrops
+            MediaTab.POSTERS -> mediaPosters
             MediaTab.THEMES -> DetailMediaRow.themes(animeThemes, mediaThemeArt)
             null -> emptyList()
         }

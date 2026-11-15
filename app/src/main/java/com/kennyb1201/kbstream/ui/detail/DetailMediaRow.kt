@@ -5,7 +5,6 @@ import com.kennyb1201.kbstream.data.animethemes.AnimeThemeRules
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.tmdb.TmdbImageAsset
 import com.kennyb1201.kbstream.data.tmdb.TmdbVideo
-import com.kennyb1201.kbstream.data.tmdb.tmdbImage
 import java.util.Locale
 
 /**
@@ -210,17 +209,11 @@ internal object DetailMediaRow {
      * set.
      */
     fun backdrops(backdrops: List<TmdbImageAsset>): List<MediaCardItem> =
-        backdrops.mapNotNull { asset ->
-            val path = asset.filePath?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-            MediaCardItem(
-                id = "backdrop:$path",
-                imageUrl = tmdbImage(path, "w780"),
-                badge = null,
-                title = "Backdrop",
-                fullImageUrl = tmdbImage(path, "w1280"),
-                imagePath = path
-            )
-        }
+        // One projection for both sources (spec 2026-11-15, fanart in the Media
+        // rail): the screen calls [DetailMediaArt.backdrops] with the merged
+        // lists, and a caller that has only TMDB's passes null for fanart here -
+        // which is the same cards this function always built.
+        DetailMediaArt.backdrops(backdrops, fanart = null)
 
     /**
      * The long-press rows [tab]'s cards offer, in the order they are drawn.
@@ -317,18 +310,7 @@ internal object DetailMediaRow {
      * makes for the hero's: this page is "all the art for this title".
      */
     fun posters(posters: List<TmdbImageAsset>): List<MediaCardItem> =
-        posters.mapNotNull { asset ->
-            val path = asset.filePath?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-            MediaCardItem(
-                id = "poster:$path",
-                imageUrl = tmdbImage(path, "w500"),
-                badge = null,
-                title = "Poster",
-                fullImageUrl = tmdbImage(path, "w780"),
-                portrait = true,
-                imagePath = path
-            )
-        }
+        DetailMediaArt.posters(posters, fanart = null)
 
     /**
      * The themes page: one card per theme (OP1, OP2, ED1...), in the order

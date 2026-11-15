@@ -142,6 +142,11 @@ internal sealed interface FanartResult {
  * `clearlogo` is read beside the HD types because fanart uses it for the older
  * transparent logo entries; the pick rule then ranks English first and likes
  * after, so an HD English logo still wins.
+ *
+ * `movieposter` / `tvposter` (the title's own artwork) joined in the 2026-11-15
+ * spec: the Detail Media row's Posters page merges them after TMDB's, and until
+ * then the bundle had no general poster list at all - only `seasonposter`,
+ * which describes one season rather than the title.
  */
 internal fun readFanartArt(root: JSONObject): FanartArt {
     fun images(vararg keys: String): List<FanartImage> =
@@ -151,7 +156,8 @@ internal fun readFanartArt(root: JSONObject): FanartArt {
         logos = images("hdmovielogo", "movielogo", "hdtvlogo", "clearlogo"),
         backgrounds = images("moviebackground", "showbackground"),
         backgrounds4k = images("movie4kbackground", "show4kbackground"),
-        seasonPosters = images("seasonposter")
+        seasonPosters = images("seasonposter"),
+        posters = images("movieposter", "tvposter")
     )
 }
 
@@ -182,6 +188,7 @@ internal fun fanartArtToJson(art: FanartArt): String =
         put("backgrounds", fanartImagesToJson(art.backgrounds))
         put("backgrounds4k", fanartImagesToJson(art.backgrounds4k))
         put("seasonPosters", fanartImagesToJson(art.seasonPosters))
+        put("posters", fanartImagesToJson(art.posters))
     }.toString()
 
 internal fun fanartArtFromJson(json: String): FanartArt? = runCatching {
@@ -190,7 +197,11 @@ internal fun fanartArtFromJson(json: String): FanartArt? = runCatching {
         logos = readFanartImages(root.optJSONArray("logos")),
         backgrounds = readFanartImages(root.optJSONArray("backgrounds")),
         backgrounds4k = readFanartImages(root.optJSONArray("backgrounds4k")),
-        seasonPosters = readFanartImages(root.optJSONArray("seasonPosters"))
+        seasonPosters = readFanartImages(root.optJSONArray("seasonPosters")),
+        // Absent on every row written before the poster list existed: an empty
+        // bundle half is the right answer for those, not a reason to drop the
+        // cached logos and backgrounds beside it.
+        posters = readFanartImages(root.optJSONArray("posters"))
     )
 }.getOrNull()
 

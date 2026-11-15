@@ -240,9 +240,26 @@ class DetailMediaRowWiringContractTest {
         assertTrue(
             "and the page the viewer is on is projected through the rule " +
                 "object, one branch per page",
-            screen.contains("MediaTab.TRAILERS -> DetailMediaRow.trailers(mediaVideos)") &&
-                screen.contains("MediaTab.BACKDROPS -> DetailMediaRow.backdrops(mediaBackdrops)") &&
-                screen.contains("MediaTab.POSTERS -> DetailMediaRow.posters(mediaPosters)")
+            screen.contains("MediaTab.TRAILERS -> DetailMediaRow.trailers(mediaVideos)")
+        )
+        // The two artwork pages are projected ONCE, by the merge rule, because
+        // they now carry two sources (spec 2026-11-15, fanart in the Media
+        // rail): TMDB's images, then fanart's appended after them. The cards the
+        // branch returns are already the merged list - projecting TMDB's assets
+        // again here would drop fanart's entries.
+        assertTrue(
+            "the Backdrops page is the merged projection, not a re-projection of " +
+                "TMDB's list",
+            screen.contains("MediaTab.BACKDROPS -> mediaBackdrops")
+        )
+        assertTrue(
+            "and the Posters page likewise",
+            screen.contains("MediaTab.POSTERS -> mediaPosters")
+        )
+        assertTrue(
+            "both merged pages come from the one rule object",
+            screen.contains("DetailMediaArt.backdrops(") &&
+                screen.contains("DetailMediaArt.posters(")
         )
         assertTrue(
             "a poster card draws the portrait shape it was projected with, " +

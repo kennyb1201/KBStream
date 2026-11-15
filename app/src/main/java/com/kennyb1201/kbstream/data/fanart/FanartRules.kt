@@ -63,13 +63,25 @@ internal data class FanartArt(
     val logos: List<FanartImage> = emptyList(),
     val backgrounds: List<FanartImage> = emptyList(),
     val backgrounds4k: List<FanartImage> = emptyList(),
-    val seasonPosters: List<FanartImage> = emptyList()
+    val seasonPosters: List<FanartImage> = emptyList(),
+    /**
+     * `movieposter` / `tvposter` - the title's own 2:3 artwork (spec
+     * 2026-11-15, fanart in the Media rail F2).
+     *
+     * The bundle parsed no general poster list until then: the only posters it
+     * read were `seasonposter` entries, which say nothing about the title. This
+     * is what the Detail Media row's Posters page merges after TMDB's own, and
+     * it is DISTINCT from [seasonPosters] - one is the show, the other is one of
+     * its seasons.
+     */
+    val posters: List<FanartImage> = emptyList()
 ) {
     val isEmpty: Boolean
         get() = logos.isEmpty() &&
             backgrounds.isEmpty() &&
             backgrounds4k.isEmpty() &&
-            seasonPosters.isEmpty()
+            seasonPosters.isEmpty() &&
+            posters.isEmpty()
 }
 
 /** The memory/disk key for one title's bundle. One spelling, one prefix. */
