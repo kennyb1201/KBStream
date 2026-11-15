@@ -134,9 +134,11 @@ class SeasonChipStyleTest {
         val view = android.view.LayoutInflater.from(context)
             .inflate(R.layout.picker_season_chip, null)
         val chip = view.findViewById<TextView>(R.id.picker_season_chip)
+        // The getter by NAME: the `is…` form is not a Kotlin property here, and
+        // guessing at it is what failed the 326 build.
         assertTrue(
             "the layout switched the framework highlight off",
-            !chip.isDefaultFocusHighlightEnabled
+            !chip.isDefaultFocusHighlightEnabled()
         )
     }
 
