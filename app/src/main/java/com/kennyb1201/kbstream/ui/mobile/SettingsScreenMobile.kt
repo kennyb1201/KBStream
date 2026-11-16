@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -3669,7 +3670,11 @@ private fun AccentSwatchMobile(
  * geometry ran to the screen edge. In the track slot the gradient is a thin bar,
  * centred in the full 48dp touch area, and Material insets it by half the thumb
  * width at each end - so the thumb at 0% and at 100% is fully on screen.
+ *
+ * The custom `track` slot is the one experimental Material API here; the rest of
+ * the call is the stable value-based overload.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AccentSliderMobile(
     label: String,
