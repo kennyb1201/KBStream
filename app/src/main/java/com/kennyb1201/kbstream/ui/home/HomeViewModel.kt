@@ -2120,23 +2120,52 @@ Log.d(
      * other filters. No ceiling (an adult profile) returns the feed untouched:
      * one null check, no list copy, no reorder.
      *
-     * A ceiling-thinned feed falls back to the walked default pool (F3). The
-     * threshold is [BILLBOARD_MAX_PAGES], the "full" the trending walk itself
-     * aims at: a strict ceiling can keep three titles out of a forty-title rail,
-     * and three is not a billboard - it is a hero with almost nothing to swipe
-     * to. The walk's default feed is already ceiling-filtered per page and walked
-     * to full, so it is the one pool that is kids-safe AND long. The fallback
-     * only ever REPLACES the feed with more titles: when the default pool is no
-     * longer than what the chosen feed kept (a chosen catalog that IS the
-     * trending feed, or a day where the ceiling thinned both), the viewer keeps
-     * the catalog they picked.
+     * A ceiling-thinned feed falls back to the walked default pool (F3), and to
+     * the kids rails when even that is empty (spec 2026-11-16, F1). The threshold
+     * is [BILLBOARD_MAX_PAGES], the "full" the trending walk itself aims at: a
+     * strict ceiling can keep three titles out of a forty-title rail, and three
+     * is not a billboard - it is a hero with almost nothing to swipe to. The
+     * walk's default feed is already ceiling-filtered per page and walked to full,
+     * and the kids rails are ceiling-filtered by their own build, so those are the
+     * pools that are kids-safe AND long. The fallback only ever REPLACES the feed
+     * with more titles: when the best fallback is no longer than what the chosen
+     * feed kept (a chosen catalog that IS the trending feed, or a day where every
+     * pool thinned), the viewer keeps the catalog they picked.
      */
     private suspend fun billboardKidsSafePool(items: List<MetaPreview>): List<MetaPreview> {
         tmdbRepository.kidsMaxAge() ?: return items
         val filtered = tmdbRepository.kidsFilterMetas(items)
         val walked = _billboardTrendingDay.value
-        return billboardKidsSafePool(filtered, walked)
+        return billboardKidsSafePool(filtered, walked, kidsRailsPool())
     }
+
+    /**
+     * The six app-built kids rails as one pool, for the last rung of the kids
+     * fallback (spec 2026-11-16, F1).
+     *
+     * On the reported TCL kids profile (Willow, strict PG ceiling) the trending-day
+     * walk yielded NOTHING - the ceiling drops every title whose US certification
+     * cannot be resolved - and the F3 fallback IS that walked pool, so the default
+     * feed and its own fallback were both empty and the hero was black for anyone
+     * who never picked a feed. These rows are the one pool that is kids-safe AND
+     * long: `loadPinnedKidsRails` put every item through the same ceiling when it
+     * built them, and they are the very rails the picker offers as chips (matched
+     * by [billboardFeedKey], the same spelling the chips use), so a viewer who
+     * does pick one gets the rail they picked rather than a different draw.
+     *
+     * Drawn at random across the rails, like a chosen rails feed
+     * ([billboardRandomPages]): the pools are many times the pager's size, and
+     * taking the head in rail order would deal "Top Kids Movies" forever.
+     */
+    private fun kidsRailsPool(): List<MetaPreview> =
+        billboardRandomPages(
+            sources = _rails.value
+                .filter { rail ->
+                    billboardFeedKey(rail) in
+                        com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.KIDS_BUILTIN_KEYS
+                }
+                .map { rail -> rail.items }
+        )
 
     /**
      * Deals a ceiling-passed pool, atomically per page.
@@ -2165,7 +2194,13 @@ Log.d(
         val samePool =
             currentKeys.size == wantedKeys.size &&
                 currentKeys.toSet() == wantedKeys.toSet() &&
-                billboardPoolFor == forProfile
+                billboardPoolFor == forProfile &&
+                // An EMPTY pool is not "nothing new" (spec 2026-11-16, F3):
+                // skipping there is a black billboard that never retries, and the
+                // paste's repeated "deal skipped (same pool) pages=0 settled=0" is
+                // exactly that. It falls through to a deal, whose own empty branch
+                // re-walks the default feed.
+                wantedKeys.isNotEmpty()
         if (samePool) {
             val stillWorking = billboardResolveJob?.isActive == true
             val settledNow = _billboardPages.value.count { it.settled }
@@ -2217,6 +2252,11 @@ Log.d(
             // (F1) rather than a settle that never arrives.
             _billboardReady.value = true
             SpotlightDiagTrace.billboardCleared("empty feed", dealEpoch)
+            // And it does not sit there (F3): one empty first walk used to leave
+            // the hero black until the next Home entry, because nothing asked
+            // again. Ask now - a walk that has titles re-emits the default feed,
+            // which the screen re-resolves.
+            rewalkEmptyBillboard()
             return
         }
 
@@ -2260,6 +2300,24 @@ Log.d(
                 SpotlightDiagTrace.billboardJobFailed(e.message ?: e.javaClass.simpleName)
             }
         }
+    }
+
+    /**
+     * A re-walk for a billboard that came up empty while Home is still up (F3).
+     *
+     * Cheap to call and safe to repeat: nothing happens when the billboard is off,
+     * when a default pool HAS been published (`_billboardTrendingDay` non-empty
+     * means the walk found titles, and the empty deal came from somewhere else),
+     * or while a walk is already in flight - that one is about to answer. A day
+     * where trending genuinely yields nothing re-walks once per deal and then
+     * stops, because the walk publishes nothing new and the screens' feed does not
+     * change.
+     */
+    private fun rewalkEmptyBillboard() {
+        if (!AppPreferences.getHomeBillboardEnabled(getApplication())) return
+        if (_billboardTrendingDay.value.isNotEmpty()) return
+        if (billboardTrendingJob?.isActive == true) return
+        loadBillboardTrendingDay(force = true)
     }
 
     /**
@@ -2311,23 +2369,50 @@ Log.d(
             // Seeded empty: a page 1 that fails leaves the answer empty, and the
             // publish rule below decides whether that is published at all.
             var pages: List<MetaPreview> = emptyList()
+            // The walk's own evidence (spec 2026-11-16, F2): per page, what TMDB
+            // returned and what the ceiling kept. An empty kids hero could not be
+            // diagnosed without it - "no titles today" and "the ceiling dropped
+            // all forty" were the same line in the paste.
+            SpotlightDiagTrace.billboardWalkStart()
+            var endReason: String? = null
             while (billboardShouldWalkNextPage(pagesWalked = walked, poolSize = pages.size)) {
                 walked += 1
-                val moviePage = safeSuspend { tmdbRepository.trendingDay("movie", walked) }
-                val showPage = safeSuspend { tmdbRepository.trendingDay("tv", walked) }
-                moviePage?.mapTo(movies) { it.toBillboardPreview("movie") }
-                showPage?.mapTo(shows) { it.toBillboardPreview("series") }
+                val moviePage = safeSuspend { tmdbRepository.trendingDayPage("movie", walked) }
+                val showPage = safeSuspend { tmdbRepository.trendingDayPage("tv", walked) }
+                moviePage?.kept?.mapTo(movies) { it.toBillboardPreview("movie") }
+                showPage?.kept?.mapTo(shows) { it.toBillboardPreview("series") }
                 // ONE interleave over everything walked so far, so rank order
                 // holds ACROSS pages (page 1's movies still outrank page 2's)
                 // and the existing de-dupe and cap apply to the whole pool.
                 pages = billboardInterleaveFeeds(movies, shows)
+                // -1 is "this page did not answer", so a failed fetch cannot read
+                // as an empty one.
+                SpotlightDiagTrace.billboardWalkPage(
+                    page = walked,
+                    moviesFetched = moviePage?.fetched ?: -1,
+                    moviesKept = moviePage?.kept?.size ?: 0,
+                    showsFetched = showPage?.fetched ?: -1,
+                    showsKept = showPage?.kept?.size ?: 0,
+                    pool = pages.size
+                )
                 // A page that did not answer ends the walk, publishing what was
                 // gathered - including the half that DID answer, which is what
                 // this feed did when it fetched a single page.
-                if (moviePage == null || showPage == null) break
+                if (moviePage == null || showPage == null) {
+                    endReason = "null page"
+                    break
+                }
                 // Nothing left to find: the feed is shorter than the walk.
-                if (moviePage.isEmpty() && showPage.isEmpty()) break
+                if (moviePage.kept.isEmpty() && showPage.kept.isEmpty()) {
+                    endReason = "empty pages"
+                    break
+                }
             }
+            SpotlightDiagTrace.billboardWalkEnded(
+                reason = endReason ?: "cap",
+                pages = walked,
+                pool = pages.size
+            )
             // Same profile: a failed reload never blanks a published feed. A
             // DIFFERENT profile (or a changed ceiling): an empty answer has to
             // clear it, because leaving the old list published is exactly adult

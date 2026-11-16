@@ -2125,16 +2125,38 @@ class TmdbRepository private constructor(context: Context) :
      * as [getKBListItems]: keep a title whose certification the ceiling allows,
      * and keep an unresolvable one only on the loosest (PG-13) ceiling.
      */
-    suspend fun trendingDay(mediaType: String, page: Int = 1): List<TmdbDiscoverItem>? {
+    suspend fun trendingDay(mediaType: String, page: Int = 1): List<TmdbDiscoverItem>? =
+        trendingDayPage(mediaType, page)?.kept
+
+    /**
+     * One page of trending-day with its RAW count, for the billboard walk's trace
+     * (spec 2026-11-16, F2).
+     *
+     * [trendingDay] answers only what survived the ceiling, which is all the walk
+     * needs and all it could ever show - and that is exactly why an empty kids
+     * hero could not be diagnosed: "TMDB returned nothing" and "the strict ceiling
+     * dropped all forty" were the same answer. The page that failed to resolve a
+     * certification is dropped silently (see `KidsMode`), so the trace needs both
+     * numbers to say which one happened.
+     */
+    suspend fun trendingDayPage(mediaType: String, page: Int = 1): TrendingDayPage? {
         if (apiKey.isBlank()) return null
         val isTv = mediaType.lowercase() == "tv"
         val rows = runCatchingCancellable {
             if (isTv) api.getTrendingTvDayDiscover(apiKey, page).results
             else api.getTrendingMoviesDayDiscover(apiKey, page).results
         }.getOrNull() ?: return null
-        if (kidsMaxAge() == null) return rows
-        return kidsFilter(rows) { row -> row.id to if (isTv) "tv" else "movie" }
+        val kept =
+            if (kidsMaxAge() == null) {
+                rows
+            } else {
+                kidsFilter(rows) { row -> row.id to if (isTv) "tv" else "movie" }
+            }
+        return TrendingDayPage(fetched = rows.size, kept = kept)
     }
+
+    /** One trending-day page: what TMDB returned, and what survived the ceiling. */
+    data class TrendingDayPage(val fetched: Int, val kept: List<TmdbDiscoverItem>)
 
     /**
      * TMDB "LIST" source: items of a hosted TMDB list id. Kids Mode note:

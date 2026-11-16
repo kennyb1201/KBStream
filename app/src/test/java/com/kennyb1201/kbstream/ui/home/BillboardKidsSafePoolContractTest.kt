@@ -180,6 +180,165 @@ class BillboardKidsSafePoolContractTest {
         )
     }
 
+    // ── 2026-11-16: the third pool, and the black kids hero it fixes ─────
+
+    @Test
+    fun `a default feed that yielded nothing falls back to the kids rails`() {
+        val rails = pool(BILLBOARD_MAX_PAGES, "kids")
+
+        assertEquals(
+            "the reported TCL kids profile: trending yielded nothing under the strict PG " +
+                "ceiling and its own fallback IS that pool, so the hero was black for anyone " +
+                "who never picked a feed",
+            rails.map { it.id },
+            billboardKidsSafePool(emptyList(), emptyList(), rails).map { it.id }
+        )
+    }
+
+    @Test
+    fun `the longest fallback wins, and the walked pool keeps a tie`() {
+        val walked = pool(3, "day")
+        val rails = pool(BILLBOARD_MAX_PAGES, "kids")
+        assertEquals(
+            "a longer kids-rail pool wins over a thinner walked one",
+            rails.map { it.id },
+            billboardKidsSafePool(emptyList(), walked, rails).map { it.id }
+        )
+
+        val evenWalked = pool(6, "day")
+        val evenRails = pool(6, "kids")
+        assertEquals(
+            "on a tie the walked default keeps today's behaviour - the kids rows have " +
+                "nothing extra to offer",
+            evenWalked.map { it.id },
+            billboardKidsSafePool(emptyList(), evenWalked, evenRails).map { it.id }
+        )
+    }
+
+    @Test
+    fun `a full pick is never replaced by the kids rails`() {
+        val filtered = pool(BILLBOARD_MAX_PAGES, "feed")
+        val rails = pool(BILLBOARD_MAX_PAGES, "kids")
+
+        assertEquals(
+            "the fallback only ever REPLACES the feed with more titles - a kids profile " +
+                "that picked a rail feed keeps its pick when the rail is full",
+            filtered.map { it.id },
+            billboardKidsSafePool(filtered, emptyList(), rails).map { it.id }
+        )
+    }
+
+    @Test
+    fun `the resolve supplies the rails the picker itself offers`() {
+        val vm = source(HOME_VM)
+        assertTrue(
+            "the third pool reaches the rule",
+            vm.contains("billboardKidsSafePool(filtered, walked, kidsRailsPool())")
+        )
+        val railsPool = vm.substringAfter("private fun kidsRailsPool()")
+            .substringBefore("private fun publishBillboardPool(")
+        assertTrue(
+            "the rows are the six app-built kids rails, matched by the same key the picker's " +
+                "chips use",
+            railsPool.contains("_rails.value") &&
+                railsPool.contains("billboardFeedKey(rail) in") &&
+                railsPool.contains("KBHomeOrderPrefs.KIDS_BUILTIN_KEYS")
+        )
+        assertTrue(
+            "and drawn across the rails, not sliced in rail order",
+            railsPool.contains("billboardRandomPages(")
+        )
+        assertTrue(
+            "no new setting: the default feed is still trending_day",
+            source(PREFS).contains(
+                "val DEFAULT_BILLBOARD_FEEDS: List<String> = listOf(BILLBOARD_TRENDING_DAY_FEED)"
+            )
+        )
+        assertTrue(
+            "an adult profile still returns before any of this runs",
+            vm.substringAfter("private suspend fun billboardKidsSafePool(")
+                .substringBefore("private fun kidsRailsPool()")
+                .contains("tmdbRepository.kidsMaxAge() ?: return items")
+        )
+    }
+
+    @Test
+    fun `an empty pool re-walks instead of sitting black`() {
+        val vm = source(HOME_VM)
+        assertTrue(
+            "an empty pool is not 'nothing new' - that guard is what kept saying 'deal " +
+                "skipped (same pool) pages=0 settled=0'",
+            vm.substringAfter("val samePool =")
+                .substringBefore("if (samePool)")
+                .contains("wantedKeys.isNotEmpty()")
+        )
+        val emptyDeal = vm.substringAfter("if (dealt.isEmpty()) {")
+            .substringBefore("val epoch = billboardResolveEpoch")
+        assertTrue("the empty deal asks again", emptyDeal.contains("rewalkEmptyBillboard()"))
+        val rewalk = vm.substringAfter("private fun rewalkEmptyBillboard()")
+            .substringBefore("\n    /**")
+        assertTrue(
+            "a forced walk, not the cached one",
+            rewalk.contains("loadBillboardTrendingDay(force = true)")
+        )
+        assertTrue("nothing runs while the billboard is off", rewalk.contains("getHomeBillboardEnabled"))
+        assertTrue(
+            "and a walk already in flight is the answer - it is not cancelled and restarted",
+            rewalk.contains("billboardTrendingJob?.isActive == true")
+        )
+    }
+
+    @Test
+    fun `the TV reloads the default feed for the profile on screen`() {
+        val tv = source(SPOTLIGHT)
+        assertTrue(
+            "the TV's load is keyed exactly as the phone's is",
+            tv.contains("LaunchedEffect(billboardEnabled, activeProfileId)") &&
+                source(PHONE).contains("LaunchedEffect(billboardEnabled, activeProfileId)")
+        )
+        assertTrue(
+            "the profile is handed in by the Home, which already reads it",
+            tv.contains("activeProfileId: String?,") &&
+                source(HOME_SCREEN).contains("activeProfileId = activeProfileId,")
+        )
+    }
+
+    @Test
+    fun `the walk traces raw and survived per page`() {
+        val vm = source(HOME_VM)
+        val walk = vm.substringAfter("SpotlightDiagTrace.billboardWalkStart()")
+            .substringBefore("// Same profile: a failed reload never blanks")
+        assertTrue(
+            "the walk asks for the page WITH its raw count, not just the survivors",
+            walk.contains("tmdbRepository.trendingDayPage(") &&
+                source(TMDB).contains("data class TrendingDayPage(val fetched: Int")
+        )
+        assertTrue(
+            "each page reports its two numbers and the pool it built",
+            walk.contains("moviesFetched = moviePage?.fetched ?: -1") &&
+                walk.contains("showsKept = showPage?.kept?.size ?: 0") &&
+                walk.contains("pool = pages.size")
+        )
+        assertTrue(
+            "and the end says which rule stopped it: a null page, empty pages, or the cap",
+            walk.contains("\"null page\"") &&
+                walk.contains("\"empty pages\"") &&
+                walk.contains("reason = endReason ?: \"cap\"")
+        )
+        val trace = source(DIAG)
+        assertTrue(
+            "the trace keeps one line per walk, replaced as it goes",
+            trace.contains("listOf(\"gate\", \"render\", \"feed\", \"walk\", \"pages\", \"resolve\", \"clear\")")
+        )
+        assertTrue(
+            "a fresh deal refreshes the resolve slot, so a pool of 0 cannot sit beside a " +
+                "stale resolved=16",
+            trace.substringAfter("fun billboardDealt(")
+                .substringBefore("fun billboardWalkStart()")
+                .contains("putBillboard(\"resolve\", resolveLine())")
+        )
+    }
+
     private fun source(relative: String): String {
         val prefixes = listOf("", "app/")
         var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
@@ -205,5 +364,8 @@ class BillboardKidsSafePoolContractTest {
         const val PHONE = "com/kennyb1201/kbstream/ui/mobile/HomeScreenMobile.kt"
         const val SPOTLIGHT = "com/kennyb1201/kbstream/ui/home/SpotlightHome.kt"
         const val TMDB = "com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt"
+        const val HOME_SCREEN = "com/kennyb1201/kbstream/ui/home/HomeScreen.kt"
+        const val PREFS = "com/kennyb1201/kbstream/data/settings/AppPreferences.kt"
+        const val DIAG = "com/kennyb1201/kbstream/data/reporting/SpotlightDiagTrace.kt"
     }
 }

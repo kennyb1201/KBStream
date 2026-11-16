@@ -513,9 +513,11 @@ class MobileBillboardContractTest {
         // a settled page replaces its own slot by key.
         assertTrue(vm.contains("_billboardPages.value = dealt.map { item -> BillboardPage("))
         // The default feed is the day pair, interleaved by rank - fetched by
-        // PAGE, because one page is not always a pool (see the walk test).
-        assertTrue(vm.contains("tmdbRepository.trendingDay(\"movie\", walked)"))
-        assertTrue(vm.contains("tmdbRepository.trendingDay(\"tv\", walked)"))
+        // PAGE, because one page is not always a pool (see the walk test), and
+        // WITH its raw count since 2026-11-16: the ceiling's yield is what the
+        // paste has to be able to read (see TmdbRepository.trendingDayPage).
+        assertTrue(vm.contains("tmdbRepository.trendingDayPage(\"movie\", walked)"))
+        assertTrue(vm.contains("tmdbRepository.trendingDayPage(\"tv\", walked)"))
         assertTrue(vm.contains("billboardInterleaveFeeds("))
         // A recomposition carrying the same feed resolves nothing new - compared
         // as a SET, because a changed pool is re-dealt and the guard has to hold

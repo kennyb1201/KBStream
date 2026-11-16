@@ -51,7 +51,7 @@ internal object SpotlightDiagTrace {
 
     /** Summary slots in print order, so two pastes of one state read alike. */
     private val BILLBOARD_ORDER =
-        listOf("gate", "render", "feed", "pages", "resolve", "clear")
+        listOf("gate", "render", "feed", "walk", "pages", "resolve", "clear")
     private val SPOTLIGHT_ORDER = listOf("tracker", "dwell", "panel")
 
     private val lock = Any()
@@ -74,6 +74,17 @@ internal object SpotlightDiagTrace {
     private var resolved = 0
     private var nulls = 0
     private var failure: String? = null
+
+    // ── The last trending-day walk (spec 2026-11-16, F2) ───────────────────
+    //
+    // The kids hero went black on the TCL and the paste could not say WHY the
+    // default feed was empty: TMDB returning nothing and the strict PG ceiling
+    // dropping all forty titles both read as "empty pool". The walk now records,
+    // per page, what came back and what survived, and how it ended - so the next
+    // paste answers it instead of the next guess.
+    private val walkPages = mutableListOf<String>()
+    private var walkPool = 0
+    private var walkEnd: String? = null
 
     // ── The last snapshot, kept past its blur (F5) ────────────────────────
     // COPY DIAGNOSTICS is taken from Settings, so by paste time the card has
@@ -256,7 +267,69 @@ internal object SpotlightDiagTrace {
             failure = null
         }
         putBillboard("pages", pagesLine())
+        // F4 (2026-11-16): the RESOLVE slot is refreshed with the counters that
+        // were just zeroed. It used to be left as the previous deal wrote it, so
+        // a pool of 0 sat beside a `resolve resolved=16` from an earlier deal -
+        // almost certainly another profile's - and the paste lied about what the
+        // current pool had done.
+        putBillboard("resolve", resolveLine())
         note(BILLBOARD + "deal pages=$pages pool=$pool epoch=$epoch")
+    }
+
+    /** A new walk of the default feed has started; the last walk's pages are dropped. */
+    fun billboardWalkStart() {
+        synchronized(lock) {
+            walkPages.clear()
+            walkPool = 0
+            walkEnd = null
+        }
+        putBillboard("walk", walkLine())
+        note(BILLBOARD + "walk start")
+    }
+
+    /**
+     * One page of the walk: what TMDB returned and what the ceiling kept.
+     *
+     * [moviesFetched] and [showsFetched] are the raw row counts, [moviesKept] and
+     * [showsKept] the survivors - the pair that tells "an empty day" from "the
+     * ceiling dropped everything" (F2). A fetched count of -1 means that half of
+     * the page did not answer at all, so a failed request never reads as an empty
+     * one.
+     */
+    fun billboardWalkPage(
+        page: Int,
+        moviesFetched: Int,
+        moviesKept: Int,
+        showsFetched: Int,
+        showsKept: Int,
+        pool: Int
+    ) {
+        synchronized(lock) {
+            walkPages += "p$page m$moviesFetched>$moviesKept s$showsFetched>$showsKept"
+            walkPool = pool
+        }
+        putBillboard("walk", walkLine())
+        note(
+            BILLBOARD + "walk page=$page movies=$moviesFetched->$moviesKept " +
+                "shows=$showsFetched->$showsKept pool=$pool"
+        )
+    }
+
+    /** Why the walk stopped: [reason] is `null` page, `empty` pages or the `cap`. */
+    fun billboardWalkEnded(reason: String, pages: Int, pool: Int) {
+        synchronized(lock) {
+            walkEnd = reason
+            walkPool = pool
+        }
+        putBillboard("walk", walkLine())
+        note(BILLBOARD + "walk end reason=$reason pages=$pages pool=$pool")
+    }
+
+    /** The walk's one summary line: every page, the pool it built, and its end. */
+    private fun walkLine(): String {
+        val pages =
+            if (walkPages.isEmpty()) "pages=0" else "pages=${walkPages.size} [${walkPages.joinToString(" ")}]"
+        return "walk $pages pool=$walkPool end=${walkEnd ?: "running"}"
     }
 
     /**
@@ -496,6 +569,9 @@ internal object SpotlightDiagTrace {
             resolved = 0
             nulls = 0
             failure = null
+            walkPages.clear()
+            walkPool = 0
+            walkEnd = null
             focusToken = 0
             held = false
             lastKey = null

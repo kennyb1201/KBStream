@@ -160,6 +160,79 @@ class SpotlightDiagContractTest {
         )
     }
 
+    // ── 2026-11-16: the walk's own evidence, and the resolve slot ─────────
+
+    @Test
+    fun `the walk records raw and survived per page, and why it stopped`() {
+        SpotlightDiagTrace.billboardWalkStart()
+        SpotlightDiagTrace.billboardWalkPage(
+            page = 1,
+            moviesFetched = 20,
+            moviesKept = 0,
+            showsFetched = 20,
+            showsKept = 1,
+            pool = 1
+        )
+        SpotlightDiagTrace.billboardWalkPage(
+            page = 2,
+            moviesFetched = 20,
+            moviesKept = 0,
+            showsFetched = 0,
+            showsKept = 0,
+            pool = 1
+        )
+        SpotlightDiagTrace.billboardWalkEnded("empty pages", pages = 2, pool = 1)
+
+        val walk = SpotlightDiagTrace.summaries().first { it.contains("walk ") }
+        assertTrue(walk, walk.contains("pages=2"))
+        assertTrue(
+            "what came back and what the ceiling kept, page by page: $walk",
+            walk.contains("p1 m20>0 s20>1") && walk.contains("p2 m20>0 s0>0")
+        )
+        assertTrue("the pool and the stop reason travel: $walk", walk.contains("pool=1 end=empty pages"))
+
+        val transitions = SpotlightDiagTrace.lines().joinToString("\n")
+        assertTrue(
+            "and each page is its own transition: $transitions",
+            transitions.contains("walk page=1 movies=20->0 shows=20->1 pool=1")
+        )
+        assertTrue(transitions.contains("walk end reason=empty pages pages=2 pool=1"))
+    }
+
+    @Test
+    fun `a failed page is traced as -1, never as an empty one`() {
+        SpotlightDiagTrace.billboardWalkStart()
+        SpotlightDiagTrace.billboardWalkPage(
+            page = 1,
+            moviesFetched = -1,
+            moviesKept = 0,
+            showsFetched = 20,
+            showsKept = 0,
+            pool = 0
+        )
+        SpotlightDiagTrace.billboardWalkEnded("null page", pages = 1, pool = 0)
+        val walk = SpotlightDiagTrace.summaries().first { it.contains("walk ") }
+        assertTrue(walk, walk.contains("p1 m-1>0 s20>0"))
+        assertTrue(walk, walk.contains("end=null page"))
+    }
+
+    @Test
+    fun `a fresh deal rewrites the resolve slot`() {
+        SpotlightDiagTrace.billboardDealt(pages = 16, pool = 20, epoch = 1)
+        repeat(16) { i ->
+            SpotlightDiagTrace.billboardPageResolved("movie:$i", settledNow = i + 1, total = 16)
+        }
+        assertTrue(
+            SpotlightDiagTrace.summaries().first { it.contains("resolve ") }.contains("resolved=16")
+        )
+
+        // The next deal is empty (another profile, a stricter ceiling): the slot
+        // must not still claim the previous deal's sixteen.
+        SpotlightDiagTrace.billboardDealt(pages = 0, pool = 0, epoch = 2)
+        val line = SpotlightDiagTrace.summaries().first { it.contains("resolve ") }
+        assertTrue(line, line.contains("resolved=0 null=0 of 0"))
+    }
+
     @Test
     fun `a failed resolve job carries the exception message, not a stack`() {
         SpotlightDiagTrace.billboardDealt(pages = 2, pool = 5, epoch = 1)

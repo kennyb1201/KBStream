@@ -7057,6 +7057,10 @@ fun HomeScreen(
                                     trailerAutoplay = spotlightTrailerAutoplay,
                                     heroHeight = spotlightHeroItemHeight,
                                     pillFocusRequester = spotlightHeroPillRequester,
+                                    // The profile the hero's default-feed load must
+                                    // be keyed on (spec 2026-11-16, F3), the same
+                                    // value this screen's own reads use.
+                                    activeProfileId = activeProfileId,
                                     // F4 (2026-11-14): the Ken Burns sweep holds
                                     // while the rails list is moving. Passed as a
                                     // lambda so the read happens inside the

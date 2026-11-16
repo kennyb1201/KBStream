@@ -134,6 +134,15 @@ internal fun SpotlightHeroSection(
      * not have been composed at all yet.
      */
     pillFocusRequester: FocusRequester,
+    /**
+     * The profile on screen, handed in from the Home.
+     *
+     * One job: keying the trending-day load on it (spec 2026-11-16, F3). The
+     * default feed is ceiling-filtered per profile and the switch empties it, so
+     * the TV has to re-ask like the phone does instead of waiting for the picker
+     * round-trip to dispose Home.
+     */
+    activeProfileId: String?,
     /** Called once the pill request has been taken, so the latch closes. */
     onEntryFocusClaimed: () -> Unit = {},
     /**
@@ -175,7 +184,13 @@ internal fun SpotlightHeroSection(
     }
 
     val trendingDay by viewModel.billboardTrendingDay.collectAsStateWithLifecycle()
-    LaunchedEffect(billboardEnabled) {
+    // Keyed on the profile as well as the switch, exactly as the phone's hero is
+    // (spec 2026-11-16, F3): the default feed is ceiling-filtered for the profile
+    // that loads it, and a profile switch EMPTIES it (see HomeViewModel's switch
+    // block) - so the profile now on screen has to ask again, or a kids profile
+    // inherits the previous profile's adult trending titles as its hero. The TV
+    // used to rely on the picker round-trip disposing Home for the reload.
+    LaunchedEffect(billboardEnabled, activeProfileId) {
         if (billboardEnabled) viewModel.loadBillboardTrendingDay()
     }
 

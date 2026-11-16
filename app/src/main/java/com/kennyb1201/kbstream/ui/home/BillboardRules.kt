@@ -65,31 +65,43 @@ internal fun billboardShouldWalkNextPage(pagesWalked: Int, poolSize: Int): Boole
  * The pool the billboard deals from once a ceiling has had its say.
  *
  * [filtered] is the chosen feed after the active profile's ceiling
- * (`kidsFilterMetas` - the same rule Up Next and the catalog rails use), and
+ * (`kidsFilterMetas` - the same rule Up Next and the catalog rails use),
  * [walkedDefault] is the ceiling-filtered, walked trending-day pool the feed
- * falls back to. The rule is pure so the fallback is testable without a
- * network, and it is deliberately conservative:
+ * falls back to, and [kidsRails] is the merged items of the six app-built kids
+ * rails (spec 2026-11-16, F1) - already kids-safe, because their own build runs
+ * every item through the same ceiling. The rule is pure so the fallback is
+ * testable without a network, and it is deliberately conservative:
  *
  *  - a feed that survives the ceiling at FULL size ([BILLBOARD_MAX_PAGES]) is
  *    the pool, untouched;
- *  - a thinner feed keeps a longer default pool only when the default really is
- *    longer. A strict kids ceiling can leave a rail three titles out of forty,
- *    and three is a hero with almost nothing to swipe to - but a day where the
- *    ceiling thinned both pools must still show the catalog the viewer picked,
- *    so "no longer than what survived" keeps the feed.
+ *  - a thinner feed keeps a longer fallback only when that fallback really is
+ *    longer, and the LONGEST of the two wins - the walked default when it is,
+ *    the kids rails when they are. A strict kids ceiling can leave a rail three
+ *    titles out of forty, and three is a hero with almost nothing to swipe to -
+ *    but a day where every pool thinned must still show the catalog the viewer
+ *    picked, so "no longer than what survived" keeps the feed.
+ *
+ * Why the kids rails are a fallback at all: on the reported TCL kids profile the
+ * trending-day walk yielded NOTHING (the strict PG ceiling drops every title
+ * whose US cert cannot be resolved), so the default feed and its own fallback
+ * were both empty and the hero was black for anyone who never picked a feed.
+ * The kids rows are the one pool that is kids-safe AND long, and the viewer does
+ * not have to know the picker exists to get a billboard.
  *
  * Adult profiles never reach here at all: with no ceiling the resolve hands the
  * feed straight to the dealer.
  */
 internal fun billboardKidsSafePool(
     filtered: List<MetaPreview>,
-    walkedDefault: List<MetaPreview>
-): List<MetaPreview> =
-    if (filtered.size >= BILLBOARD_MAX_PAGES || walkedDefault.size <= filtered.size) {
-        filtered
-    } else {
-        walkedDefault
-    }
+    walkedDefault: List<MetaPreview>,
+    kidsRails: List<MetaPreview> = emptyList()
+): List<MetaPreview> {
+    if (filtered.size >= BILLBOARD_MAX_PAGES) return filtered
+    // Ties go to the walked pool: it is today's behaviour, and a tie means the
+    // kids rows have nothing extra to offer.
+    val best = if (kidsRails.size > walkedDefault.size) kidsRails else walkedDefault
+    return if (best.size <= filtered.size) filtered else best
+}
 
 /**
  * One billboard page's identity: the title's id AND its type.
