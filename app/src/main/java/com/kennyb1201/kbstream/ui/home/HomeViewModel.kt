@@ -9582,11 +9582,14 @@ episodesTotal =
         // "Unknown Show" placeholder is a title the feed failed to fill in, so
         // [resolvedName], the detail the card's art and label already come from,
         // gets its turn.
+        // [upcomingDetail] is this builder's own capture of the detail (the
+        // nested `detail` further up is scoped to the lookup branch): the name
+        // chain needs the same one [resolvedName] was built from.
         val displayTitle =
             upNextCardNameOrNull(
                 sourceName = item.title,
-                detailName = detail?.name,
-                detailTitle = detail?.title,
+                detailName = upcomingDetail?.name,
+                detailTitle = upcomingDetail?.title,
                 sourceHasArtwork = !posterUrl.isNullOrBlank()
             )
                 ?: resolvedName
