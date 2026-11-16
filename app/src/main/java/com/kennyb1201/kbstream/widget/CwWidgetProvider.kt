@@ -23,9 +23,10 @@ import com.kennyb1201.kbstream.data.widget.CwWidgetUpdater
  *
  * The provider draws the shell (title, freshness line, refresh affordance, the
  * list's adapter/template) and leaves the rows to [CwWidgetService]. Refreshes are
- * pushed by the app when Continue Watching changes ([CwWidgetUpdater]) and by the
- * header's own button; `updatePeriodMillis` is 0, so the launcher never wakes the
- * app on its own schedule.
+ * pushed by the app when Continue Watching changes ([CwWidgetUpdater]) and rebuilt
+ * by the header's own button and the half-hourly round (spec 2026-11-16);
+ * `updatePeriodMillis` is 0, so the launcher never wakes the app on its own
+ * schedule.
  */
 class CwWidgetProvider : AppWidgetProvider() {
 
@@ -46,9 +47,12 @@ class CwWidgetProvider : AppWidgetProvider() {
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
         if (intent.action == CwWidgetTap.ACTION_REFRESH) {
-            // The header's own button. There is nothing to fetch: re-reading the
-            // snapshot is the refresh, and the launcher's re-bind shows the
-            // freshness line as of now.
+            // The header's own button (spec 2026-11-16, F2). Re-binding the
+            // stored snapshot first, so the press is acknowledged immediately;
+            // then a real rebuild, off this thread, which rewrites the snapshot
+            // from local history and repaints again when it lands. Before this,
+            // the repaint was the whole refresh - on a snapshot only a running
+            // app could change - so a tap could not change anything at all.
             runCatching {
                 val manager = AppWidgetManager.getInstance(context)
                 if (manager != null) {
@@ -58,6 +62,8 @@ class CwWidgetProvider : AppWidgetProvider() {
                     ids.forEach { id -> runCatching { render(context, manager, id) } }
                 }
             }
+            runCatching { CwWidgetUpdater.rebuildNow(context) }
+                .onFailure { Log.w(TAG, "could not queue a rebuild: ${it.javaClass.simpleName}") }
         }
     }
 

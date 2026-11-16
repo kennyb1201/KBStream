@@ -12,8 +12,10 @@ import org.junit.Test
  * exist across files, and they are the ones a refactor silently breaks:
  *
  * - ONE source of truth: the snapshot is written from Home's own publish funnel,
- *   filtered by the rail's own read-site rules, and nothing in the widget path
- *   reads the history database or calls a tracker.
+ *   filtered by the rail's own read-site rules. Since spec 2026-11-16 the widget
+ *   also rebuilds it from local history when the app is not there to publish it
+ *   (the button and the half-hourly round) - the local repository, Home's own
+ *   card builder, and still no tracker and no add-on call.
  * - ONE resume path: a row tap becomes `Screen.Detail(pendingTarget = ...)`, the
  *   same destination a Continue Watching card press produces.
  * - The manifest/service/layout shape a launcher actually requires, and no new
@@ -77,7 +79,7 @@ class CwWidgetWiringContractTest {
     }
 
     @Test
-    fun `the widget path never reads history or calls a tracker`() {
+    fun `the rebuild reads local history only, and only the publisher does`() {
         listOf(publisher, service, provider, worker, updater).forEach { source ->
             assertFalse(
                 "no history DAO / tracker / add-on work in the widget path",
@@ -90,6 +92,21 @@ class CwWidgetWiringContractTest {
         assertTrue(
             "the factory reads the snapshot and nothing else",
             service.contains("CwWidgetStore.read(context)")
+        )
+        assertTrue(
+            "the rebuild's one source is the local history repository, through the " +
+                "slice Home reads its instant seed from",
+            publisher.contains("WatchHistoryRepository(application)") &&
+                publisher.contains(".getContinueWatchingParentsSnapshot()") &&
+                !service.contains("WatchHistoryRepository") &&
+                !provider.contains("WatchHistoryRepository")
+        )
+        assertTrue(
+            "and it builds cards with Home's own builder, not a second reading of " +
+                "a history row",
+            publisher.contains("rows.mapNotNull(::instantContinueWatchingItem)") &&
+                publisher.contains("continueWatchingShowNames(rows)") &&
+                homeVm.contains("visibleHistory.mapNotNull(::instantContinueWatchingItem)")
         )
     }
 
@@ -243,8 +260,10 @@ class CwWidgetWiringContractTest {
                 provider.contains("CwWidgetUpdater.syncPeriodicWork(context, hasWidget = false)")
         )
         assertTrue(
-            "the worker itself does not poll anything",
-            !worker.contains("Repository") && !worker.contains("Dao")
+            "the worker itself does not poll anything - it delegates the one rebuild",
+            worker.contains("CwWidgetPublisher.rebuild(context)") &&
+                !worker.contains("Repository") &&
+                !worker.contains("Dao")
         )
     }
 

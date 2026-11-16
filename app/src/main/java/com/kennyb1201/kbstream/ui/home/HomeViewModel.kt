@@ -645,17 +645,10 @@ class HomeViewModel(
     private fun publishContinueWatchingShowNames(
         rows: List<WatchHistoryEntity>
     ) {
-        val names =
-            buildMap<String, String> {
-                rows.forEach { row ->
-                    val name =
-                        row.name.trim().takeIf { it.isNotEmpty() }
-                            ?: return@forEach
-                    upNextIdentifier(row.parentId)
-                        ?.let { identifier -> put(identifier, name) }
-                    put(row.id, name)
-                }
-            }
+        // Shared with the widget's background rebuild (spec 2026-11-16, F1):
+        // the hidden-titles rule reads this map, and a widget that resolved a
+        // show's name its own way could hide a different card than the rail.
+        val names = continueWatchingShowNames(rows)
 
         if (names != _continueWatchingShowNames.value) {
             _continueWatchingShowNames.value = names
@@ -6465,26 +6458,6 @@ Log.d(
             }
     }
 
-    private fun calculateRemainingMinutes(
-    positionMs: Long,
-    durationMs: Long
-): Int? {
-    if (durationMs <= 0L || positionMs < 0L) {
-        return null
-    }
-
-    val remainingMs =
-        (durationMs - positionMs).coerceAtLeast(0L)
-
-    if (remainingMs <= 0L) {
-        return null
-    }
-
-    return ((remainingMs + 30_000L) / 60_000L)
-        .toInt()
-        .coerceAtLeast(1)
-}
-
     private fun calculateRemainingMinutesFromProgress(
     runtimeMinutes: Int?,
     progress: Float?
@@ -6870,62 +6843,11 @@ Log.d(
 
         if (visibleHistory.isEmpty()) return
 
-        val items = visibleHistory.mapNotNull { entry ->
-            UpNextItem(
-                id = buildString {
-                    append("history:")
-                    append(entry.id)
-                    entry.season?.let { append(":s$it") }
-                    entry.episode?.let { append(":e$it") }
-                },
-                title =
-                    upNextDisplayTitleOrNull(
-                        entry.name,
-                        !entry.poster.isNullOrBlank()
-                    )
-                        ?: return@mapNotNull null,
-                poster = entry.poster,
-                badge = UpNextBadge.CONTINUE_WATCHING,
-                showTitle = if (entry.season != null && entry.episode != null) {
-                    entry.name
-                } else {
-                    null
-                },
-                episodeTitle = entry.episodeTitle?.takeIf { it.isNotBlank() },
-                episodeDescription = entry.overview?.takeIf { it.isNotBlank() },
-                backdrop = entry.backdropUrl,
-                clearLogo = entry.clearLogo,
-                progressPercent = progressFromHistory(
-                    positionMs = entry.positionMs,
-                    durationMs = entry.durationMs
-                ),
-                remainingMinutes = calculateRemainingMinutes(
-                    positionMs = entry.positionMs,
-                    durationMs = entry.durationMs
-                ),
-                runtimeMinutes =
-                    if (entry.durationMs > 0L) {
-                        ((entry.durationMs + 30_000L) / 60_000L)
-                            .toInt()
-                            .coerceAtLeast(1)
-                    } else {
-                        null
-                    },
-                streamUrl = entry.streamUrl,
-                parentId = entry.parentId.ifBlank { entry.id },
-                parentType = entry.type,
-                season = entry.season,
-                episode = namedEpisodeNumber(entry.episode),
-                // A stream id keys an episode. When the row's episode is the
-                // source's 0, there is no episode for it to key, so it is
-                // dropped with the number rather than opening a phantom one.
-                episodeStreamId = entry.episodeStreamId
-                    .takeIf { namedEpisodeNumber(entry.episode) != null },
-                startPositionMs = entry.positionMs,
-                recencyTimestamp = entry.updatedAt,
-                historyRowId = entry.id
-            )
-        }
+        // The card itself is [instantContinueWatchingItem]: the widget's
+        // background rebuild builds its rows with the same function (spec
+        // 2026-11-16, F1), so the rail and the widget cannot disagree about
+        // what a history row looks like.
+        val items = visibleHistory.mapNotNull(::instantContinueWatchingItem)
 
         // Only seed when nothing is showing yet (cold start / fresh entry);
         // never clobber a live enriched list with the raw snapshot.

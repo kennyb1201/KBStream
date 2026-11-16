@@ -132,6 +132,15 @@ class StoredEpisodeStreamIdRerootTest {
     private val home =
         normalized(stripComments(source(HOME)))
 
+    /**
+     * The card the instant seed builds is [instantContinueWatchingItem] since
+     * spec 2026-11-16: the widget's background rebuild builds its rows with the
+     * same function, so the one bare read of a stored id moved out of the
+     * ViewModel without gaining a second copy.
+     */
+    private val upNext =
+        normalized(stripComments(source(UP_NEXT)))
+
     @Test
     fun `the rail's card re-roots the row's own stream id`() {
         assertTrue(
@@ -205,17 +214,32 @@ class StoredEpisodeStreamIdRerootTest {
                 "private fun previousSimklUpNextItems()"
             )
         assertTrue(
-            "the seed has no TMDB id to verify a root with",
-            snapshot.contains("episodeStreamId = entry.episodeStreamId")
+            "the seed hands its rows to the one card builder",
+            snapshot.contains("visibleHistory.mapNotNull(::instantContinueWatchingItem) ")
+        )
+        val builder =
+            section(
+                upNext,
+                "internal fun instantContinueWatchingItem( entry: WatchHistoryEntity ):",
+                "internal fun continueWatchingShowNames("
+            )
+        assertTrue(
+            "the builder has no TMDB id to verify a root with",
+            builder.contains("episodeStreamId = entry.episodeStreamId")
         )
         assertFalse(
             "and it therefore must not re-root anything",
-            snapshot.contains("rerootStoredStreamId(")
+            builder.contains("rerootStoredStreamId(")
         )
         assertEquals(
             "no other read of a history row's id may skip the re-root",
-            2,
+            1,
             Regex("entry\\.episodeStreamId").findAll(home).count()
+        )
+        assertEquals(
+            "and the bare read lives in that one builder, not in a second one",
+            1,
+            Regex("entry\\.episodeStreamId").findAll(upNext).count()
         )
     }
 
@@ -260,5 +284,6 @@ class StoredEpisodeStreamIdRerootTest {
 
     private companion object {
         const val HOME = "com/kennyb1201/kbstream/ui/home/HomeViewModel.kt"
+        const val UP_NEXT = "com/kennyb1201/kbstream/ui/home/HomeUpNext.kt"
     }
 }

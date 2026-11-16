@@ -6,7 +6,9 @@ import android.content.Context
 import android.content.Intent
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.kennyb1201.kbstream.widget.CwWidgetProvider
@@ -15,12 +17,19 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Tells the Continue Watching widget that its list changed (spec 2026-11-13,
- * F2), and owns its periodic round.
+ * F2), and owns its half-hourly round and the header button's one-time rebuild.
  *
  * The app is the only thing that knows Continue Watching changed, so it says so -
  * after a playback session, a mark, a dismissal, a profile switch or a snapshot
  * write - and the launcher asks its factory for the rows again. No polling: a
- * refresh is a notification, not a re-read of the database.
+ * refresh from the app is a notification, not a re-read of the database.
+ *
+ * The two SCHEDULED paths are different since spec 2026-11-16: the half-hourly
+ * round and the button both ask [CwWidgetPublisher.rebuild] to re-derive the list
+ * from local history before they repaint, because the app's own publish only
+ * happens while Home is alive and a widget on a phone that was not opened for
+ * hours went stale - and stayed stale, since re-reading an unchanged snapshot
+ * changes nothing on screen.
  *
  * A device with no widget placed is never woken: [refresh] returns immediately
  * and the periodic round is not scheduled at all, so adding this feature costs a
@@ -30,7 +39,10 @@ internal object CwWidgetUpdater {
 
     const val PERIODIC_WORK_NAME = "cw_widget_refresh"
 
-    /** Thirty minutes: the widget's data is local, so this only repaints freshness. */
+    /** The header's button: one rebuild, at most one in flight (spec 2026-11-16, F2). */
+    const val REBUILD_WORK_NAME = "cw_widget_rebuild"
+
+    /** Thirty minutes: the round rebuilds from local history and repaints. */
     private const val INTERVAL_MINUTES = 30L
 
     /** True while at least one instance of the widget is on a launcher. */
@@ -83,6 +95,37 @@ internal object CwWidgetUpdater {
     }
 
     /**
+     * The header's refresh button: one on-demand rebuild, run off the UI thread
+     * (spec 2026-11-16, F2).
+     *
+     * WorkManager rather than a thread inside `onReceive`, which runs on the main
+     * thread and is a broadcast receiver the launcher is waiting on. `KEEP` is the
+     * "a tap while a rebuild is in flight is a no-op" rule: the second press finds
+     * the work already there and queues nothing, instead of two rebuilds racing to
+     * write the same file. No network constraint - the rebuild reads local history.
+     *
+     * The caller still repaints first, so the tap is acknowledged even if the work
+     * system is slow to start it.
+     */
+    fun rebuildNow(context: Context) {
+        if (!hasInstances(context)) return
+        runCatching {
+            val request = OneTimeWorkRequestBuilder<CwWidgetRefreshWorker>()
+                .setConstraints(
+                    Constraints.Builder()
+                        .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
+                        .build()
+                )
+                .build()
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                REBUILD_WORK_NAME,
+                ExistingWorkPolicy.KEEP,
+                request
+            )
+        }
+    }
+
+    /**
      * Arms the 30-minute round while a widget exists, and disarms it when the
      * last one is removed.
      *
@@ -95,6 +138,9 @@ internal object CwWidgetUpdater {
         val workManager = WorkManager.getInstance(context)
         if (!hasWidget) {
             workManager.cancelUniqueWork(PERIODIC_WORK_NAME)
+            // A tap that landed just before the last instance went away has
+            // nothing left to rebuild for.
+            workManager.cancelUniqueWork(REBUILD_WORK_NAME)
             return
         }
         val request = PeriodicWorkRequestBuilder<CwWidgetRefreshWorker>(

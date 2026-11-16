@@ -2,9 +2,12 @@ package com.kennyb1201.kbstream.data.widget
 
 import android.content.Context
 import android.util.Log
+import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.ui.home.UpNextItem
+import com.kennyb1201.kbstream.ui.home.continueWatchingShowNames
+import com.kennyb1201.kbstream.ui.home.instantContinueWatchingItem
 import com.kennyb1201.kbstream.ui.home.upNextContinueWatchingDecision
 import java.time.LocalDate
 import java.time.ZoneId
@@ -20,8 +23,14 @@ import kotlinx.coroutines.withContext
  * already ordered, already dismissed-filtered, already tracker-merged - and it
  * runs the same two read-site rules the rail runs ([upNextContinueWatchingDecision]:
  * hidden titles and the not-yet-aired tracker card) with the same inputs, so
- * the widget cannot invent an order, a card or a rule of its own. Nothing here
- * reads the history database or calls a tracker.
+ * the widget cannot invent an order, a card or a rule of its own.
+ *
+ * Since spec 2026-11-16 it also has the second half: [rebuild] re-derives that
+ * list from the phone's own watch history when the app is not there to publish
+ * it - the header's button, and the half-hourly round. It reads the LOCAL history
+ * database and nothing else (no network, no tracker), and it builds its cards with
+ * Home's own builder ([instantContinueWatchingItem]), so "a second Continue
+ * Watching" is still something this file cannot produce.
  *
  * Writes are change-gated in memory: a publish that produces the same rows as the
  * last one is skipped, so the tracker arrivals that re-publish the rail several
@@ -44,7 +53,18 @@ internal object CwWidgetPublisher {
     suspend fun publish(
         context: Context,
         items: List<UpNextItem>,
-        showNames: Map<String, String>
+        showNames: Map<String, String>,
+        /**
+         * Write even when the rows are the ones already in the snapshot.
+         *
+         * True only for [rebuild]: the freshness line is read from the write's
+         * own timestamp, so a round or a tap that found the same rows must still
+         * move it - otherwise the widget would sit there saying "Updated 5h ago"
+         * after the viewer watched it rebuild (spec 2026-11-16, F2/F3). A
+         * publish from Home keeps the gate: it fires on every tracker arrival,
+         * and most of those change nothing.
+         */
+        force: Boolean = false
     ) {
         val application = context.applicationContext
         val profileId = runCatching { ProfileStorage.activeProfileId(application) }.getOrNull()
@@ -58,7 +78,7 @@ internal object CwWidgetPublisher {
         }
 
         val gate = profileId ?: ""
-        if (lastRows[gate] == rows) return
+        if (!force && lastRows[gate] == rows) return
         lastRows[gate] = rows
 
         withContext(Dispatchers.IO) {
@@ -72,6 +92,62 @@ internal object CwWidgetPublisher {
             )
         }
         CwWidgetUpdater.refresh(application)
+    }
+
+    /**
+     * Re-derives the snapshot from this phone's own watch history, writes it and
+     * repaints (spec 2026-11-16, F1).
+     *
+     * Until now the app's Home view model was the only thing that could move the
+     * widget, so a phone that was not showing Home went on drawing whatever the
+     * snapshot said - twelve hours of it, in the report that started this. The
+     * header's button and the half-hourly round both ask for this, and it answers
+     * from the same local source and the same card builder Home's instant seed
+     * uses ([instantContinueWatchingItem]), so the widget shows the rail's own
+     * reading of the history rather than a second one.
+     *
+     * LOCAL ONLY: the history database, no network, no tracker, no add-on call.
+     * The tracker cards a running Home merges in are not reproducible from disk,
+     * and inventing them here would be a second Continue Watching.
+     *
+     * The write is forced past the change gate, and that is the point: the
+     * freshness line is the snapshot's own `writtenAtMs`, so a round or a tap that
+     * found the same rows still has to move it, or the button would go on doing
+     * visibly nothing.
+     *
+     * Fail-soft, never blank: a read that throws, and a history with nothing in it
+     * (a cold start, a profile with no progress) both leave the last good snapshot
+     * exactly where it is. A failed rebuild is not worth a retry storm; the next
+     * round and the next tap cover it.
+     */
+    suspend fun rebuild(context: Context) {
+        val application = context.applicationContext
+        // No widget placed, nothing runs: the round's own rule, kept for the tap
+        // (spec 2026-11-16).
+        if (!CwWidgetUpdater.hasInstances(application)) return
+
+        val rows = withContext(Dispatchers.IO) {
+            runCatching {
+                WatchHistoryRepository(application).getContinueWatchingParentsSnapshot()
+            }
+                .onFailure {
+                    Log.w(TAG, "history read for a rebuild failed: ${it.javaClass.simpleName}")
+                }
+                .getOrNull()
+        } ?: return
+
+        // An empty history is not an empty Continue Watching the viewer asked to
+        // see: it is a cold profile or a read that answered nothing, and blanking a
+        // widget that is showing the last good list would be worse than waiting for
+        // the next round.
+        if (rows.isEmpty()) return
+
+        publish(
+            application,
+            rows.mapNotNull(::instantContinueWatchingItem),
+            continueWatchingShowNames(rows),
+            force = true
+        )
     }
 
     /**

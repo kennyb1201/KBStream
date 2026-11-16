@@ -1804,6 +1804,139 @@ internal fun collapseDuplicateUpNextCards(
 }
 
 /**
+ * One Continue Watching card built from a local watch-history row, and nothing
+ * else.
+ *
+ * This was the body of the instant seed's `mapNotNull` (spec 2026-11-13): no
+ * TMDB enrichment and no tracker round-trip, so the rail renders the moment Home
+ * composes. It is a named function because the widget's background rebuild
+ * (spec 2026-11-16, F1) needs the same card: that path has no ViewModel to hand
+ * it a list, and a second reading of "what a history row looks like on the rail"
+ * is exactly what a widget showing its own idea of Continue Watching would be.
+ *
+ * Null for a row that cannot make a card - no displayable name would be a blank
+ * row - which every caller drops.
+ */
+internal fun instantContinueWatchingItem(
+    entry: WatchHistoryEntity
+): UpNextItem? {
+    // A block body, not `=`: the title gate below is a `return null`, and Kotlin
+    // forbids returns from an expression-bodied function.
+    return UpNextItem(
+        id = buildString {
+            append("history:")
+            append(entry.id)
+            entry.season?.let { append(":s$it") }
+            entry.episode?.let { append(":e$it") }
+        },
+        title =
+            upNextDisplayTitleOrNull(
+                entry.name,
+                !entry.poster.isNullOrBlank()
+            )
+                ?: return null,
+        poster = entry.poster,
+        badge = UpNextBadge.CONTINUE_WATCHING,
+        showTitle = if (entry.season != null && entry.episode != null) {
+            entry.name
+        } else {
+            null
+        },
+        episodeTitle = entry.episodeTitle?.takeIf { it.isNotBlank() },
+        episodeDescription = entry.overview?.takeIf { it.isNotBlank() },
+        backdrop = entry.backdropUrl,
+        clearLogo = entry.clearLogo,
+        progressPercent = progressFromHistory(
+            positionMs = entry.positionMs,
+            durationMs = entry.durationMs
+        ),
+        remainingMinutes = calculateRemainingMinutes(
+            positionMs = entry.positionMs,
+            durationMs = entry.durationMs
+        ),
+        runtimeMinutes =
+            if (entry.durationMs > 0L) {
+                ((entry.durationMs + 30_000L) / 60_000L)
+                    .toInt()
+                    .coerceAtLeast(1)
+            } else {
+                null
+            },
+        streamUrl = entry.streamUrl,
+        parentId = entry.parentId.ifBlank { entry.id },
+        parentType = entry.type,
+        season = entry.season,
+        episode = namedEpisodeNumber(entry.episode),
+        // A stream id keys an episode. When the row's episode is the source's
+        // 0, there is no episode for it to key, so it is dropped with the number
+        // rather than opening a phantom one.
+        episodeStreamId = entry.episodeStreamId
+            .takeIf { namedEpisodeNumber(entry.episode) != null },
+        startPositionMs = entry.positionMs,
+        recencyTimestamp = entry.updatedAt,
+        historyRowId = entry.id
+    )
+}
+
+/**
+ * The show name of every Continue Watching parent a history read returned, keyed
+ * by each spelling a card can carry (`upNextIdentifier` of the parent id, and the
+ * row's own id).
+ *
+ * The hidden-titles filter needs a SHOW's name, and a card does not always arrive
+ * with one: a resume row whose season never resolved is built without a
+ * `showTitle`, and the card's own title can then be an episode's. The parent row
+ * the builders read (`WatchHistoryEntity.name`) is the show's, so it is published
+ * here - from the same rows the cards come from, which means a name is already in
+ * hand when a card needs it and nothing reads the database again (see
+ * `upNextHiddenIdentity`).
+ *
+ * Shared with the widget's background rebuild (spec 2026-11-16, F1) for the same
+ * reason [instantContinueWatchingItem] is.
+ */
+internal fun continueWatchingShowNames(
+    rows: List<WatchHistoryEntity>
+): Map<String, String> =
+    buildMap {
+        rows.forEach { row ->
+            val name =
+                row.name.trim().takeIf { it.isNotEmpty() }
+                    ?: return@forEach
+            upNextIdentifier(row.parentId)
+                ?.let { identifier -> put(identifier, name) }
+            put(row.id, name)
+        }
+    }
+
+/**
+ * Minutes left in a card's episode, rounded up, or null when there is nothing to
+ * count (no duration, no position, already finished).
+ *
+ * A top-level helper rather than a ViewModel member because the widget's
+ * background rebuild builds the same card ([instantContinueWatchingItem]) with no
+ * ViewModel in reach.
+ */
+internal fun calculateRemainingMinutes(
+    positionMs: Long,
+    durationMs: Long
+): Int? {
+    if (durationMs <= 0L || positionMs < 0L) {
+        return null
+    }
+
+    val remainingMs =
+        (durationMs - positionMs).coerceAtLeast(0L)
+
+    if (remainingMs <= 0L) {
+        return null
+    }
+
+    return ((remainingMs + 30_000L) / 60_000L)
+        .toInt()
+        .coerceAtLeast(1)
+}
+
+/**
  * One card per show for the instant Continue Watching seed.
  *
  * The seed is built from `getContinueWatchingParentsSnapshot`, whose SQL
