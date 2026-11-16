@@ -104,6 +104,18 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                     com.kennyb1201.kbstream.data.remote.RemoteControlRuntime
                         .start(this@MainApplication)
                 }
+            } else {
+                // The other end of that channel (spec 2026-11-16, F1): a phone that
+                // has already paired resumes that TV on launch and keeps the socket
+                // up, so its Detail page's PLAY ON TV button reflects something real
+                // instead of only working while the Remote screen happened to be
+                // open. An unpaired phone starts nothing - no socket, no scan - and
+                // discovery stays the Remote screen's and the reconnect's business.
+                startupScope.launch {
+                    com.kennyb1201.kbstream.data.remote.RemoteClientProvider
+                        .get(this@MainApplication)
+                        .keepConnected()
+                }
             }
         }.onFailure {
             com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(

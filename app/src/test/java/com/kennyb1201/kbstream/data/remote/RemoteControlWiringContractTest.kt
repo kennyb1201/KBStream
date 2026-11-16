@@ -126,8 +126,12 @@ class RemoteControlWiringContractTest {
             tvSection.contains("RemotePairings.forget(context, phone.id)")
         )
         assertTrue(
-            "the phone can drop its stored token",
-            client.contains("fun forgetTv()") && client.contains("RemotePhonePrefs.clearToken")
+            "the phone can drop its stored token - and, since 2026-11-16, the address " +
+                "and the remembered TV with it, or the background connection would " +
+                "resume a TV it is no longer paired with",
+            client.contains("fun forgetTv()") &&
+                client.contains("RemotePhonePrefs.forgetTv(appContext, device.name)") &&
+                client.contains("fun forgetTv(context: Context, tvName: String)")
         )
         assertTrue(
             "an unpaired phone's arrival puts the code on the TV's screen",

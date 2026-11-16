@@ -116,7 +116,62 @@ internal class RemoteClient(context: Context) {
             )
             return
         }
+        // Already connected in the background (a paired TV, see [keepConnected]):
+        // the viewer opened the screen the connection is FOR, so discovery would
+        // only stamp SEARCHING over a live phase and re-handshake a working
+        // socket. A drop re-discovers on its own (see [scheduleReconnect]).
+        if (wantConnection && state.value.phase == RemotePhase.CONNECTED) return
         startDiscovery()
+    }
+
+    /**
+     * Keeps a PAIRED television connected while the app is up (spec 2026-11-16, F1).
+     *
+     * Called once at launch. The socket used to live and die with the Remote
+     * screen, so PLAY ON TV could only work while Settings was open - and the
+     * button on Detail promised a connection the app did not hold. Now a phone that
+     * has paired resumes that TV by itself.
+     *
+     * What it does NOT do: an unpaired phone starts nothing at all (no socket, no
+     * scan - the "nothing runs behind the viewer's back" rule survives for it), a
+     * TV the viewer forgot is not resumed, and mobile data is not a network to try
+     * on. Discovery is only ever the reconnect's own quiet re-resolve of the KNOWN
+     * TV; it never lists or enters a new one.
+     */
+    fun keepConnected() {
+        if (!onWifi()) return
+        if (wantConnection) return
+        val tvName = RemotePhonePrefs.lastTv(appContext) ?: return
+        if (RemotePhonePrefs.token(appContext, tvName) == null) return
+        wantConnection = true
+        val known = RemotePhonePrefs.address(appContext, tvName)
+        if (known != null) {
+            attempt = 0
+            state.value = state.value.copy(
+                phase = RemotePhase.CONNECTING,
+                device = known,
+                message = null
+            )
+            openSocket(known)
+            return
+        }
+        // A pairing from a build that never stored the address: resolve the TV we
+        // already have a token for, quietly, and let the token enter it.
+        startDiscovery(quiet = true)
+    }
+
+    /**
+     * Leaving the Remote screen (spec 2026-11-16, F3).
+     *
+     * Discovery was always on-demand and still is. The socket is different now: a
+     * PAIRED TV's connection outlives the screen, because the Detail page's PLAY ON
+     * TV button is only honest while it is live. An unpaired client keeps the old
+     * rule exactly - nothing stays open behind the viewer's back.
+     */
+    fun leaveScreen() {
+        stopDiscovery()
+        keepConnected()
+        if (!wantConnection) stop()
     }
 
     fun retry() {
@@ -192,8 +247,14 @@ internal class RemoteClient(context: Context) {
 
     /** Forgets the stored token for this TV, so the next connect asks for a PIN. */
     fun forgetTv() {
-        val device = state.value.device ?: return
-        RemotePhonePrefs.clearToken(appContext, device.name)
+        val device = state.value.device ?: RemotePhonePrefs.lastTv(appContext)?.let {
+            RemoteDevice(name = it, host = "", port = 0)
+        } ?: return
+        // The token, the remembered address and "the TV I was on" all go: the
+        // connection is what the Detail button's visibility rests on, so a
+        // forgotten TV must leave nothing behind for [keepConnected] to resume
+        // (spec 2026-11-16, F1's stop condition).
+        RemotePhonePrefs.forgetTv(appContext, device.name)
         // The socket goes too: it is authenticated as the pairing just removed,
         // and holding it open would keep the old freedom alive behind a screen
         // that says the phone is unpaired.
@@ -377,6 +438,9 @@ internal class RemoteClient(context: Context) {
         when (val reply = RemoteProtocol.parseReply(raw)) {
             is RemoteProtocol.Reply.Paired -> {
                 RemotePhonePrefs.saveToken(appContext, device.name, reply.token)
+                // Remembered so the next launch can resume this TV without a scan
+                // (spec 2026-11-16, F1).
+                RemotePhonePrefs.rememberTv(appContext, device)
                 state.value = state.value.copy(
                     phase = RemotePhase.CONNECTED,
                     device = device,
@@ -394,6 +458,7 @@ internal class RemoteClient(context: Context) {
             }
 
             is RemoteProtocol.Reply.Ready -> {
+                RemotePhonePrefs.rememberTv(appContext, device)
                 state.value = state.value.copy(
                     phase = RemotePhase.CONNECTED,
                     device = device,
@@ -540,6 +605,8 @@ internal object RemotePhonePrefs {
 
     private const val KEY_PHONE_ID = "phone_id"
     private const val KEY_TOKEN_PREFIX = "token_"
+    private const val KEY_ADDRESS_PREFIX = "address_"
+    private const val KEY_LAST_TV = "last_tv"
 
     fun phoneId(context: Context): String {
         val store = prefs(context)
@@ -564,8 +631,63 @@ internal object RemotePhonePrefs {
         }
     }
 
-    fun clearToken(context: Context, tvName: String) {
-        runCatching { prefs(context)?.edit()?.remove(KEY_TOKEN_PREFIX + key(tvName))?.apply() }
+    /**
+     * The TV this phone last completed a handshake with, by its advertised name
+     * (spec 2026-11-16, F1).
+     *
+     * Only the name is needed to find the token; the address below is what lets
+     * the background connection open a socket without scanning first.
+     */
+    fun lastTv(context: Context): String? =
+        prefs(context)?.getString(KEY_LAST_TV, null)?.trim()?.takeIf { it.isNotEmpty() }
+
+    /** The address [tvName] last answered on, or null when none was ever stored. */
+    fun address(context: Context, tvName: String): RemoteDevice? {
+        val raw = prefs(context)?.getString(KEY_ADDRESS_PREFIX + key(tvName), null)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: return null
+        val host = raw.substringBeforeLast(':', "").trim()
+        val port = raw.substringAfterLast(':', "").toIntOrNull() ?: return null
+        if (host.isEmpty() || port <= 0) return null
+        return RemoteDevice(name = tvName, host = host, port = port)
+    }
+
+    /**
+     * Remembers that this phone reached [device]: the name it will resume, and the
+     * address it answered on.
+     *
+     * Written on a completed handshake (a fresh pairing or a Ready), never on a
+     * mere attempt: a dead address would send the next launch to a port nobody is
+     * listening on, and the reconnect would have to rediscover it anyway.
+     */
+    fun rememberTv(context: Context, device: RemoteDevice) {
+        runCatching {
+            prefs(context)?.edit()
+                ?.putString(KEY_LAST_TV, device.name)
+                ?.putString(KEY_ADDRESS_PREFIX + key(device.name), "${device.host}:${device.port}")
+                ?.apply()
+        }
+    }
+
+    /**
+     * Forgets everything this phone held for [tvName]: its token, the address and
+     * - when it was the TV in use - the name the background connection resumes.
+     *
+     * The name matters as much as the token (spec 2026-11-16, F1): leaving it
+     * behind is a client that reconnects to a TV it no longer has a pairing for,
+     * which is exactly the button that must disappear when the viewer forgets.
+     */
+    fun forgetTv(context: Context, tvName: String) {
+        runCatching {
+            prefs(context)?.edit()
+                ?.remove(KEY_TOKEN_PREFIX + key(tvName))
+                ?.remove(KEY_ADDRESS_PREFIX + key(tvName))
+                ?.apply()
+        }
+        if (lastTv(context).equals(tvName, ignoreCase = true)) {
+            runCatching { prefs(context)?.edit()?.remove(KEY_LAST_TV)?.apply() }
+        }
     }
 
     private fun key(tvName: String): String =

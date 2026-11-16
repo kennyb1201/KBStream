@@ -77,6 +77,8 @@ import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.download.DownloadIdentity
 import com.kennyb1201.kbstream.data.images.ImageOverrides
+import com.kennyb1201.kbstream.data.remote.RemoteClientProvider
+import com.kennyb1201.kbstream.data.remote.RemotePhase
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
@@ -315,6 +317,15 @@ fun DetailScreenMobile(
 
         val meta by viewModel.meta.collectAsStateWithLifecycle()
         val tmdbDetail by viewModel.tmdbDetail.collectAsStateWithLifecycle()
+        // PLAY ON TV exists only while a TV is connected (spec 2026-11-16, F2):
+        // the button used to render on every title and answer a tap with "connect
+        // first", which is a promise the screen had no business making. The same
+        // read the Remote screen uses, behind the same client, so the two cannot
+        // disagree; a paired TV keeps that socket up now (see the client's
+        // keepConnected), so this is not "only while Settings is open".
+        val remoteClient = remember { RemoteClientProvider.get(context) }
+        val remoteState by remoteClient.stateFlow.collectAsStateWithLifecycle()
+        val remoteConnected = remoteState.phase == RemotePhase.CONNECTED
 
         // AnimeThemes' openings and endings for the Media row's Themes page
         // (spec 2026-11-13), fetched once per Detail open behind the Animation
@@ -1960,22 +1971,27 @@ fun DetailScreenMobile(
                         // resolves the add-on, picks the source and resumes from
                         // ITS stored playhead, through its own Continue Watching
                         // path - this is not a second playback route.
-                        KBButton(
-                            label = "PLAY ON TV",
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            val sent = com.kennyb1201.kbstream.data.remote
-                                .RemoteClientProvider.get(context)
-                                .playOnTv(id, normalizedType)
-                            Toast.makeText(
-                                context,
-                                if (sent) {
-                                    "Playing on TV"
-                                } else {
-                                    "Connect to your TV first: Settings → Remote"
-                                },
-                                Toast.LENGTH_SHORT
-                            ).show()
+                        //
+                        // Drawn only while the TV is connected (spec 2026-11-16,
+                        // F2) - not greyed out, absent. The tap still gates on
+                        // CONNECTED for the race where the socket drops between
+                        // the render and the press.
+                        if (remoteConnected) {
+                            KBButton(
+                                label = "PLAY ON TV",
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                val sent = remoteClient.playOnTv(id, normalizedType)
+                                Toast.makeText(
+                                    context,
+                                    if (sent) {
+                                        "Playing on TV"
+                                    } else {
+                                        "Connect to your TV first: Settings → Remote"
+                                    },
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
                         }
 
                         if (ratingDialog) {

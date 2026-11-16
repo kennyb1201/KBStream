@@ -77,11 +77,14 @@ internal fun RemoteScreen(
     val client = remember(context) { RemoteClientProvider.get(context) }
     val state by client.stateFlow.collectAsStateWithLifecycle()
 
-    // Discovery starts on entry and stops on exit: no background scanning, no
-    // socket left open behind the viewer's back.
+    // Discovery starts on entry and stops on exit - still on-demand, still no
+    // scanning behind the viewer's back. The SOCKET is different since spec
+    // 2026-11-16: a paired TV's connection outlives this screen, because the
+    // Detail page's PLAY ON TV button is only honest while it is live (an unpaired
+    // client is torn down exactly as before).
     LaunchedEffect(client) { client.start() }
     DisposableEffect(client) {
-        onDispose { client.stop() }
+        onDispose { client.leaveScreen() }
     }
     BackHandler(onBack = onBack)
 
