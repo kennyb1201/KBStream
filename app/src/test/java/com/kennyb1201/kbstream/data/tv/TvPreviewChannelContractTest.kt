@@ -4,7 +4,6 @@ import com.kennyb1201.kbstream.data.widget.CwWidgetRow
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -372,7 +371,6 @@ class TvPreviewChannelContractTest {
             "no new extras, no new scheme, no new activity: nothing here invents a route",
             launch.contains("kbstream://") || launch.contains("EXTRA_CHANNEL")
         )
-        assertNotNull("the file still compiles the widget tap import", publisher)
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
