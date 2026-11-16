@@ -5,20 +5,17 @@ package com.kennyb1201.kbstream.data.widget
  * 2026-11-13).
  *
  * The widget is a surface, not a second list: it shows what Home's Continue
- * Watching rail shows, capped at the rows a launcher grid can read. Everything
- * a row SAYS - how far through it is, how much is left, which episode it is - is
- * computed here so a test can pin it without a launcher.
+ * Watching rail shows - resume cards, next-up cards, new-episode / new-season
+ * cards and the tracker cards, in the rail's own order. There is no row cap of
+ * its own (spec 2026-11-16, F1): the list scrolls, the launcher grants whatever
+ * height the viewer gave it, and a number here could only ever cut the rail
+ * short - which is exactly how the next-up half of it went missing.
+ *
+ * Everything a row SAYS - how far through it is, how much is left, which episode
+ * it is, whether it is even a resume - is computed here so a test can pin it
+ * without a launcher.
  */
 internal object CwWidgetRules {
-
-    /**
-     * How many rows the widget will ever publish.
-     *
-     * Eight is the most a 4x5 launcher cell can show without turning the widget
-     * into a scrolling list nobody reads; the launcher grants fewer cells than
-     * that more often than not, and the ListView simply shows the ones that fit.
-     */
-    const val MAX_ROWS = 8
 
     /**
      * A snapshot older than this is drawn with a stale marker.

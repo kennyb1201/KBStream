@@ -80,8 +80,59 @@ class CwWidgetRulesTest {
     }
 
     @Test
-    fun `the widget never claims more rows than the cap`() {
-        assertEquals(8, CwWidgetRules.MAX_ROWS)
+    fun `a non-resume row claims no progress and no time left`() {
+        // The reported shape (spec 2026-11-16, F3): a next-up card sits at
+        // position 0 with a full runtime, and the position/duration fallback
+        // printed that runtime as "44m left" - progress nobody had made.
+        val row = CwWidgetRow(
+            parentType = "series",
+            parentId = "tmdb:3",
+            showTitle = "Forbidden History",
+            isResume = false,
+            season = 4,
+            episode = 2,
+            positionMs = 0L,
+            durationMs = 44L * 60_000L
+        )
+        assertEquals(0f, row.progress, 0.0001f)
+        assertEquals(null, row.minutesLeft)
+        assertEquals("", row.timeLeft)
+        // The rest of the row still draws: it is a card, not a blank.
+        assertEquals("S4E2", row.subtitle)
+        assertEquals("Forbidden History", row.showTitle)
+    }
+
+    @Test
+    fun `a non-resume row ignores rail numbers it should not have had`() {
+        // A stale snapshot could carry a fallback left-count on a card nobody
+        // started; the row's own verdict still refuses it.
+        val row = CwWidgetRow(
+            parentType = "series",
+            parentId = "tmdb:4",
+            showTitle = "Mysteries Unearthed",
+            isResume = false,
+            positionMs = 0L,
+            progressPercent = 0.9f,
+            remainingMinutes = 44,
+            durationMs = 44L * 60_000L
+        )
+        assertEquals(0f, row.progress, 0.0001f)
+        assertEquals(null, row.minutesLeft)
+        assertEquals("", row.timeLeft)
+    }
+
+    @Test
+    fun `a resume row keeps its bar and time left`() {
+        val row = CwWidgetRow(
+            parentType = "series",
+            parentId = "tmdb:5",
+            showTitle = "Landman",
+            isResume = true,
+            positionMs = 600_000L,
+            durationMs = 2_400_000L
+        )
+        assertEquals(0.25f, row.progress, 0.0001f)
+        assertEquals("30m left", row.timeLeft)
     }
 
     @Test

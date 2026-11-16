@@ -69,8 +69,12 @@ class CwWidgetWiringContractTest {
         )
         assertTrue(
             "and re-derives nothing about order: it takes the published list as given",
-            publisher.contains("items.asSequence()") &&
-                publisher.contains(".take(CwWidgetRules.MAX_ROWS)")
+            publisher.contains("items.asSequence()")
+        )
+        assertFalse(
+            "and it truncates nothing: the widget carries the rail's whole list, so a " +
+                "cap of its own cannot cut the next-up half away (spec 2026-11-16, F1)",
+            publisher.contains("MAX_ROWS") || publisher.contains(".take(")
         )
         assertFalse(
             "no second sort or dismissal store in the widget path",
@@ -129,15 +133,23 @@ class CwWidgetWiringContractTest {
     // ── One resume path ─────────────────────────────────────────────────
 
     @Test
-    fun `a row tap is the card press destination, auto-playing`() {
+    fun `a resume row's tap is the card press destination, auto-playing`() {
         assertTrue(
-            "the row route builds Detail with a pending target",
-            route.contains("pendingTarget = StreamsTarget(") &&
+            "the row route builds Detail with a pending target for a started row",
+            route.contains("pendingTarget = if (!isResume) {") &&
+                route.contains("StreamsTarget(") &&
                 route.contains("returnTo = Screen.Home")
         )
         assertTrue(
             "carrying the stored playhead",
             route.contains("resumePositionMs = positionMs.coerceAtLeast(0L)")
+        )
+        assertTrue(
+            "and a row nobody started opens its Detail instead - no play target, so " +
+                "it cannot start at 0 as if it were a resume (spec 2026-11-16, F4)",
+            route.contains("pendingTarget = if (!isResume) {\n            null") &&
+                tap.contains("putExtra(EXTRA_IS_RESUME, row.isResume)") &&
+                activity.contains("getBooleanExtra(CwWidgetTap.EXTRA_IS_RESUME, true)")
         )
         assertTrue(
             "and the launch-intent router prefers it over the non-resuming launcher route",

@@ -6,8 +6,8 @@ import org.json.JSONObject
 /**
  * The snapshot's on-disk form (spec 2026-11-13, F3).
  *
- * Hand-rolled and tiny on purpose: eight rows of flat fields, written whole and
- * read whole. A serializer dependency would be a bigger surface than the document,
+ * Hand-rolled and tiny on purpose: one rendered row per rail card, written whole
+ * and read whole. A serializer dependency would be a bigger surface than the document,
  * and a decode that fails MUST return null rather than a half-filled list - the
  * widget then draws its fail-soft state instead of a row that cannot be resumed.
  *
@@ -35,6 +35,13 @@ internal object CwWidgetSnapshotJson {
                     .put("left", row.remainingMinutes ?: -1)
                     .put("dur", row.durationMs)
                     .put("at", row.updatedAtMs)
+                    // Spec 2026-11-16: what the row IS (a resume or an offer),
+                    // and the identity spellings a rebuild re-filters it by.
+                    .put("res", row.isResume)
+                    .put("cid", row.cardId)
+                    .put("tmdb", row.tmdbId ?: -1)
+                    .put("hr", row.historyRowId ?: "")
+                    .put("air", row.ownEpisodeAirEpochDay ?: -1L)
             )
         }
         return JSONObject()
@@ -74,7 +81,14 @@ internal object CwWidgetSnapshotJson {
                         ?.toFloat(),
                     remainingMinutes = node.optInt("left", -1).takeIf { it >= 0 },
                     durationMs = node.optLong("dur", 0L).coerceAtLeast(0L),
-                    updatedAtMs = node.optLong("at", 0L)
+                    updatedAtMs = node.optLong("at", 0L),
+                    // Absent in a snapshot an older build wrote, which drew a
+                    // resume row until the next publish rewrote it.
+                    isResume = node.optBoolean("res", true),
+                    cardId = node.optString("cid").trim(),
+                    tmdbId = node.optInt("tmdb", -1).takeIf { it > 0 },
+                    historyRowId = node.optString("hr").trim().takeIf { it.isNotEmpty() },
+                    ownEpisodeAirEpochDay = node.optLong("air", -1L).takeIf { it >= 0L }
                 )
             }
             CwWidgetSnapshot(

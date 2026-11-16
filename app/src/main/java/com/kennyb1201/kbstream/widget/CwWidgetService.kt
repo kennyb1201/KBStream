@@ -93,11 +93,18 @@ internal class CwWidgetFactory(
             R.id.cw_widget_row_subtitle,
             if (row.subtitle.isBlank()) android.view.View.GONE else android.view.View.VISIBLE
         )
+        // A resume row's bar; a next-up / new-episode row has no playhead to
+        // draw, and an empty bar under it would read as "0% watched" when the
+        // truth is "not started" (spec 2026-11-16, F3).
         views.setProgressBar(
             R.id.cw_widget_row_progress,
             PROGRESS_MAX,
             (row.progress * PROGRESS_MAX).roundToInt().coerceIn(0, PROGRESS_MAX),
             false
+        )
+        views.setViewVisibility(
+            R.id.cw_widget_row_progress,
+            if (row.isResume) android.view.View.VISIBLE else android.view.View.GONE
         )
         views.setTextViewText(R.id.cw_widget_row_time_left, row.timeLeft)
         views.setViewVisibility(

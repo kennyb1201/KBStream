@@ -3518,10 +3518,9 @@ private fun ContinueWatchingCard(
     val hidesEpisodeIdentity = rememberHidesEpisodeTitle(inProgress = item.startPositionMs > 0)
     val episodeLabel = upNextEpisodeLabel(item)
     val progress = item.progressPercent?.coerceIn(0f, 1f)
-    // Resume cards keep their progress bar and time-left. A finale being
-    // resumed still has a saved position, so it behaves like a resume card.
-    val isResumeCard = item.badge == UpNextBadge.CONTINUE_WATCHING ||
-        (item.startPositionMs > 0L && (item.isSeasonFinale || item.isSeriesFinale))
+    // Resume cards keep their progress bar and time-left. One rule for every
+    // surface, the widget's rows included (spec 2026-11-16).
+    val isResumeCard = upNextIsResumeCard(item)
     val timeLeft = if (isResumeCard) formatTimeLeft(item.remainingMinutes) else null
     // The chip's text, from the ONE rule every surface uses (spec 2026-11-16):
     // the home-screen widget draws the same string for the same card.

@@ -4707,14 +4707,9 @@ private fun CompactUpNextCard(
     val progress = item.progressPercent
         ?.coerceIn(0f, 1f)
 
-    // Resume cards keep their progress bar and time-left. A finale being
-    // resumed still has a saved position, so treat it like a resume card;
-    // plain up-next finales have no position to show.
-    val isResumeCard =
-        item.badge == UpNextBadge.CONTINUE_WATCHING ||
-            (item.startPositionMs > 0L &&
-                (item.isSeasonFinale ||
-                    item.isSeriesFinale))
+    // Resume cards keep their progress bar and time-left. The verdict is the ONE
+    // rule every surface shares, the widget's rows included (spec 2026-11-16).
+    val isResumeCard = upNextIsResumeCard(item)
 
     val timeLeft =
     if (isResumeCard) {

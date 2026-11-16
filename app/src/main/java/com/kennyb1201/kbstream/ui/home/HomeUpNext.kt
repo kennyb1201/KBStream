@@ -944,10 +944,37 @@ internal const val CW_UNAIRED_DROP_SUFFIX = " dropped=unaired"
 internal fun upNextUnairedForCW(
     item: UpNextItem,
     today: LocalDate = LocalDate.now(ZoneId.systemDefault())
-): Boolean {
-    if (!isTrackerSourcedCard(item)) return false
-    if (item.startPositionMs != 0L) return false
-    return trackerCardNamesUnairedEpisode(item, today)
+): Boolean =
+    upNextOwnEpisodeAirEpochDay(item)?.let { airDay -> airDay >= today.toEpochDay() } ?: false
+
+/**
+ * The air date of the episode THIS card names, as an epoch day, when the card
+ * proves it is a tracker card pointing at its own unplayed, dated episode.
+ *
+ * The time-varying half of [upNextUnairedForCW] pulled out on its own, because a
+ * surface that keeps the card past a publish (the home-screen widget's snapshot,
+ * spec 2026-11-16) has to re-ask "has it aired yet?" later without the card's
+ * `UpNextItem` in hand. The card's identity conditions are decided here once -
+ * tracker-sourced, nothing played, the air record naming the card's OWN pair
+ * ([trackerCardNamesUnairedEpisode]) - and the caller compares the day to its own
+ * `today`, so the verdict can move from "unaired" to "aired" without a republish
+ * and can never drift inside one pass.
+ *
+ * Null when the card proves nothing: a local card, a started one, no air record,
+ * a record for a different episode, or a date that does not parse.
+ */
+internal fun upNextOwnEpisodeAirEpochDay(item: UpNextItem): Long? {
+    if (!isTrackerSourcedCard(item)) return null
+    if (item.startPositionMs != 0L) return null
+    val air = item.nextEpisodeAir ?: return null
+
+    return episodeOwnAirEpochDay(
+        cardSeason = item.season,
+        cardEpisode = item.episode,
+        airSeason = air.seasonNumber,
+        airEpisode = air.episodeNumber,
+        airDate = air.airDate
+    )
 }
 
 /**
@@ -1615,6 +1642,22 @@ internal fun trackerCardOwnedByAnotherProfile(
  * card, the phone card, the home-screen widget - comes from this function, so
  * two of them cannot disagree about the same title.
  */
+/**
+ * True when the viewer has STARTED this card: it keeps a progress bar and a
+ * time-left, and its press resumes at the saved playhead.
+ *
+ * One rule for every surface that draws a Continue Watching card - the TV rail,
+ * the phone rail and the home-screen widget (spec 2026-11-16, F3/F4). A next-up,
+ * new-episode or new-season card has nobody's playhead to show: it is an offer to
+ * start something, so a bar at 0% and a full runtime dressed up as "44m left"
+ * would both be claims about progress that does not exist. A finale being
+ * resumed is still a resume card (it has a saved position); a plain up-next
+ * finale has none to show.
+ */
+internal fun upNextIsResumeCard(item: UpNextItem): Boolean =
+    item.badge == UpNextBadge.CONTINUE_WATCHING ||
+        (item.startPositionMs > 0L && (item.isSeasonFinale || item.isSeriesFinale))
+
 internal fun upNextChipLabel(item: UpNextItem): String =
     when {
         item.isSeriesFinale -> "SERIES FINALE"

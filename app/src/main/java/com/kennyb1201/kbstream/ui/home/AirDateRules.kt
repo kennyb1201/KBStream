@@ -172,16 +172,46 @@ internal fun episodeProvablyUnaired(
     airDate: String?,
     today: LocalDate
 ): Boolean {
-    val season = cardSeason?.takeIf { it > 0 } ?: return false
-    val episode = cardEpisode?.takeIf { it > 0 } ?: return false
+    val airDay =
+        episodeOwnAirEpochDay(
+            cardSeason = cardSeason,
+            cardEpisode = cardEpisode,
+            airSeason = airSeason,
+            airEpisode = airEpisode,
+            airDate = airDate
+        ) ?: return false
 
-    if (airSeason?.takeIf { it > 0 } != season) return false
-    if (airEpisode?.takeIf { it > 0 } != episode) return false
+    return airDay >= today.toEpochDay()
+}
 
-    val date =
-        runCatching {
-            LocalDate.parse(airDate?.trim())
-        }.getOrNull() ?: return false
+/**
+ * The air day of the episode a card NAMES, when the air record names that same
+ * episode (spec 2026-11-16).
+ *
+ * The identity half of [episodeProvablyUnaired] on its own, so a surface that has
+ * to ask the question again later - the home-screen widget's carried-forward rows,
+ * which keep a tracker card past the publish that created it - can compare the day
+ * to ITS OWN `today` instead of re-deciding which episodes the record describes.
+ * The pair must match exactly: a show's "next episode to air" is a fact about the
+ * show, and a card for the episode just finished carries it too.
+ *
+ * Null when nothing is proven: no card pair, an air record for a different
+ * episode, or a date that does not parse.
+ */
+internal fun episodeOwnAirEpochDay(
+    cardSeason: Int?,
+    cardEpisode: Int?,
+    airSeason: Int?,
+    airEpisode: Int?,
+    airDate: String?
+): Long? {
+    val season = cardSeason?.takeIf { it > 0 } ?: return null
+    val episode = cardEpisode?.takeIf { it > 0 } ?: return null
 
-    return !date.isBefore(today)
+    if (airSeason?.takeIf { it > 0 } != season) return null
+    if (airEpisode?.takeIf { it > 0 } != episode) return null
+
+    return runCatching {
+        LocalDate.parse(airDate?.trim())
+    }.getOrNull()?.toEpochDay()
 }

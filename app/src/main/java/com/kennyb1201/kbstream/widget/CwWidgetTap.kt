@@ -42,6 +42,15 @@ internal object CwWidgetTap {
     const val EXTRA_POSITION_MS = "cw_widget_position_ms"
     const val EXTRA_POSTER = "cw_widget_poster"
 
+    /**
+     * Whether this row is one the viewer has STARTED (spec 2026-11-16, F4).
+     *
+     * The router turns it into "resume this playhead" or "open this card's
+     * Detail": a next-up row carries no playhead of its own, so playing it as a
+     * resume would start the episode at 0 as if the viewer had left it there.
+     */
+    const val EXTRA_IS_RESUME = "cw_widget_is_resume"
+
     private const val FLAGS = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
 
     /**
@@ -67,6 +76,10 @@ internal object CwWidgetTap {
             row.season?.let { putExtra(EXTRA_SEASON, it) }
             row.episode?.let { putExtra(EXTRA_EPISODE, it) }
             putExtra(EXTRA_POSITION_MS, row.positionMs)
+            // Always present, so an older template cannot leave the router to
+            // guess: absent means resume, which is the safe reading of a row a
+            // pre-fix snapshot wrote.
+            putExtra(EXTRA_IS_RESUME, row.isResume)
             row.posterUrl?.let { putExtra(EXTRA_POSTER, it) }
         }
 

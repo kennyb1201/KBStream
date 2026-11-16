@@ -10,6 +10,8 @@ import com.kennyb1201.kbstream.ui.home.continueWatchingShowNames
 import com.kennyb1201.kbstream.ui.home.instantContinueWatchingItem
 import com.kennyb1201.kbstream.ui.home.upNextChipLabel
 import com.kennyb1201.kbstream.ui.home.upNextContinueWatchingDecision
+import com.kennyb1201.kbstream.ui.home.upNextIsResumeCard
+import com.kennyb1201.kbstream.ui.home.upNextOwnEpisodeAirEpochDay
 import java.time.LocalDate
 import java.time.ZoneId
 import java.util.concurrent.ConcurrentHashMap
@@ -32,6 +34,12 @@ import kotlinx.coroutines.withContext
  * database and nothing else (no network, no tracker), and it builds its cards with
  * Home's own builder ([instantContinueWatchingItem]), so "a second Continue
  * Watching" is still something this file cannot produce.
+ *
+ * The rebuild MERGES rather than overwrites (spec 2026-11-16, F2): local history
+ * can only re-derive the resume half, so the cards it cannot reproduce - the
+ * next-up and tracker rows - are carried forward from the snapshot Home last
+ * published, re-checked against the rail's two read-site rules. A rebuild
+ * therefore stops DELETING the full rail; it still invents nothing.
  *
  * Writes are change-gated in memory: a publish that produces the same rows as the
  * last one is skipped, so the tracker arrivals that re-publish the rail several
@@ -65,7 +73,17 @@ internal object CwWidgetPublisher {
          * publish from Home keeps the gate: it fires on every tracker arrival,
          * and most of those change nothing.
          */
-        force: Boolean = false
+        force: Boolean = false,
+        /**
+         * Keep the snapshot's non-resume rows beside the ones [items] produces.
+         *
+         * True only for [rebuild]: Home's publish already carries the whole rail,
+         * while a rebuild can only re-derive the resume cards from local history.
+         * The next-up, new-episode and tracker cards come from the last Home
+         * publish and are kept until the next one refreshes them (spec
+         * 2026-11-16, F2).
+         */
+        carryNonResume: Boolean = false
     ) {
         val application = context.applicationContext
         val profileId = runCatching { ProfileStorage.activeProfileId(application) }.getOrNull()
@@ -73,7 +91,7 @@ internal object CwWidgetPublisher {
         // Built off the main thread: the hidden-titles read and the file write are
         // both disk work, and a publish can land while the rail is scrolling.
         val rows = withContext(Dispatchers.IO) {
-            runCatching { rows(items, showNames, application) }
+            runCatching { rowsForPublish(items, showNames, application, carryNonResume) }
                 .onFailure { Log.w(TAG, "could not build rows: ${it.javaClass.simpleName}") }
                 .getOrDefault(emptyList())
         }
@@ -111,6 +129,14 @@ internal object CwWidgetPublisher {
      * The tracker cards a running Home merges in are not reproducible from disk,
      * and inventing them here would be a second Continue Watching.
      *
+     * What it does NOT do is delete them (spec 2026-11-16, F2). The rebuild used
+     * to write the local half alone, so every round and every tap narrowed a full
+     * rail down to resume-only until Home published again. The publish below runs
+     * with [publish]'s `carryNonResume`, which keeps the snapshot's next-up and
+     * tracker rows - re-checked against the same hidden and unaired rules - so a
+     * profile showing resume cards plus two next-up cards still shows all of them
+     * after the round.
+     *
      * The write is forced past the change gate, and that is the point: the
      * freshness line is the snapshot's own `writtenAtMs`, so a round or a tap that
      * found the same rows still has to move it, or the button would go on doing
@@ -147,13 +173,69 @@ internal object CwWidgetPublisher {
             application,
             rows.mapNotNull(::instantContinueWatchingItem),
             continueWatchingShowNames(rows),
-            force = true
+            force = true,
+            // The half local history cannot produce, kept from the last Home
+            // publish (spec 2026-11-16, F2).
+            carryNonResume = true
         )
     }
 
     /**
-     * The rows the widget shows for [items]: the same verdicts the rail applies,
-     * the same order, capped at [CwWidgetRules.MAX_ROWS].
+     * The rows this publish writes: the rail's own list, plus the carried rows a
+     * rebuild is allowed to keep.
+     */
+    private fun rowsForPublish(
+        items: List<UpNextItem>,
+        showNames: Map<String, String>,
+        context: Context,
+        carryNonResume: Boolean
+    ): List<CwWidgetRow> {
+        val fresh = rows(items, showNames, context)
+        if (!carryNonResume) return fresh
+        return fresh + carriedForwardRows(fresh, showNames, context)
+    }
+
+    /**
+     * The snapshot's non-resume rows, which local history cannot re-derive (spec
+     * 2026-11-16, F2).
+     *
+     * Three rules, all of them the rail's:
+     *
+     *  - only NON-RESUME rows are carried: the resume half was just rebuilt from
+     *    the live history, and a carried resume row could only be a stale copy of
+     *    a card the viewer has since finished;
+     *  - a show already represented by a fresh row contributes nothing, so the
+     *    merge cannot double a card the rebuild did reproduce;
+     *  - the hidden and unaired verdicts are asked again with today's inputs, so
+     *    a title hidden (or an episode that turns out to be unaired) after Home's
+     *    publish drops here exactly as it would on the rail.
+     *
+     * Nothing is invented: a card the snapshot never carried cannot appear here,
+     * because this reads the snapshot and nothing else.
+     */
+    private fun carriedForwardRows(
+        fresh: List<CwWidgetRow>,
+        showNames: Map<String, String>,
+        context: Context
+    ): List<CwWidgetRow> {
+        val existing = runCatching { CwWidgetStore.read(context).rows }.getOrDefault(emptyList())
+        if (existing.isEmpty()) return emptyList()
+
+        val hidden = runCatching { HiddenTitles.keys(context) }.getOrDefault(emptySet())
+        val todayEpochDay = LocalDate.now(ZoneId.systemDefault()).toEpochDay()
+        val freshParents = fresh.map { it.parentKey }.toSet()
+
+        return existing.filter { row ->
+            !row.isResume &&
+                row.parentKey !in freshParents &&
+                !row.droppedFromRail(hidden, showNames, todayEpochDay)
+        }
+    }
+
+    /**
+     * The rows the widget shows for [items]: the same verdicts the rail applies
+     * and the same order - the rail's whole list, with no cap of the widget's own
+     * (spec 2026-11-16, F1).
      *
      * A card with no parent id cannot be resumed and is not drawn - it would be a
      * row that does nothing when tapped.
@@ -174,7 +256,6 @@ internal object CwWidgetPublisher {
                 !decision.hidden && !decision.dropped
             }
             .mapNotNull(::rowOf)
-            .take(CwWidgetRules.MAX_ROWS)
             .toList()
     }
 
@@ -192,6 +273,17 @@ internal object CwWidgetPublisher {
             parentId = parentId,
             streamId = item.episodeStreamId?.trim()?.takeIf { it.isNotBlank() },
             showTitle = title,
+            // The rail's own resume verdict, rendered at publish time so the
+            // widget draws (and taps) the card as what it is (spec 2026-11-16,
+            // F3/F4). A next-up card is an offer, not a playhead.
+            isResume = upNextIsResumeCard(item),
+            // The identity spellings the carry-forward rules re-ask a rebuild:
+            // the card's own id (tracker-sourced or not), its TMDB show id and
+            // its history row, plus the air date when it proves one.
+            cardId = item.id,
+            tmdbId = item.tmdbId?.takeIf { it > 0 },
+            historyRowId = item.historyRowId?.trim()?.takeIf { it.isNotBlank() },
+            ownEpisodeAirEpochDay = upNextOwnEpisodeAirEpochDay(item),
             // The rail's own chip rule, run here, in the same publish that
             // renders the title and the progress: the launcher prints a string
             // it was handed, so it cannot print a chip the Home card does not

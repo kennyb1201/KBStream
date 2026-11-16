@@ -2039,7 +2039,11 @@ fun AppRoot(
                     null
                 },
                 positionMs = intent.getLongExtra(CwWidgetTap.EXTRA_POSITION_MS, 0L),
-                poster = intent.getStringExtra(CwWidgetTap.EXTRA_POSTER)
+                poster = intent.getStringExtra(CwWidgetTap.EXTRA_POSTER),
+                // A card the viewer has not started opens its Detail instead of
+                // resuming a playhead it does not have (spec 2026-11-16, F4).
+                // Absent means resume, which is what a pre-fix row meant.
+                isResume = intent.getBooleanExtra(CwWidgetTap.EXTRA_IS_RESUME, true)
             )
             return true
         }

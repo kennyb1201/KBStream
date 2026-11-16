@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.home
 
 import java.time.LocalDate
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -94,5 +95,30 @@ class UpcomingUnairedEpisodeProofTest {
     fun `a zero season or episode is not an identity`() {
         // Tracker rows use 0 for "unset"; it must not read as S0E0.
         assertFalse(episodeProvablyUnaired(0, 0, 0, 0, "2026-11-13", today))
+    }
+
+    // --- The same proof, as a date (spec 2026-11-16, F2) --------------------
+
+    @Test
+    fun `the proof hands back the air day it matched`() {
+        // A surface that keeps the card has to ask again LATER, so the day is
+        // the useful answer: the widget compares it to its own today.
+        assertEquals(
+            LocalDate.of(2026, 11, 13).toEpochDay(),
+            episodeOwnAirEpochDay(2, 9, 2, 9, "2026-11-13")
+        )
+    }
+
+    @Test
+    fun `a record for another episode yields no day`() {
+        assertEquals(null, episodeOwnAirEpochDay(2, 8, 2, 9, "2026-11-13"))
+        assertEquals(null, episodeOwnAirEpochDay(1, 9, 2, 9, "2026-11-13"))
+        assertEquals(null, episodeOwnAirEpochDay(null, null, 2, 9, "2026-11-13"))
+    }
+
+    @Test
+    fun `an unreadable date yields no day`() {
+        assertEquals(null, episodeOwnAirEpochDay(2, 9, 2, 9, null))
+        assertEquals(null, episodeOwnAirEpochDay(2, 9, 2, 9, "next friday"))
     }
 }

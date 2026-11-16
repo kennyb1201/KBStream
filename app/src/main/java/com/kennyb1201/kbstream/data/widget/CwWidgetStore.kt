@@ -15,8 +15,9 @@ import java.io.File
  * A FILE rather than a preference because it is a document, not a setting: it is
  * replaced whole, it is read whole, and it can be handed to a background
  * RemoteViews factory without SharedPreferences' single-instance caching games.
- * It is not a second database - it holds at most [CwWidgetRules.MAX_ROWS]
- * rendered rows and nothing here ever queries the history tables.
+ * It is not a second database - it holds one rendered row per Continue Watching
+ * card (the rail's whole list, spec 2026-11-16, F1) and nothing here ever
+ * queries the history tables.
  *
  * A read NEVER throws: a missing file is "no list yet", an unreadable one falls
  * back to the last good copy and is drawn WITH the stale marker, and neither is a

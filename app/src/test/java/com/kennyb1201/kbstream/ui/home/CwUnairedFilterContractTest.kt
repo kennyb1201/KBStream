@@ -41,15 +41,22 @@ class CwUnairedFilterContractTest {
         assertTrue(
             "1. tracker cards only - local cards are built from rows the walk " +
                 "already skips unaired episodes for",
-            predicate.contains("if (!isTrackerSourcedCard(item)) return false")
+            predicate.contains("if (!isTrackerSourcedCard(item)) return null")
         )
         assertTrue(
             "2. a real resume keeps its card whatever the air date says",
-            predicate.contains("if (item.startPositionMs != 0L) return false")
+            predicate.contains("if (item.startPositionMs != 0L) return null")
         )
         assertTrue(
-            "3. and the air record must prove this CARD's episode is unaired",
-            predicate.contains("return trackerCardNamesUnairedEpisode(item, today)")
+            "3. and the air record must prove this CARD's episode is unaired: the proof " +
+                "is the shared episode-level one, handed the card's own pair",
+            predicate.contains("episodeOwnAirEpochDay(") &&
+                predicate.contains("airSeason = air.seasonNumber") &&
+                predicate.contains("airEpisode = air.episodeNumber")
+        )
+        assertTrue(
+            "the only time-varying step is the caller's own today",
+            predicate.contains("airDay >= today.toEpochDay()")
         )
         assertTrue(
             "the date is the caller's, so one pass cannot see two days",
@@ -68,21 +75,26 @@ class CwUnairedFilterContractTest {
         // no air info, an air record naming a different episode (the stale card
         // for the episode just finished), a movie, an episode TMDB has not
         // listed. All of those answer false and the card stays.
-        val proof = source(AIR_DATE_RULES).substringAfter("internal fun episodeProvablyUnaired(")
+        val airDateRules = source(AIR_DATE_RULES)
+        val proof = airDateRules.substringAfter("internal fun episodeProvablyUnaired(")
             .substringBefore("fun ")
+        // The identity half and the date half are one rule (spec 2026-11-16): the
+        // proof is `episodeOwnAirEpochDay` compared to the caller's today, so a
+        // surface that keeps the card can ask again later with its own day.
+        val identity = airDateRules.substringAfter("internal fun episodeOwnAirEpochDay(")
 
         assertTrue(
             "the air record has to name THIS card's (season, episode)",
-            proof.contains("if (airSeason?.takeIf { it > 0 } != season) return false") &&
-                proof.contains("if (airEpisode?.takeIf { it > 0 } != episode) return false")
+            identity.contains("if (airSeason?.takeIf { it > 0 } != season) return null") &&
+                identity.contains("if (airEpisode?.takeIf { it > 0 } != episode) return null")
         )
         assertTrue(
             "and date it today or later - a past date is not a proof",
-            proof.contains("return !date.isBefore(today)")
+            proof.contains("return airDay >= today.toEpochDay()")
         )
         assertTrue(
             "the tracker-ahead-of-TMDB card has no air info at all, so it stays",
-            proof.contains("val season = cardSeason?.takeIf { it > 0 } ?: return false")
+            identity.contains("val season = cardSeason?.takeIf { it > 0 } ?: return null")
         )
     }
 
