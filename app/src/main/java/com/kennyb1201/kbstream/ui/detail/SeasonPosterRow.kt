@@ -25,8 +25,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.Size
 import androidx.compose.ui.unit.dp
+// Coil's own size type, not compose's (there is no `Size` in ui.unit): this is
+// what `ImageRequest.Builder.size(...)` takes.
+import coil3.size.Size
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
