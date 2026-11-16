@@ -138,9 +138,11 @@ class UpcomingLocalNullAirCardContractTest {
                 "gated by the same rule as a dated one",
             builder.indexOf("val air =") in 0 until builder.indexOf("isCaughtUpOnLastAired(")
         )
-        assertTrue(
-            "F2: title resolution unchanged - still a refusal when nothing can be named",
-            builder.contains("upNextDisplayTitleOrNull(\n                candidate.title,") &&
+                assertTrue(
+            "F2: title resolution unchanged - still a refusal when nothing can be named " +
+                "(the chain is the shared one since spec 2026-11-16: the candidate's name, " +
+                "then the TMDB detail's name and title, and a refusal past that)",
+            builder.contains("upNextCardNameOrNull(\n                sourceName = candidate.title,") &&
                 builder.contains("?: return null")
         )
     }

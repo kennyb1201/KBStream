@@ -409,6 +409,55 @@ internal fun upNextDisplayTitleOrNull(
 internal const val UNKNOWN_SHOW_NAME = "Unknown Show"
 
 /**
+ * Whether [raw] is the placeholder rather than a name (spec 2026-11-16).
+ *
+ * The literal is what the app PRINTS when nothing names a card - and a stored
+ * history row can therefore carry it: an older build persisted the player's
+ * fallback name into the row's own `name` field. Read back as a name it beats
+ * every real one, because it is neither blank nor id-like, which is how a
+ * Continue Watching card for Forbidden History printed "Unknown Show" over
+ * correct art, a correct episode label and the right ids (tt4192786 / tmdb
+ * 73626). A placeholder is a missing name, never a name.
+ */
+internal fun upNextNameIsPlaceholder(raw: String?): Boolean =
+    raw?.trim()?.equals(UNKNOWN_SHOW_NAME, ignoreCase = true) == true
+
+/**
+ * The name a card prints for its show, in the Detail screen's order: the
+ * source's own name, then the TMDB detail's name, then its title.
+ *
+ * The source name is gated twice - [upNextDisplayTitleOrNull] rejects a blank or
+ * an internal id, [upNextNameIsPlaceholder] rejects the placeholder - and only a
+ * name that survives both is taken over the detail's. A card whose detail knows
+ * the show gets the detail's name; a card no source can name is null here, and
+ * the caller decides between dropping it and printing the literal.
+ *
+ * One asymmetry, deliberate: a source that carried the PLACEHOLDER, and a detail
+ * that cannot name the show either, gets the placeholder back rather than null.
+ * That card exists today - "Unknown Show" over its art and episode label - and it
+ * must not vanish because the app stopped trusting its stored name (spec
+ * 2026-11-16, and the settler that keeps the literal for a card with no name
+ * anywhere). A source that offered NOTHING still answers null: a card nobody can
+ * name was never drawn, and this does not start drawing it.
+ *
+ * [sourceHasArtwork] is the source's own art signal (a bare-number name is an id
+ * only when the row has nothing else to identify it); the detail's name needs no
+ * such allowance, because a resolved detail IS the identification.
+ */
+internal fun upNextCardNameOrNull(
+    sourceName: String?,
+    detailName: String?,
+    detailTitle: String?,
+    sourceHasArtwork: Boolean
+): String? {
+    val source = upNextDisplayTitleOrNull(sourceName, sourceHasArtwork)
+    if (source != null && !upNextNameIsPlaceholder(source)) return source
+    upNextDisplayTitleOrNull(detailName, true)?.let { return it }
+    upNextDisplayTitleOrNull(detailTitle, true)?.let { return it }
+    return source
+}
+
+/**
  * Whether a Continue Watching row's card is a ZOMBIE: a row filed under an id
  * that names no title, with nothing else to draw or say.
  *

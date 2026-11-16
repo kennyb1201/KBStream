@@ -4543,13 +4543,15 @@ Log.d(
 
         if (!caughtUp) return null
 
+        // The same chain the rail's other cards use (spec 2026-11-16): the
+        // candidate's own name, then the TMDB detail's name, then its title.
         val title =
-            upNextDisplayTitleOrNull(
-                candidate.title,
-                !candidate.poster.isNullOrBlank()
+            upNextCardNameOrNull(
+                sourceName = candidate.title,
+                detailName = detail.name,
+                detailTitle = detail.title,
+                sourceHasArtwork = !candidate.poster.isNullOrBlank()
             )
-                ?: upNextDisplayTitleOrNull(detail.name, true)
-                ?: upNextDisplayTitleOrNull(detail.title, true)
                 ?: return null
 
         val poster =
@@ -4580,7 +4582,9 @@ Log.d(
             title = title,
             poster = poster,
             badge = UpNextBadge.NEXT_UP,
-            showTitle = detail.name ?: title,
+            // Gated like the title: a blank or id-like detail name must not blank
+            // the show line beside a good card title (spec 2026-11-16).
+            showTitle = upNextDisplayTitleOrNull(detail.name, true) ?: title,
             parentId = candidate.parentId,
             parentType = "series",
             // Null on a TMDB-dateless show, and deliberately so: the pair
@@ -5447,13 +5451,18 @@ Log.d(
                     ?.let { TmdbRepository.POSTER_BASE + it }
                 ?: return null
 
+        // The Detail screen's order, on the rail (spec 2026-11-16): the row's own
+        // name, then the TMDB detail's name, then its title. The detail is
+        // already in hand for the art and the episode target, so its name costs
+        // no lookup - and a row carrying the "Unknown Show" placeholder is a row
+        // with NO name, which is why the placeholder does not get to win.
         val title =
-            upNextDisplayTitleOrNull(
-                row.name,
-                !row.poster.isNullOrBlank()
+            upNextCardNameOrNull(
+                sourceName = row.name,
+                detailName = detail.name,
+                detailTitle = detail.title,
+                sourceHasArtwork = !row.poster.isNullOrBlank()
             )
-                ?: upNextDisplayTitleOrNull(detail.name, true)
-                ?: upNextDisplayTitleOrNull(detail.title, true)
                 ?: return null
 
         val backdrop =
@@ -8213,7 +8222,13 @@ Log.d(
                 ?.takeIf { it.isNotBlank() }
                 ?.let { "https://image.tmdb.org/t/p/w780$it" }
             if (!session.isMovie) {
-                showTitle = detail.name
+                // Gated, so a placeholder or id-like detail name falls through to
+                // the card's own title instead of printing on the show line
+                // (spec 2026-11-16).
+                showTitle = upNextDisplayTitleOrNull(
+                    detail.name,
+                    !posterUrl.isNullOrBlank()
+                )
                 runtimeMinutes = detail.displayRuntimeMinutes()
                     ?: runtimeMinutes
             }
@@ -8596,7 +8611,14 @@ Log.d(
             poster = posterUrl,
             badge = badge,
             resumeSource = ResumeSource.TRAKT,
-            showTitle = if (session.isMovie) null else detail?.name ?: displayTitle,
+            showTitle =
+                if (session.isMovie) {
+                    null
+                } else {
+                    // Gated, like every other builder's show line (spec 2026-11-16).
+                    upNextDisplayTitleOrNull(detail?.name, !posterUrl.isNullOrBlank())
+                        ?: displayTitle
+                },
             episodeTitle = session.episodeTitle,
             tmdbRating = detail?.voteAverage?.takeIf { it > 0.0 },
             runtimeMinutes = runtimeMinutes,
@@ -9117,7 +9139,9 @@ Log.d(
             poster = posterUrl,
             badge = badge,
             resumeSource = resumeSource,
-            showTitle = detail?.name ?: displayTitle,
+            // Gated, like every other builder's show line (spec 2026-11-16).
+            showTitle = upNextDisplayTitleOrNull(detail?.name, !posterUrl.isNullOrBlank())
+                ?: displayTitle,
             episodeTitle = resolvedTarget.episodeTitle,
             episodeDescription = resolvedTarget.episodeDescription,
             tmdbRating = detail?.voteAverage?.takeIf { it > 0.0 },
@@ -9359,7 +9383,13 @@ var episodesTotal: Int? = null
 
                 showTitle =
                     if (item.mediaType == "series") {
-                        detail.name
+                        // Gated for the same reason as the MDBList leg's: the
+                        // show line never prints a blank, an id or the
+                        // placeholder when the card has a real title.
+                        upNextDisplayTitleOrNull(
+                            detail.name,
+                            !posterUrl.isNullOrBlank()
+                        )
                     } else {
                         null
                     }
@@ -9546,13 +9576,18 @@ episodesTotal =
             posterUrl = null
         }
 
-        // The tracker's title, or the name TMDB resolved, or no card at all.
-        // A Simkl item whose title is a bare id is the same phantom the
-        // MDBList builder drops: nothing recognizable to show.
+        // The tracker's own name, then whatever TMDB resolved for the same item,
+        // or no card at all (spec 2026-11-16). A Simkl item whose title is a bare
+        // id is the same phantom the MDBList builder drops - and one carrying the
+        // "Unknown Show" placeholder is a title the feed failed to fill in, so
+        // [resolvedName], the detail the card's art and label already come from,
+        // gets its turn.
         val displayTitle =
-            upNextDisplayTitleOrNull(
-                item.title,
-                !posterUrl.isNullOrBlank()
+            upNextCardNameOrNull(
+                sourceName = item.title,
+                detailName = detail?.name,
+                detailTitle = detail?.title,
+                sourceHasArtwork = !posterUrl.isNullOrBlank()
             )
                 ?: resolvedName
                 ?: return null
@@ -9580,7 +9615,12 @@ episodesTotal =
             showTitle =
                 showTitle
                     ?: if (item.mediaType == "series") {
-                        item.title
+                        // Gated, like every other builder's show line: the
+                        // fallback is a name, not the tracker's raw field.
+                        upNextDisplayTitleOrNull(
+                            item.title,
+                            !posterUrl.isNullOrBlank()
+                        )
                     } else {
                         null
                     },
