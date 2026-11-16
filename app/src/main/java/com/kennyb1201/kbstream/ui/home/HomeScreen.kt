@@ -42,6 +42,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material3.Icon
 import com.kennyb1201.kbstream.FormFactor
+import com.kennyb1201.kbstream.ui.components.LocalGlideActive
+import com.kennyb1201.kbstream.ui.components.keepComposedWhileFocused
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
 import com.kennyb1201.kbstream.data.kb.browseChipSuccessor
 import com.kennyb1201.kbstream.data.kb.chipKey
@@ -3552,7 +3554,12 @@ private fun LibraryListHomeRail(
     val cardHeight = if (landscapeCards) HomeLandscapeHeight else HomePosterHeight
 
     Column(
-        modifier = Modifier.padding(start = TvSafeAreaHorizontal, top = 0.dp, bottom = 0.dp)
+        modifier = Modifier
+            .padding(start = TvSafeAreaHorizontal, top = 0.dp, bottom = 0.dp)
+            // Stay composed while a card inside holds focus: a glide down the
+            // column may scroll this row out of the column's window with the
+            // focused card still in it (see keepComposedWhileFocused).
+            .then(Modifier.keepComposedWhileFocused())
     ) {
         // The pin's stored name, plus what the loaded items ARE: a pinned list
         // can be all films, all shows or a mix, and the heading is the only
@@ -3769,7 +3776,11 @@ private fun BuiltinTopPicksRail(
     val overridePaths = rememberImageOverridePaths()
 
     Column(
-        modifier = Modifier.padding(start = TvSafeAreaHorizontal, top = 0.dp, bottom = 0.dp)
+        modifier = Modifier
+            .padding(start = TvSafeAreaHorizontal, top = 0.dp, bottom = 0.dp)
+            // See keepComposedWhileFocused: the row has to outlive the column's
+            // window while one of its cards holds a gliding focus.
+            .then(Modifier.keepComposedWhileFocused())
     ) {
         SectionTitle(title, onHeight = onTitleHeight)
 
@@ -4209,6 +4220,9 @@ private fun BuiltinContinueWatchingRail(
             // above), which is what makes the whole section - title and cards -
             // the thing the column lands, rather than the head card alone.
             .bringIntoViewRequester(railAnchor)
+            // See keepComposedWhileFocused: the row has to outlive the column's
+            // window while one of its cards holds a gliding focus.
+            .then(Modifier.keepComposedWhileFocused())
     ) {
         SectionTitle(title, onHeight = onTitleHeight)
 
@@ -4441,11 +4455,15 @@ private fun BuiltinUpcomingRail(
     }
 
     Column(
-        modifier = Modifier.padding(
-            start = TvSafeAreaHorizontal,
-            top = 0.dp,
-            bottom = 0.dp
-        )
+        modifier = Modifier
+            .padding(
+                start = TvSafeAreaHorizontal,
+                top = 0.dp,
+                bottom = 0.dp
+            )
+            // See keepComposedWhileFocused: the row has to outlive the column's
+            // window while one of its cards holds a gliding focus.
+            .then(Modifier.keepComposedWhileFocused())
     ) {
         SectionTitle(title, onHeight = onTitleHeight, onClick = onOpenCalendar)
 
@@ -5088,6 +5106,17 @@ fun HomeScreen(
     val landscapeCards by remember(activeProfileId, syncRevision) {
         mutableStateOf(AppPreferences.homeLandscapeActive(context))
     }
+    // Hold to glide (Settings > Home Rails, default ON): a HELD direction glides
+    // the list instead of walking focus card by card. Read on the profile like
+    // the other Home display switches; only Settings changes it, so it cannot
+    // flip under a scroll.
+    val holdToGlide by remember(activeProfileId) {
+        mutableStateOf(AppPreferences.getHoldToGlide(context))
+    }
+    // True only while a list is gliding: the cards drop the focus chrome for a
+    // focus that is not on them (see LocalGlideActive). One flag for the screen,
+    // because only one list can be gliding at a time.
+    val glideActive = remember { mutableStateOf(false) }
     // The TV Home's layout (spec: Home second layout - Spotlight). PER-PROFILE
     // since spec 2026-11-15, and read on the profile only: it IS a synced pref,
     // but TV to TV and never a live one - a synced value lands on the next Home
@@ -6866,6 +6895,35 @@ fun HomeScreen(
         }
     }
 
+    // Where focus LANDS when a glide down the rails column stops: the first card
+    // of the first row that is fully visible, resolved exactly the way that row's
+    // cards register (see glideLandingCardKey). A row this lookup has no term for
+    // (a browse / collection row) hands the landing to the next visible row
+    // rather than leaving Home with no focused node at all. The landing is the one
+    // focus move of a hold, so the hero resolves for it the way it would for a
+    // stepped landing - and the Spotlight dwell-expand, which keys off a focus
+    // landing, works on it unchanged.
+    val landAfterGlideOnRows:
+        (androidx.compose.foundation.lazy.LazyListLayoutInfo) -> Unit = { info ->
+            val visible = info.visibleItemsInfo.sortedBy { it.index }
+            val landedIndex = glideLandingIndex(info) ?: visible.firstOrNull()?.index
+            val from = visible
+                .indexOfFirst { it.index == landedIndex }
+                .coerceAtLeast(0)
+            val entryByKey = mergedEntries.associateBy { homeEntryItemKey(it) }
+            var requester: FocusRequester? = null
+            for (item in visible.drop(from)) {
+                val key = item.key as? String ?: continue
+                val entry = entryByKey[key] ?: continue
+                val cardKey = glideLandingCardKey(entry) { prefix ->
+                    railFocusRequesters.keys.firstOrNull { it.startsWith(prefix) }
+                } ?: continue
+                requester = railFocusRequesters[cardKey] ?: continue
+                break
+            }
+            restoreFocus(requester)
+        }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -6987,6 +7045,13 @@ fun HomeScreen(
                         )
                     }
                 }
+                // The cards inside the list read the glide flag here (see
+                // LocalGlideActive): they paint no focus ring / glow / lift while
+                // the list is gliding, and paint it exactly as before the rest of
+                // the time.
+                CompositionLocalProvider(
+                    LocalGlideActive provides glideActive.value
+                ) {
                 LazyColumn(
                     state = railListState,
                     // Hold-Up from ANY rail reveals the top bar (see
@@ -7020,6 +7085,24 @@ fun HomeScreen(
                                 onOpenTopBar = { target ->
                                     openTopBarFromHold(target)
                                 }
+                            )
+                        )
+                        .then(
+                            // Hold Down to GLIDE the rows (Up stays the top
+                            // bar's own hold - see glideAxisKeys): from the first
+                            // repeat (or the moment the press passes the hold
+                            // threshold, on a remote that sends no repeats) the
+                            // column scrolls at a constant velocity and focus
+                            // stops moving, so a skim pays no hero resolve, no
+                            // focus scale and no glow per row. The first press
+                            // is never consumed, so a single press is exactly
+                            // today's one-row step. See rememberHoldToGlide.
+                            rememberHoldToGlide(
+                                state = railListState,
+                                axis = GlideAxis.Vertical,
+                                enabled = holdToGlide,
+                                onGlideActiveChange = { glideActive.value = it },
+                                onLanded = landAfterGlideOnRows
                             )
                         ),
                     contentPadding = PaddingValues(
@@ -7452,11 +7535,21 @@ fun HomeScreen(
                                             railCardKeyPrefix(rail)
 
                                         Column(
-                                            modifier = Modifier.padding(
-                                                start = TvSafeAreaHorizontal,
-                                                top = 0.dp,
-                                                bottom = 0.dp
-                                            )
+                                            modifier = Modifier
+                                                .padding(
+                                                    start = TvSafeAreaHorizontal,
+                                                    top = 0.dp,
+                                                    bottom = 0.dp
+                                                )
+                                                // See keepComposedWhileFocused:
+                                                // the row has to outlive the
+                                                // column's window while one of
+                                                // its cards holds a gliding
+                                                // focus.
+                                                .then(
+                                                    Modifier
+                                                        .keepComposedWhileFocused()
+                                                )
                                         ) {
                                             SectionTitle(
                                                 homeRailTitle(
@@ -7493,6 +7586,36 @@ fun HomeScreen(
                                     ) {
                                         LazyRow(
                                             state = railRowState,
+                                            // Hold Left / Right to glide ALONG
+                                            // this rail, with focus left on the
+                                            // card it was on (see
+                                            // rememberHoldToGlide); a single
+                                            // press still steps one card.
+                                            modifier = Modifier.then(
+                                                rememberHoldToGlide(
+                                                    state = railRowState,
+                                                    axis = GlideAxis.Horizontal,
+                                                    enabled = holdToGlide,
+                                                    onGlideActiveChange = {
+                                                        glideActive.value = it
+                                                    },
+                                                    onLanded = { info ->
+                                                        val landing =
+                                                            glideLandingIndex(info)
+                                                        val meta = landing?.let {
+                                                            rail.items.getOrNull(it)
+                                                        }
+                                                        restoreFocus(
+                                                            meta?.let {
+                                                                railFocusRequesters[
+                                                                    catalogCardKeyPrefix +
+                                                                        "${it.type}:${it.id}"
+                                                                ]
+                                                            }
+                                                        )
+                                                    }
+                                                )
+                                            ),
                                             contentPadding = PaddingValues(
                                                 start = RailHorizontalStartPadding,
                                                 end = TvSafeAreaHorizontal,
@@ -7782,9 +7905,10 @@ fun HomeScreen(
                     // Nothing is appended after the column any more: the
                     // viewer's pinned Library lists are entries IN it (see
                     // KBHomeSlots), so drawing them here as well would draw
-                    // every one of them twice.
-                }
-            }
+                                         // every one of them twice.
+                 }
+                 }
+             }
         }
 
         // Back dismisses the top bar. Every other overlay on Home (the poster

@@ -615,6 +615,9 @@ fun SettingsScreen(
     var railShowAddon by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getHomeRailShowAddonName(context))
     }
+    var holdToGlide by remember {
+        mutableStateOf(AppPreferences.getHoldToGlide(context))
+    }
     var searchRailShowType by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getSearchRailShowCatalogType(context))
     }
@@ -3720,6 +3723,21 @@ fun SettingsScreen(
                     onToggle = {
                         railShowAddon = it
                         AppPreferences.setHomeRailShowAddonName(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // How the rows are TRAVERSED, so it sits with the rows (settings
+                // reorg §8.4: the rail switches act on Home's rows, not on how a
+                // poster is drawn).
+                ToggleRow(
+                    label = "Hold to glide",
+                    description = "Hold a direction to glide through rows smoothly — focus lands when you let go.",
+                    checked = holdToGlide,
+                    onToggle = {
+                        holdToGlide = it
+                        AppPreferences.setHoldToGlide(context, it)
                     }
                 )
 

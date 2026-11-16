@@ -133,3 +133,46 @@ internal fun homeEntryIndexForCardKey(entries: List<HomeEntry>, cardKey: String)
             entry.rail.type == spec[2]
     }.takeIf { it >= 0 }
 }
+
+/**
+ * The card a glide should LAND on in the row [entry] draws, or null when this
+ * lookup has no term for that row.
+ *
+ * A glide scrolls focus off the card it started on (see `rememberHoldToGlide`),
+ * so on release focus has to be put back on something the viewer can actually
+ * see - the card the row came to rest on, not the one it left behind: asking for
+ * the old card would scroll the list back to it and undo the glide. The first
+ * card of the row is that landing, and every catalog row names it exactly the way
+ * its own cards register (see [railCardKeyPrefix]).
+ *
+ * The built-in rows are the exception: their first card belongs to whichever
+ * built-in list the row draws, and the pending-item lists a glide may not have
+ * seen compose yet - so the caller answers with any key that registered under
+ * that row's prefix (the rail's own first card is composed whenever the row is
+ * on screen at all). Null is a normal answer for the rows this lookup has no
+ * term for (a collection, a browse rail, a pinned Library list); the caller falls
+ * through to a neighbour.
+ */
+internal fun glideLandingCardKey(
+    entry: HomeEntry,
+    registeredKeyWithPrefix: (String) -> String?
+): String? = when (entry) {
+    is HomeEntry.AddonRail -> entry.rail.items.firstOrNull()?.let { meta ->
+        railCardKeyPrefix(entry.rail) + "${meta.type}:${meta.id}"
+    }
+
+    is HomeEntry.BuiltinRail -> when (entry.key) {
+        KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING ->
+            registeredKeyWithPrefix(CONTINUE_WATCHING_CARD_KEY_PREFIX)
+
+        KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE ->
+            registeredKeyWithPrefix(UPCOMING_CARD_KEY_PREFIX)
+
+        KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU ->
+            registeredKeyWithPrefix(TOP_PICKS_CARD_KEY_PREFIX)
+
+        else -> null
+    }
+
+    else -> null
+}

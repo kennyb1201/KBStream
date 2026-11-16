@@ -2023,6 +2023,21 @@ object AppPreferences {
         syncDisplayPrefsBlob(context)
     }
 
+    // ── Hold to glide ─────────────────────────────────────────────────
+    // Default ON: it changes HOLD behavior only. A single press still moves one
+    // card, and the behavior it replaces - focus bouncing card to card under a
+    // held key - is the jank it removes. Deliberately NOT synced and not in the
+    // display blob: this is how the remote in the viewer's hand behaves, and a
+    // value arriving from a sibling TV would flip the walk under a scroll.
+    private const val KEY_HOLD_TO_GLIDE = "hold_to_glide"
+
+    fun getHoldToGlide(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_HOLD_TO_GLIDE, true)
+
+    fun setHoldToGlide(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_HOLD_TO_GLIDE, enabled).apply()
+    }
+
     // ── Search rails (add-on search only): show catalog type ──────────
     // Governs the addon search rails on the Search screen (AIOMetadata,
     // Cinemeta, ...) — NOT the built-in TMDB results, which never carry a

@@ -623,6 +623,12 @@ internal object SettingsSearchIndex {
             "home rail addon name label show"
         ),
         SettingSearchEntry(
+            "interface.hold-to-glide",
+            SettingsPane.INTERFACE,
+            "Hold to glide",
+            "glide hold scroll fast smooth dpad remote navigation rows rail walk"
+        ),
+        SettingSearchEntry(
             "interface.search-rail-catalog-type",
             SettingsPane.INTERFACE,
             "Show Catalog Type on Search Rails",

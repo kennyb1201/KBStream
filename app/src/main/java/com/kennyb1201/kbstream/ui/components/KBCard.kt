@@ -3,12 +3,15 @@ package com.kennyb1201.kbstream.ui.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Shape
@@ -17,6 +20,8 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.LocalPinnableContainer
+import androidx.compose.ui.layout.PinnableContainer
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Border
 import androidx.tv.material3.Card
@@ -26,6 +31,7 @@ import com.kennyb1201.kbstream.ui.theme.CardShape
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusCard
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlow
+import com.kennyb1201.kbstream.ui.theme.KBFocusNone
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -57,6 +63,62 @@ private const val LONG_PRESS_THRESHOLD_MS = 450L
  * stopped focus keeps today's look, one fifth of a second late.
  */
 private const val FOCUS_GLOW_SETTLE_MS = 220L
+
+/**
+ * Whether the viewer is HOLDING a direction to glide a list rather than stepping
+ * focus through it (see `rememberHoldToGlide`).
+ *
+ * True only while the glide runs. A card uses it to drop the focus chrome it
+ * would otherwise paint for a focus that is about to leave the screen: while the
+ * list glides, focus is deliberately NOT moving, so the card that still holds it
+ * is the one scrolling away - its ring and its glow would be drawn on a tile the
+ * viewer is watching leave. Chrome comes back the moment the glide lands, and a
+ * card at rest always paints it exactly as before.
+ */
+val LocalGlideActive = compositionLocalOf { false }
+
+/** Holds one [PinnableContainer.PinnedHandle] without a snapshot write. */
+private class FocusPin {
+    var handle: PinnableContainer.PinnedHandle? = null
+}
+
+/**
+ * Keep this node composed while it, or something focusable inside it, holds
+ * focus.
+ *
+ * A lazy list disposes the items that leave its window, and a disposed focus
+ * target takes the FOCUS with it. A glide (see `rememberHoldToGlide`) scrolls the
+ * list under a focus that deliberately does not move, so its focused card is
+ * exactly the item that gets disposed - and with it goes the key handling that
+ * ends the glide on release. Pinning the item for as long as it is focused is the
+ * framework's own answer: the lazy layout offers each item a [PinnableContainer]
+ * (null outside a lazy list, which is why this is a no-op everywhere else).
+ *
+ * Applied to a card (for a glide along its ROW) and to a rail row (for a glide
+ * down the rails COLUMN, where the row leaves the column's window with the
+ * focused card still inside it). It costs a pin only while something inside is
+ * focused, and one composed item while it is - released the moment focus leaves.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+internal fun Modifier.keepComposedWhileFocused(): Modifier {
+    val pinnable = LocalPinnableContainer.current ?: return this
+    val pin = remember(pinnable) { FocusPin() }
+    DisposableEffect(pinnable) {
+        onDispose {
+            pin.handle?.release()
+            pin.handle = null
+        }
+    }
+    return this.onFocusChanged { state ->
+        if (state.hasFocus) {
+            if (pin.handle == null) pin.handle = pinnable.pin()
+        } else {
+            pin.handle?.release()
+            pin.handle = null
+        }
+    }
+}
 
 @Composable
 fun KBCard(
@@ -94,6 +156,9 @@ fun KBCard(
     // the glow arms and the card looks exactly as it always did at rest.
     var focused by remember { mutableStateOf(false) }
     var glowArmed by remember { mutableStateOf(false) }
+    // A glide is not a focus landing: no ring, no glow, no scale lift while the
+    // list is moving under a held key.
+    val gliding = LocalGlideActive.current
     LaunchedEffect(focused) {
         if (!focused) {
             // Blurring disarms immediately: a card that loses focus must not
@@ -124,7 +189,7 @@ fun KBCard(
         // the same two beats for free — see the KBFocus* scale in the theme.
         scale = CardDefaults.scale(
             scale = 1f,
-            focusedScale = focusedScale,
+            focusedScale = if (gliding) KBFocusNone else focusedScale,
             pressedScale = KBFocusPressed
         ),
         border = CardDefaults.border(
@@ -140,12 +205,13 @@ fun KBCard(
                 // point: the deferred half of the focus treatment costs
                 // nothing until the focus has settled (see
                 // [FOCUS_GLOW_SETTLE_MS]).
-                elevation = if (glowArmed) KBFocusGlow else 0.dp
+                elevation = if (glowArmed && !gliding) KBFocusGlow else 0.dp
             )
         ),
         // onPreviewKeyEvent runs on the way DOWN the tree, before Card's own
         // internal clickable sees the event, so we get first refusal on it.
         modifier = modifier
+            .keepComposedWhileFocused()
             .onFocusChanged { focused = it.isFocused }
             .onPreviewKeyEvent { event ->
             val isSelectKey =

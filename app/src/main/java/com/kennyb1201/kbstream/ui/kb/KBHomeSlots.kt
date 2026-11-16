@@ -70,6 +70,7 @@ import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
 import com.kennyb1201.kbstream.ui.components.KB_ART_FADE_MS
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBSectionHeader
+import com.kennyb1201.kbstream.ui.components.keepComposedWhileFocused
 import com.kennyb1201.kbstream.ui.components.posterBorderModifier
 import com.kennyb1201.kbstream.ui.components.posterEdgeShape
 import com.kennyb1201.kbstream.ui.components.rememberMotionMs
@@ -785,11 +786,16 @@ fun KBHomeCollectionRail(
     onHeadLeftPressed: ((FocusRequester) -> Unit)? = null
 ) {
     Column(
-        modifier = Modifier.padding(
-            start = TvSafeAreaHorizontal,
-            top = 0.dp,
-            bottom = 8.dp
-        )
+        modifier = Modifier
+            .padding(
+                start = TvSafeAreaHorizontal,
+                top = 0.dp,
+                bottom = 8.dp
+            )
+            // Stay composed while a card inside holds focus: a glide down Home's
+            // column may scroll this row out of the column's window with the
+            // focused card still in it (see keepComposedWhileFocused).
+            .then(Modifier.keepComposedWhileFocused())
     ) {
         // The app's rail heading, not a fourth treatment of its own: this was a
         // raw titleMedium at 94% white with its own padding, so a collection's
@@ -1151,11 +1157,15 @@ fun KBHomeBrowseRail(
     title: String = "Browse"
 ) {
     Column(
-        modifier = Modifier.padding(
-            start = TvSafeAreaHorizontal,
-            top = 0.dp,
-            bottom = 8.dp
-        )
+        modifier = Modifier
+            .padding(
+                start = TvSafeAreaHorizontal,
+                top = 0.dp,
+                bottom = 8.dp
+            )
+            // See keepComposedWhileFocused: a glide down Home's column must not
+            // take this row's focused chip with it.
+            .then(Modifier.keepComposedWhileFocused())
     ) {
         // The app's rail heading, not a treatment of its own: this was a raw
         // titleMedium at 94% white with its own padding, so a Browse rail's
