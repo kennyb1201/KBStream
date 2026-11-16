@@ -1,9 +1,9 @@
 package com.kennyb1201.kbstream.ui.home
 
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.orientation.Orientation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -17,7 +17,6 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.nativeKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalDensity
@@ -87,17 +86,22 @@ internal fun isGlideForwardKey(axis: GlideAxis, key: Key): Boolean = when (axis)
 
 /** [glideLandingIndex] over a list's measured info, in layout coordinates. */
 internal fun glideLandingIndex(info: LazyListLayoutInfo): Int? {
-    val vertical = info.orientation == Orientation.Vertical
     val items = info.visibleItemsInfo
     if (items.isEmpty()) return null
-    val offsets = items.map { it.offset }
-    val sizes = items.map { if (vertical) it.size.height else it.size.width }
-    val viewportSize = if (vertical) info.viewportSize.height else info.viewportSize.width
+    // An item's own `size` is its extent along the axis the list scrolls on, so
+    // the arithmetic is the same for a row and for the column; only the viewport
+    // has to be read on the right axis.
+    val viewportSize = info.viewportSize
+    val viewportEnd = if (info.orientation == Orientation.Vertical) {
+        viewportSize.height
+    } else {
+        viewportSize.width
+    }
     val visible = glideLandingIndex(
-        offsets = offsets,
-        sizes = sizes,
+        offsets = items.map { it.offset },
+        sizes = items.map { it.size },
         viewportStart = 0,
-        viewportEnd = viewportSize
+        viewportEnd = viewportEnd
     ) ?: return null
     return items[visible].index
 }
