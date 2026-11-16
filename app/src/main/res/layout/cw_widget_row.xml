@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- One Continue Watching row in the widget: poster, title, "S1E2 · Name",
-     progress bar, time left. The whole row is one tap target - it resumes. -->
+<!-- One Continue Watching row in the widget: poster, title (with the chip the
+     Home card draws), "S1E2 · Name", progress bar, time left. The whole row is
+     one tap target - it resumes; the chip is a label, never its own target. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/cw_widget_row_root"
     android:layout_width="match_parent"
@@ -26,15 +27,41 @@
         android:layout_weight="1"
         android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/cw_widget_row_title"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:textColor="@color/kb_text_hi"
-            android:textSize="12sp"
-            android:textStyle="bold" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/cw_widget_row_title"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <!-- The Home card's chip, carried in the snapshot's rendered row. A
+                 row with no chip hides it rather than drawing an empty one. -->
+            <TextView
+                android:id="@+id/cw_widget_row_chip"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="4dp"
+                android:background="@drawable/cw_widget_chip"
+                android:maxLines="1"
+                android:paddingLeft="4dp"
+                android:paddingTop="1dp"
+                android:paddingRight="4dp"
+                android:paddingBottom="1dp"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="8sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/cw_widget_row_subtitle"

@@ -80,6 +80,14 @@ internal class CwWidgetFactory(
     private fun rowView(row: CwWidgetRow, position: Int): RemoteViews {
         val views = RemoteViews(context.packageName, R.layout.cw_widget_row)
         views.setTextViewText(R.id.cw_widget_row_title, row.showTitle)
+        // The chip the Home card draws, as the publish rendered it (spec
+        // 2026-11-16, F2). No chip in the snapshot means no chip on screen: the
+        // view is GONE, never an empty pill.
+        views.setTextViewText(R.id.cw_widget_row_chip, row.chip.orEmpty())
+        views.setViewVisibility(
+            R.id.cw_widget_row_chip,
+            if (row.chip.isNullOrBlank()) android.view.View.GONE else android.view.View.VISIBLE
+        )
         views.setTextViewText(R.id.cw_widget_row_subtitle, row.subtitle)
         views.setViewVisibility(
             R.id.cw_widget_row_subtitle,

@@ -224,7 +224,7 @@ class HomeScreenMobileContractTest {
         // three things the phone card used to leave UNDER the artwork.
         listOf(
             "displayBadge",
-            "\"SERIES FINALE\"",
+            "upNextChipLabel(item)",
             "ep. left",
             "formatTimeLeft(",
             "KBProgressBar("
@@ -232,8 +232,11 @@ class HomeScreenMobileContractTest {
             assertTrue("the Continue Watching card must draw $marker", mobile.contains(marker))
         }
         assertTrue(
-            "the state chip is spelled the way the TV rail spells it",
-            mobile.contains("\"NEXT UP\"") && mobile.contains("UpNextBadge.NEW_SEASON")
+            "the state chip is the TV rail's OWN rule, so the two cannot spell it " +
+                "two ways (the strings themselves live in HomeUpNext since spec " +
+                "2026-11-16, which is also what the widget prints)",
+            mobile.contains("import com.kennyb1201.kbstream.ui.home.upNextChipLabel") &&
+                mobile.contains("UpNextBadge.NEW_SEASON")
         )
         assertTrue(
             "and filled with the TV rail's per-state colour, not one accent for all",

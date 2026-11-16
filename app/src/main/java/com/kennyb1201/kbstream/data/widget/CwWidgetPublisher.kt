@@ -8,6 +8,7 @@ import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.ui.home.UpNextItem
 import com.kennyb1201.kbstream.ui.home.continueWatchingShowNames
 import com.kennyb1201.kbstream.ui.home.instantContinueWatchingItem
+import com.kennyb1201.kbstream.ui.home.upNextChipLabel
 import com.kennyb1201.kbstream.ui.home.upNextContinueWatchingDecision
 import java.time.LocalDate
 import java.time.ZoneId
@@ -191,6 +192,11 @@ internal object CwWidgetPublisher {
             parentId = parentId,
             streamId = item.episodeStreamId?.trim()?.takeIf { it.isNotBlank() },
             showTitle = title,
+            // The rail's own chip rule, run here, in the same publish that
+            // renders the title and the progress: the launcher prints a string
+            // it was handed, so it cannot print a chip the Home card does not
+            // have (spec 2026-11-16, F1/F3).
+            chip = upNextChipLabel(item),
             episodeTitle = item.episodeTitle?.trim()?.takeIf { it.isNotBlank() },
             season = item.season,
             episode = item.episode,

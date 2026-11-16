@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Continue Watching row's chip background (spec 2026-11-16).
+
+     One tone for every chip state on the widget, not six: the Home card colours
+     its chip by state, but a RemoteViews row can only swap whole drawables, and
+     the spec's parity requirement is the chip's TEXT ("RESUME", "NEXT UP",
+     "SEASON FINALE" ...). The steel tone is the one the rail gives its neutral
+     "next up" chip, so a launcher chip reads as the same family without a
+     drawable per state. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#CC3E5C76" />
+    <corners android:radius="3dp" />
+</shape>

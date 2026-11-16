@@ -1600,6 +1600,35 @@ internal fun trackerCardOwnedByAnotherProfile(
 }
 
 /**
+ * The chip a Continue Watching card draws - the ONE rule for every surface that
+ * draws one (spec 2026-11-16).
+ *
+ * The finale overrides come first, then the badge [upNextArrivalBadge] decided:
+ * a show's last episode is news about the SHOW, not about the viewer's queue, and
+ * that order is what the Home cards have always used. The strings are the Home
+ * cards' own, character for character.
+ *
+ * It takes the whole [UpNextItem] rather than the badge alone because the finale
+ * flags live beside the badge: a widget handed only the enum would have to be
+ * handed the flags too and re-implement this order, which is exactly how the
+ * rail and the launcher drifted apart in the first place. Every chip - the TV
+ * card, the phone card, the home-screen widget - comes from this function, so
+ * two of them cannot disagree about the same title.
+ */
+internal fun upNextChipLabel(item: UpNextItem): String =
+    when {
+        item.isSeriesFinale -> "SERIES FINALE"
+        item.isSeasonFinale -> "SEASON FINALE"
+        else ->
+            when (item.badge) {
+                UpNextBadge.CONTINUE_WATCHING -> "RESUME"
+                UpNextBadge.NEXT_UP -> "NEXT UP"
+                UpNextBadge.NEW_EPISODE -> "NEW EPISODE"
+                UpNextBadge.NEW_SEASON -> "NEW SEASON"
+            }
+    }
+
+/**
  * A tracker card's subtitle: the action word and the episode pair, or the
  * tracker's own text when there is no pair to print.
  *

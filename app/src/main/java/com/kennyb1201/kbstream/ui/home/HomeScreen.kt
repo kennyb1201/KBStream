@@ -4700,29 +4700,9 @@ private fun CompactUpNextCard(
         item.episode
     )
 
-    val displayBadge =
-        when {
-            item.isSeriesFinale ->
-                "SERIES FINALE"
-
-            item.isSeasonFinale ->
-                "SEASON FINALE"
-
-            else ->
-                when (item.badge) {
-                    UpNextBadge.CONTINUE_WATCHING ->
-                        "RESUME"
-
-                    UpNextBadge.NEXT_UP ->
-                        "NEXT UP"
-
-                    UpNextBadge.NEW_EPISODE ->
-                        "NEW EPISODE"
-
-                    UpNextBadge.NEW_SEASON ->
-                        "NEW SEASON"
-                }
-        }
+    // The chip's text, from the ONE rule every surface uses (spec 2026-11-16):
+    // the home-screen widget draws the same string for the same card.
+    val displayBadge = upNextChipLabel(item)
 
     val progress = item.progressPercent
         ?.coerceIn(0f, 1f)

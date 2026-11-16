@@ -25,6 +25,7 @@ internal object CwWidgetSnapshotJson {
                     .put("pid", row.parentId)
                     .put("sid", row.streamId ?: "")
                     .put("t", row.showTitle)
+                    .put("chip", row.chip ?: "")
                     .put("et", row.episodeTitle ?: "")
                     .put("s", row.season ?: -1)
                     .put("e", row.episode ?: -1)
@@ -60,6 +61,9 @@ internal object CwWidgetSnapshotJson {
                     parentId = parentId,
                     streamId = node.optString("sid").trim().takeIf { it.isNotEmpty() },
                     showTitle = node.optString("t").trim(),
+                    // Absent in a snapshot an older build wrote: no chip, not an
+                    // empty one (the row hides the view).
+                    chip = node.optString("chip").trim().takeIf { it.isNotEmpty() },
                     episodeTitle = node.optString("et").trim().takeIf { it.isNotEmpty() },
                     season = node.optInt("s", -1).takeIf { it >= 0 },
                     episode = node.optInt("e", -1).takeIf { it > 0 },

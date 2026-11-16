@@ -17,6 +17,17 @@ internal data class CwWidgetRow(
     /** The stream id the player resumes, when the card had one. */
     val streamId: String? = null,
     val showTitle: String,
+    /**
+     * The card's chip text ("RESUME", "NEXT UP", "SEASON FINALE" ...), RENDERED
+     * by the rail's own rule ([com.kennyb1201.kbstream.ui.home.upNextChipLabel])
+     * at publish time (spec 2026-11-16, F1).
+     *
+     * The rendered string, not the badge enum plus the two finale flags: the
+     * widget is RemoteViews, it only prints this, and a launcher that decided
+     * which of six strings a badge and two flags add up to would be a second
+     * copy of the rule - the one thing F3 forbids. Null means "draw no chip".
+     */
+    val chip: String? = null,
     val episodeTitle: String? = null,
     val season: Int? = null,
     val episode: Int? = null,

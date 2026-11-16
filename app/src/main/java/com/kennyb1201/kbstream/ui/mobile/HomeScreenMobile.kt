@@ -195,6 +195,7 @@ import com.kennyb1201.kbstream.ui.home.UpNextBadge
 import com.kennyb1201.kbstream.ui.home.UpNextItem
 import com.kennyb1201.kbstream.ui.home.UpcomingEpisode
 import com.kennyb1201.kbstream.ui.home.formatTimeLeft
+import com.kennyb1201.kbstream.ui.home.upNextChipLabel
 import com.kennyb1201.kbstream.ui.home.upNextContinueWatchingDecision
 import com.kennyb1201.kbstream.ui.home.hiddenIdentity
 import com.kennyb1201.kbstream.ui.home.upNextEpisodeLabel as tvUpNextEpisodeLabel
@@ -3522,16 +3523,9 @@ private fun ContinueWatchingCard(
     val isResumeCard = item.badge == UpNextBadge.CONTINUE_WATCHING ||
         (item.startPositionMs > 0L && (item.isSeasonFinale || item.isSeriesFinale))
     val timeLeft = if (isResumeCard) formatTimeLeft(item.remainingMinutes) else null
-    val displayBadge = when {
-        item.isSeriesFinale -> "SERIES FINALE"
-        item.isSeasonFinale -> "SEASON FINALE"
-        else -> when (item.badge) {
-            UpNextBadge.CONTINUE_WATCHING -> "RESUME"
-            UpNextBadge.NEXT_UP -> "NEXT UP"
-            UpNextBadge.NEW_EPISODE -> "NEW EPISODE"
-            UpNextBadge.NEW_SEASON -> "NEW SEASON"
-        }
-    }
+    // The chip's text, from the ONE rule every surface uses (spec 2026-11-16):
+    // the home-screen widget draws the same string for the same card.
+    val displayBadge = upNextChipLabel(item)
     // The same chip colours the television gives the same states (see
     // `CompactUpNextCard`'s `badgeColor` argument): the chip is a state, and a
     // single accent for all four made a finale and a resume look alike.
