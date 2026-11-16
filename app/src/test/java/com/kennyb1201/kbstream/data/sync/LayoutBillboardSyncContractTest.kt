@@ -62,55 +62,54 @@ class LayoutBillboardSyncContractTest {
         )
     }
 
-    // ── F2/F3: the gate is receiver-side, and the carrier device-level ────
+    // ── F2/F3: the gate is receiver-side, and the carrier PER-PROFILE ───────
+    //
+    // Spec 2026-11-15 reversed the carrier: the six keys are no longer one
+    // box's arrangement, they are each profile's own. What does NOT move is the
+    // TV gate - a phone still neither publishes nor adopts them.
 
     @Test
-    fun `only a TV publishes them, and it reads them from the device store`() {
+    fun `only a TV publishes them, and it reads them from the blob's own profile`() {
         val builder = payload.substringAfter("fun buildDisplayPrefs(context: Context): JsonObject")
             .substringBefore("fun buildAddons(")
         assertTrue(
-            "the builder gates the six on the form factor - a phone publishes none of them",
-            builder.contains("if (com.kennyb1201.kbstream.FormFactor.isTv)") &&
-                builder.contains(".deviceScopedValue(context, key)")
+            "the builder still gates the six on the form factor - a phone publishes none",
+            builder.contains("if (key in TV_SCOPED_SYNC_KEYS &&") &&
+                builder.contains("!com.kennyb1201.kbstream.FormFactor.isTv")
         )
         assertTrue(
-            "and it reads a TV-scoped key from that store, never the profile file",
-            builder.contains("if (key in TV_SCOPED_SYNC_KEYS) deviceValues[key] else all[key]")
+            "and a TV-scoped key comes from the same place as every other key: this " +
+                "profile's file",
+            builder.contains("all[key]") && !builder.contains("deviceScopedValue")
+        )
+        assertFalse(
+            "with no device-store detour left in the publish path",
+            builder.contains("deviceValues") || builder.contains("devicePrefs(")
         )
     }
 
     @Test
-    fun `only a TV adopts them, and it writes them device-wide`() {
+    fun `only a TV adopts them, and the value lands in that profile`() {
         val apply = payload.substringAfter("private fun applyDisplayPrefs(")
             .substringBefore("private suspend fun applyAddons(")
         assertTrue(
-            "the apply step has its own branch for the six",
-            apply.contains("if (key in PrefsPayloadBuilder.TV_SCOPED_SYNC_KEYS) {")
-        )
-        assertTrue(
             "a phone drops them - its layout and billboard are untouched by a TV sync",
-            apply.contains("if (!com.kennyb1201.kbstream.FormFactor.isTv) return@forEach")
+            apply.contains("if (key in PrefsPayloadBuilder.TV_SCOPED_SYNC_KEYS &&") &&
+                apply.contains("!com.kennyb1201.kbstream.FormFactor.isTv") &&
+                apply.contains("return@forEach")
+        )
+        assertFalse(
+            "and the TV writes through the ordinary per-profile editor: profile 1's Modern " +
+                "reaches profile 1, and profile 2's Home is not touched",
+            apply.contains("adoptDeviceScopedValue") ||
+                apply.contains("devicePrefs(") ||
+                apply.contains("AppPreferences")
         )
         assertTrue(
-            "a TV writes the DEVICE store, not a profile's file",
-            apply.contains("com.kennyb1201.kbstream.data.settings.AppPreferences") &&
-                apply.contains(".adoptDeviceScopedValue(context, key, adopted)")
+            "the trailer mode keeps its Int shape, or the Int reader throws on the Long",
+            apply.contains("if (key == \"home_billboard_trailer_mode\")") &&
+                apply.contains("editor.putInt(key, it.toInt())")
         )
-        val deviceKeys = prefs.substringAfter("internal val DEVICE_SCOPED_KEYS: Set<String> = setOf(")
-            .substringBefore(")")
-        listOf(
-            "KEY_HOME_LAYOUT",
-            "KEY_HOME_CARD_EXPAND_MS",
-            "KEY_BILLBOARD_ENABLED",
-            "KEY_BILLBOARD_FEEDS",
-            "KEY_BILLBOARD_CYCLE_MS",
-            "KEY_BILLBOARD_TRAILER_MODE"
-        ).forEach { constant ->
-            assertTrue(
-                "the device store owns $constant",
-                deviceKeys.contains(constant)
-            )
-        }
         listOf(
             "fun getHomeLayout",
             "fun getHomeCardExpandMs",
@@ -121,26 +120,37 @@ class LayoutBillboardSyncContractTest {
         ).forEach { getter ->
             val body = prefs.substringAfter("$getter(").substringBefore("fun ")
             assertTrue(
-                "$getter reads the device store, so a profile switch cannot change it",
-                // Through deviceValue (spec 2026-11-12, render-path B1): the
-                // per-key inheritance point, not the raw SharedPreferences read.
-                body.contains("deviceValue(context, ")
+                "$getter reads the profile's value, so a profile switch changes the Home",
+                body.contains("layoutValue(context, ")
             )
         }
-        assertTrue(
-            "the device store is un-namespaced - a profile's file is namespaced",
-            prefs.contains("private const val DEVICE_PREFS_NAME = \"kbstream_device_prefs\"")
+        listOf(
+            "fun setHomeLayout(",
+            "fun setHomeCardExpandMs(",
+            "fun setHomeBillboardEnabled(",
+            "fun setHomeBillboardFeeds(",
+            "fun setHomeBillboardCycleMs(",
+            "fun setHomeBillboardTrailerMode("
+        ).forEach { setter ->
+            val body = prefs.substringAfter(setter).substringBefore("}")
+            assertTrue(
+                "$setter writes the profile, never the device store",
+                body.contains("prefs(context).edit()") &&
+                    !body.contains("devicePrefs(context)")
+            )
+        }
+        assertFalse(
+            "and the device-scoped machinery is retired of itself, not just of its callers",
+            prefs.contains("DEVICE_SCOPED_KEYS") ||
+                prefs.contains("fun deviceScopedValue") ||
+                prefs.contains("fun adoptDeviceScopedValue")
         )
         assertTrue(
-            "and the move inherits from the profile store once, so no TV forgets its layout",
-            prefs.contains("private fun deviceValue(context: Context, key: String): Any?")
-        )
-        assertTrue(
-            "but only once a profile exists: before that the profile store is the legacy " +
-                "global file and holds none of the six, so seeding from it would decide the " +
-                "box's layout from an empty store (spec 2026-11-12, render-path B1)",
-            prefs.contains("if (profileId.isNullOrBlank()) return null") &&
-                prefs.contains("ProfileStorage.activeProfileId(context)")
+            "the old device store is still named, because the migration seed reads it " +
+                "once per profile so no Home flips on the update",
+            prefs.contains("private const val DEVICE_PREFS_NAME = \"kbstream_device_prefs\"") &&
+                prefs.contains("private fun layoutValue(context: Context, key: String): Any?") &&
+                prefs.contains("devicePrefs(context).all[key]")
         )
     }
 
@@ -151,9 +161,9 @@ class LayoutBillboardSyncContractTest {
         val builder = payload.substringAfter("fun buildDisplayPrefs(context: Context): JsonObject")
             .substringBefore("fun buildAddons(")
         assertTrue(
-            "the builder only publishes a key the device store actually holds",
-            builder.contains(".deviceScopedValue(context, key)") &&
-                builder.contains("?.let { value -> key to value }")
+            "the builder only publishes a key the profile actually holds",
+            builder.contains("blobValue(key, stored(key))?.let { current[key] = it }") &&
+                builder.contains("all[key]")
         )
         assertTrue(
             "and the payload loop skips an absent value instead of writing a default",

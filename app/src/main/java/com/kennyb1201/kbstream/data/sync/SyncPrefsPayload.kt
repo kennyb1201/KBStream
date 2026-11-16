@@ -277,7 +277,7 @@ object PrefsPayloadBuilder {
         // identity. That family is now the ONLY local layout family; see
         // [TV_SCOPED_SYNC_KEYS] below for the six keys that left it.
         "home_layout",                     // see [TV_SCOPED_SYNC_KEYS]: TV to TV,
-        "home_billboard_enabled",           //   device-level, never to a phone
+        "home_billboard_enabled",           //   per profile, never to a phone
         "home_billboard_feeds",
         "home_billboard_cycle_ms",
         "home_billboard_trailer_mode",
@@ -450,14 +450,15 @@ object PrefsPayloadBuilder {
      * selection, the hold, the trailer mode). One television's arrangement is
      * the other television's - and NOT a phone's, in either direction:
      *
-     *  - only a TV PUBLISHES them ([buildDisplayPrefs] reads them from the
-     *    device store on a TV and omits them everywhere else), so a phone's
-     *    billboard settings can never travel up and rearrange a TV;
+     *  - only a TV PUBLISHES them ([buildDisplayPrefs] keeps them on a TV and
+     *    omits them everywhere else), so a phone's billboard settings can never
+     *    travel up and rearrange a TV;
      *  - only a TV ADOPTS them ([applyDisplayPrefs] drops them on a phone), so
      *    a TV's arrangement never lands on a phone at all;
-     *  - on a TV they are applied DEVICE-WIDE, to the device store (see
-     *    AppPreferences.DEVICE_SCOPED_KEYS), never to a profile's file - they
-     *    are the same on every profile of that box.
+     *  - and per-PROFILE, like every other display pref (spec 2026-11-15):
+     *    profile 1's Modern on one TV reaches profile 1 on the other, profile 2's
+     *    Spotlight reaches profile 2, and neither lands on a profile that did
+     *    not ask for it. Only the TV gate below is theirs.
      *
      * The screen-geometry family (`poster_size`, `home_landscape_cards`,
      * `landscape_posters`) stays device-local and never appears here.
@@ -1097,26 +1098,21 @@ object PrefsPayloadBuilder {
         val prefs = scopedPrefs(context, DISPLAY_PREFS_STORE)
         val all = prefs.all
 
-        // The six TV-scoped keys are DEVICE-level and a phone never publishes
-        // them (spec 2026-11-12) - so they are read from their own store, and
-        // only on a television. On a phone the map is empty and the six are
+        // The six TV-scoped keys are read from the PROFILE's file like every
+        // other display pref (spec 2026-11-15, F3): this blob belongs to one
+        // profile, and that profile's layout and billboard are what it carries.
+        // The only thing they still need of their own is the FORM-FACTOR gate -
+        // a phone never publishes them (spec 2026-11-12), so on a phone they are
         // simply absent from the blob, which is what makes its billboard
         // settings unable to travel.
-        val deviceValues: Map<String, Any> =
-            if (com.kennyb1201.kbstream.FormFactor.isTv) {
-                TV_SCOPED_SYNC_KEYS.mapNotNull { key ->
-                    com.kennyb1201.kbstream.data.settings.AppPreferences
-                        .deviceScopedValue(context, key)
-                        ?.let { value -> key to value }
-                }.toMap()
-            } else {
-                emptyMap()
-            }
-        // A TV-scoped key is read from the DEVICE store even if this profile's
-        // file still holds a pre-migration copy: the device value is the one
-        // every reader uses.
         fun stored(key: String): Any? =
-            if (key in TV_SCOPED_SYNC_KEYS) deviceValues[key] else all[key]
+            if (key in TV_SCOPED_SYNC_KEYS &&
+                !com.kennyb1201.kbstream.FormFactor.isTv
+            ) {
+                null
+            } else {
+                all[key]
+            }
 
         val current =
             LinkedHashMap<String, String>()
@@ -2509,28 +2505,17 @@ object PrefsPayloadApplier {
                 return@forEach
             }
 
-            // The six TV-scoped keys (spec 2026-11-12) are adopted differently
-            // from every other key, for two reasons that cannot be folded into
-            // the profile write below: they belong to the DEVICE, not to the
-            // profile this blob is for, and a PHONE never adopts them at all. A
-            // phone must come out of a TV's sync with its own layout and
-            // billboard exactly as they were, so the gate is here - on the
-            // receiving device, since the payload carries no device class.
-            if (key in PrefsPayloadBuilder.TV_SCOPED_SYNC_KEYS) {
-                if (!com.kennyb1201.kbstream.FormFactor.isTv) return@forEach
-                val adopted: Any? =
-                    when {
-                        primitive.isString -> content
-                        content == "true" || content == "false" -> content == "true"
-                        else -> content.toLongOrNull()
-                    }
-                if (adopted != null) {
-                    com.kennyb1201.kbstream.data.settings.AppPreferences
-                        .adoptDeviceScopedValue(context, key, adopted)
-                    applied[key] = content
-                    appliedAt[key] = editsAt
-                    snapshot[key] = content
-                }
+            // The six TV-scoped keys need one thing every other key does not
+            // (spec 2026-11-12): only a TV adopts them. A phone must come out of
+            // a TV's sync with its own layout and billboard exactly as they
+            // were, and the gate is on the RECEIVING device, since the payload
+            // carries no device class. Everything else about them is the
+            // ordinary per-profile write below (spec 2026-11-15): the value
+            // lands in the file of the profile this blob is for, so profile 1's
+            // Modern reaches profile 1 and nobody else's Home changes.
+            if (key in PrefsPayloadBuilder.TV_SCOPED_SYNC_KEYS &&
+                !com.kennyb1201.kbstream.FormFactor.isTv
+            ) {
                 return@forEach
             }
 
@@ -2545,7 +2530,14 @@ object PrefsPayloadApplier {
                         true
                     }
                     else -> content.toLongOrNull()?.let {
-                        editor.putLong(key, it)
+                        // The Home arrangement bundle's trailer mode is the one
+                        // Int in it (BillboardTrailerMode.storageValue); read
+                        // back as a Long it would throw on the next read.
+                        if (key == "home_billboard_trailer_mode") {
+                            editor.putInt(key, it.toInt())
+                        } else {
+                            editor.putLong(key, it)
+                        }
                         true
                     } ?: false
                 }

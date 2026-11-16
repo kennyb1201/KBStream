@@ -38,39 +38,46 @@ class SpotlightRenderGateContractTest {
     private val home by lazy { source(HOME_SCREEN) }
     private val section by lazy { source(SPOTLIGHT_HOME) }
 
-    // ── B1: the layout gate, and the seed that shut it ───────────────────
+    // ── B1: the layout gate, the seed that shut it, and the per-profile move
 
     @Test
-    fun `the layout is inherited per key, and never decided without a profile`() {
+    fun `the layout is read from the profile, seeded once, and never decided without one`() {
         assertTrue(
-            "the layout reads the device store's inherited value",
-            prefs.contains("deviceValue(context, KEY_HOME_LAYOUT) as? String")
+            "the layout reads THIS PROFILE's value (spec 2026-11-15)",
+            prefs.contains("layoutValue(context, KEY_HOME_LAYOUT) as? String")
         )
         assertTrue(
             "one key at a time, so one bad read cannot decide the other five",
-            prefs.contains("private fun deviceValue(context: Context, key: String): Any?")
+            prefs.contains("private fun layoutValue(context: Context, key: String): Any?")
         )
         assertTrue(
-            "and the migration refuses to run, or mark, before a profile exists: " +
-                "prefs() is the legacy global file until then and holds none of the six",
+            "the seed never overwrites a value the profile already holds - a choice made " +
+                "there is final",
+            prefs.contains("profile.all[key]?.let { return it }")
+        )
+        assertTrue(
+            "it seeds from the pre-move device store, so no Home flips on the update",
+            prefs.contains("devicePrefs(context).all[key]")
+        )
+        assertTrue(
+            "and it refuses to run, or mark, before a profile exists: prefs() is the " +
+                "legacy global file until then, and the 0.9.245 field revert came from " +
+                "deciding a box in exactly that window",
             prefs.contains("ProfileStorage.activeProfileId(context)") &&
                 prefs.contains("if (profileId.isNullOrBlank()) return null")
         )
         assertTrue(
-            "the decided flag is PER KEY, so a later read can still inherit",
-            prefs.contains("private const val DEVICE_DECIDED_PREFIX = \"device_decided_\"") &&
-                prefs.contains("device.getBoolean(decided, false)")
+            "the seeded flag is PER KEY and lives in the profile, so a later read of a " +
+                "key the seed had nothing for still falls to its default instead of " +
+                "re-reading the device store",
+            prefs.contains("private const val LAYOUT_SEEDED_PREFIX = \"__layout_seeded__\"") &&
+                prefs.contains("profile.getBoolean(LAYOUT_SEEDED_PREFIX + key, false)")
         )
         assertFalse(
             "the one-shot flag that poisoned the field box is gone from the source, and " +
-                "nothing consults it - that is what lets an upgraded TV recover on the " +
-                "next read instead of staying on Modern",
+                "nothing consults it",
             prefs.contains("DEVICE_PREFS_SEEDED_KEY") ||
                 prefs.contains("\"device_prefs_seeded\"")
-        )
-        assertTrue(
-            "the migration never overwrites a value the box already holds",
-            prefs.contains("device.all[key]?.let { return it }")
         )
     }
 

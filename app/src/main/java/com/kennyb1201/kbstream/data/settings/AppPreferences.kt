@@ -25,21 +25,28 @@ object AppPreferences {
 
     /**
      * The DEVICE store's file name, un-namespaced on purpose: [prefs] is a
-     * profile's file (`<id>.<PREFS_NAME>`), and the six keys [DEVICE_SCOPED_KEYS]
-     * lists must outlive a profile switch.
+     * profile's file (`<id>.<PREFS_NAME>`).
+     *
+     * Nothing lives here any more. The six keys it held (the Home layout, its
+     * dwell, and the billboard settings that go with them) are per-profile since
+     * spec 2026-11-15, and the one reader left is [layoutValue]'s seed: what is
+     * in this file is what the pre-move build stored, kept so that no profile's
+     * layout flips on the update, and never written again.
      */
     private const val DEVICE_PREFS_NAME = "kbstream_device_prefs"
 
     /**
-     * The per-key "this box has already answered" flag, `device_decided_<key>`.
+     * The per-key "this profile has already been seeded" flag,
+     * `__layout_seeded__<key>`, kept in the PROFILE's own file (spec 2026-11-15,
+     * F2).
      *
-     * Per KEY, not one flag for the family (spec 2026-11-12, render-path B1): the
-     * old `device_prefs_seeded` marked all six decided at once, which is how a
-     * single early read could decide them from a store that held none of them.
-     * The old flag is deliberately not read anywhere, so a box the 0.9.245 seed
-     * poisoned recovers on its next read.
+     * Per KEY, not one flag for the family - the same lesson as the
+     * `device_decided_<key>` flag this replaces (spec 2026-11-12, render-path
+     * B1): a single read of one key must not decide the other five. And once a
+     * profile is seeded it is never seeded again, which is what keeps the device
+     * store from reaching back in after a viewer sets a profile's layout.
      */
-    private const val DEVICE_DECIDED_PREFIX = "device_decided_"
+    private const val LAYOUT_SEEDED_PREFIX = "__layout_seeded__"
 
     // Keys
     private const val KEY_DEFAULT_BUFFER_MODE = "default_buffer_mode"       // 0=balanced, 1=low-latency, 2=auto
@@ -248,10 +255,10 @@ object AppPreferences {
     // (default), true = the horizontal episode rail. Screen geometry like the
     // two switches above it - see notifyDisplayPrefChanged.
     private const val KEY_DETAIL_EPISODE_RAIL = "detail_episode_rail"
-    // The phone Home billboard (see the billboard section below). Screen
-    // geometry/behaviour of ONE phone's Home, so device-local for the same
-    // reason as the three keys above it: a television has no billboard, and a
-    // phone's cycling hero says nothing about the account.
+    // The Home billboard (see the billboard section below): the phone's hero and
+    // the TV's Spotlight hero. Per-PROFILE since spec 2026-11-15 - the cycle, the
+    // feeds and the trailer mode are one profile's arrangement of its own Home,
+    // not a property of the box.
     private const val KEY_BILLBOARD_ENABLED = "home_billboard_enabled"
     private const val KEY_BILLBOARD_FEEDS = "home_billboard_feeds"
     private const val KEY_BILLBOARD_CYCLE_MS = "home_billboard_cycle_ms"
@@ -283,67 +290,54 @@ object AppPreferences {
         )
 
     /**
-     * The DEVICE-LEVEL store: the prefs that are the same on every profile of
-     * this box, rather than a profile's own.
+     * The DEVICE store: the pre-move home of the Home arrangement family (spec
+     * 2026-11-12), un-namespaced because it belonged to the box rather than to
+     * any profile.
      *
-     * Exactly one family lives here (spec 2026-11-12): the TV Home layout
-     * selection, the card dwell that goes with it, and the billboard settings
-     * that go with it - the six keys that sync TV to TV. They cannot be
-     * per-profile: [prefs] is the ACTIVE PROFILE's file, so storing them there
-     * meant a profile switch changed which layout the box drew. Everything
-     * else stays in [prefs] exactly as it was.
+     * It is read-only now, and read by exactly one thing: [layoutValue]'s
+     * one-time seed. The layout, its dwell and the billboard settings that go
+     * with them moved into each profile's file (spec 2026-11-15), so a profile
+     * switch draws THAT profile's Home instead of the box's.
      */
     private fun devicePrefs(context: Context): SharedPreferences =
         context.getSharedPreferences(DEVICE_PREFS_NAME, Context.MODE_PRIVATE)
 
     /**
-     * The keys [devicePrefs] owns. The sync layer reads and writes exactly this
-     * set through [deviceScopedValue] / [adoptDeviceScopedValue], and every one
-     * of them is also in
-     * [com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.SYNCED_PREF_KEYS].
-     */
-    internal val DEVICE_SCOPED_KEYS: Set<String> = setOf(
-        KEY_HOME_LAYOUT,
-        KEY_HOME_CARD_EXPAND_MS,
-        KEY_BILLBOARD_ENABLED,
-        KEY_BILLBOARD_FEEDS,
-        KEY_BILLBOARD_CYCLE_MS,
-        KEY_BILLBOARD_TRAILER_MODE
-    )
-
-    /**
-     * The device-level value of [key], inheriting this box's own choice the first
-     * time it is read with a real profile present.
+     * A Home-arrangement value: THIS PROFILE's own, seeded once from the device
+     * store the pre-move build wrote (spec 2026-11-15, F2).
      *
-     * Why per key, and why the profile guard - the field bug this replaces
-     * (spec 2026-11-12, render-path B1): this used to be ONE one-shot seed that
-     * copied all six out of `prefs(context)` and then set a flag. `prefs()` is
-     * the ACTIVE PROFILE's file, and `ProfileStorage.activeProfileId` is null
-     * until the stored profiles are restored - during which `prefs()` silently
-     * resolves to the LEGACY global file, which holds none of the six. A read in
-     * that window, from any surface, copied NOTHING and marked the box seeded
-     * forever: `getHomeLayout` then answered "modern" for good, and a TV whose
-     * layout was Spotlight came up on Modern with no billboard hero at all - a
-     * 20/20 settled pool and a missing hero in the same paste, exactly.
+     * The six keys used to be device-level (spec 2026-11-12), so the move that
+     * made them per-profile owes every profile an answer to "what was this TV on
+     * before?": no profile's layout may flip on the update. This is the mirror
+     * image of the inheritance it replaces - the seed comes FROM the device
+     * store, and only when the profile holds nothing for that key and has not
+     * been seeded yet.
      *
-     * So: inherit one key at a time, only once a profile exists, never over a
-     * value already in the device store (a choice made here, or adopted from the
-     * other TV), and mark the key decided even when the profile had no value -
-     * from then on this box's answer is its default, not a re-read.
+     * Per key, and only once a profile exists. The per-key flag is the same
+     * lesson as the one-shot seed that poisoned a field box (render-path B1 in
+     * the 2026-11-12 spec): one read must not decide the other five. And
+     * `prefs()` resolves to the LEGACY global file while no profile is active,
+     * so a read in that window must decide nothing at all.
+     *
+     * Once seeded, the device store is never consulted again for that profile:
+     * setting profile 1 to Modern leaves profile 2 where it was. The old device
+     * values are left in place, never written, never deleted - no bulk migration
+     * and no data loss. What this cannot do is recover per-profile intent, which
+     * the old code never stored: every profile starts from the layout the box
+     * had, and a viewer who wants another sets it once, in Settings.
      */
-    private fun deviceValue(context: Context, key: String): Any? {
-        val device = devicePrefs(context)
-        device.all[key]?.let { return it }
-        val decided = DEVICE_DECIDED_PREFIX + key
-        if (device.getBoolean(decided, false)) return null
-        // No active profile: the profile store is the legacy global file, so
-        // there is nothing to inherit and nothing to decide.
+    private fun layoutValue(context: Context, key: String): Any? {
+        val profile = prefs(context)
+        profile.all[key]?.let { return it }
+        if (profile.getBoolean(LAYOUT_SEEDED_PREFIX + key, false)) return null
+        // No active profile: `prefs()` is the legacy global file here, so there
+        // is no profile to seed and this read must not decide one.
         val profileId = runCatching {
             com.kennyb1201.kbstream.data.sync.ProfileStorage.activeProfileId(context)
         }.getOrNull()
         if (profileId.isNullOrBlank()) return null
-        val inherited = runCatching { prefs(context).all[key] }.getOrNull()
-        device.edit().apply {
+        val inherited = runCatching { devicePrefs(context).all[key] }.getOrNull()
+        profile.edit().apply {
             when (inherited) {
                 is Boolean -> putBoolean(key, inherited)
                 is Int -> putInt(key, inherited)
@@ -351,48 +345,9 @@ object AppPreferences {
                 is Float -> putFloat(key, inherited)
                 is String -> putString(key, inherited)
             }
-            putBoolean(decided, true)
+            putBoolean(LAYOUT_SEEDED_PREFIX + key, true)
         }.apply()
         return inherited
-    }
-
-    /**
-     * A device-scoped key's stored value, or null when this box never set it.
-     *
-     * The null is load-bearing for sync (F4): an unset key is not published, so
-     * a TV that never chose a layout cannot overwrite the other TV's choice
-     * with a default.
-     */
-    internal fun deviceScopedValue(context: Context, key: String): Any? {
-        if (key !in DEVICE_SCOPED_KEYS) return null
-        return deviceValue(context, key)
-    }
-
-    /**
-     * Adopts a value that arrived from another TV.
-     *
-     * Only a television calls this (the sync apply gates on [FormFactor.isTv]),
-     * and it writes the DEVICE store rather than a profile's file, which is what
-     * makes the value the same on every profile of the box.
-     */
-    internal fun adoptDeviceScopedValue(context: Context, key: String, value: Any) {
-        if (key !in DEVICE_SCOPED_KEYS) return
-        val editor = devicePrefs(context).edit()
-        when {
-            // Stored as an Int (BillboardTrailerMode.storageValue) but carried as
-            // a JSON number, which the applier parses to a Long - writing a Long
-            // here would make the Int reader throw on the next read.
-            key == KEY_BILLBOARD_TRAILER_MODE -> {
-                val mode = (value as? Number)?.toInt() ?: return
-                editor.putInt(key, mode)
-            }
-            value is Boolean -> editor.putBoolean(key, value)
-            value is Long -> editor.putLong(key, value)
-            value is String -> editor.putString(key, value)
-            else -> return
-        }
-        editor.apply()
-        notifyDisplayPrefChanged()
     }
 
     /**
@@ -1799,10 +1754,12 @@ object AppPreferences {
     //
     // The cycling hero at the top of Home on both surfaces: which feed it
     // shows, how long each page holds, and whether a page offers a trailer -
-    // plus the on/off switch. All four are DEVICE-LEVEL (see [devicePrefs]) and
-    // sync TV to TV only (spec 2026-11-12): the television's Spotlight hero is
-    // the same billboard the phone draws, so one TV's answers are the other
-    // TV's, while a phone neither publishes nor adopts them (see
+    // plus the on/off switch. All four are PER-PROFILE (spec 2026-11-15): they
+    // travel with the layout they belong to, so profile 2's billboard and 2s dwell
+    // stay with profile 2. They sync TV to TV only (spec 2026-11-12): the
+    // television's Spotlight hero is the same billboard the phone draws, so one
+    // TV's answers are the other TV's, while a phone neither publishes nor adopts
+    // them (see
     // [com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.TV_SCOPED_SYNC_KEYS]).
 
     /** The feed key that means "TMDB trending of the day", the default. */
@@ -1822,10 +1779,10 @@ object AppPreferences {
     const val DEFAULT_BILLBOARD_CYCLE_MS = 6_000L
 
     fun getHomeBillboardEnabled(context: Context): Boolean =
-        deviceValue(context, KEY_BILLBOARD_ENABLED) as? Boolean ?: true
+        layoutValue(context, KEY_BILLBOARD_ENABLED) as? Boolean ?: true
 
     fun setHomeBillboardEnabled(context: Context, enabled: Boolean) {
-        devicePrefs(context).edit().putBoolean(KEY_BILLBOARD_ENABLED, enabled).apply()
+        prefs(context).edit().putBoolean(KEY_BILLBOARD_ENABLED, enabled).apply()
         syncDisplayPrefsBlob(context)
     }
 
@@ -1838,10 +1795,10 @@ object AppPreferences {
      * cannot represent and Home answers it by hiding the billboard entirely.
      */
     fun getHomeBillboardFeeds(context: Context): List<String> =
-        billboardFeedsFromStored(deviceValue(context, KEY_BILLBOARD_FEEDS) as? String)
+        billboardFeedsFromStored(layoutValue(context, KEY_BILLBOARD_FEEDS) as? String)
 
     fun setHomeBillboardFeeds(context: Context, feeds: List<String>) {
-        devicePrefs(context).edit()
+        prefs(context).edit()
             .putString(KEY_BILLBOARD_FEEDS, encodeBillboardFeeds(feeds))
             .apply()
         syncDisplayPrefsBlob(context)
@@ -1849,12 +1806,12 @@ object AppPreferences {
 
     fun getHomeBillboardCycleMs(context: Context): Long =
         billboardCycleFromStored(
-            deviceValue(context, KEY_BILLBOARD_CYCLE_MS) as? Long
+            layoutValue(context, KEY_BILLBOARD_CYCLE_MS) as? Long
                 ?: DEFAULT_BILLBOARD_CYCLE_MS
         )
 
     fun setHomeBillboardCycleMs(context: Context, ms: Long) {
-        devicePrefs(context).edit()
+        prefs(context).edit()
             .putLong(KEY_BILLBOARD_CYCLE_MS, billboardCycleFromStored(ms))
             .apply()
         syncDisplayPrefsBlob(context)
@@ -1862,12 +1819,14 @@ object AppPreferences {
 
     fun getHomeBillboardTrailerMode(context: Context): BillboardTrailerMode =
         BillboardTrailerMode.fromStorage(
-            (deviceValue(context, KEY_BILLBOARD_TRAILER_MODE) as? Number)?.toInt()
+            // A Number, not an Int: the profile stores the Int this app writes,
+            // and the sync applier an adopted Long (see applyDisplayPrefs).
+            (layoutValue(context, KEY_BILLBOARD_TRAILER_MODE) as? Number)?.toInt()
                 ?: BillboardTrailerMode.OFF.storageValue
         )
 
     fun setHomeBillboardTrailerMode(context: Context, mode: BillboardTrailerMode) {
-        devicePrefs(context).edit()
+        prefs(context).edit()
             .putInt(KEY_BILLBOARD_TRAILER_MODE, mode.storageValue)
             .apply()
         syncDisplayPrefsBlob(context)
@@ -2109,27 +2068,30 @@ object AppPreferences {
         notifyDisplayPrefChanged()
     }
 
-    // ── TV Home layout (device-level, synced TV to TV) ─────────────────────
+    // ── TV Home layout (per-profile, synced TV to TV) ──────────────────────
     //
     // The TV Home's presentation: `modern` is the hero-that-follows-focus it
     // has always been, `spotlight` is the cycling billboard hero plus the
     // expanding rail card. Both are read only on a TV - the phone never offers
     // the choice and its Home is the same code either way.
     //
-    // DEVICE-LEVEL, not per-profile (spec 2026-11-12): the layout, its dwell and
-    // the billboard settings that go with it are one box's arrangement, so they
-    // live in [devicePrefs] and are the same on every profile. They DO sync, but
-    // only TV to TV and only from a TV - see
+    // PER-PROFILE (spec 2026-11-15), and it always should have been: two people
+    // sharing a TV want two Homes. profile 2 on Spotlight and profile 1 on Modern
+    // is the case that started this - the old code had ONE layout for the box, so
+    // switching to profile 1 kept profile 2's arrangement. It lives in [prefs]
+    // with the six-key bundle it belongs to (this key, its dwell, the billboard
+    // settings) and syncs like every other display pref, PER PROFILE - but still
+    // only TV to TV, never to a phone: see
     // [com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.TV_SCOPED_SYNC_KEYS].
     // The screen GEOMETRY family (`poster_size`, `home_landscape_cards`,
     // `landscape_posters`) is still device-local and never travels.
     fun getHomeLayout(context: Context): String {
-        val stored = deviceValue(context, KEY_HOME_LAYOUT) as? String
+        val stored = layoutValue(context, KEY_HOME_LAYOUT) as? String
         return stored?.takeIf { it.isNotBlank() } ?: "modern"
     }
 
     fun setHomeLayout(context: Context, layout: String) {
-        devicePrefs(context).edit().putString(KEY_HOME_LAYOUT, layout).apply()
+        prefs(context).edit().putString(KEY_HOME_LAYOUT, layout).apply()
         syncDisplayPrefsBlob(context)
     }
 
@@ -2143,10 +2105,10 @@ object AppPreferences {
      * delay so the trailer can still follow it.
      */
     fun getHomeCardExpandMs(context: Context): Long =
-        deviceValue(context, KEY_HOME_CARD_EXPAND_MS) as? Long ?: 2_000L
+        layoutValue(context, KEY_HOME_CARD_EXPAND_MS) as? Long ?: 2_000L
 
     fun setHomeCardExpandMs(context: Context, ms: Long) {
-        devicePrefs(context).edit().putLong(KEY_HOME_CARD_EXPAND_MS, ms).apply()
+        prefs(context).edit().putLong(KEY_HOME_CARD_EXPAND_MS, ms).apply()
         syncDisplayPrefsBlob(context)
     }
 

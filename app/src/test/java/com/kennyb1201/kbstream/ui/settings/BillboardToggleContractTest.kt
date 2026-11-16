@@ -22,6 +22,7 @@ class BillboardToggleContractTest {
     private val settings: String by lazy { read(SETTINGS) }
     private val prefs: String by lazy { read(PREFS) }
     private val spotlight: String by lazy { read(SPOTLIGHT) }
+    private val payload: String by lazy { read(PAYLOAD) }
 
     /** The section, from its declaration to the dialog that follows it. */
     private fun section(): String = between(
@@ -128,23 +129,23 @@ class BillboardToggleContractTest {
         val getter = prefs.substringAfter("fun getHomeBillboardEnabled(")
             .substringBefore("fun setHomeBillboardEnabled(")
         assertTrue(
-            "read from the DEVICE store (not a profile's file), defaulting ON",
-            getter.contains("deviceValue(context, KEY_BILLBOARD_ENABLED)") &&
+            "read from the PROFILE's own store (spec 2026-11-15), defaulting ON",
+            getter.contains("layoutValue(context, KEY_BILLBOARD_ENABLED)") &&
                 getter.contains("?: true")
         )
         val setter = prefs.substringAfter("fun setHomeBillboardEnabled(")
             .substringBefore("}")
         assertTrue(
-            "and written to the same device store - so a profile switch cannot reset it",
-            setter.contains("devicePrefs(context)") &&
-                !setter.contains("profile")
+            "and written to the same profile - so the switch stays with the profile it " +
+                "was set on, and another profile does not reset it",
+            setter.contains("prefs(context).edit()") &&
+                !setter.contains("devicePrefs(context)")
         )
         assertTrue(
             "it is one of the six TV-scoped sync keys, not a local-only pref",
-            prefs.contains("internal val DEVICE_SCOPED_KEYS: Set<String> = setOf(") &&
-                prefs.substringAfter("internal val DEVICE_SCOPED_KEYS")
-                    .substringBefore(")")
-                    .contains("KEY_BILLBOARD_ENABLED")
+            payload.substringAfter("internal val TV_SCOPED_SYNC_KEYS = setOf(")
+                .substringBefore(")")
+                .contains("\"home_billboard_enabled\"")
         )
         assertTrue(
             "the section itself calls no sync layer",
@@ -185,5 +186,6 @@ class BillboardToggleContractTest {
         const val SETTINGS = "com/kennyb1201/kbstream/ui/settings/SettingsScreen.kt"
         const val PREFS = "com/kennyb1201/kbstream/data/settings/AppPreferences.kt"
         const val SPOTLIGHT = "com/kennyb1201/kbstream/ui/home/SpotlightHome.kt"
+        const val PAYLOAD = "com/kennyb1201/kbstream/data/sync/SyncPrefsPayload.kt"
     }
 }

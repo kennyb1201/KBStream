@@ -3845,8 +3845,10 @@ fun SettingsScreen(
                 // ── Home layout (spec: Home second layout - Spotlight) ─────
                 //
                 // TV only: the phone Home never offers this and is unchanged.
-                // Device-local (see AppPreferences.getHomeLayout), which is why
-                // this pane is its only door - there is no synced copy.
+                // Per-PROFILE (see AppPreferences.getHomeLayout), so the value
+                // here is the profile this Settings screen was opened on - the
+                // switch itself is the same as before, it just writes that
+                // profile's file. It does sync, TV to TV.
                 var homeLayoutChoice by remember {
                     mutableStateOf(HomeLayout.fromStored(AppPreferences.getHomeLayout(context)))
                 }
@@ -6228,9 +6230,9 @@ private fun BillboardSettingsSection() {
     // The pref and the Home's gate for it already existed - and the PHONE already
     // writes it, from its Home manager - but the TV had no setter anywhere, so a
     // TV viewer could only get rid of the hero by switching the Home layout to
-    // Modern. Same global, device-level key as the phone writes (see
-    // AppPreferences.getHomeBillboardEnabled): every profile on this TV sees the
-    // value, a profile switch does not reset it, and nothing is pushed anywhere.
+    // Modern. Per-PROFILE like the layout it belongs to (see
+    // AppPreferences.getHomeBillboardEnabled, spec 2026-11-15): profile 2's
+    // billboard settings stay with profile 2, and a switch does not reset them.
     var billboardOn by remember {
         mutableStateOf(AppPreferences.getHomeBillboardEnabled(context))
     }

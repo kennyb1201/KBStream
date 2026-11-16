@@ -153,11 +153,13 @@ internal fun SpotlightHeroSection(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    // These three billboard prefs are DEVICE-LEVEL and sync TV to TV (spec
-    // 2026-11-12), but their reads are seeded on entry rather than keyed on the
+    // These three billboard prefs are PER-PROFILE and sync TV to TV (spec
+    // 2026-11-15), but their reads are seeded on entry rather than keyed on the
     // sync revision: applying a synced value lands on the NEXT Home entry, so a
     // layout or billboard change never re-flows under a viewer mid-scroll. This
-    // section is recomposed on every entry, which is where they are re-read.
+    // section is composed on every entry, which is where they are re-read - and
+    // a profile switch disposes Home for the picker, so a new entry reads the
+    // new profile's answer.
     val billboardEnabled = remember { AppPreferences.getHomeBillboardEnabled(context) }
     val billboardFeeds = remember { AppPreferences.getHomeBillboardFeeds(context) }
     val billboardCycleMs = remember { AppPreferences.getHomeBillboardCycleMs(context) }

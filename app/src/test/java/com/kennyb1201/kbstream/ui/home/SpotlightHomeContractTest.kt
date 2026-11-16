@@ -118,13 +118,12 @@ class SpotlightHomeContractTest {
 
         val prefs = source(PREFS)
         assertTrue(
-            // Repointed by the 2026-11-12 render-path spec: the read now goes
-            // through the per-key device inheritance (deviceValue) instead of a
-            // raw getString, because a one-shot seed could decide "modern" from
-            // an empty legacy store and permanently hide the hero. The DEFAULT
-            // is what this pins, and it is unchanged.
+            // Repointed twice: through the per-key inheritance in the 2026-11-12
+            // render-path fix, and onto the profile's own value by the
+            // 2026-11-15 per-profile move (layoutValue seeds from the old device
+            // store once). The DEFAULT is what this pins, and it is unchanged.
             "the pref's default is modern at the storage layer too",
-            prefs.contains("deviceValue(context, KEY_HOME_LAYOUT) as? String") &&
+            prefs.contains("layoutValue(context, KEY_HOME_LAYOUT) as? String") &&
                 prefs.contains("takeIf { it.isNotBlank() } ?: \"modern\"")
         )
         val sync = source(SYNC)
@@ -433,10 +432,10 @@ class SpotlightHomeContractTest {
 
         val prefs = source(PREFS)
         assertTrue(
-            // Same repoint as the layout's default: the read is deviceValue now,
-            // the default is still the two-second step.
+            // Same two repoints as the layout's default: the read is the
+            // profile's own value now, the default is still the two-second step.
             "stored default is the two-second step",
-            prefs.contains("deviceValue(context, KEY_HOME_CARD_EXPAND_MS) as? Long ?: 2_000L")
+            prefs.contains("layoutValue(context, KEY_HOME_CARD_EXPAND_MS) as? Long ?: 2_000L")
         )
         val settings = source(SETTINGS)
         assertTrue(

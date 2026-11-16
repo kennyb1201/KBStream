@@ -5088,10 +5088,12 @@ fun HomeScreen(
     val landscapeCards by remember(activeProfileId, syncRevision) {
         mutableStateOf(AppPreferences.homeLandscapeActive(context))
     }
-    // The TV Home's layout (spec: Home second layout - Spotlight). DEVICE-LOCAL
-    // and read with the profile only: it is not a synced pref, so the sync
-    // revision has nothing to say about it, and a profile switch re-reads it
-    // because the whole screen is rebuilt by then anyway.
+    // The TV Home's layout (spec: Home second layout - Spotlight). PER-PROFILE
+    // since spec 2026-11-15, and read on the profile only: it IS a synced pref,
+    // but TV to TV and never a live one - a synced value lands on the next Home
+    // entry (as the billboard hero's own reads do), so the layout never re-flows
+    // under a viewer mid-scroll. A profile switch re-reads it because the key is
+    // the profile, and the whole screen is rebuilt by then anyway.
     val homeLayout by remember(activeProfileId) {
         mutableStateOf(HomeLayout.fromStored(AppPreferences.getHomeLayout(context)))
     }
@@ -5162,9 +5164,10 @@ fun HomeScreen(
     // Spotlight-only; Modern pays nothing (the tracker is never provided).
     val spotlightTracker = remember { SpotlightCardFocus() }
     var spotlightCardExpanded by remember { mutableStateOf(false) }
-    // The billboard's mode is DEVICE-LOCAL (see EXCLUDED_PREF_KEYS), so it is
-    // read with the profile only: keying it on the sync revision would let the
-    // other TV's answer move this one's.
+    // The billboard's mode is part of the per-profile bundle (spec 2026-11-15),
+    // so it is read on the profile only even though it does sync: a value from
+    // the other TV lands on the next Home entry, never under a viewer's hands
+    // (and the other TV's answer is for ITS profile-1, not this box's).
     val spotlightTrailerPrefMode = remember(activeProfileId) {
         AppPreferences.getHomeBillboardTrailerMode(context)
     }
