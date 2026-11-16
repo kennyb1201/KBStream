@@ -5783,15 +5783,25 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         if (positionMs <= 0L) return
         if (endedHandled || errorContainer?.visibility == View.VISIBLE) return
         if (surface?.isPaused() == true) return
-        if (System.currentTimeMillis() - startedAt < REBUFFER_DOWNSHIFT_MIN_STALL_MS) return
+        val stalledMs = System.currentTimeMillis() - startedAt
+        if (stalledMs < REBUFFER_DOWNSHIFT_MIN_STALL_MS) return
         val now = System.currentTimeMillis()
-        rebufferDownshift.record(now)
+        // The duration goes in with the timestamp: one stall this long is
+        // conclusive on its own (see REBUFFER_DOWNSHIFT_LONG_STALL_MS), so the
+        // MPV engine gets the same fast trigger as the main one.
+        rebufferDownshift.record(now, stalledMs)
         if (!rebufferDownshift.due(now)) return
         val stalledCount = rebufferDownshift.count(now)
+        val singleLongStall = rebufferDownshift.longStall(now)
         Log.w(
             TAG,
-            "Source rebuffered $stalledCount times in ${REBUFFER_DOWNSHIFT_WINDOW_MS / 60_000}min " +
-                "— downshifting to the next source"
+            if (singleLongStall) {
+                "Source stalled ${stalledMs}ms in one rebuffer " +
+                    "(>= ${REBUFFER_DOWNSHIFT_LONG_STALL_MS}ms) — downshifting to the next source"
+            } else {
+                "Source rebuffered $stalledCount times in " +
+                    "${REBUFFER_DOWNSHIFT_WINDOW_MS / 60_000}min — downshifting to the next source"
+            }
         )
         val next = nextSourceOrNull(tab = null)
         rebufferDownshift.reset()

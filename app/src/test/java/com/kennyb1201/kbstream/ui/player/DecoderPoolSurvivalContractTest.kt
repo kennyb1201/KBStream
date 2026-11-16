@@ -167,7 +167,7 @@ class DecoderPoolSurvivalContractTest {
             "and the check must come before the stall is even counted, so a pool-pressure " +
                 "stall cannot spend the downshift window",
             downshift.indexOf("DecoderPoolHealth.exhaustedRecently()") <
-                downshift.indexOf("rebufferDownshift.record(now)")
+                downshift.indexOf("rebufferDownshift.record(now, stalledMs)")
         )
         assertTrue(
             "the switch itself must be unreachable while the pool is the problem",

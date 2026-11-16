@@ -16716,6 +16716,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // exhaustion window is the box not having released a decoder yet, and a
         // switch is a rebuild is another ask for that same decoder. Hold the
         // source and let the pool recover on its own (see DecoderPoolHealth).
+        // This outranks the long-stall trigger too: the check sits before the
+        // stall is recorded, so a 9s stall while the pool is recovering holds
+        // exactly like a 2s one - a faster trigger must never re-ask a wedged
+        // pool for the decoder it cannot hand out.
         if (DecoderPoolHealth.exhaustedRecently()) {
             Log.w(
                 "PLAYER_STALL",
@@ -16725,7 +16729,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             return false
         }
         val now = System.currentTimeMillis()
-        rebufferDownshift.record(now)
+        // The duration goes in with the timestamp: one stall this long is
+        // conclusive on its own, without waiting for the second and third
+        // (see REBUFFER_DOWNSHIFT_LONG_STALL_MS).
+        rebufferDownshift.record(now, stalledMs)
         if (!rebufferDownshift.due(now)) return false
         // A qualified stall is one of the two signals that teach the learned
         // bitrate ceiling: this row could not hold its own bitrate HERE (see
@@ -16733,16 +16740,26 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // currentUrl at the next source and would hand this write the wrong row.
         noteQualifiedStallForCeiling()
         val stalledCount = rebufferDownshift.count(now)
+        val singleLongStall = rebufferDownshift.longStall(now)
         Log.w(
             "PLAYER_STALL",
-            "Source rebuffered $stalledCount times in ${REBUFFER_DOWNSHIFT_WINDOW_MS / 60_000}min " +
-                "— downshifting to the next source"
+            if (singleLongStall) {
+                "Source stalled ${stalledMs}ms in one rebuffer " +
+                    "(>= ${REBUFFER_DOWNSHIFT_LONG_STALL_MS}ms) — downshifting to the next source"
+            } else {
+                "Source rebuffered $stalledCount times in " +
+                    "${REBUFFER_DOWNSHIFT_WINDOW_MS / 60_000}min — downshifting to the next source"
+            }
         )
         PlaybackEngineTrace.note(
             PlaybackEngineTrace.describe(
                 cause = "source could not keep up",
-                detail = "$stalledCount rebuffers, last ${stalledMs}ms, " +
-                    "${currentSourceLabel ?: "unknown source"}"
+                detail = if (singleLongStall) {
+                    "one ${stalledMs}ms stall, ${currentSourceLabel ?: "unknown source"}"
+                } else {
+                    "$stalledCount rebuffers, last ${stalledMs}ms, " +
+                        "${currentSourceLabel ?: "unknown source"}"
+                }
             )
         )
         // Which addon this source came from, read BEFORE the switch: switching

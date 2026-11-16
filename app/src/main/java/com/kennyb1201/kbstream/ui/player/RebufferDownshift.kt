@@ -18,6 +18,11 @@ package com.kennyb1201.kbstream.ui.player
  * two sources, and its own per-source switch cap still bounds how far a
  * session walks the list.
  *
+ * Counting is not the whole signal, though: one stall of
+ * [REBUFFER_DOWNSHIFT_LONG_STALL_MS] or more convicts the source on its own
+ * (see that constant). The count rule is what the hiccup-versus-slow-source
+ * reasoning was written for, and it still governs every shorter stall.
+ *
  * The arithmetic lives here, apart from the Activity, for the usual reason
  * ([PlaybackRecoveryRules], [LiveStallWatchdog]): the window is the whole
  * feature, and it can be exercised without a TV. The Activity owns the side
@@ -33,6 +38,10 @@ package com.kennyb1201.kbstream.ui.player
  * two is a bad minute — while three inside [REBUFFER_DOWNSHIFT_WINDOW_MS] is a
  * source that plainly cannot sustain its own bitrate. Waiting for more would
  * spend minutes of the film proving what the first three already said.
+ *
+ * That reasoning is about SHORT stalls, and it is why the count rule still
+ * governs every stall under [REBUFFER_DOWNSHIFT_LONG_STALL_MS]. A stall long
+ * enough to be conclusive on its own does not wait for the second and third.
  */
 internal const val REBUFFER_DOWNSHIFT_COUNT = 3
 
@@ -44,6 +53,26 @@ internal const val REBUFFER_DOWNSHIFT_COUNT = 3
  * visibly bad rather than after the film has mostly played out.
  */
 internal const val REBUFFER_DOWNSHIFT_WINDOW_MS = 5 * 60_000L
+
+/**
+ * One rebuffer at least this long convicts the source on its own.
+ *
+ * The count rule above is about short stalls: one is a CDN hiccup and two is a
+ * bad minute. A nine-second stall is neither. A source with any read-ahead
+ * buffer does not starve for nine seconds and then recover by itself — it has
+ * stopped being able to sustain its own bitrate, and the only thing waiting for
+ * the second and third stall buys is more of the viewer's time paid to a source
+ * already proven unfit. The reported case is Landman S02E02 on Usenet Vault 4K
+ * HEVC (7.4 GB): three rebuffers, the last 9184 ms, before the switch fired.
+ *
+ * Eight seconds sits just under that stall and is 4x
+ * [REBUFFER_DOWNSHIFT_MIN_STALL_MS]: long enough that no seek, track change or
+ * decoder flicker reaches it, short enough to fire on the first stall a source
+ * of this kind produces. It is a constant, not a preference — the guards around
+ * it (the 2s minimum, the seek grace, the forward-only ladder, the per-source
+ * switch cap and the decoder-exhaustion hold) are what keep it safe.
+ */
+internal const val REBUFFER_DOWNSHIFT_LONG_STALL_MS = 8_000L
 
 /**
  * A rebuffer shorter than this does not count.
@@ -83,42 +112,63 @@ internal fun rebufferFollowsSeek(
 /**
  * The sliding window of a single source's mid-playback rebuffers.
  *
- * Only timestamps of rebuffers the Activity has already accepted (long enough,
- * while actually playing, not a seek's own) are recorded, so this class holds
- * no opinion about what a rebuffer is — it just answers "have enough of them
- * landed close together yet".
+ * Only rebuffers the Activity has already accepted (long enough, while actually
+ * playing, not a seek's own) are recorded, so this class holds no opinion about
+ * what a rebuffer is — it just answers "is this source done": either one stall
+ * lasted [REBUFFER_DOWNSHIFT_LONG_STALL_MS], or [REBUFFER_DOWNSHIFT_COUNT] of
+ * them landed close together.
+ *
+ * The duration travels with the timestamp because the long-stall rule is a
+ * property of one stall, not of how many there have been: a single 9s stall
+ * says what three 2s ones only say together.
  *
  * Not thread-safe on its own: it is only ever touched from the Activity's one
  * player-listener handler thread.
  */
 internal class RebufferDownshiftTracker {
 
-    /** Rebuffer end timestamps, oldest first. */
-    private val rebuffersMs = ArrayDeque<Long>()
+    /** One counted rebuffer: when it ended, and how long it lasted. */
+    private class Rebuffer(val endedAtMs: Long, val stalledMs: Long)
 
-    /** Records one counted rebuffer. */
-    fun record(nowMs: Long) {
-        rebuffersMs.addLast(nowMs)
+    /** Counted rebuffers, oldest first. */
+    private val rebuffers = ArrayDeque<Rebuffer>()
+
+    /** Records one counted rebuffer and how long it lasted. */
+    fun record(nowMs: Long, stalledMs: Long) {
+        rebuffers.addLast(Rebuffer(nowMs, stalledMs))
         prune(nowMs)
     }
 
-    /** True when the window already holds [REBUFFER_DOWNSHIFT_COUNT] rebuffers. */
-    fun due(nowMs: Long): Boolean = count(nowMs) >= REBUFFER_DOWNSHIFT_COUNT
+    /**
+     * True when the source is done: one long stall, or
+     * [REBUFFER_DOWNSHIFT_COUNT] of them inside the window.
+     */
+    fun due(nowMs: Long): Boolean =
+        longStall(nowMs) || count(nowMs) >= REBUFFER_DOWNSHIFT_COUNT
+
+    /**
+     * True when the window holds a stall long enough to convict the source on
+     * its own, for the log line and the report.
+     */
+    fun longStall(nowMs: Long): Boolean {
+        prune(nowMs)
+        return rebuffers.any { it.stalledMs >= REBUFFER_DOWNSHIFT_LONG_STALL_MS }
+    }
 
     /** How many rebuffers the window currently holds, for logs and reports. */
     fun count(nowMs: Long): Int {
         prune(nowMs)
-        return rebuffersMs.size
+        return rebuffers.size
     }
 
     /** A fresh source (or a spent ladder) starts with an empty window. */
     fun reset() {
-        rebuffersMs.clear()
+        rebuffers.clear()
     }
 
     private fun prune(nowMs: Long) {
-        while (rebuffersMs.isNotEmpty() && nowMs - rebuffersMs.first() > REBUFFER_DOWNSHIFT_WINDOW_MS) {
-            rebuffersMs.removeFirst()
+        while (rebuffers.isNotEmpty() && nowMs - rebuffers.first().endedAtMs > REBUFFER_DOWNSHIFT_WINDOW_MS) {
+            rebuffers.removeFirst()
         }
     }
 }
