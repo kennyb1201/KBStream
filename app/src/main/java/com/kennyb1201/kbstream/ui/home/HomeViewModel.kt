@@ -5454,8 +5454,9 @@ Log.d(
         // The Detail screen's order, on the rail (spec 2026-11-16): the row's own
         // name, then the TMDB detail's name, then its title. The detail is
         // already in hand for the art and the episode target, so its name costs
-        // no lookup - and a row carrying the "Unknown Show" placeholder is a row
-        // with NO name, which is why the placeholder does not get to win.
+        // no lookup - and a row carrying the placeholder literal
+        // ([UNKNOWN_SHOW_NAME]) is a row with NO name, which is why the
+        // placeholder does not get to win.
         val title =
             upNextCardNameOrNull(
                 sourceName = row.name,
@@ -9579,7 +9580,8 @@ episodesTotal =
         // The tracker's own name, then whatever TMDB resolved for the same item,
         // or no card at all (spec 2026-11-16). A Simkl item whose title is a bare
         // id is the same phantom the MDBList builder drops - and one carrying the
-        // "Unknown Show" placeholder is a title the feed failed to fill in, so
+        // placeholder ([UNKNOWN_SHOW_NAME]) is a title the feed failed to fill
+        // in, so
         // [resolvedName], the detail the card's art and label already come from,
         // gets its turn.
         // [upcomingDetail] is this builder's own capture of the detail (the

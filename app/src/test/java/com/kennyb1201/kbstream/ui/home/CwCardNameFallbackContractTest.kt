@@ -10,14 +10,16 @@ import org.junit.Test
  * A Continue Watching card falls back to the TMDB detail's name (spec 2026-11-16).
  *
  * The reported card was Forbidden History: `id=nextup:tt4192786`, tmdb 73626,
- * correct art, correct episode label, and "Unknown Show" printed as the show. The
- * ids were right and the detail was already in hand - the builder fetches it for
- * the poster and the target episode - but its NAME was never offered to the card.
+ * correct art, correct episode label, and the no-name literal printed as the
+ * show. The ids were right and the detail was already in hand - the builder
+ * fetches it for the poster and the target episode - but its NAME was never
+ * offered to the card.
  *
- * The placeholder is the load-bearing part: "Unknown Show" is what the app prints
- * when nothing names a card, and a stored history row can therefore carry the
- * literal in its own name field, where it beats every real name because it is
- * neither blank nor id-like.
+ * The placeholder is the load-bearing part: UNKNOWN_SHOW_NAME is what the app
+ * prints when nothing names a card, and a stored history row can therefore carry
+ * the literal in its own name field, where it beats every real name because it is
+ * neither blank nor id-like. The words themselves are written once, in that
+ * constant (see ZombieCardsTest's T6).
  *
  * - F1: source name → TMDB detail name → TMDB detail title, with a blank, an
  *   internal id AND the placeholder all counting as "no name".
