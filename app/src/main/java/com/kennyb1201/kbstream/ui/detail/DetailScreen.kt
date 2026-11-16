@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -40,7 +39,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -111,9 +109,7 @@ import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
-import com.kennyb1201.kbstream.data.art.SeasonPosterMemory
 import com.kennyb1201.kbstream.data.reporting.DetailTrace
-import com.kennyb1201.kbstream.data.reporting.SeasonPosterTrace
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.data.player.fileEpisodeStreamId
@@ -154,6 +150,7 @@ import com.kennyb1201.kbstream.ui.components.KBProgressBar
 import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.rememberKBFeedback
+import com.kennyb1201.kbstream.ui.components.rememberLongPressModifier
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.formatRuntimeLabel
 import com.kennyb1201.kbstream.ui.components.formatRuntimeMinutes
@@ -1640,6 +1637,14 @@ fun DetailScreen(
             .sortedWith(compareBy({ it == 0 }, { it }))
     }
 
+    // The season poster row's resolver (spec 2026-11-15, the poster season
+    // picker): the same fanart-then-TMDB lookup the single header poster ran,
+    // now asked once per season, lazily, as each poster composes.
+    val seasonPosterResolver = rememberSeasonPosterResolver(
+        showId = tmdbDetail?.id,
+        isSeries = normalizedType == "series"
+    )
+
     // Seasons TMDB lists with a future air_date are announced but not yet
     // released (e.g. Silo S4). Keep their premiere dates so the UI can dim
     // those chips and explain why the episode list is empty instead of a
@@ -2213,104 +2218,10 @@ fun DetailScreen(
         )
     }
 
-    // A season can name itself: American Horror Story's "Coven", Monster's
-    // "The Jeffrey Dahmer Story". For an anthology the chip reading "SEASON 3"
-    // says nothing about what is underneath it, so the section heading borrows
-    // the season's own name and follows the chips as the selection moves.
-    // Shows whose seasons TMDB only numbers keep the old "EPISODES".
-    val episodesHeader = remember(tmdbDetail, effectiveSeason) {
-        effectiveSeason
-            ?.let { season -> tmdbDetail?.displaySeasonName(season) }
-            ?.uppercase(Locale.US)
-            ?: "EPISODES"
-    }
-
-    // ── the season's own poster (spec 2026-11-13, F3) ──────────────────────
-    //
-    // Resolution is deliberately NOT remember-ed into the composition: it is one
-    // network hop (fanart first, TMDB's season poster second) and the poster has
-    // to follow the chips as they move. Because the new value is only written
-    // when the lookup ANSWERS, the previous season's poster stays up while the
-    // next one loads - the header never flashes empty, and a season with neither
-    // source clears it on answer rather than on press.
-    //
-    // It follows the selection and nothing else: no focus move, no episode-list
-    // change, no effect on which season loads.
-    val seasonPosterContext = androidx.compose.ui.platform.LocalContext.current
-    var seasonPosterUrl by remember { mutableStateOf<String?>(null) }
-    // One retry for the header image, and the trace that names which half failed
-    // (spec 2026-11-14, F1/F3): a healthy URL whose image did not redraw is a
-    // different bug from a URL that was cleared, and the paste has to say which.
-    var seasonPosterRetry by remember { mutableIntStateOf(0) }
-    var seasonPosterRetried by remember { mutableStateOf(false) }
-    LaunchedEffect(seasonPosterUrl) { seasonPosterRetried = false }
-    // Which (type, show, season) the last run asked for: it names the trigger in
-    // the trace and tells a transient null from a page that is another title.
-    var seasonPosterKeys by remember { mutableStateOf<Triple<String, Int?, Int?>?>(null) }
-    LaunchedEffect(normalizedType, tmdbDetail?.id, effectiveSeason) {
-        val showId = tmdbDetail?.id
-        val seasonNumber = effectiveSeason
-        val previous = seasonPosterKeys
-        val trigger = when {
-            previous == null -> "open"
-            previous.first != normalizedType -> "type"
-            previous.second != showId -> "show"
-            previous.third != seasonNumber -> "season"
-            else -> "rerun"
-        }
-        seasonPosterKeys = Triple(normalizedType, showId, seasonNumber)
-        if (normalizedType != "series" || showId == null || seasonNumber == null) {
-            // A transient null (a seasons re-emission while he scrolls) keeps
-            // the poster that is already on screen; only a page that is not a
-            // series clears it, because that poster belongs to another title.
-            val clear = normalizedType != "series"
-            if (clear) seasonPosterUrl = null
-            SeasonPosterTrace.record(
-                SeasonPosterTrace.runLine(
-                    trigger = trigger,
-                    season = seasonNumber,
-                    answer = null,
-                    decision = if (clear) {
-                        SeasonPosterMemory.Decision.CLEAR
-                    } else {
-                        SeasonPosterMemory.Decision.KEEP
-                    }
-                )
-            )
-            return@LaunchedEffect
-        }
-        val fanart = com.kennyb1201.kbstream.data.fanart.FanartArtRepository
-            .getInstance(seasonPosterContext)
-        val tmdbRepo = com.kennyb1201.kbstream.data.tmdb.TmdbRepository
-            .getInstance(seasonPosterContext)
-        val tvdbId = runCatching { tmdbRepo.resolveTvdbId(showId, "series") }.getOrNull()
-        // Without this, a null id cannot be told from "TMDB proved there is no
-        // TVDB mapping": fanart was never asked either way, and only the proven
-        // absence may count as an answered none (see SeasonPosterMemory).
-        val tvdbProvenAbsent = runCatching {
-            tmdbRepo.hasProvenNoTvdbMapping(showId, "series")
-        }.getOrDefault(false)
-        val answer = fanart.seasonPosterAnswer(
-            tvdbId = tvdbId,
-            tmdbTvId = showId,
-            season = seasonNumber
-        )
-        // The rule every run now follows, not only a season change: replace on an
-        // answer, keep through a failure, clear only on an answered none.
-        val decision = SeasonPosterMemory.decide(
-            current = seasonPosterUrl,
-            answer = answer,
-            forSeries = true,
-            season = seasonNumber,
-            tvdbProvenAbsent = tvdbProvenAbsent
-        )
-        SeasonPosterTrace.record(SeasonPosterTrace.runLine(trigger, seasonNumber, answer, decision))
-        when (decision) {
-            SeasonPosterMemory.Decision.REPLACE -> seasonPosterUrl = answer.url
-            SeasonPosterMemory.Decision.CLEAR -> seasonPosterUrl = null
-            SeasonPosterMemory.Decision.KEEP -> Unit
-        }
-    }
+    // The "EPISODES" heading is gone (spec 2026-11-15, the poster season
+    // picker): each season names itself under its own poster now, so a heading
+    // that repeated the selected season's name above the row would be a second
+    // copy of the caption the viewer is looking at.
 
     val hasExplicitSeasonSource = normalizedType == "series" && (
         selectedSeason != null ||
@@ -6334,86 +6245,18 @@ fun DetailScreen(
                                 }
                             }
 
-                            item(key = "episodesheader", contentType = "section-header") {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    // The heading sizes to its own text, so the
-                                    // season's poster can hang directly off it
-                                    // (F1). It used to take weight(1f), which
-                                    // pushed the poster to the far edge of the
-                                    // row, away from the section it belongs to.
-                                    KBSectionHeader(
-                                        title = episodesHeader,
-                                        modifier = Modifier.padding(
-                                            start = KBScreenEdge,
-                                            top = 14.dp
-                                        )
-                                    )
-                                    // The season's own poster, immediately right
-                                    // of the heading (F1). A season with no
-                                    // poster of its own draws nothing here -
-                                    // never the show's poster.
-                                    seasonPosterUrl?.let { poster ->
-                                        // Re-keyed on the retry so a failed draw
-                                        // gets exactly one more request instead of
-                                        // a silent blank (F3).
-                                        key(seasonPosterRetry) {
-                                            AsyncImage(
-                                                model = ImageRequest.Builder(
-                                                    androidx.compose.ui.platform.LocalContext.current
-                                                )
-                                                    .data(poster)
-                                                    .size(Size(300, 450))
-                                                    .build(),
-                                                contentDescription = null,
-                                                contentScale = ContentScale.Crop,
-                                                onSuccess = { state ->
-                                                    SeasonPosterTrace.record(
-                                                        SeasonPosterTrace.imageLine(
-                                                            "tv",
-                                                            state.result.dataSource.name.lowercase()
-                                                        )
-                                                    )
-                                                },
-                                                onError = {
-                                                    SeasonPosterTrace.record(
-                                                        SeasonPosterTrace.imageLine("tv", "error")
-                                                    )
-                                                    if (!seasonPosterRetried) {
-                                                        seasonPosterRetried = true
-                                                        seasonPosterRetry++
-                                                    }
-                                                },
-                                                // 84dp, not the old 54dp (spec
-                                                // 2026-11-15): at density 2.00
-                                                // on a 1080p TV that is ~168px
-                                                // wide instead of ~108, still
-                                                // inside the 300x450 decode
-                                                // below, so no re-fetch and no
-                                                // new cache entry. The 2:3
-                                                // shape, the clip and the
-                                                // non-focusable draw are
-                                                // unchanged - prominence comes
-                                                // from size, not chrome.
-                                                modifier = Modifier
-                                                    .padding(start = 12.dp, top = 14.dp)
-                                                    .width(84.dp)
-                                                    .aspectRatio(2f / 3f)
-                                                    .clip(KBShapeSmall)
-                                            )
-                                        }
-                                    }
-                                    // The row still fills the width, so the
-                                    // column below never shifts; the heading
-                                    // stays at the screen edge.
-                                    Spacer(Modifier.weight(1f))
-                                }
-                            }
-
+                            // The season POSTERS (spec 2026-11-15, the poster
+                            // season picker): the row that used to be chips under
+                            // an "EPISODES" heading, now the seasons themselves -
+                            // poster, caption, tap to enter. The header is gone,
+                            // which is what makes the old clip bug moot: there is
+                            // no heading above the row to be cut against.
                             item(key = SEASON_ROW_KEY, contentType = "section-row") {
-                                SeasonRow(
+                                SeasonPosterRow(
+                                    posterResolver = seasonPosterResolver,
+                                    seasonNameFor = { season ->
+                                        tmdbDetail?.displaySeasonName(season)
+                                    },
                                     state = seasonRowState,
                                     seasons = seasons,
                                     seasonPremiereDates = seasonPremiereDates,
@@ -6449,11 +6292,6 @@ fun DetailScreen(
                                         ),
                                     seasonFocusRequesters =
                                         seasonFocusRequesters,
-                                    parentId = id,
-                                    watchedEpisodeKeys =
-                                        watchedEpisodeKeys,
-                                    simklWatchedEpisodes =
-                                        simklWatchedEpisodes,
                                     seasonEpisodeNumbersFor =
                                         seasonEpisodeNumbersFor,
                                     onSeasonLongPress = {
@@ -8979,79 +8817,8 @@ private fun DetailFactCard(
 }
 
 @Composable
-private fun SeasonChip(
-    seasonNumber: Int,
-    seasonName: String,
-    isSelected: Boolean,
-    available: Boolean = true,
-    onClick: () -> Unit,
-    onFocus: () -> Unit,
-    onLongClick: (() -> Unit)? = null,
-    modifier: Modifier = Modifier
-) {
-    // A chip, not a card: the season row is a strip of interactive chips, so it
-    // follows the chip treatment (10dp corner, 1.06 focus) rather than the
-    // 12dp/1.03 card scale it shared with the posters around it.
-    KBCard(
-        onClick = onClick,
-        onLongClick = onLongClick,
-        focusedScale = KBFocusChip,
-        shape = KBShapeChip,
-        modifier = modifier.onFocusChanged {
-            if (it.isFocused) {
-                onFocus()
-            }
-        }
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = seasonName,
-                style = MaterialTheme.typography.bodyMedium,
-                color =
-                    when {
-                        isSelected -> KBAccent
-                        // Dimmed label for announced-but-not-yet-released
-                        // seasons (their premiere year is in the chip text).
-                        else -> if (available) KBTextHi else KBTextLo
-                    },
-                fontWeight =
-                    if (isSelected) {
-                        FontWeight.SemiBold
-                    } else {
-                        FontWeight.Normal
-                    },
-                modifier = Modifier.padding(
-                    start = 12.dp,
-                    top = 7.dp,
-                    end = 12.dp
-                )
-            )
-
-            Box(
-                modifier = Modifier
-                    .padding(
-                        top = 3.dp,
-                        bottom = 6.dp
-                    )
-                    .width(20.dp)
-                    .height(2.dp)
-                    .background(
-                        if (isSelected) {
-                            KBAccent
-                        } else {
-                            Color.Transparent
-                        },
-                        RoundedCornerShape(2.dp)
-                    )
-            )
-        }
-    }
-}
-
-@Composable
-private fun SeasonRow(
+private fun SeasonPosterRow(
+    posterResolver: SeasonPosterResolver,
     state: LazyListState,
     seasons: List<Int>,
     seasonPremiereDates: Map<Int, LocalDate>,
@@ -9060,9 +8827,11 @@ private fun SeasonRow(
     onSeasonSelected: (Int) -> Unit,
     onSeasonFocused: (Int) -> Unit,
     seasonFocusRequesters: MutableMap<Int, FocusRequester>,
-    parentId: String,
-    watchedEpisodeKeys: Set<String>,
-    simklWatchedEpisodes: Set<Pair<Int, Int>>,
+    // The season's own name when TMDB gives it one (American Horror Story's
+    // "Coven", Monster's "The Jeffrey Dahmer Story"), else null and the row
+    // falls back to its number. The heading used to borrow this name; the
+    // caption under the poster is where it belongs now.
+    seasonNameFor: (Int) -> String?,
     seasonEpisodeNumbersFor: (Int) -> List<Int>?,
     onSeasonLongPress: (
         Int,
@@ -9070,20 +8839,25 @@ private fun SeasonRow(
         List<Int>,
         FocusRequester
     ) -> Unit,
-    // The chip's own vertical press. Owned by the page and handed in whole
-    // rather than decided here: what UP and DOWN mean on a chip is a chain
-    // question (see seasonChipVerticalFocus), and the rail below must not grow
+    // The item's own vertical press. Owned by the page and handed in whole
+    // rather than decided here: what UP and DOWN mean in this section is a
+    // chain question (see seasonChipVerticalFocus), and the row must not grow
     // a second idea of where the rows around it are.
     chipVerticalFocus: (KeyEvent) -> Boolean
 ) {
+    // The seasons as POSTERS (spec 2026-11-15, the poster season picker): one
+    // item per season, its own poster and a caption under it, and the whole row
+    // is what focus lands on - there is no heading above it to be cut off, which
+    // is the clip bug fixed by deletion rather than by another scroll fix.
     LazyRow(
         state = state,
         contentPadding = PaddingValues(
             start = 24.dp,
             end = 24.dp,
-            top = 6.dp,
-            bottom = 6.dp
+            top = 10.dp,
+            bottom = 10.dp
         ),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
         modifier = Modifier
             .padding(bottom = 10.dp)
             .focusGroup()
@@ -9101,18 +8875,24 @@ private fun SeasonRow(
             val seasonUnavailable =
                 seasonPremiere?.isAfter(today) == true
 
-            val chipFocusRequester =
+            val posterFocusRequester =
                 remember(season) {
                     FocusRequester()
                 }
 
             seasonFocusRequesters[
                 season
-            ] = chipFocusRequester
+            ] = posterFocusRequester
 
+            // The caption is the season's OWN name when it has one, else its
+            // number - the label the chip carried, with the name the heading
+            // used to wear. It is TEXT now: no pill, no chip chrome (see
+            // SeasonPosterArt).
+            val ownName = seasonNameFor(season)?.takeIf { it.isNotBlank() }
             val seasonName =
                 when {
                     season == 0 -> "SPECIALS"
+                    ownName != null -> ownName.uppercase(Locale.US)
                     seasonUnavailable -> "SEASON $season \u00b7 ${seasonPremiere?.year}"
                     else -> "SEASON $season"
                 }
@@ -9120,75 +8900,67 @@ private fun SeasonRow(
             val episodeNumbers =
                 seasonEpisodeNumbersFor(season)
 
-            val watchedSet =
-                if (episodeNumbers == null) {
-                    emptySet<Int>()
-                } else {
-                    WatchedEpisodeState
-                        .effectiveWatchedEpisodesForSeason(
-                            parentId = parentId,
-                            season = season,
-                            simklWatchedEpisodes =
-                                simklWatchedEpisodes,
-                            watchedEpisodeKeys =
-                                watchedEpisodeKeys
-                        )
-                }
+            // The poster for THIS season, resolved as the item composes - which
+            // is the repository's Lazy rule: a LazyRow composes the seasons in
+            // and near the viewport, so the row resolves those and the rest as
+            // they scroll in. No poster of its own = the caption alone, with no
+            // frame drawn (see SeasonPosterArt).
+            val posterUrl =
+                rememberSeasonPoster(
+                    season = season,
+                    resolver = posterResolver
+                )
 
-            val isSeasonWatched =
-                episodeNumbers != null &&
-                    episodeNumbers.isNotEmpty() &&
-                    episodeNumbers.all {
-                        it in watchedSet
-                    }
+            var posterFocused by remember(season) {
+                mutableStateOf(false)
+            }
 
-            SeasonChip(
-                seasonNumber = season,
-                seasonName = seasonName,
-                isSelected = selected,
-                available = !seasonUnavailable,
-                onClick = {
-                    onSeasonSelected(season)
-                },
-                onFocus = {
-                    onSeasonFocused(season)
-                },
-                onLongClick = if (seasonUnavailable || episodeNumbers.isNullOrEmpty()) {
-                    // No episodes to mark yet - hide the watch-menu gesture
-                    // on not-yet-released seasons.
-                    //
-                    // ...and on a season no source can enumerate. The old
-                    // fallback was `1..highest already watched`, so the menu
-                    // offered "Mark as Watched" for a list that stopped at the
-                    // last tick and marked nothing new - and because
-                    // isSeasonWatched is false whenever the numbers are null,
-                    // it offered that row even for a season the viewer had
-                    // finished. With no episode set there is nothing honest to
-                    // offer, so the gesture is withheld rather than guessing.
-                    null
-                } else {
-                    {
-                        onSeasonLongPress(
-                            season,
-                            seasonName,
-                            episodeNumbers,
-                            chipFocusRequester
-                        )
-                    }
-                },
+            Box(
                 modifier = Modifier
-                    .padding(end = 8.dp)
-                    .focusRequester(
-                        chipFocusRequester
-                    )
-                    // UP leaves the section through the chain, DOWN is the
-                    // episode cards directly under the chips - never the chain's
-                    // DOWN, which is the cast rail (see
-                    // seasonChipVerticalFocus). Consumed either way: focusing a
-                    // chip also selects its season, so a press left to the
-                    // default search could re-trigger a swap.
+                    .focusRequester(posterFocusRequester)
+                    // Focus SELECTS the season, exactly as the chip's did: the
+                    // episodes below change as the focus moves across the row.
+                    .onFocusChanged { focusState ->
+                        posterFocused = focusState.isFocused
+                        if (focusState.isFocused) {
+                            onSeasonFocused(season)
+                        }
+                    }
                     .onPreviewKeyEvent(chipVerticalFocus)
-            )
+                    // Long press opens the season menu - withheld on a season
+                    // with no episodes to mark yet, and on one no source can
+                    // enumerate: there is nothing honest for the menu to offer.
+                    .then(
+                        rememberLongPressModifier(
+                            if (seasonUnavailable || episodeNumbers.isNullOrEmpty()) {
+                                null
+                            } else {
+                                {
+                                    onSeasonLongPress(
+                                        season,
+                                        seasonName,
+                                        episodeNumbers,
+                                        posterFocusRequester
+                                    )
+                                }
+                            }
+                        )
+                    )
+                    .clickable {
+                        onSeasonSelected(season)
+                    }
+                    .padding(vertical = 2.dp)
+            ) {
+                SeasonPosterArt(
+                    posterUrl = posterUrl,
+                    caption = seasonName,
+                    posterWidth = 84.dp,
+                    selected = selected,
+                    available = !seasonUnavailable,
+                    focused = posterFocused,
+                    surface = "tv"
+                )
+            }
         }
     }
 }

@@ -77,13 +77,13 @@ class DetailFocusGraphContractTest {
     }
 
     @Test
-    fun `a season chip leaves the section UP and stays inside it DOWN`() {
+    fun `a season poster leaves the section UP and stays inside it DOWN`() {
         assertTrue(
-            "every chip carries it, handed in by the page rather than decided " +
+            "every poster carries it, handed in by the page rather than decided " +
                 "inside the rail",
             detail.contains(".onPreviewKeyEvent(chipVerticalFocus)") &&
                 detail.contains("chipVerticalFocus = seasonChipVerticalFocus(") &&
-                detail.contains("SeasonRow(")
+                detail.contains("SeasonPosterRow(")
         )
         assertTrue(
             "UP is the chain's own press out of the section - the tag rail, or " +

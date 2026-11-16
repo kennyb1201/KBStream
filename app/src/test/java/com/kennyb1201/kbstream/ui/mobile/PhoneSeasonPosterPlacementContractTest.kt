@@ -7,115 +7,109 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The phone season poster: next to "Episodes", and bigger (spec 2026-11-15, 13:28).
+ * The phone's poster season picker (spec 2026-11-15, the poster season picker, F2).
  *
- * Kenny's phone screenshot: the poster was small AND way over on the right edge.
- * The edge was the layout - the heading took `weight(1f)`, which pushed the poster
- * to the far side of the row. The TV fixed exactly this on the same day (its
- * heading sizes to its own text, the poster hangs off it, a trailing Spacer keeps
- * the row full width); the phone never got the move. This pins the move, the
- * 48dp → 72dp draw, and that the rules around it are untouched: the season's own
- * poster only, decorative, one retry on a failed draw, the raw-URL request, and a
- * chips row that was not touched.
+ * This replaces the phone header-poster contract: the "Episodes" heading row (the
+ * heading, the 72dp poster beside it, the trailing spacer) and the LazyRow of
+ * `TouchChoiceChip`s are deleted. In their place, in the same position, one
+ * horizontal row where each season is its own poster with a "SEASON N" caption
+ * under it - the same row the TV page draws, touch-sized.
+ *
+ * Pinned here: no heading and no chip in the section; the row is still one item;
+ * a tap selects the season and loads its episodes; a long press still opens the
+ * season menu; the poster keeps its 72dp draw and its one retry; and a season
+ * with no poster of its own reads as a tappable caption with no empty frame.
  */
 class PhoneSeasonPosterPlacementContractTest {
 
+    private val phone by lazy { read("ui/mobile/DetailScreenMobile.kt") }
+
+    /** The season row item, through to the episode-order row that follows it. */
+    private val row: String by lazy {
+        phone.substringAfter("item(key = \"seasons\")")
+            .substringBefore("item(key = \"episode-order\")")
+    }
+
     @Test
-    fun `the heading sizes to its text so the poster sits beside it`() {
-        val row = headerRow()
+    fun `the heading and the chips are gone`() {
         assertFalse(
-            "the header no longer takes the row's width - that is what pushed " +
-                "the poster to the far edge",
-            row.contains("MobileSectionHeader(") && headerCall(row).contains("weight(1f)")
+            "no Episodes heading is composed from the section header",
+            row.contains("MobileSectionHeader(")
         )
+        assertFalse("no season chip is composed", row.contains("TouchChoiceChip("))
+        assertFalse("no spacer holds the old header row open", row.contains("Spacer(Modifier"))
+        assertEquals("one season row", 1, phone.count("item(key = \"seasons\")"))
+    }
+
+    @Test
+    fun `each season is a poster with a caption under it`() {
+        assertTrue("the row is horizontal", row.contains("LazyRow("))
+        assertTrue("one item per season", row.contains("items(") && row.contains("seasons,"))
+        assertTrue("keyed by season number", row.contains("key = { it.seasonNumber }"))
+        assertTrue("each item draws the shared poster unit", row.contains("SeasonPosterArt("))
         assertTrue(
-            "the poster hangs directly off the heading, on its start side",
-            row.contains(".padding(start = 12.dp)") && !row.contains(".padding(end = 16.dp)")
-        )
-        assertTrue(
-            "and a trailing spacer keeps the row full width, so the column below " +
-                "never shifts",
-            row.contains("Spacer(Modifier.weight(1f))") &&
-                row.indexOf("Spacer(Modifier.weight(1f))") > row.indexOf(".width(72.dp)")
+            "the caption is the season's name, else its number - the chip's label",
+            row.contains("summary.name") && row.contains("\"Season \$seasonNumber\"")
         )
     }
 
     @Test
-    fun `the draw is 72dp, keeping its 2 by 3 shape`() {
-        val row = headerRow()
-        assertTrue("72dp wide, not the old 48dp", row.contains(".width(72.dp)"))
-        assertFalse("and the old width is gone", row.contains(".width(48.dp)"))
-        assertTrue("the shape is unchanged", row.contains(".aspectRatio(2f / 3f)"))
-        assertTrue("and so is the clip", row.contains(".clip(KBShapeSmall)"))
-        // 72dp on a phone at density 2.0 is ~144px: a 50% wider poster than 96px,
-        // without doubling the header row.
-        assertEquals(108, 72 * 3 / 2)
-    }
-
-    @Test
-    fun `the request is still the raw url, so a wider draw refetches nothing`() {
-        val row = headerRow()
+    fun `a tap selects and loads, a long press opens the menu`() {
+        assertTrue("the press is the item's", row.contains(".combinedClickable("))
         assertTrue(
-            "the phone passes the URL and lets Coil decode at the target",
-            row.contains("model = poster,") && !row.contains(".size(Size(")
+            "tap selects the season",
+            row.contains("season = seasonNumber")
+        )
+        assertTrue(
+            "and loads that season's episodes, exactly as the chip did",
+            row.contains("viewModel.loadEpisodesForSeason(")
+        )
+        assertTrue(
+            "long press opens the same season menu",
+            row.contains("onLongClick =") && row.contains("seasonMenu = SeasonMenuTarget(")
         )
     }
 
     @Test
-    fun `the poster stays decorative and keeps its one retry`() {
-        val row = headerRow()
-        assertTrue("nothing is announced", row.contains("contentDescription = null"))
-        assertFalse("it does not act on a click", row.contains(".clickable"))
-        assertFalse("and it never takes focus", row.contains(".focusable"))
+    fun `the poster keeps its 72dp draw and its one retry`() {
+        assertTrue("72dp wide", row.contains("posterWidth = 72.dp"))
+        assertFalse("not the TV's size", row.contains("posterWidth = 84.dp"))
+        // The retry and the trace line live in the shared draw now, once for both
+        // surfaces, instead of being copied into each screen.
+        val art = read("ui/detail/SeasonPosterRow.kt")
+        assertTrue("one retry on a failed draw", art.contains("if (!retried) {"))
+        assertTrue("and the trace records it", art.contains("imageLine(surface, \"error\")"))
         assertTrue(
-            "a failed draw gets exactly one more request",
-            row.contains("key(mobileSeasonPosterRetry)") &&
-                row.contains("if (!mobileSeasonPosterRetried) {") &&
-                row.contains("mobileSeasonPosterRetry++") &&
-                row.contains("imageLine(\"phone\", \"error\")")
+            "the phone still labels its own draws",
+            row.contains("surface = \"phone\"")
         )
     }
 
     @Test
-    fun `no poster of its own still draws nothing`() {
-        val row = headerRow()
+    fun `the poster is resolved per season, not for the one header slot`() {
         assertTrue(
-            "the draw sits inside the season's-own-poster guard",
-            row.contains("mobileSeasonPosterUrl?.let { poster ->") &&
-                !row.contains("heroBackdropUrl")
+            "each item asks for its own season's poster",
+            row.contains("rememberSeasonPoster(") && row.contains("season = seasonNumber")
         )
         assertTrue(
-            "and the spacer means the heading does not move when it is absent",
-            row.contains("Spacer(Modifier.weight(1f))")
+            "through the shared resolver the page holds",
+            phone.contains("rememberSeasonPosterResolver(")
+        )
+        assertFalse(
+            "and the single header poster's state is gone",
+            phone.contains("mobileSeasonPosterUrl")
         )
     }
 
     @Test
-    fun `the chips row and the tv poster are untouched`() {
-        val phone = read("ui/mobile/DetailScreenMobile.kt")
-        val chips = phone.substringAfter("LazyRow(\n                                contentPadding = PaddingValues(horizontal = 16.dp)")
-            .take(400)
-        assertTrue(
-            "the chips row keeps its padding and spacing",
-            chips.contains("Arrangement.spacedBy(8.dp)")
-        )
+    fun `the tv poster is its own landing`() {
         val tv = read("ui/detail/DetailScreen.kt")
+        assertTrue("the television poster is 84dp", tv.contains("posterWidth = 84.dp"))
         assertTrue(
-            "the television poster is still its own 84dp landing",
-            tv.substringAfter("seasonPosterUrl?.let { poster ->").take(6_000)
-                .contains(".width(84.dp)")
+            "and it is the same shared unit, not a second copy",
+            tv.contains("SeasonPosterArt(")
         )
     }
-
-    /** The Episodes header row: from its Row to the closing of that Row. */
-    private fun headerRow(): String {
-        val phone = read("ui/mobile/DetailScreenMobile.kt")
-        val row = phone.substringAfter("MobileSectionHeader(").substringBefore("LazyRow(")
-        assertTrue("the header row is found", row.isNotEmpty())
-        return row
-    }
-
-    private fun headerCall(row: String): String = row.substringBefore(")")
 
     private fun read(relative: String): String {
         val prefixes = listOf("", "app/")
@@ -129,5 +123,15 @@ class PhoneSeasonPosterPlacementContractTest {
             dir = dir.parentFile
         }
         throw AssertionError("source missing: $relative")
+    }
+
+    private fun String.count(needle: String): Int {
+        var total = 0
+        var index = indexOf(needle)
+        while (index >= 0) {
+            total++
+            index = indexOf(needle, index + needle.length)
+        }
+        return total
     }
 }

@@ -6,14 +6,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The season poster that vanished on scroll-back (spec 2026-11-14).
+ * The season poster that vanished on scroll-back (spec 2026-11-14), now per season
+ * (spec 2026-11-15, the poster season picker).
  *
  * The poster showed, disappeared when he scrolled back to it, and stayed gone.
- * The effect wrote its answer straight into the state, so a re-run that came
- * back empty erased a good URL, and nothing re-triggered it afterwards. Every
- * run now decides through [SeasonPosterMemory] - replace on an answer, keep
- * through a failure, clear only on an answered none - both screens trace what
- * they did, and the header image gets one retry instead of a silent blank.
+ * The effect wrote its answer straight into the state, so a re-run that came back
+ * empty erased a good URL, and nothing re-triggered it afterwards. Every run
+ * decides through [SeasonPosterMemory] - replace on an answer, keep through a
+ * failure, clear only on an answered none - and the image draw gets one retry
+ * instead of a silent blank.
+ *
+ * What moved: the single header slot is gone, and the resolution lives once in
+ * [SeasonPosterRow]'s `rememberSeasonPoster`, asked per season as each poster
+ * composes. The rule is the same rule, so these pins follow it there - and the
+ * per-season form is what makes the keep matter more, not less: a row that
+ * re-composes as it scrolls re-runs the lookup for every poster it brings back.
  *
  * Pinned by reading the sources: this needs two screens, a player-less Compose
  * tree and a network to exercise otherwise. The rule itself is covered by
@@ -23,68 +30,74 @@ class SeasonPosterVanishContractTest {
 
     private val tv by lazy { read("ui/detail/DetailScreen.kt") }
     private val phone by lazy { read("ui/mobile/DetailScreenMobile.kt") }
+    private val row by lazy { read("ui/detail/SeasonPosterRow.kt") }
     private val fanart by lazy { read("data/fanart/FanartArtRepository.kt") }
     private val tmdb by lazy { read("data/tmdb/TmdbRepository.kt") }
     private val diagnostics by lazy { read("data/reporting/Diagnostics.kt") }
     private val application by lazy { read("MainApplication.kt") }
 
-    private val tvEffect by lazy {
-        tv.slice("LaunchedEffect(normalizedType, tmdbDetail?.id, effectiveSeason)", "val hasExplicitSeasonSource")
-    }
-    private val phoneEffect by lazy {
-        phone.slice("LaunchedEffect(normalizedType, tmdbDetail?.id, currentSeason)", "val watchedInSeason")
+    /** The per-season resolution: the lookup and the effect that runs it. */
+    private val resolve by lazy {
+        row.slice("internal class SeasonPosterResolver(", "internal fun SeasonPosterArt(")
     }
 
+    private val draw by lazy { row.substringAfter("internal fun SeasonPosterArt(") }
+
     @Test
-    fun `neither screen writes a lookup straight into its poster state`() {
-        listOf(tvEffect to "TV", phoneEffect to "phone").forEach { (effect, name) ->
-            assertTrue("$name: the rule is the shared one", effect.contains("SeasonPosterMemory.decide("))
+    fun `nothing writes a lookup straight into a poster state`() {
+        assertTrue("the rule is the shared one", resolve.contains("SeasonPosterMemory.decide("))
+        assertFalse(
+            "the raw answer must never be assigned - that is the erasure",
+            resolve.contains("= fanart.seasonPoster(")
+        )
+        assertTrue(
+            "a URL is assigned only on the replace branch",
+            resolve.contains("SeasonPosterMemory.Decision.REPLACE -> poster =")
+        )
+        assertTrue(
+            "and null only on the clear branch",
+            resolve.contains("SeasonPosterMemory.Decision.CLEAR -> poster = null")
+        )
+        assertTrue(
+            "the keep branch writes nothing at all",
+            resolve.contains("SeasonPosterMemory.Decision.KEEP -> Unit")
+        )
+        listOf(tv to "TV", phone to "phone").forEach { (screen, name) ->
             assertFalse(
-                "$name: the raw answer must never be assigned - that is the erasure",
-                effect.contains("= fanart.seasonPoster(")
-            )
-            assertTrue(
-                "$name: a URL is assigned only on the replace branch",
-                effect.contains("SeasonPosterMemory.Decision.REPLACE -> ")
-            )
-            assertTrue(
-                "$name: and null only on the clear branch",
-                effect.contains("SeasonPosterMemory.Decision.CLEAR -> ")
+                "$name: neither screen owns a poster slot of its own any more",
+                screen.contains("seasonPosterUrl") || screen.contains("mobileSeasonPosterUrl")
             )
         }
     }
 
     @Test
-    fun `a run with no season or another page keeps the poster`() {
-        listOf(
-            Triple(tvEffect, "TV", "if (clear) seasonPosterUrl = null"),
-            Triple(phoneEffect, "phone", "if (clear) mobileSeasonPosterUrl = null")
-        ).forEach { (effect, name, conditionalClear) ->
-            assertTrue(
-                "$name: a transient null must not erase the poster - the null write " +
-                    "is behind the \"another page\" branch, not the early return",
-                effect.contains(conditionalClear)
-            )
-            assertTrue(
-                "$name: and the keep verdict is recorded for the transient case",
-                effect.contains("SeasonPosterMemory.Decision.KEEP")
-            )
-            assertTrue(
-                "$name: only a page of another kind clears it",
-                effect.contains("normalizedType != \"series\"") || effect.contains("normalizedType == \"movie\"")
-            )
-        }
+    fun `a run for another title keeps the poster already drawn`() {
+        assertTrue(
+            "the decide call reads the poster on screen, not a fresh null",
+            resolve.contains("current = poster,")
+        )
+        assertTrue(
+            "and a page that cannot resolve a season returns before touching it",
+            resolve.contains("if (!resolver.canResolve) return@LaunchedEffect")
+        )
+        assertTrue(
+            "a show without a TMDB id yet is the same case",
+            resolve.contains("val lookup = resolver.lookup(season) ?: return@LaunchedEffect")
+        )
     }
 
     @Test
     fun `the lookup says what each source answered`() {
-        listOf(tvEffect to "TV", phoneEffect to "phone").forEach { (effect, name) ->
-            assertTrue("$name: the provenance-carrying lookup", effect.contains("seasonPosterAnswer("))
-            assertTrue(
-                "$name: a failed TVDB resolve is not a proven absence",
-                effect.contains("hasProvenNoTvdbMapping(showId, \"series\")")
-            )
-        }
+        assertTrue("the provenance-carrying lookup", resolve.contains("seasonPosterAnswer("))
+        assertTrue(
+            "a failed TVDB resolve is not a proven absence",
+            resolve.contains("hasProvenNoTvdbMapping(id, \"series\")") &&
+                resolve.contains("tvdbProvenAbsent = tvdbProvenAbsent")
+        )
+        assertTrue(
+            "and the rule is handed that distinction",
+            resolve.contains("tvdbProvenAbsent = lookup.tvdbProvenAbsent")
+        )
         assertTrue(
             "fanart tells NONE from UNANSWERED by whether a bundle arrived",
             fanart.contains("bundle == null -> ArtSourceAnswer.UNANSWERED") &&
@@ -102,35 +115,34 @@ class SeasonPosterVanishContractTest {
     }
 
     @Test
-    fun `every run is named in the paste`() {
-        listOf(tvEffect to "TV", phoneEffect to "phone").forEach { (effect, name) ->
-            assertTrue("$name: the run is traced", effect.contains("SeasonPosterTrace.runLine("))
-            assertTrue(
-                "$name: and the trigger is computed from the keys, not guessed",
-                effect.contains("previous.first != normalizedType") &&
-                    effect.contains("previous.second != showId") &&
-                    effect.contains("previous.third != seasonNumber")
-            )
-        }
+    fun `every season's run is named in the paste`() {
         assertTrue(
-            "the report prints the ring beside the Detail state",
-            diagnostics.contains("SeasonPosterTrace.lines().forEach { report.appendLine(\"poster: \$it\") }")
+            "the run is traced with THIS season's number",
+            resolve.contains("SeasonPosterTrace.runLine(trigger, season, lookup.answer, decision)")
+        )
+        assertTrue(
+            "the trigger says whether the item is resolving for the first time",
+            resolve.contains("val trigger = if (runs == 0) \"open\" else \"rerun\"")
+        )
+        assertTrue(
+            "so a paste can name the source of every season's poster",
+            diagnostics.contains(
+                "SeasonPosterTrace.lines().forEach { report.appendLine(\"poster: \$it\") }"
+            )
         )
     }
 
     @Test
-    fun `the header image survives its item being disposed`() {
-        assertTrue("TV traces the draw", tv.contains("SeasonPosterTrace.imageLine(\n                                                            \"tv\""))
-        assertTrue("phone traces the draw", phone.contains("SeasonPosterTrace.imageLine(\n                                                        \"phone\""))
-        assertTrue("TV re-keys for one retry", tv.contains("key(seasonPosterRetry)"))
-        assertTrue("phone re-keys for one retry", phone.contains("key(mobileSeasonPosterRetry)"))
-        listOf(tv to "TV", phone to "phone").forEach { (screen, name) ->
-            assertTrue(
-                "$name: exactly one retry, not a loop",
-                screen.contains("if (!seasonPosterRetried) {") ||
-                    screen.contains("if (!mobileSeasonPosterRetried) {")
-            )
-        }
+    fun `each poster's image survives its item being disposed`() {
+        assertTrue("the draw is traced per surface", draw.contains("SeasonPosterTrace.imageLine("))
+        assertTrue("TV labels its draws", tv.contains("surface = \"tv\""))
+        assertTrue("phone labels its draws", phone.contains("surface = \"phone\""))
+        assertTrue("the draw re-keys for one retry", draw.contains("key(retry)"))
+        assertTrue(
+            "exactly one retry, not a loop",
+            draw.contains("if (!retried) {") && draw.contains("retry++")
+        )
+        assertTrue("and the failure is traced", draw.contains("imageLine(surface, \"error\")"))
         assertTrue(
             "the app really has both image caches the retry can hit",
             application.contains(".memoryCache(") && application.contains(".diskCache(")
@@ -139,9 +151,9 @@ class SeasonPosterVanishContractTest {
 
     @Test
     fun `a second run for the same show costs no network for the TVDB id`() {
-        val resolve = tmdb.slice("suspend fun resolveTvdbId(", "internal fun hasProvenNoTvdbMapping")
-        val cached = resolve.indexOf("cachedExternalIds(key, now)")
-        val network = resolve.indexOf("fetchExternalIds(tmdbId, normalizedType)")
+        val resolveIds = tmdb.slice("suspend fun resolveTvdbId(", "internal fun hasProvenNoTvdbMapping")
+        val cached = resolveIds.indexOf("cachedExternalIds(key, now)")
+        val network = resolveIds.indexOf("fetchExternalIds(tmdbId, normalizedType)")
         assertTrue("the disk/memory copy is consulted first", cached in 0 until network)
         assertTrue("and only a miss reaches the network", network > cached)
     }

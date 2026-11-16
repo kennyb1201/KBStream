@@ -76,9 +76,7 @@ import android.widget.Toast
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.download.DownloadIdentity
-import com.kennyb1201.kbstream.data.art.SeasonPosterMemory
 import com.kennyb1201.kbstream.data.images.ImageOverrides
-import com.kennyb1201.kbstream.data.reporting.SeasonPosterTrace
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
@@ -138,6 +136,9 @@ import com.kennyb1201.kbstream.ui.components.touch.TouchChoiceChip
 import com.kennyb1201.kbstream.ui.components.touch.TouchLinkChip
 import com.kennyb1201.kbstream.ui.detail.DetailMediaRow
 import com.kennyb1201.kbstream.ui.detail.EpisodeOrderSection
+import com.kennyb1201.kbstream.ui.detail.SeasonPosterArt
+import com.kennyb1201.kbstream.ui.detail.rememberSeasonPoster
+import com.kennyb1201.kbstream.ui.detail.rememberSeasonPosterResolver
 import com.kennyb1201.kbstream.data.youtube.HeroTrailerResumeVerdict
 import com.kennyb1201.kbstream.data.youtube.InnerTubeExtractor
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
@@ -167,7 +168,6 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBShapePill
-import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -642,6 +642,14 @@ fun DetailScreenMobile(
         }
         val currentSeason = season ?: loadedSeason ?: seasons.firstOrNull()?.seasonNumber ?: 1
 
+        // The season poster row's resolver (spec 2026-11-15, the poster season
+        // picker): the same fanart-then-TMDB lookup this page ran for the one
+        // header poster, now asked once per season as each poster composes.
+        val seasonPosterResolver = rememberSeasonPosterResolver(
+            showId = tmdbDetail?.id,
+            isSeries = normalizedType == "series"
+        )
+
         // The alternate episode order (spec 2026-11-13): empty until TVDB
         // confirms the show HAS more than one order.
         val episodeOrders by viewModel.episodeOrders.collectAsStateWithLifecycle()
@@ -698,86 +706,6 @@ fun DetailScreenMobile(
         ) {
             MobileDetailRules.wholeSeriesWatched(wholeSeriesEpisodeNumbers) {
                 watchedSeasonSet(it)
-            }
-        }
-
-        // ── the season's own poster (spec 2026-11-13, F3) ──────────────────
-        // The same resolution the TV page runs, through the same repository:
-        // fanart's seasonposter first, TMDB's season poster second, nothing
-        // third. Written only when a lookup ANSWERS, so the previous season's
-        // poster stays up while the next one loads.
-        val seasonPosterContext = LocalContext.current
-        var mobileSeasonPosterUrl by remember { mutableStateOf<String?>(null) }
-        // One retry for the header image, and the trace that names which half
-        // failed (spec 2026-11-14, F1/F3): a healthy URL whose image did not
-        // redraw is a different bug from a URL that was cleared.
-        var mobileSeasonPosterRetry by remember { mutableIntStateOf(0) }
-        var mobileSeasonPosterRetried by remember { mutableStateOf(false) }
-        LaunchedEffect(mobileSeasonPosterUrl) { mobileSeasonPosterRetried = false }
-        // Which (type, show, season) the last run asked for: it names the trigger
-        // in the trace and tells a transient null from another title's page.
-        var mobileSeasonPosterKeys by remember { mutableStateOf<Triple<String, Int?, Int?>?>(null) }
-        LaunchedEffect(normalizedType, tmdbDetail?.id, currentSeason) {
-            val showId = tmdbDetail?.id
-            val seasonNumber = currentSeason
-            val previous = mobileSeasonPosterKeys
-            val trigger = when {
-                previous == null -> "open"
-                previous.first != normalizedType -> "type"
-                previous.second != showId -> "show"
-                previous.third != seasonNumber -> "season"
-                else -> "rerun"
-            }
-            mobileSeasonPosterKeys = Triple(normalizedType, showId, seasonNumber)
-            if (normalizedType == "movie" || showId == null || seasonNumber == null) {
-                // A transient null (a seasons re-emission while he scrolls)
-                // keeps the poster already on screen; a movie page clears it,
-                // because that poster belongs to another title.
-                val clear = normalizedType == "movie"
-                if (clear) mobileSeasonPosterUrl = null
-                SeasonPosterTrace.record(
-                    SeasonPosterTrace.runLine(
-                        trigger = trigger,
-                        season = seasonNumber,
-                        answer = null,
-                        decision = if (clear) {
-                            SeasonPosterMemory.Decision.CLEAR
-                        } else {
-                            SeasonPosterMemory.Decision.KEEP
-                        }
-                    )
-                )
-                return@LaunchedEffect
-            }
-            val fanart = com.kennyb1201.kbstream.data.fanart.FanartArtRepository
-                .getInstance(seasonPosterContext)
-            val tmdbRepo = com.kennyb1201.kbstream.data.tmdb.TmdbRepository
-                .getInstance(seasonPosterContext)
-            val tvdbId = runCatching { tmdbRepo.resolveTvdbId(showId, "series") }.getOrNull()
-            // A null id is a failed resolve unless TMDB proved there is no TVDB
-            // mapping, and only that proof may count as an answered none.
-            val tvdbProvenAbsent = runCatching {
-                tmdbRepo.hasProvenNoTvdbMapping(showId, "series")
-            }.getOrDefault(false)
-            val answer = fanart.seasonPosterAnswer(
-                tvdbId = tvdbId,
-                tmdbTvId = showId,
-                season = seasonNumber
-            )
-            // Replace on an answer, keep through a failure, clear only on an
-            // answered none - on every run, not only a season change.
-            val decision = SeasonPosterMemory.decide(
-                current = mobileSeasonPosterUrl,
-                answer = answer,
-                forSeries = true,
-                season = seasonNumber,
-                tvdbProvenAbsent = tvdbProvenAbsent
-            )
-            SeasonPosterTrace.record(SeasonPosterTrace.runLine(trigger, seasonNumber, answer, decision))
-            when (decision) {
-                SeasonPosterMemory.Decision.REPLACE -> mobileSeasonPosterUrl = answer.url
-                SeasonPosterMemory.Decision.CLEAR -> mobileSeasonPosterUrl = null
-                SeasonPosterMemory.Decision.KEEP -> Unit
             }
         }
 
@@ -2169,101 +2097,62 @@ fun DetailScreenMobile(
                 }
 
                 if (normalizedType != "movie" && seasons.isNotEmpty()) {
+                    // The season POSTERS (spec 2026-11-15, the poster season
+                    // picker): the "Episodes" heading and the season chips are
+                    // gone. Each season is its own poster with a caption under
+                    // it - tap to select and load, long press for the season
+                    // menu - the same row the TV page draws, touch-sized.
                     item(key = "seasons") {
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                // The heading sizes to its own text, so the
-                                // season's poster can hang directly off it - the
-                                // same move the TV made (spec 2026-11-15). It used
-                                // to take weight(1f), which pushed the poster to
-                                // the far right edge of the row, away from the
-                                // section it belongs to.
-                                MobileSectionHeader(
-                                    if (episodesLoading) "Episodes…" else "Episodes"
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            items(
+                                seasons,
+                                key = { it.seasonNumber },
+                                contentType = { "season" }
+                            ) { summary ->
+                                val seasonNumber = summary.seasonNumber
+                                // The season's own name when it has one, else its
+                                // number - the label the chip carried.
+                                val seasonLabel = summary.name
+                                    ?: "Season $seasonNumber"
+                                // Resolved lazily as the item composes, so a
+                                // 13-season show asks for the posters it draws
+                                // and the rest as they scroll in.
+                                val posterUrl = rememberSeasonPoster(
+                                    season = seasonNumber,
+                                    resolver = seasonPosterResolver
                                 )
-                                // The season's own poster immediately right of the
-                                // heading, bigger (72dp - spec 2026-11-15). No
-                                // poster of its own = nothing drawn here, never
-                                // the show's.
-                                mobileSeasonPosterUrl?.let { poster ->
-                                    // Re-keyed on the retry so a failed draw gets
-                                    // exactly one more request instead of a
-                                    // silent blank (F3).
-                                    key(mobileSeasonPosterRetry) {
-                                        AsyncImage(
-                                            model = poster,
-                                            contentDescription = null,
-                                            contentScale = ContentScale.Crop,
-                                            onSuccess = { state ->
-                                                SeasonPosterTrace.record(
-                                                    SeasonPosterTrace.imageLine(
-                                                        "phone",
-                                                        state.result.dataSource.name.lowercase()
-                                                    )
+                                Box(
+                                    modifier = Modifier
+                                        .combinedClickable(
+                                            onClick = {
+                                                season = seasonNumber
+                                                viewModel.loadEpisodesForSeason(
+                                                    seasonNumber
                                                 )
                                             },
-                                            onError = {
-                                                SeasonPosterTrace.record(
-                                                    SeasonPosterTrace.imageLine("phone", "error")
+                                            onLongClick = {
+                                                seasonMenu = SeasonMenuTarget(
+                                                    seasonNumber = seasonNumber,
+                                                    seasonName = seasonLabel
                                                 )
-                                                if (!mobileSeasonPosterRetried) {
-                                                    mobileSeasonPosterRetried = true
-                                                    mobileSeasonPosterRetry++
-                                                }
-                                            },
-                                            // Start padding, not end: the poster
-                                            // hangs off the heading now instead of
-                                            // sitting at the screen edge. It stays
-                                            // vertically centred against the
-                                            // heading, and the request is the raw
-                                            // URL - Coil decodes at the target, so
-                                            // a wider draw re-fetches nothing.
-                                            modifier = Modifier
-                                                .padding(start = 12.dp)
-                                                .width(72.dp)
-                                                .aspectRatio(2f / 3f)
-                                                .clip(KBShapeSmall)
+                                            }
                                         )
-                                    }
-                                }
-                                // The row still fills the width, so the column
-                                // below never shifts; the heading stays at the
-                                // screen edge.
-                                Spacer(Modifier.weight(1f))
-                            }
-                            // The season chips own the row now. The episode
-                            // area's LIST/RAIL choice is a Settings row
-                            // (Settings → Posters & Browsing), not a control
-                            // on this page: it is a viewing preference that
-                            // applies to every season, so it belongs beside
-                            // the other display choices.
-                            LazyRow(
-                                contentPadding = PaddingValues(horizontal = 16.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                items(
-                                    seasons,
-                                    key = { it.seasonNumber },
-                                    contentType = { "season" }
-                                ) { summary ->
-                                    TouchChoiceChip(
-                                        label = summary.name
-                                            ?: "Season ${summary.seasonNumber}",
-                                        selected = summary.seasonNumber == currentSeason,
-                                        onClick = {
-                                            season = summary.seasonNumber
-                                            viewModel.loadEpisodesForSeason(summary.seasonNumber)
-                                        },
-                                        onLongClick = {
-                                            seasonMenu = SeasonMenuTarget(
-                                                seasonNumber = summary.seasonNumber,
-                                                seasonName = summary.name
-                                                    ?: "Season ${summary.seasonNumber}"
-                                            )
-                                        }
+                                        .padding(vertical = 4.dp)
+                                ) {
+                                    SeasonPosterArt(
+                                        posterUrl = posterUrl,
+                                        caption = seasonLabel,
+                                        posterWidth = 72.dp,
+                                        selected = seasonNumber == currentSeason,
+                                        available = true,
+                                        // A touch surface has no focus state:
+                                        // the tap is the press, as it was for
+                                        // the chip.
+                                        focused = false,
+                                        surface = "phone"
                                     )
                                 }
                             }
@@ -2271,7 +2160,7 @@ fun DetailScreenMobile(
                     }
 
                     // The numbering the cards below are in, beside the season
-                    // chips and above the episodes - the TV page's own row.
+                    // posters and above the episodes - the TV page's own row.
                     // Draws nothing unless the show really has an alternate
                     // order (F2).
                     if (episodeOrders.size > 1) {

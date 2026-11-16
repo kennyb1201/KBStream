@@ -7,22 +7,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The season poster sits beside the EPISODES heading, not at the row's far edge
- * (detail season-poster placement, F1-F2, 2026-11-13).
+ * The poster season picker on TV Detail (spec 2026-11-15, the poster season
+ * picker, F1).
  *
- * The field photo (TCL, Upload, Season 3) showed the small portrait thumb
- * pushed against the right edge of the header row, detached from the section it
- * belongs to, with the arrow running all the way back to EPISODES. The cause was
- * the row's own construction: the heading took `weight(1f)`, so it ate the free
- * width and shoved the poster out to the edge.
+ * This replaces the header-poster placement contract: the "EPISODES" heading and
+ * the single selected-season poster beside it are deleted, and so are the season
+ * chips. In their place, in the same position in the list - between the
+ * episode-order row and the episode cards - one horizontal row where each season
+ * is its own poster with a "SEASON N" caption under it.
  *
- * Pinned here: the heading sizes to its own text (F1); the poster is the row's
- * second child, directly after it, with a start gap instead of the edge padding
- * (F1); a trailing spacer holds the row's width so nothing in the column shifts
- * and the heading stays at the screen edge (F1/F2); a season with no poster of
- * its own still draws nothing and substitutes nothing (F1); and the poster is
- * still not a focus or press target (F2). The art source, size and shape are
- * pinned as unchanged - only the placement moved.
+ * Pinned here: the header item is gone (that is the clip bug closed by deletion -
+ * there is no heading above the row to be cut against); the row is still its own
+ * vertical item, in the same position; the poster is the focusable item, focus
+ * still SELECTS the season and a tap still selects it with the episode load; a
+ * long press still opens the season menu; and no chip is left anywhere in the
+ * section.
  *
  * Source-reading style, like this page's other contract tests.
  */
@@ -30,131 +29,119 @@ class DetailSeasonPosterPlacementContractTest {
 
     private val detail by lazy { normalized(stripComments(read(DETAIL_FILE))) }
 
-    /** The EPISODES header item, through to the season chips that follow it. */
-    private val header: String by lazy {
-        detail.substringAfter("item(key = \"episodesheader\"")
-            .substringBefore("item(key = SEASON_ROW_KEY")
+    /** The season row item, through to the first episode state that follows it. */
+    private val row: String by lazy {
+        detail.substringAfter("item(key = SEASON_ROW_KEY")
+            .substringBefore("when { episodesLoading")
     }
 
-    // ── F1: title, poster, spacer ──────────────────────────────────────────
-
     @Test
-    fun `the poster is the second child, directly after the heading`() {
-        assertTrue("the header item must exist", header.isNotEmpty())
-        val title = header.indexOf("KBSectionHeader(")
-        val poster = header.indexOf("AsyncImage(")
-        val spacer = header.indexOf("Spacer(Modifier.weight(1f))")
-        assertTrue(
-            "child order is heading, poster, spacer - the poster comes to the heading",
-            title >= 0 && title < poster && poster < spacer
-        )
+    fun `the header and the chips are gone`() {
         assertFalse(
-            "the heading keeps its edge and the poster comes to it",
-            header.substring(0, poster).contains("weight(")
+            "no EPISODES header item is left to cut the row against",
+            detail.contains("episodesheader")
         )
-        assertTrue(
-            "and it keeps its own leading edge padding and top gap",
-            header.substring(title, poster).contains("KBScreenEdge") &&
-                header.substring(title, poster).contains("top = 14.dp")
-        )
-        assertTrue(
-            "the poster carries a start gap instead of the row's end padding",
-            header.substring(poster, spacer).contains(".padding(start = 12.dp, top = 14.dp)")
-        )
+        assertFalse("no header label is composed", detail.contains("\"EPISODES\""))
         assertFalse(
-            "nothing is left against the far edge",
-            header.contains("end = KBScreenEdge")
+            "no season chip is composed",
+            detail.contains("private fun SeasonChip(") || detail.contains("SeasonsChip(")
         )
+        assertFalse("and the chip row is not composed either", detail.contains("SeasonRow("))
     }
 
     @Test
-    fun `only the placement moved - same art, size, shape and crop`() {
+    fun `the row is still its own item, between the order row and the cards`() {
+        val order = detail.indexOf("item(key = \"episode-order\"")
+        val seasonRow = detail.indexOf("item(key = SEASON_ROW_KEY")
+        val cards = detail.indexOf("episodesloading")
         assertTrue(
-            "the season's own art is still the only model",
-            header.contains(".data(poster)")
+            "order row, then the season row, then the episode states",
+            order >= 0 && order < seasonRow && seasonRow < cards
         )
-        // The lookup now carries provenance and the state is written through the
-        // keep/replace/clear rule (spec 2026-11-14, F2): the art still comes from
-        // the same fanart season lookup - only the write is guarded.
-        assertTrue(
-            "and the loader resolves it from the same fanart season lookup",
-            detail.contains("fanart.seasonPosterAnswer(") &&
-                detail.contains("SeasonPosterMemory.Decision.REPLACE -> seasonPosterUrl = answer.url")
-        )
-        // The width is the one thing a later spec was allowed to move: the
-        // 2026-11-15 poster spec drew it at 84dp. Everything else here is the
-        // art, the shape, the crop and the decode, which that spec left alone.
-        listOf(
-            ".width(84.dp)",
-            ".aspectRatio(2f / 3f)",
-            ".clip(KBShapeSmall)",
-            "contentScale = ContentScale.Crop",
-            "contentDescription = null",
-            ".size(Size(300, 450))"
-        ).forEach { pin ->
-            assertTrue("$pin is unchanged", header.contains(pin))
-        }
+        assertEquals("one season row", 1, detail.count("item(key = SEASON_ROW_KEY"))
+        assertTrue("and it draws the poster row", row.contains("SeasonPosterRow("))
     }
 
     @Test
-    fun `a season with no poster draws nothing, and substitutes nothing`() {
+    fun `each season is a poster with a caption under it`() {
+        val posterRow = posterRowSource()
+        assertTrue("one poster per season", posterRow.contains("SeasonPosterArt("))
         assertTrue(
-            "the poster is drawn only behind the season poster's own value",
-            header.contains("seasonPosterUrl?.let { poster ->")
+            "seasons are the row's items, keyed by number",
+            posterRow.contains("items(") && posterRow.contains("key = { it }")
         )
-        assertEquals(
-            "one header, one poster slot",
-            1,
-            normalized(
-                stripComments(read(DETAIL_FILE))
-            ).count("seasonPosterUrl?.let")
-        )
-        assertEquals("one image in the row", 1, header.count("AsyncImage("))
-        listOf("posterPath", "backdrop", "R.drawable").forEach { fallback ->
-            assertFalse(
-                "never a fallback art source ($fallback): an absent poster leaves the row as the heading",
-                header.contains(fallback)
-            )
-        }
-    }
-
-    @Test
-    fun `the row still fills the width, and the heading stays at the edge`() {
         assertTrue(
-            "the row keeps filling the width, centered on the heading's line",
-            header.contains("modifier = Modifier.fillMaxWidth()") &&
-                header.contains("verticalAlignment = Alignment.CenterVertically")
+            "the caption is the season's own label, as the chip had it",
+            posterRow.contains("\"SEASON \$season\"") && posterRow.contains("\"SPECIALS\"")
         )
-        val poster = header.indexOf("AsyncImage(")
-        val spacer = header.indexOf("Spacer(Modifier.weight(1f))")
-        assertTrue("the spacer trails the poster", spacer > poster)
+        assertTrue(
+            "and a season that names itself wears that name - the label the " +
+                "heading used to carry",
+            posterRow.contains("seasonNameFor(season)") &&
+                posterRow.contains("ownName.uppercase(Locale.US)")
+        )
+        // The caption is text inside the shared draw, never a chip: no pill, no
+        // chip component, no chip shape.
+        assertFalse("no chip in the row", posterRow.contains("TouchChoiceChip"))
         assertFalse(
-            "the spacer is the row's last child - nothing is pushed to the edge after it",
-            header.substring(spacer).contains("AsyncImage(") ||
-                header.substring(spacer).contains("KBSectionHeader(")
-        )
-        assertTrue(
-            "and the season chips still follow the header",
-            detail.indexOf("item(key = SEASON_ROW_KEY") > detail.indexOf("item(key = \"episodesheader\"")
-        )
-        assertEquals(
-            "one header item serves both form factors",
-            1,
-            detail.count("item(key = \"episodesheader\"")
+            "and the caption carries no chip chrome of its own",
+            posterRow.contains("KBCard(")
         )
     }
 
     @Test
-    fun `the poster is still not a focus or press target`() {
-        listOf("focusable", "FocusRequester", "onClick", "clickable").forEach { pin ->
-            assertFalse(
-                "the header row stays out of the focus chain ($pin)",
-                header.contains(pin)
-            )
-        }
+    fun `focus still selects, tap still selects, long press still opens the menu`() {
+        val posterRow = posterRowSource()
+        assertTrue(
+            "focus on a poster selects the season",
+            posterRow.contains("onSeasonFocused(season)")
+        )
+        assertTrue(
+            "and the press selects it with the episode load",
+            posterRow.contains("onSeasonSelected(season)")
+        )
+        assertTrue(
+            "long press opens the same season menu",
+            posterRow.contains("rememberLongPressModifier(") &&
+                posterRow.contains("onSeasonLongPress(")
+        )
+        assertTrue(
+            "the row's requesters are still filed per season, so the landing can find them",
+            posterRow.contains("seasonFocusRequesters[") &&
+                posterRow.contains("FocusRequester()")
+        )
+        assertTrue(
+            "and the page's own vertical press is still what the item answers",
+            posterRow.contains("onPreviewKeyEvent(chipVerticalFocus)")
+        )
+    }
+
+    @Test
+    fun `a season that has not aired withholds the menu, not the selection`() {
+        val posterRow = posterRowSource()
+        assertTrue(
+            "no menu for a season with no episodes to mark",
+            posterRow.contains("seasonUnavailable || episodeNumbers.isNullOrEmpty()")
+        )
+        // The press belongs to the item, not to the poster: a season whose poster
+        // no source answered is still a caption you can select.
+        assertTrue("the press is on the item", posterRow.contains(".clickable {"))
+        assertTrue(
+            "and the click does not test the poster first",
+            posterRow.substringAfter(".clickable {").substringBefore("}")
+                .contains("onSeasonSelected(season)")
+        )
     }
 
     // ── source access ─────────────────────────────────────────────────────
+
+    /** The SeasonPosterRow composable, which the item calls. */
+    private fun posterRowSource(): String {
+        val start = detail.indexOf("private fun SeasonPosterRow(")
+        assertTrue("the poster row is composed", start >= 0)
+        val end = detail.indexOf("private fun ", start + 10)
+        return detail.substring(start, if (end > start) end else detail.length)
+    }
 
     private fun read(fileName: String): String =
         File(
