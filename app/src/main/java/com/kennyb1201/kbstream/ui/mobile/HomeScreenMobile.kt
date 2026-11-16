@@ -2387,8 +2387,9 @@ internal fun MobileBillboard(
     var backgrounded by remember { mutableStateOf(false) }
 
     // Whether one of the hero's OWN pills holds focus (F5). Written by the pill
-    // row's focus observer below and read by the hold and the sweep, so the two
-    // pause on exactly the same fact.
+    // row's focus observer below and read by the hold, which must not change the
+    // page under it. The SWEEP deliberately does not read it (2026-11-15): the
+    // backdrop keeps panning under the pills, and only the page has to hold.
     var pillsFocused by remember { mutableStateOf(false) }
     // A page change draws a NEW set of pills and disposes the old ones, so any
     // focus they held went with them. Cleared here as well as by the focus
@@ -2819,10 +2820,19 @@ internal fun MobileBillboard(
             }
     }
 
-    // The sweep and the entrance pause with EXACTLY what the hold pauses with -
-    // a finger on the pager, the app in the background, a trailer that owns the
-    // page (or is waiting out its delay) - so the move is never playing to a
-    // screen nobody is looking at, and the fill never advances under a pause.
+    // The sweep and the entrance pause with what the hold pauses with - a finger
+    // on the pager, the app in the background, a trailer that owns the page (or
+    // is waiting out its delay) - so the move is never playing to a screen
+    // nobody is looking at, and the fill never advances under a pause.
+    //
+    // The ONE rung it does not share is the pills (2026-11-15). The hold still
+    // waits there - the page must not change under the viewer - but the sweep
+    // keeps panning: a focused pill is not a screen nobody is looking at, it is
+    // the viewer looking at THIS page, and the freeze it used to add was the
+    // reported "i have to hit left from the play button for the effect to work".
+    // Splitting the two halves of that hold is the fix: the page stays still
+    // because the cycle timer still reads the flag, and the still keeps moving
+    // because this list no longer does.
     val sweepPaused = reducedMotion ||
         backgrounded ||
         // F4: a scroll over the hero (the rail list on a TV, the page on the
@@ -2834,10 +2844,7 @@ internal fun MobileBillboard(
         autoTrailerArmed ||
         // The Ken Burns sweep is the other half of the hold (audit a1): the
         // still must not keep moving under an expanded card either.
-        trailerSuppressed ||
-        // And it is the same hold while the viewer is on the pills (F5): the
-        // sweep is the other clock that would have moved the hero under them.
-        pillsFocused
+        trailerSuppressed
     // The page this Animatable belongs to. It is what distinguishes a page
     // CHANGE (snap back to the start) from a pause (hold where it is): the
     // effect below is keyed on the page, and a pause only stops the tween, so

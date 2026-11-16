@@ -337,10 +337,11 @@ class SpotlightScrollHeroContractTest {
         )
     }
 
-    // ── (j) F5 (2026-11-13): the hero holds still under its own pills ─────
+    // ── (j) F5 (2026-11-13): the hero holds still under its own pills, and
+    //        (2026-11-15) only the PAGE half of that hold survives ──────────
 
     @Test
-    fun `the cycle and the sweep pause while a hero pill holds focus`() {
+    fun `the cycle holds while a hero pill holds focus and the sweep does not`() {
         val mobile = flat(source(MOBILE))
         assertTrue(
             "the pill group reports its own focus as one node, so three pills cannot " +
@@ -357,15 +358,37 @@ class SpotlightScrollHeroContractTest {
             "and the delay re-arms when it lifts: the flag is a KEY of the hold effect",
             mobile.contains("node they were stepping onto. pillsFocused ) {")
         )
+        // The two halves are split on purpose (2026-11-15): a focused pill is
+        // the viewer looking at this page, not a screen nobody is watching, so
+        // the still keeps panning while the page is held.
+        val sweepRungs = mobile
+            .substringAfter("val sweepPaused = reducedMotion ||")
+            .substringBefore("// The page this Animatable belongs to")
+        assertFalse(
+            "the sweep keeps moving under the pills - the reported freeze",
+            sweepRungs.contains("pillsFocused")
+        )
         assertTrue(
-            "the Ken Burns sweep is the same hold - one fact, both clocks",
-            mobile.contains("trailerSuppressed ||") &&
-                mobile.contains("hero under them. pillsFocused")
+            "every other rung of the hold still pauses it",
+            listOf(
+                "backgrounded",
+                "scrollHeld()",
+                "pagerState.isScrollInProgress",
+                "playbackPageKey != null",
+                "playback != null",
+                "autoTrailerArmed",
+                "trailerSuppressed"
+            ).all { sweepRungs.contains(it) }
         )
         assertTrue(
             "and the report falls with the pills, so a scrolled-away hero cannot " +
                 "leave it stuck true for the UP carve-out to read",
             mobile.contains("onDispose { if (pillsFocused) onPillFocusChange(false) }")
+        )
+        assertTrue(
+            "and the split is stated where the sweep's pause list is declared",
+            mobile.contains("The ONE rung it does not share is the pills") &&
+                mobile.contains("keeps panning:")
         )
         assertFalse(
             "and no key maps Left/Right to a page change: the timer is the only " +
