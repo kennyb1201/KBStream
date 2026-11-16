@@ -111,6 +111,12 @@ internal object CwWidgetPublisher {
             )
         }
         CwWidgetUpdater.refresh(application)
+
+        // The TV launcher's own Continue Watching channel mirrors this same list
+        // (spec 2026-11-16): one publish, two launcher surfaces, and the channel
+        // is handed the rows that were just written rather than reading the
+        // history again. A no-op off a television.
+        runCatching { com.kennyb1201.kbstream.data.tv.TvPreviewChannelPublisher.sync(application, rows) }
     }
 
     /**

@@ -2436,6 +2436,12 @@ fun AppRoot(
         val dao = WatchHistoryDatabase.getInstanceScoped(context).watchHistoryDao()
         val entries = runCatchingCancellable { dao.getAll() }.getOrDefault(emptyList())
         TvLauncherPublisher.sync(context, entries)
+        // The app's own launcher channel (spec 2026-11-16): created here so it
+        // exists after the first launch for the viewer to enable in the
+        // launcher's channel list (Projectivy: Edit channels), and republished
+        // from the snapshot the Continue Watching rail last wrote. A no-op off a
+        // television, and it never forces the channel visible.
+        com.kennyb1201.kbstream.data.tv.TvPreviewChannelPublisher.refresh(context)
     }
 
     // A "Play on TV" from the phone (spec 2026-11-13, F3). The TV is handed a
