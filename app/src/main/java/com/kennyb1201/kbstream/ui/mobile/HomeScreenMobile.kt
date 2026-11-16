@@ -199,6 +199,7 @@ import com.kennyb1201.kbstream.ui.home.upNextChipLabel
 import com.kennyb1201.kbstream.ui.home.upNextContinueWatchingDecision
 import com.kennyb1201.kbstream.ui.home.hiddenIdentity
 import com.kennyb1201.kbstream.ui.home.upNextEpisodeLabel as tvUpNextEpisodeLabel
+import com.kennyb1201.kbstream.ui.home.upNextIsResumeCard
 import com.kennyb1201.kbstream.ui.home.upNextPlayerDisplayName
 import com.kennyb1201.kbstream.ui.kb.HomeEntry
 import com.kennyb1201.kbstream.ui.kb.KBHomeSlots

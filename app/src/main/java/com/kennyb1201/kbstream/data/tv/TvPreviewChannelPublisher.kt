@@ -90,8 +90,11 @@ object TvPreviewChannelPublisher {
      *
      * Fire-and-forget on the publisher's own IO scope: a launcher surface must
      * never hold up a Home publish, and the provider calls are the slow part.
+     *
+     * Internal, like the widget row it takes: the channel is fed by the app's own
+     * publish, not by anything outside this module.
      */
-    fun sync(context: Context, rows: List<CwWidgetRow>) {
+    internal fun sync(context: Context, rows: List<CwWidgetRow>) {
         if (!enabled(context)) return
         val programs = TvPreviewChannelRules.programsFrom(rows)
         val app = context.applicationContext
