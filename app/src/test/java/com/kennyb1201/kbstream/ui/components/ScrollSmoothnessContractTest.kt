@@ -143,14 +143,21 @@ class ScrollSmoothnessContractTest {
         )
         assertTrue(
             "and while it is not armed the elevation is ZERO - no shadow at all, " +
-                "not a cheaper one",
-            card.contains("elevation = if (glowArmed) KBFocusGlow else 0.dp")
+                "not a cheaper one. The `!gliding` half is the 2026-11-16 hold: " +
+                "while a list GLIDES the focus is not on the card it is leaving, " +
+                "so the settled shadow is withheld too - and only then",
+            card.contains(
+                "elevation = if (glowArmed && !gliding) KBFocusGlow else 0.dp"
+            ) && card.contains("val gliding = LocalGlideActive.current")
         )
         assertTrue(
-            "at rest the look is today's: the same accent glow, the same scale",
+            "at rest the look is today's: the same accent glow, the same scale - " +
+                "the glide gate falls back to the caller's own focused scale",
             card.contains("Glow(") &&
                 card.contains("elevationColor = KBAccent") &&
-                card.contains("focusedScale = focusedScale") &&
+                card.contains(
+                    "focusedScale = if (gliding) KBFocusNone else focusedScale"
+                ) &&
                 card.contains(".onFocusChanged { focused = it.isFocused }")
         )
     }
