@@ -3660,6 +3660,15 @@ private fun AccentSwatchMobile(
  * One mixing bar. The track is the gradient the bar produces, so the viewer
  * sees what it does; [onFinished] is where the pref write happens, so a drag is
  * one write rather than one per frame.
+ *
+ * The bar is drawn in Material's own TRACK slot, not as the Slider's background
+ * (spec 2026-11-16). Painting the gradient onto the Slider's modifier meant the
+ * gradient inherited Material's 48dp minimum touch target while a `.height(32.dp)`
+ * tried to hold it to 32dp; the conflicting constraints resolved to 48dp, the
+ * slider painted over the label row above it ("Its all smooshed"), and its thumb
+ * geometry ran to the screen edge. In the track slot the gradient is a thin bar,
+ * centred in the full 48dp touch area, and Material insets it by half the thumb
+ * width at each end - so the thumb at 0% and at 100% is fully on screen.
  */
 @Composable
 private fun AccentSliderMobile(
@@ -3676,35 +3685,49 @@ private fun AccentSliderMobile(
             Text(
                 text = label,
                 color = KBTextHi,
-                style = MaterialTheme.typography.labelSmall
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1
             )
             Spacer(modifier = Modifier.weight(1f))
             Text(
                 text = valueText,
                 color = KBTextLo,
-                style = MaterialTheme.typography.labelSmall
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1
             )
         }
+        // The belt to the track slot's braces: the slider's own 48dp box cannot
+        // reach the label row, whatever a launcher's font scale does to it.
+        Spacer(modifier = Modifier.height(6.dp))
         Slider(
             value = value,
             onValueChange = onValueChange,
             onValueChangeFinished = onFinished,
             valueRange = valueRange,
-            // Transparent tracks: the box's gradient IS the bar, and Material's
-            // own track would paint over it. The thumb stays opaque so it reads
-            // against every hue.
+            // Material's own tracks are transparent: the gradient below IS the
+            // track. The thumb stays opaque so it reads against every hue.
             colors = SliderDefaults.colors(
                 thumbColor = KBTextHi,
                 activeTrackColor = Color.Transparent,
                 inactiveTrackColor = Color.Transparent
             ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(32.dp)
-                .background(trackBrush, KBShapePill)
+            track = { _ ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(AccentSliderTrackHeight)
+                        .background(trackBrush, KBShapePill)
+                )
+            },
+            // No forced height: the Slider keeps the touch target Material asks
+            // for, and the thin bar is what gets drawn inside it.
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }
+
+/** The mixing bars' visible thickness, well inside Material's 48dp touch area. */
+private val AccentSliderTrackHeight = 12.dp
 
 /**
  * The touch twin of `ui/settings/DialogueBoostRow.kt`: a level, minus and plus,

@@ -366,6 +366,59 @@ class SettingsScreenMobileContractTest {
         )
     }
 
+    /**
+     * Kenny's 2026-11-16 screenshot: the Hue / Saturation / Brightness bars were
+     * fat pills painting over their own labels, with the thumbs half off the
+     * screen at the ends.
+     *
+     * The cause was structural, so the fix is pinned structurally: the gradient
+     * is the Slider's TRACK (a thin bar, inset by Material's own half-thumb
+     * geometry), not the Slider's background under a `.height(32.dp)` that
+     * Material's 48dp touch target always won. A spacer keeps the label row out
+     * of reach even if a bar ever grows again.
+     */
+    @Test
+    fun `the accent mixer's bars cannot paint over their labels`() {
+        val mobile = mobileSettings()
+        val bar = mobile
+            .substringAfter("private fun AccentSliderMobile(")
+            .substringBefore("private val AccentSliderTrackHeight")
+
+        assertTrue(
+            "the gradient is drawn in Material's track slot, which is what insets it " +
+                "by half the thumb width",
+            bar.contains("track = {")
+        )
+        assertTrue(
+            "the gradient background is inside that slot, not on the slider's own box",
+            bar.indexOf(".background(trackBrush, KBShapePill)") > bar.indexOf("track = {")
+        )
+        assertFalse(
+            "no forced height: the slider keeps the 48dp touch target instead of " +
+                "overflowing a 32dp box",
+            bar.contains(".height(32.dp)")
+        )
+        assertTrue(
+            "the gradient is painted exactly once - in the slot, never again on the " +
+                "slider's own box",
+            bar.split(".background(trackBrush, KBShapePill)").size - 1 == 1
+        )
+        assertTrue(
+            "a spacer separates the label row from the bar",
+            bar.indexOf("Spacer(modifier = Modifier.height(6.dp))") in
+                0 until bar.indexOf("Slider(")
+        )
+        assertTrue(
+            "the visible bar is a thin track, not a pill as tall as the touch area",
+            mobile.contains("private val AccentSliderTrackHeight = 12.dp")
+        )
+        assertTrue(
+            "labels and values hold one line each, so a long scale cannot push the " +
+                "value off the edge",
+            bar.split("maxLines = 1").size - 1 >= 2
+        )
+    }
+
     @Test
     fun `tv-only frame-rate controls are not drawn on the phone`() {
         val mobile = mobileSettings()
