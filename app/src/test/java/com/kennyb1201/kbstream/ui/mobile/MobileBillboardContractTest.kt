@@ -573,22 +573,29 @@ class MobileBillboardContractTest {
         // far - page 1's survivors stay ahead of page 2's, movies and shows
         // still alternate by rank, and the existing de-dupe/cap apply.
         assertTrue(
-            "survivors accumulate across pages",
-            vm.contains("moviePage?.mapTo(movies) { it.toBillboardPreview(\"movie\") }") &&
-                vm.contains("showPage?.mapTo(shows) { it.toBillboardPreview(\"series\") }")
+            "survivors accumulate across pages - `kept`, since the walk carries the page's " +
+                "raw count too (2026-11-16, F2)",
+            vm.contains("moviePage?.kept?.mapTo(movies) { it.toBillboardPreview(\"movie\") }") &&
+                vm.contains("showPage?.kept?.mapTo(shows) { it.toBillboardPreview(\"series\") }")
         )
         assertTrue(
             "and one interleave, over the accumulated lists, is the pool",
             vm.contains("pages = billboardInterleaveFeeds(movies, shows)")
         )
-        // The three ways it ends.
+        // The three ways it ends, each naming itself in the trace.
         assertTrue(
             "a page that did not answer ends the walk with what was gathered",
-            vm.contains("if (moviePage == null || showPage == null) break")
+            vm.contains("if (moviePage == null || showPage == null) {") &&
+                vm.contains("endReason = \"null page\"")
         )
         assertTrue(
             "and so does a page with nothing left on it",
-            vm.contains("if (moviePage.isEmpty() && showPage.isEmpty()) break")
+            vm.contains("if (moviePage.kept.isEmpty() && showPage.kept.isEmpty()) {") &&
+                vm.contains("endReason = \"empty pages\"")
+        )
+        assertTrue(
+            "and the third is the page cap, which is the loop's own condition",
+            vm.contains("reason = endReason ?: \"cap\"")
         )
         // A failed walk never blanks a published feed, and a DIFFERENT profile
         // still clears it: the publish rule is untouched by the walk.
