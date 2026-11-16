@@ -141,11 +141,15 @@ class UiUniformityBatchBContractTest {
             source("ui/home/HomeScreen.kt").contains("KBSectionHeader( title = text,")
         )
         val detail = source("ui/detail/DetailScreen.kt")
+        // Seven, not eight: the EPISODES heading is gone with the season chips it
+        // named - the seasons are a poster row now, and the row carries no
+        // heading of its own (Kenny's season-picker spec, 2026-11-15). Every
+        // heading Detail still has is the shared one.
         assertEquals(
             "Detail's rail headings are all the shared heading - including the " +
                 "Media row's, whose tab strip sits UNDER the heading rather " +
                 "than replacing it",
-            8,
+            7,
             count(detail, "KBSectionHeader(")
         )
         // The file-wide "no titleSmall in Detail" check this replaces was

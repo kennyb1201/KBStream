@@ -75,10 +75,12 @@ class UiUniformityBatchDContractTest {
 
     @Test
     fun `chips in a strip get the chip scale and corner`() {
+        // Detail's season strip is POSTERS now, not chips (season-picker spec,
+        // 2026-11-15), so the chip scale/corner promise has no strip left there to
+        // hold - it holds where chips remain, which is the assertions below.
         assertTrue(
-            "Detail's season chips are chips",
-            source("ui/detail/DetailScreen.kt")
-                .contains("focusedScale = KBFocusChip, shape = KBShapeChip,")
+            "Detail's season strip is the poster row, not a chip strip",
+            source("ui/detail/DetailScreen.kt").contains("SeasonPosterRow(")
         )
         assertTrue(
             "and so are the guide's group chips",

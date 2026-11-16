@@ -258,19 +258,26 @@ class FanartArtContractTest {
             val screen = source(path)
             assertTrue("$path asks the shared resolver", screen.contains("FanartArtRepository"))
             assertTrue(
-                "$path follows the season selection",
-                screen.contains("LaunchedEffect(normalizedType, tmdbDetail?.id, effectiveSeason)") ||
-                    screen.contains("LaunchedEffect(normalizedType, tmdbDetail?.id, currentSeason)")
-            )
-            // Since the vanishing-poster fix (spec 2026-11-14, F2) the screen asks
-            // the provenance-carrying lookup and writes through the keep/replace/
-            // clear rule, which is the same promise - held for every run, not only
-            // a season change.
-            assertTrue(
-                "$path writes the new poster only when it answers (no flash)",
-                screen.contains("seasonPosterAnswer(") && screen.contains("SeasonPosterMemory.decide(")
+                "$path goes through the shared season-poster path rather than " +
+                    "resolving a poster of its own",
+                screen.contains("rememberSeasonPoster(") || screen.contains("SeasonPosterRow(")
             )
         }
+        // Where the resolve went: since the season strip became a poster row
+        // (2026-11-15) the per-season lookup is ONE shared implementation -
+        // `rememberSeasonPoster`, used by both layouts and by the row item - and it
+        // still follows the season selection, asks the provenance-carrying lookup
+        // and writes through the keep/replace/clear rule from the vanishing-poster
+        // fix (spec 2026-11-14, F2). Those three promises moved file, not away.
+        val row = source("com/kennyb1201/kbstream/ui/detail/SeasonPosterRow.kt")
+        assertTrue(
+            "the poster follows the season selection",
+            row.contains("LaunchedEffect(season, resolver)")
+        )
+        assertTrue(
+            "the new poster is written only when it answers (no flash)",
+            row.contains("seasonPosterAnswer(") && row.contains("SeasonPosterMemory.decide(")
+        )
     }
 
     @Test
