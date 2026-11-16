@@ -171,6 +171,15 @@ private fun bingecatMapSyncPrefs(context: Context, profileId: String? = null) =
 private const val SIMKL_AUTH_STORE = "simkl_auth"
 private const val SIMKL_ACCESS_TOKEN_KEY = "access_token"
 
+/**
+ * AUTH V2's marker for "this device holds its own grant" (spec 2026-11-16, F3).
+ *
+ * Its presence means the session is DEVICE-LOCAL: it is never published, never
+ * adopted from a sibling, and never cleared by a sibling's legacy tombstone. V1
+ * never wrote this key, so every row that predates the migration is a legacy one.
+ */
+private const val SIMKL_REFRESH_TOKEN_KEY = "refresh_token"
+
 // Display-prefs store, plus the LOCAL bookkeeping that gives the display blob
 // its per-key edit timestamps. These shadow keys are never published —
 // SYNCED_PREF_KEYS is what actually leaves the device.
@@ -398,6 +407,10 @@ object PrefsPayloadBuilder {
         // cannot put them on the wire.
         "screensaver_enabled",
         "screensaver_timeout",
+        // Dynamic color is what THIS phone's wallpaper looks like. A television
+        // has no wallpaper, and a synced value would arm it from nothing -
+        // device-local (spec 2026-11-16, A1).
+        "dynamic_color",
         // `force_software_decoder` used to sit here with no accessor anywhere in
         // the app - a key nothing could read or write. Removed with the other
         // dead entries (settings reorg U4).
@@ -662,9 +675,10 @@ object PrefsPayloadBuilder {
     fun hasSimklAuthToPublish(context: Context): Boolean {
         val prefs = simklAuthPrefs(context)
         val token = prefs.getString(SIMKL_ACCESS_TOKEN_KEY, null)
+        val refresh = prefs.getString(SIMKL_REFRESH_TOKEN_KEY, null)
         val signedOut = token.isNullOrBlank() &&
             prefs.getBoolean(SimklAuthRules.SIGNED_OUT_FIELD, false)
-        return SimklAuthRules.shouldPublish(token, signedOut)
+        return SimklAuthRules.shouldPublish(token, signedOut, refresh)
     }
 
     /**
@@ -1213,6 +1227,19 @@ object PrefsPayloadBuilder {
     fun buildSimklAuth(context: Context): JsonObject {
         val prefs = simklAuthPrefs(context)
         val token = prefs.getString(SIMKL_ACCESS_TOKEN_KEY, null)
+        val refresh = prefs.getString(SIMKL_REFRESH_TOKEN_KEY, null)
+        // AUTH V2 (spec 2026-11-16, F3): a V2 session is per DEVICE - two devices
+        // sharing one refresh token cut each other off - so the row carries
+        // nothing at all for it. Not even a "connected" marker: a marker would
+        // claim a connection on a device whose own grant was revoked.
+        val deviceLocal = SimklAuthV2Rules.isV2Session(refresh)
+        if (deviceLocal) {
+            return buildJsonObject {
+                put("updatedAt", System.currentTimeMillis())
+                put(SIMKL_ACCESS_TOKEN_KEY, "")
+                put(SimklAuthRules.SIGNED_OUT_FIELD, false)
+            }
+        }
         // Tombstone: a blank token is a real sign-out ONLY when this profile
         // deliberately disconnected. It also has to be blank — a stale marker
         // left over from an earlier disconnect must not tag a live token.
@@ -2627,6 +2654,12 @@ object PrefsPayloadApplier {
                 ?.content == "true"
 
         val prefs = simklAuthPrefs(context, profileId)
+
+        // AUTH V2 (spec 2026-11-16, F3): a device holding its own V2 grant takes
+        // nothing from this row. A sibling's legacy sign-out must not end a
+        // session it never held, and a legacy token must not replace a V2 pair
+        // (the refresh token is what makes the two different sessions).
+        if (SimklAuthV2Rules.isV2Session(prefs.getString(SIMKL_REFRESH_TOKEN_KEY, null))) return
 
         // Blank token = the profile SIGNED OUT on some device. Honor it — but
         // only when the blob says so explicitly. Every device used to publish

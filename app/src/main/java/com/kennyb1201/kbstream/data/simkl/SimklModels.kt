@@ -4,20 +4,67 @@ import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 
 @JsonClass(generateAdapter = true)
-data class SimklPinCodeResponse(
-    @Json(name = "user_code") val userCode: String?,
-    @Json(name = "device_code") val deviceCode: String?,
-    @Json(name = "verification_url") val verificationUrl: String?,
-    @Json(name = "expires_in") val expiresIn: Int?,
-    @Json(name = "interval") val interval: Int?
-)
-
-@JsonClass(generateAdapter = true)
 data class SimklTokenResponse(
     @Json(name = "access_token") val accessToken: String?,
     @Json(name = "token_type") val tokenType: String?,
     @Json(name = "refresh_token") val refreshToken: String?,
-    @Json(name = "created_at") val createdAt: Long?
+    @Json(name = "created_at") val createdAt: Long?,
+    /** V2 gives the access token a 7-day life; V1's response had no expiry. */
+    @Json(name = "expires_in") val expiresIn: Long? = null,
+    /** V2 answers the scope it granted, which the write gates check. */
+    @Json(name = "scope") val scope: String? = null,
+    /** RFC 8628's error code on a poll that has not been approved yet. */
+    @Json(name = "error") val error: String? = null,
+    /** The human line beside [error]; never shown in place of a mapped message. */
+    @Json(name = "error_description") val errorDescription: String? = null
+)
+
+/**
+ * `POST /oauth2/device` (AUTH V2, spec 2026-11-16 F1).
+ *
+ * `device_code` is the POLLING credential and is never logged or drawn;
+ * `user_code` is what the viewer types, `verification_uri_complete` is what the
+ * QR encodes (it pre-fills the code and still shows the consent screen).
+ */
+@JsonClass(generateAdapter = true)
+data class SimklDeviceCodeResponse(
+    @Json(name = "device_code") val deviceCode: String? = null,
+    @Json(name = "user_code") val userCode: String? = null,
+    @Json(name = "verification_uri") val verificationUri: String? = null,
+    @Json(name = "verification_uri_complete") val verificationUriComplete: String? = null,
+    @Json(name = "expires_in") val expiresIn: Long? = null,
+    @Json(name = "interval") val interval: Long? = null,
+    @Json(name = "error") val error: String? = null,
+    @Json(name = "error_description") val errorDescription: String? = null
+)
+
+/** `POST /oauth2/device`'s body: a public client sends only its id and scopes. */
+@JsonClass(generateAdapter = true)
+data class SimklDeviceAuthRequest(
+    @Json(name = "client_id") val clientId: String,
+    @Json(name = "scope") val scope: String
+)
+
+/** The device-code grant half of `POST /oauth2/token`. */
+@JsonClass(generateAdapter = true)
+data class SimklDeviceTokenRequest(
+    @Json(name = "grant_type") val grantType: String = "urn:ietf:params:oauth:grant-type:device_code",
+    @Json(name = "device_code") val deviceCode: String,
+    @Json(name = "client_id") val clientId: String
+)
+
+/** The refresh half of `POST /oauth2/token`. */
+@JsonClass(generateAdapter = true)
+data class SimklRefreshRequest(
+    @Json(name = "grant_type") val grantType: String = "refresh_token",
+    @Json(name = "refresh_token") val refreshToken: String,
+    @Json(name = "client_id") val clientId: String
+)
+
+/** `POST /oauth2/revoke`: the token, and nothing else a public client must send. */
+@JsonClass(generateAdapter = true)
+data class SimklRevokeRequest(
+    @Json(name = "token") val token: String
 )
 
 @JsonClass(generateAdapter = true)

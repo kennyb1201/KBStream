@@ -166,8 +166,10 @@ import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.detail.formatEpisodeAirDate
 import com.kennyb1201.kbstream.ui.detail.episodeRowKey
 import com.kennyb1201.kbstream.ui.detail.isEpisodeUnavailable
+import com.kennyb1201.kbstream.ui.theme.ArtworkTintGradient
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
+import com.kennyb1201.kbstream.ui.theme.rememberArtworkTint
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBShapePill
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -3120,6 +3122,26 @@ private fun MobileDetailHeader(
             modifier = Modifier
                 .fillMaxSize()
                 .heroSharedElement(type, id)
+        )
+        // Part C (spec 2026-11-16): the tint this title's own backdrop
+        // contributes, bleeding UP from the header's bottom edge.
+        //
+        // It sits UNDER the scrim below, so the title-wide scrim still protects
+        // the text and the chips (C4) - the tint is a background wash, never
+        // something text is drawn on directly at full strength. Colours come from
+        // the header's ALREADY-LOADED art via the image cache, so opening a title
+        // fetches nothing new and waits on nothing new (C1); a title whose art has
+        // not landed yet draws no tint at all rather than a placeholder colour
+        // (C5). It scrolls away with this item, which is what makes it fade out
+        // with the header (C3).
+        ArtworkTintGradient(
+            tint = rememberArtworkTint(backdropUrl),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .fillMaxHeight(0.6f),
+            fadeUpwards = true,
+            maxAlpha = 0.85f
         )
         // The shared hero player, over the still: its shutter is transparent,
         // so until the first frame lands the backdrop above is exactly what a

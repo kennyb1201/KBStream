@@ -11,11 +11,35 @@ data class SimklUiState(
     val isConfigured: Boolean = false,
     val isLoading: Boolean = false,
     val isConnected: Boolean = false,
+    /**
+     * The code as the viewer types it - `XXXX-YYYY` under AUTH V2 (spec
+     * 2026-11-16, F1). Already formatted by the repository.
+     */
     val userCode: String? = null,
+
+    /**
+     * The POLLING credential. Never drawn, never logged: it is the half of the
+     * pair that can exchange itself for a token.
+     */
     val deviceCode: String? = null,
+
+    /**
+     * What the QR encodes: V2's `verification_uri_complete`, which pre-fills the
+     * code and still shows the consent screen.
+     */
     val verificationUrl: String? = null,
     val expiresIn: Int? = null,
     val intervalSeconds: Int = 5,
+
+    /** Countdown against [expiresIn]; the code restarts itself at zero (F1). */
+    val secondsRemaining: Int? = null,
+
+    /**
+     * Connected on a LEGACY (V1) grant. The screen offers RECONNECT and the
+     * settings pane names the state (spec F4) - a V2 session is not legacy, and
+     * a disconnected profile is neither.
+     */
+    val isLegacySession: Boolean = false,
     val statusMessage: String? = null,
     val errorMessage: String? = null,
     /**

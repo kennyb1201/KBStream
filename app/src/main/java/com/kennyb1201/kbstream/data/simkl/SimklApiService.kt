@@ -7,20 +7,43 @@ import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
-import retrofit2.http.Path
 import retrofit2.http.Query
 
 interface SimklApiService {
 
-    @GET("oauth/pin")
-    suspend fun createPinCode(
-        @Query("redirect") redirect: String = "urn:ietf:wg:oauth:2.0:oob"
-    ): SimklPinCodeResponse
+    /*
+     * AUTH V2 (spec 2026-11-16). The PIN flow this interface used to expose
+     * (`GET oauth/pin` + `GET oauth/pin/{userCode}`) is retired by Simkl around
+     * April 2027; these four are its replacement. A public client sends only
+     * its client_id - there is still no secret anywhere in this file, and
+     * SimklClientConfigTest fails the build if one is ever added.
+     */
+    @POST("oauth2/device")
+    suspend fun requestDeviceCode(
+        @Body body: SimklDeviceAuthRequest
+    ): Response<SimklDeviceCodeResponse>
 
-    @GET("oauth/pin/{userCode}")
-    suspend fun checkPin(
-        @Path("userCode") userCode: String
-    ): SimklTokenResponse
+    /** One poll. `authorization_pending` is the ordinary answer while unapproved. */
+    @POST("oauth2/token")
+    suspend fun pollDeviceToken(
+        @Body body: SimklDeviceTokenRequest
+    ): Response<SimklTokenResponse>
+
+    /**
+     * The refresh grant. Simkl returns the SAME refresh token with a new
+     * access token, and the previous access token stops working immediately -
+     * so a refresh must be single-flight (one caller at a time), never raced.
+     */
+    @POST("oauth2/token")
+    suspend fun refreshToken(
+        @Body body: SimklRefreshRequest
+    ): Response<SimklTokenResponse>
+
+    /** Always 200, even for a token that never existed (RFC 7009 anti-probing). */
+    @POST("oauth2/revoke")
+    suspend fun revoke(
+        @Body body: SimklRevokeRequest
+    ): Response<Unit>
 
     @GET("sync/activities")
     suspend fun getActivities(

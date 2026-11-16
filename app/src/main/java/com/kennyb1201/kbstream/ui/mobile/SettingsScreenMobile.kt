@@ -934,13 +934,24 @@ private fun IntegrationsPaneMobile(
                 .getInstance(context).hasToken()
         }
         val simklAccount = rememberSimklAccountName(simklConnected, profileRowKey)
+        // The reconnect row (spec 2026-11-16, F4) - the TV pane's row, verbatim:
+        // a legacy session keeps working until Simkl retires it, and this names
+        // the state and leads to the device flow without a forced sign-out.
+        val simklLegacy = remember(profileRowKey, syncedRevision, simklConnected) {
+            simklConnected && com.kennyb1201.kbstream.data.simkl.SimklRepository
+                .getInstance(context).isLegacySession()
+        }
         SettingsNavRowMobile(
-            label = if (simklConnected) {
-                connectedAsLabel("Simkl", simklAccount)
-            } else {
-                "Simkl"
+            label = when {
+                !simklConnected -> "Simkl"
+                simklLegacy -> "Simkl: connected (legacy)"
+                else -> connectedAsLabel("Simkl", simklAccount)
             },
-            description = "Connect your Simkl account for scrobbling",
+            description = if (simklLegacy) {
+                "Reconnect to keep Simkl syncing after the old sign-in is retired"
+            } else {
+                "Connect your Simkl account for scrobbling"
+            },
             onClick = onOpenSimkl
         )
         val traktConnected = remember(profileRowKey, syncedRevision) {
@@ -2860,6 +2871,11 @@ private fun InterfacePaneMobile() {
     var amoled by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getAmoledBlack(context))
     }
+    // Device-local, so it re-reads on the same revision the rest of the theme
+    // rows do; the value never arrives from another device (spec A1).
+    var dynamicColor by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getDynamicColor(context))
+    }
     var pureBlack by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getPureBlackSurface(context))
     }
@@ -2982,6 +2998,32 @@ private fun InterfacePaneMobile() {
         SettingsSectionMobile("Theme")
         // The accent leads the section, as it does on the TV pane.
         AccentColorPickerMobile()
+        // Part A (spec 2026-11-16): beside the accent picker it overrides, which
+        // is where a viewer looking at the accent will find it. Device-local and
+        // OFF by default, so the chosen accent is untouched until it is asked
+        // for - and turning it back off is exactly the way to get that accent
+        // back, because nothing about it is written while this is on.
+        val dynamicColorSupported = android.os.Build.VERSION.SDK_INT >=
+            android.os.Build.VERSION_CODES.S
+        SettingsToggleMobile(
+            label = "Dynamic color",
+            description = if (dynamicColorSupported) {
+                "Tint the app from your wallpaper (Android 12 and up). Overrides " +
+                    "the accent colour while on."
+            } else {
+                "Tint the app from your wallpaper. Needs Android 12 - this device " +
+                    "has no wallpaper palette, so the accent stays as chosen."
+            },
+            checked = dynamicColor,
+            onChange = {
+                dynamicColor = it
+                AppPreferences.setDynamicColor(context, it)
+                // The stored pref is the source of truth and the theme's live
+                // state is a mirror: without this the switch would only take
+                // effect on the next launch.
+                refreshThemeMirrors(context)
+            }
+        )
         SettingsToggleMobile(
             label = "AMOLED black",
             description = "Use true black for the app background.",

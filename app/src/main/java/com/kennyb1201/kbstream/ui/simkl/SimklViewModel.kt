@@ -29,12 +29,16 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
         SimklUiState(
             isConfigured = repository.isConfigured(),
             isConnected = repository.hasToken(),
+            isLegacySession = repository.isLegacySession(),
             statusMessage = if (repository.hasToken()) "Connected to Simkl." else null
         )
     )
     val uiState: StateFlow<SimklUiState> = _uiState.asStateFlow()
 
     private var pollJob: Job? = null
+
+    /** Drives the on-screen countdown for the code's own lifetime. */
+    private var countdownJob: Job? = null
 
     /**
      * The PIN request, so a re-entry cancels the previous one.
@@ -78,10 +82,13 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                     pollJob = null
                     codeJob?.cancel()
                     codeJob = null
+                    countdownJob?.cancel()
+                    countdownJob = null
                     val connected = repository.hasToken()
                     _uiState.value = SimklUiState(
                         isConfigured = repository.isConfigured(),
                         isConnected = connected,
+                        isLegacySession = repository.isLegacySession(),
                         statusMessage = if (connected) "Connected to Simkl." else null
                     )
                     if (connected) {
@@ -194,27 +201,44 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Starts an AUTH V2 device authorisation (spec 2026-11-16, F1).
+     *
+     * The request asks for `media:read media:write` and the QR carries
+     * `verification_uri_complete`, so a scan lands on the consent screen with the
+     * code already filled in. The device code stays in this state only - it is
+     * the polling credential and is never drawn or logged.
+     */
     private fun beginCodeRequest() {
+        pollJob?.cancel()
+        countdownJob?.cancel()
         codeJob = viewModelScope.launch {
             _uiState.value = _uiState.value.copy(
                 isLoading = true,
                 errorMessage = null,
+                userCode = null,
+                deviceCode = null,
+                verificationUrl = null,
+                secondsRemaining = null,
                 statusMessage = "Requesting Simkl code…"
             )
 
-            runCatchingCancellable { repository.createPinCode() }
-                .onSuccess { pin ->
+            runCatchingCancellable { repository.startDeviceAuthorization() }
+                .onSuccess { authorization ->
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
                         isConnected = repository.hasToken(),
-                        userCode = pin.userCode,
-                        deviceCode = pin.deviceCode,
-                        verificationUrl = pin.verificationUrl ?: "https://simkl.com/pin",
-                        expiresIn = pin.expiresIn,
-                        intervalSeconds = pin.interval ?: 5,
+                        isLegacySession = repository.isLegacySession(),
+                        userCode = authorization.userCode,
+                        deviceCode = authorization.deviceCode,
+                        verificationUrl = authorization.verificationUriComplete,
+                        expiresIn = authorization.expiresInSeconds,
+                        intervalSeconds = authorization.intervalSeconds,
+                        secondsRemaining = authorization.expiresInSeconds,
                         statusMessage = "Enter this code on Simkl to connect.",
                         errorMessage = null
                     )
+                    startCountdown(authorization.expiresInSeconds)
                     startPolling()
                 }
                 .onFailure { error ->
@@ -224,6 +248,31 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                         statusMessage = null
                     )
                 }
+        }
+    }
+
+    /**
+     * Ticks the code's countdown down to zero (F1).
+     *
+     * Display only: the poll loop owns expiry, because the same `expires_in` has
+     * to end the attempt even on a device whose countdown was missed while
+     * backgrounded. Measured on the monotonic clock, so a wall-clock jump cannot
+     * make a code look dead early.
+     */
+    private fun startCountdown(expiresInSeconds: Int) {
+        countdownJob?.cancel()
+        countdownJob = viewModelScope.launch {
+            val startedAtMs = SystemClock.elapsedRealtime()
+            while (true) {
+                val elapsed = (SystemClock.elapsedRealtime() - startedAtMs) / 1_000L
+                val left = com.kennyb1201.kbstream.data.simkl.SimklAuthV2Rules
+                    .secondsRemaining(elapsed, expiresInSeconds)
+                val current = _uiState.value
+                if (current.userCode == null) return@launch
+                _uiState.value = current.copy(secondsRemaining = left)
+                if (left <= 0) return@launch
+                delay(1_000L)
+            }
         }
     }
 
@@ -239,9 +288,22 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
      * the generic timeout ten minutes later. Expiry is measured on the monotonic
      * clock, as Trakt's loop does: a wall-clock jump must not read as one.
      */
+    /**
+     * Polls `POST /oauth2/token` until the code is approved, refused, or past its
+     * own lifetime (spec 2026-11-16, F1's polling discipline).
+     *
+     * Three answers are handled rather than lumped together: `authorization_pending`
+     * keeps the wait, `slow_down` widens the interval by five seconds before the
+     * next poll, and an expiry starts a FRESH code instead of leaving a dead one on
+     * screen - the old flow told the viewer to generate a new one, which is the same
+     * work done by hand on a D-pad.
+     *
+     * A decline is invisible on the wire (Simkl writes nothing), so the code's own
+     * `expires_in` is the only signal the attempt ever gets.
+     */
     private fun startPolling() {
-        val userCode = _uiState.value.userCode ?: return
-        val interval = _uiState.value.intervalSeconds.coerceAtLeast(3)
+        val deviceCode = _uiState.value.deviceCode ?: return
+        var interval = _uiState.value.intervalSeconds.coerceAtLeast(1)
         val expiresInSeconds = _uiState.value.expiresIn ?: 0
 
         pollJob?.cancel()
@@ -249,66 +311,115 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
             val issuedAtMs = SystemClock.elapsedRealtime()
             var consecutiveFailures = 0
 
-            repeat(120) {
+            while (true) {
                 delay(interval * 1000L)
 
-                if (expiresInSeconds > 0 &&
-                    (SystemClock.elapsedRealtime() - issuedAtMs) / 1_000L >= expiresInSeconds
-                ) {
-                    fail("That code expired. Generate a new one.")
+                val elapsed = (SystemClock.elapsedRealtime() - issuedAtMs) / 1_000L
+                if (expiresInSeconds > 0 && elapsed >= expiresInSeconds) {
+                    restartExpiredCode()
                     return@launch
                 }
 
-                runCatchingCancellable { repository.checkPin(userCode) }
-                    .onSuccess { token ->
-                        // A poll that answered - even "not yet" - is a reached
-                        // Simkl, so the failure run ends here.
-                        consecutiveFailures = 0
-                        if (!token.accessToken.isNullOrBlank()) {
-                            repository.forceClearWatchedActivitySync()
-                            watchedStatusRepository.clearRemoteSyncCheckpoint()
+                val outcome = runCatchingCancellable {
+                    repository.pollDeviceAuthorization(
+                        deviceCode = deviceCode,
+                        elapsedSeconds = elapsed,
+                        expiresInSeconds = expiresInSeconds,
+                        intervalSeconds = interval
+                    )
+                }.getOrNull()
 
-                            _uiState.value = _uiState.value.copy(
-                                isLoading = false,
-                                isConnected = repository.hasToken(),
-                                statusMessage = "Connected to Simkl.",
-                                errorMessage = null
-                            )
-                            loadAccountInfo()
-                            loadContinueWatching()
-                            loadWatchedCounts()
-                            // A connect is one of the three drain triggers for
-                            // the queued taste signals (see
-                            // TasteRatingSubmission): the fresh grant re-opens
-                            // the leg and this profile's pending ratings are due.
-                            TasteRatingSubmission.onTrackerConnected(
-                                appContext,
-                                TasteRatingTracker.SIMKL
-                            )
-                            pollJob?.cancel()
-                            return@launch
-                        } else {
-                            _uiState.value = _uiState.value.copy(
-                                isLoading = false,
-                                statusMessage = "Waiting for authorization…"
-                            )
-                        }
+                if (outcome == null) {
+                    consecutiveFailures++
+                    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                        fail("Could not reach Simkl. Try again.")
+                        return@launch
                     }
-                    .onFailure {
-                        consecutiveFailures++
-                        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-                            fail("Could not reach Simkl. Try again.")
-                            return@launch
-                        }
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        statusMessage = "Could not reach Simkl — retrying…"
+                    )
+                    continue
+                }
+
+                // A poll that answered - even "not yet" - is a reached Simkl, so
+                // the failure run ends here.
+                consecutiveFailures = 0
+                when (outcome.state) {
+                    com.kennyb1201.kbstream.data.simkl.SimklAuthV2Rules.Poll.APPROVED -> {
+                        onAuthorized()
+                        return@launch
+                    }
+
+                    com.kennyb1201.kbstream.data.simkl.SimklAuthV2Rules.Poll.PENDING -> {
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
-                            statusMessage = "Could not reach Simkl — retrying…"
+                            statusMessage = "Waiting for authorization…"
                         )
                     }
-            }
 
-            fail("Authorization timed out. Please generate a new code.")
+                    com.kennyb1201.kbstream.data.simkl.SimklAuthV2Rules.Poll.SLOW_DOWN -> {
+                        interval = (outcome.intervalSeconds ?: interval).coerceAtLeast(1)
+                        _uiState.value = _uiState.value.copy(
+                            isLoading = false,
+                            intervalSeconds = interval,
+                            statusMessage = "Waiting for authorization…"
+                        )
+                    }
+
+                    com.kennyb1201.kbstream.data.simkl.SimklAuthV2Rules.Poll.EXPIRED -> {
+                        restartExpiredCode()
+                        return@launch
+                    }
+
+                    else -> {
+                        fail(outcome.message ?: "Simkl could not authorise this app.")
+                        return@launch
+                    }
+                }
+            }
         }
+    }
+
+    /** One shape for an approved poll: the session is already saved by the repository. */
+    private fun onAuthorized() {
+        repository.forceClearWatchedActivitySync()
+        watchedStatusRepository.clearRemoteSyncCheckpoint()
+        countdownJob?.cancel()
+
+        _uiState.value = _uiState.value.copy(
+            isLoading = false,
+            isConnected = repository.hasToken(),
+            isLegacySession = repository.isLegacySession(),
+            userCode = null,
+            deviceCode = null,
+            verificationUrl = null,
+            secondsRemaining = null,
+            statusMessage = "Connected to Simkl.",
+            errorMessage = null
+        )
+        loadAccountInfo()
+        loadContinueWatching()
+        loadWatchedCounts()
+        // A connect is one of the three drain triggers for the queued taste
+        // signals (see TasteRatingSubmission): the fresh grant re-opens the leg
+        // and this profile's pending ratings are due.
+        TasteRatingSubmission.onTrackerConnected(
+            appContext,
+            TasteRatingTracker.SIMKL
+        )
+    }
+
+    /**
+     * The code died on its own: issue another, rather than leaving a dead one on
+     * screen for the viewer to notice and fix by hand (F1).
+     */
+    private fun restartExpiredCode() {
+        _uiState.value = _uiState.value.copy(
+            statusMessage = "That code expired — generating a new one…",
+            errorMessage = null
+        )
+        beginCodeRequest()
     }
 
     /** One shape for every way the poll can end without a token. */
@@ -430,6 +541,8 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
         pollJob?.cancel()
         codeJob?.cancel()
         codeJob = null
+        countdownJob?.cancel()
+        countdownJob = null
 
         viewModelScope.launch {
             val cleared = runCatchingCancellable {
@@ -452,6 +565,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                 stillConnected -> SimklUiState(
                     isConfigured = repository.isConfigured(),
                     isConnected = true,
+                    isLegacySession = repository.isLegacySession(),
                     errorMessage = "Could not sign out on this device — Simkl is still " +
                         "connected here. Try again."
                 )

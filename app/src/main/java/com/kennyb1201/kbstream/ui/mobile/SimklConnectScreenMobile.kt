@@ -184,12 +184,32 @@ fun SimklConnectScreenMobile(
                             )
                         }
 
+                        // The legacy state (spec 2026-11-16, F4): the TV page's
+                        // sentence and button, so both surfaces say the same thing
+                        // about the same session.
+                        if (uiState.isLegacySession) {
+                            Text(
+                                text = "This device is signed in with the old Simkl " +
+                                    "sign-in. Reconnect to keep syncing after Simkl " +
+                                    "retires it.",
+                                color = KBTextLo,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             KBButton(
                                 label = "REFRESH",
                                 modifier = Modifier.fillMaxWidth(),
                                 onClick = vm::refreshSimklNow
                             )
+                            if (uiState.isLegacySession && !kidsProfile) {
+                                KBButton(
+                                    label = "RECONNECT",
+                                    modifier = Modifier.fillMaxWidth(),
+                                    onClick = vm::generateCode
+                                )
+                            }
                             if (!kidsProfile) {
                                 KBButton(
                                     label = "DISCONNECT",
@@ -257,6 +277,16 @@ fun SimklConnectScreenMobile(
                                     textAlign = TextAlign.Center,
                                     modifier = Modifier.padding(top = 6.dp)
                                 )
+                                // The code's own lifetime, counting down (F1).
+                                uiState.secondsRemaining?.let { left ->
+                                    Text(
+                                        text = "expires in " +
+                                            "${left / 60}:${(left % 60).toString().padStart(2, '0')}",
+                                        color = KBTextLo,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        modifier = Modifier.padding(top = 8.dp)
+                                    )
+                                }
                             }
                         }
 

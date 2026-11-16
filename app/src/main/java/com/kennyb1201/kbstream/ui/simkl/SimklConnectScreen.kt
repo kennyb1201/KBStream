@@ -180,12 +180,29 @@ fun SimklConnectScreen(
                         SimklErrorLine(error)
                     }
 
+                    // The legacy state (spec 2026-11-16, F4): a session minted by
+                    // AUTH V1 keeps working until Simkl retires it, and this is
+                    // where the viewer is told - and offered the way forward -
+                    // without a forced sign-out.
+                    if (uiState.isLegacySession) {
+                        SimklStatusLine(
+                            "This device is signed in with the old Simkl sign-in. " +
+                                "Reconnect to keep syncing after Simkl retires it."
+                        )
+                    }
+
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         // The app's one button (KBButton), not a hand-rolled
                         // KBCard + titleMedium label: the same "REFRESH" was a
                         // size bigger and a pixel taller here than in every
                         // other panel.
                         KBButton(label = "REFRESH", onClick = vm::refreshSimklNow)
+
+                        // Legacy only: the same device flow every new sign-in
+                        // uses, one button away from where the state is named.
+                        if (uiState.isLegacySession && !kidsProfile) {
+                            KBButton(label = "RECONNECT", onClick = vm::generateCode)
+                        }
 
                         KBButton(label = "BACK", onClick = onBack)
 
@@ -277,6 +294,18 @@ fun SimklConnectScreen(
                                         textAlign = TextAlign.Center,
                                         modifier = Modifier.padding(top = 6.dp)
                                     )
+                                    // The code's own lifetime, counting down: a
+                                    // dead code left on screen was the old flow's
+                                    // worst state (spec F1).
+                                    uiState.secondsRemaining?.let { left ->
+                                        Text(
+                                            text = "expires in " +
+                                                "${left / 60}:${(left % 60).toString().padStart(2, '0')}",
+                                            color = KBTextLo,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            modifier = Modifier.padding(top = 8.dp)
+                                        )
+                                    }
                                 }
                             }
                         }

@@ -47,6 +47,11 @@ jobs:
       # SIMKL_CLIENT_SECRET secret to pass, and no buildConfigField to receive
       # one (see app/build.gradle.kts).
       SIMKL_CLIENT_ID: ${{ secrets.SIMKL_CLIENT_ID }}
+      # AUTH V2's registration (spec 2026-11-16). A second app on Simkl's side:
+      # both ids ship while the V1 one keeps serving the tokens already out
+      # there. Public by construction, like the V1 id - the device flow sends
+      # only client_id, so there is no V2 secret to pass.
+      SIMKL_CLIENT_ID_V2: ${{ secrets.SIMKL_CLIENT_ID_V2 }}
       # Trakt's device-code app. The id only: this is a public-client flow and
       # no client secret may be compiled into the APK (SimklClientConfigTest
       # fails the build on any *SECRET* BuildConfig field).

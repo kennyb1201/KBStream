@@ -1,12 +1,17 @@
 package com.kennyb1201.kbstream.ui.theme
 
+import android.content.Context
+import android.os.Build
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.tv.material3.MaterialTheme as TvMaterialTheme
 
 /**
@@ -50,11 +55,47 @@ import androidx.tv.material3.MaterialTheme as TvMaterialTheme
  */
 @Composable
 fun MobileTheme(content: @Composable () -> Unit) {
+    val context = LocalContext.current
+    // Part A (spec 2026-11-16): when the viewer asks for it, the phone's scheme
+    // comes from the SYSTEM palette - Material You reads the wallpaper and hands
+    // the app a palette, Android 12 and up. Everything else about this theme is
+    // unchanged: the type scale, the shapes and the AMOLED tokens are the app's.
+    //
+    // Below API 31 there is no palette to ask for, so the switch simply keeps
+    // today's scheme (A3) - the row stays visible and does nothing, which is the
+    // honest answer on a device that has no wallpaper palette to give.
+    val dynamic = kbDynamicColorState.value && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    val amoled = kbAmoledBlackState.value
+    val scheme = remember(dynamic, amoled, KBAccent) {
+        if (dynamic) dynamicScheme(context, amoled) else KBStreamMobileColorScheme
+    }
     MaterialTheme(
-        colorScheme = KBStreamMobileColorScheme,
+        colorScheme = scheme,
         typography = rememberBrandTypography(),
         shapes = KBStreamMobileShapes,
         content = content
+    )
+}
+
+/**
+ * The wallpaper's palette, with the app's black policy applied ON TOP of it (A4).
+ *
+ * AMOLED black is a statement about the PANEL, not about the accent: with it on,
+ * the background and the surface plates stay the app's true blacks whatever the
+ * wallpaper says, and dynamic colour is free to tint the rest. The two settings
+ * therefore never fight - one owns the black, the other owns the hue.
+ */
+@androidx.annotation.RequiresApi(Build.VERSION_CODES.S)
+private fun dynamicScheme(context: Context, amoled: Boolean): ColorScheme {
+    val base = dynamicDarkColorScheme(context)
+    if (!amoled) return base
+    return base.copy(
+        background = KBVoid,
+        onBackground = KBTextHi,
+        surface = KBSurface,
+        onSurface = KBTextHi,
+        surfaceVariant = KBSurfaceRaised,
+        onSurfaceVariant = KBTextLo
     )
 }
 

@@ -58,6 +58,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -202,11 +203,13 @@ import com.kennyb1201.kbstream.ui.components.imageOverridePosterUrl
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
+import com.kennyb1201.kbstream.ui.theme.ArtworkTintGradient
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusNone
 import com.kennyb1201.kbstream.ui.theme.KBPlum
 import com.kennyb1201.kbstream.ui.theme.KBRust
+import com.kennyb1201.kbstream.ui.theme.rememberArtworkTint
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -6925,6 +6928,33 @@ fun HomeScreen(
                 vertical = TvSafeAreaVertical
             )
     ) {
+        // Spotlight's tint (spec 2026-11-16, Part B).
+        //
+        // Drawn BEFORE the Column so it is a wash UNDER the top bar and the
+        // first rail, never a colour over their cards (B4), and it only appears
+        // once the billboard has scrolled away (B2): while the billboard is on
+        // screen it supplies the colour itself. The colours come from the FOCUSED
+        // card's art, out of the image cache only - a focus move never waits on a
+        // download (B1), and a card with no art yet keeps the previous gradient
+        // (B3) because the drawing helper holds its last resolved tint.
+        if (spotlightActive) {
+            val heroScrolledAway by remember {
+                derivedStateOf {
+                    railListState.layoutInfo.visibleItemsInfo
+                        .none { info -> info.key == SPOTLIGHT_HERO_ITEM_KEY }
+                }
+            }
+            ArtworkTintGradient(
+                tint = rememberArtworkTint(
+                    focusedItemState.value?.background ?: focusedItemState.value?.poster
+                ),
+                visible = heroScrolledAway,
+                // A top strip, not a full-screen wash (B4).
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(280.dp)
+            )
+        }
         Column(
             modifier = Modifier.fillMaxSize()
         ) {

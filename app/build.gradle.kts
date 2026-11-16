@@ -77,6 +77,18 @@ val simklClientId = localProps.getProperty("SIMKL_CLIENT_ID")
     ?: System.getenv("SIMKL_CLIENT_ID")
     ?: ""
 
+// AUTH V2's registration (spec 2026-11-16, F0/F4). A V1 client id cannot be
+// upgraded - Simkl treats V2 as a second app - so BOTH ids ship and both
+// registrations stay live until AUTH V1 is retired (around April 2027). Every
+// new sign-in is minted against this one; the V1 id above keeps serving the
+// tokens already out there, which is what lets the migration land without a
+// forced sign-out. Public by construction, exactly like the V1 id: a device-flow
+// public client sends only its client_id, so there is no V2 secret here either
+// (pinned by SimklClientConfigTest).
+val simklClientIdV2 = localProps.getProperty("SIMKL_CLIENT_ID_V2")
+    ?: System.getenv("SIMKL_CLIENT_ID_V2")
+    ?: ""
+
 // There is deliberately no SIMKL_CLIENT_SECRET here, and it must not come
 // back. Simkl is reached through its PIN (device) flow: the app asks
 // /oauth/pin for a user_code, shows it, and polls /oauth/pin/{user_code}
@@ -316,6 +328,7 @@ android {
         buildConfigField("String", "FANART_API_KEY", "\"$fanartApiKey\"")
         buildConfigField("String", "TVDB_API_KEY", "\"$tvdbApiKey\"")
         buildConfigField("String", "SIMKL_CLIENT_ID", "\"$simklClientId\"")
+        buildConfigField("String", "SIMKL_CLIENT_ID_V2", "\"$simklClientIdV2\"")
         buildConfigField("String", "TRAKT_CLIENT_ID", "\"$traktClientId\"")
         buildConfigField("String", "MAL_CLIENT_ID", "\"$malClientId\"")
         buildConfigField("String", "KITSU_CLIENT_ID", "\"$kitsuClientId\"")

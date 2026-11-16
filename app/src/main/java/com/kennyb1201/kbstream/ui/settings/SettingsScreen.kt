@@ -1124,13 +1124,25 @@ fun SettingsScreen(
                             .getInstance(context).hasToken()
                     }
                     val simklAccount = rememberSimklAccountName(simklConnected, profileRowKey)
+                    // The reconnect row (spec 2026-11-16, F4): a session minted
+                    // before the V2 migration keeps working, and this row is where
+                    // a viewer who distrusts a banner goes looking. It opens the
+                    // Simkl page, whose RECONNECT button starts the device flow.
+                    val simklLegacy = remember(profileRowKey, syncedRevision, simklConnected) {
+                        simklConnected && com.kennyb1201.kbstream.data.simkl.SimklRepository
+                            .getInstance(context).isLegacySession()
+                    }
                     NavigationRow(
-                        label = if (simklConnected) {
-                            connectedAsLabel("Simkl", simklAccount)
-                        } else {
-                            "Simkl"
+                        label = when {
+                            !simklConnected -> "Simkl"
+                            simklLegacy -> "Simkl: connected (legacy)"
+                            else -> connectedAsLabel("Simkl", simklAccount)
                         },
-                        description = "Connect your Simkl account for scrobbling",
+                        description = if (simklLegacy) {
+                            "Reconnect to keep Simkl syncing after the old sign-in is retired"
+                        } else {
+                            "Connect your Simkl account for scrobbling"
+                        },
                         onClick = onOpenSimkl
                     )
 

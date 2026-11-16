@@ -15,6 +15,8 @@ import com.kennyb1201.kbstream.data.sync.SimklAuthRules
 import com.kennyb1201.kbstream.data.watched.WatchedWriteStamp
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import com.kennyb1201.kbstream.data.BackgroundWork
@@ -69,6 +71,17 @@ class SimklRepository(
     internal val clientId =
         BuildConfig.SIMKL_CLIENT_ID
 
+    /**
+     * The V2 registration's id (spec 2026-11-16, F0).
+     *
+     * A V1 client id cannot be upgraded - V2 is a second app on Simkl's side -
+     * so both ids ship and both registrations stay live through the rollout
+     * (F4). Every new grant is minted against this one; the old one keeps
+     * serving the tokens already out there until Simkl retires AUTH V1.
+     */
+    internal val clientIdV2 =
+        BuildConfig.SIMKL_CLIENT_ID_V2
+
     private val prefs
         get() = context?.applicationContext?.let { appContext ->
             // Through SecureTokenStore: this store holds the Simkl access
@@ -104,17 +117,68 @@ class SimklRepository(
     // client's own.
     private val okHttpClient by lazy {
         BaseHttpClient.derived {
+            // Order matters. The query interceptor runs FIRST so the client id is
+            // on the outgoing URL the auth interceptor retries; the auth
+            // interceptor sits inside it, so a retry re-sends the request it was
+            // handed instead of running the query half twice (which would append
+            // a second client_id).
             addInterceptor(
                 SimklQueryInterceptor(
-                    clientId = clientId,
+                    clientIdFor = { path ->
+                        com.kennyb1201.kbstream.data.simkl.SimklAuthV2Rules.clientIdFor(
+                            path = path,
+                            legacyId = clientId,
+                            v2Id = clientIdV2,
+                            isV2Session = session()?.isV2 == true
+                        )
+                    },
                     appName = SimklConfig.APP_NAME,
                     appVersion = SimklConfig.APP_VERSION
+                )
+            )
+            // F2: a 429 is read before it is retried (burst vs a spent quota).
+            addInterceptor(SimklRateLimitInterceptor())
+            // F2: refresh-on-401, single-flight, exactly one retry. This is the
+            // interceptor rather than forty call sites: a 401 can come back from
+            // ANY of them, and a refresh wired into each would be forty chances
+            // to forget one.
+            addInterceptor(
+                SimklAuthInterceptor(
+                    refresh = { failedToken -> refreshBlocking(failedToken) }
                 )
             )
             // Per-service request timing for the diagnostics perf block.
             .addInterceptor(NetworkTraceInterceptor())
         }
     }
+
+    /**
+     * The client a REFRESH travels on: no auth interceptor, so a 401 from the
+     * token endpoint can never re-enter the refresh it came from.
+     *
+     * Its own derived client (the base pool is still shared) because the refresh
+     * is issued with a synchronous `execute()` from inside another call's
+     * interceptor: it must not queue behind the calls it is unblocking.
+     */
+    private val refreshClient by lazy {
+        BaseHttpClient.derived {
+            addInterceptor(
+                SimklQueryInterceptor(
+                    clientIdFor = { path ->
+                        com.kennyb1201.kbstream.data.simkl.SimklAuthV2Rules.clientIdFor(
+                            path = path,
+                            legacyId = clientId,
+                            v2Id = clientIdV2,
+                            isV2Session = true
+                        )
+                    }
+                )
+            )
+        }
+    }
+
+    /** One refresh at a time: two would cut each other's grant off (F2). */
+    private val refreshLock = Any()
 
     internal val api: SimklApiService by lazy {
         Retrofit.Builder()
@@ -580,6 +644,10 @@ class SimklRepository(
     }
 
     fun clearAuth() {
+        // Read BEFORE anything is removed: the revoke needs the token, and the
+        // publish rule below needs to know which registration issued it.
+        val signedOutSession = session()
+
         cachedContinueWatching =
             null
 
@@ -633,10 +701,19 @@ class SimklRepository(
             }
         }
 
-        prefs
+        val editor = prefs
             ?.edit()
             ?.remove(
                 KEY_ACCESS_TOKEN
+            )
+            ?.remove(
+                KEY_REFRESH_TOKEN
+            )
+            ?.remove(
+                KEY_EXPIRES_AT_MS
+            )
+            ?.remove(
+                KEY_SCOPE
             )
             // The cached name belongs to the account that just left: keeping
             // it would let a reconnect as someone else show the old name.
@@ -646,22 +723,39 @@ class SimklRepository(
             ?.remove(
                 KEY_LAST_WATCHED_ACTIVITY_ALL
             )
-            // Tombstone: this is a DELIBERATE disconnect, which is the only
-            // thing that may clear the session on another device. Without it
-            // the blank token is indistinguishable from "this device never
-            // connected Simkl" and can no longer be published at all.
-            ?.putBoolean(
-                SimklAuthRules.SIGNED_OUT_FIELD,
-                true
-            )
-            ?.apply()
 
-        // Cross-device sync: propagate the sign-out. Without this the cloud
-        // row keeps the old token forever and every pull (app start, Sync
-        // now, profile switch) resurrects the signed-out account on this and
-        // every other device — the profile could never actually sign out.
-        // The tombstoned empty access_token tells applySimklAuth to clear too.
-        publishSimklAuthToSync()
+        // F3: a V2 sign-out is DEVICE-LOCAL and writes no tombstone. V2 tokens
+        // belong to one device, so there is no shared session to end - and a
+        // tombstone would sign out a sibling the viewer never touched. A V1
+        // session (still account-wide) keeps the tombstone it always had, so the
+        // shared legacy session is retired everywhere, exactly as before.
+        val legacy = signedOutSession?.isV2 != true
+        if (legacy) {
+            editor?.putBoolean(SimklAuthRules.SIGNED_OUT_FIELD, true)
+        } else {
+            editor?.remove(SimklAuthRules.SIGNED_OUT_FIELD)
+        }
+        editor?.apply()
+
+        // F5: V2 has a revoke, so a disconnect really ends the grant. Best-effort
+        // and off the calling thread: the local session is already gone, and a
+        // revoke that fails offline must never leave the viewer signed in - it is
+        // reported, not retried.
+        signedOutSession?.let { session ->
+            BackgroundWork.launch {
+                val revoked = runCatchingCancellable {
+                    revokeBlocking(session.refreshToken ?: session.accessToken)
+                }.getOrDefault(false)
+                Log.i(
+                    TAG,
+                    if (revoked) "Simkl grant revoked" else "Simkl revoke failed (session dropped locally)"
+                )
+            }
+        }
+
+        // Cross-device sync: only the LEGACY session is shared, so only its
+        // sign-out is propagated. A V2 sign-out publishes nothing.
+        if (legacy) publishSimklAuthToSync()
     }
 
     /**
@@ -680,45 +774,172 @@ class SimklRepository(
         }
     }
 
-    suspend fun createPinCode():
-        SimklPinCodeResponse {
+    // ── AUTH V2: the device flow (spec 2026-11-16, F1) ──────────────────
 
-        require(
-            clientId.isNotBlank()
-        ) {
-            "SIMKL_CLIENT_ID is missing"
+    /** True when this build can start a V2 grant at all. */
+    fun canStartDeviceAuthorization(): Boolean =
+        SimklAuthV2Rules.clientIdFor(
+            path = "oauth2/device",
+            legacyId = clientId,
+            v2Id = clientIdV2,
+            isV2Session = true
+        ).isNotBlank()
+
+    /**
+     * `POST /oauth2/device`: the code the viewer types, and where to send them.
+     *
+     * The requested scope is normative ([SimklAuthV2Rules.SCOPE]): a grant can
+     * never grow, so asking for read only would leave every mark-watched failing
+     * on a token that never had permission to make it - and the only fix would be
+     * another authorisation by the viewer.
+     */
+    suspend fun startDeviceAuthorization(): SimklDeviceAuthorization {
+        require(canStartDeviceAuthorization()) { "SIMKL_CLIENT_ID is missing" }
+
+        val id = SimklAuthV2Rules.clientIdFor(
+            path = "oauth2/device",
+            legacyId = clientId,
+            v2Id = clientIdV2,
+            isV2Session = true
+        )
+        val response = api.requestDeviceCode(
+            SimklDeviceAuthRequest(clientId = id, scope = SimklAuthV2Rules.SCOPE)
+        )
+        val body = response.body()
+        val deviceCode = body?.deviceCode?.takeIf { it.isNotBlank() }
+        val userCode = body?.userCode?.takeIf { it.isNotBlank() }
+        if (!response.isSuccessful || body == null || deviceCode == null || userCode == null) {
+            val error = body?.error?.takeIf { it.isNotBlank() } ?: errorCodeOf(response)
+            throw IllegalStateException(deviceCodeFailureMessage(response.code(), error))
         }
 
-        return api.createPinCode()
+        val verification = body.verificationUri?.takeIf { it.isNotBlank() }
+            ?: SimklAuthV2Rules.VERIFICATION_URL
+        return SimklDeviceAuthorization(
+            deviceCode = deviceCode,
+            // Shown as XXXX-YYYY whatever the server sent: the viewer reads it
+            // off a 10-foot screen and types it on a phone.
+            userCode = SimklAuthV2Rules.formatUserCode(userCode),
+            verificationUri = verification,
+            // The QR encodes the COMPLETE uri - it pre-fills the code, and the
+            // consent screen still stands between the scan and the grant.
+            verificationUriComplete = body.verificationUriComplete
+                ?.takeIf { it.isNotBlank() }
+                ?: verification,
+            expiresInSeconds = body.expiresIn?.takeIf { it > 0L }?.toInt()
+                ?: SimklAuthV2Rules.DEVICE_CODE_TTL_SECONDS.toInt(),
+            intervalSeconds = body.interval?.takeIf { it > 0L }?.toInt()
+                ?: SimklAuthV2Rules.POLL_INTERVAL_SECONDS.toInt()
+        )
     }
 
-    suspend fun checkPin(
-        userCode: String
-    ): SimklTokenResponse {
-
-        require(
-            clientId.isNotBlank()
-        ) {
-            "SIMKL_CLIENT_ID is missing"
-        }
-
-        val response =
-            api.checkPin(
-                userCode
+    /**
+     * One poll of the device code, and the persistence of what it grants.
+     *
+     * A 200-with-token is TERMINAL and the pair is saved before anything else:
+     * Simkl consumes the code at exchange, so re-polling it can only answer
+     * `expired_token`.
+     */
+    suspend fun pollDeviceAuthorization(
+        deviceCode: String,
+        elapsedSeconds: Long,
+        expiresInSeconds: Int,
+        intervalSeconds: Int
+    ): SimklPollOutcome {
+        val id = SimklAuthV2Rules.clientIdFor(
+            path = "oauth2/token",
+            legacyId = clientId,
+            v2Id = clientIdV2,
+            isV2Session = true
+        )
+        val response = runCatchingCancellable {
+            api.pollDeviceToken(
+                SimklDeviceTokenRequest(deviceCode = deviceCode, clientId = id)
             )
+        }.getOrNull() ?: return SimklPollOutcome(
+            state = SimklAuthV2Rules.Poll.FAILED,
+            message = "Could not reach Simkl."
+        )
 
-        response.accessToken
-            ?.takeIf {
-                it.isNotBlank()
-            }
-            ?.let {
-                saveAccessToken(
-                    it
-                )
-            }
+        val body = response.body()
+        val error = body?.error?.takeIf { it.isNotBlank() } ?: errorCodeOf(response)
+        val state = SimklAuthV2Rules.poll(
+            statusCode = response.code(),
+            hasToken = !body?.accessToken.isNullOrBlank(),
+            elapsedSeconds = elapsedSeconds,
+            expiresInSeconds = expiresInSeconds,
+            error = error
+        )
+        if (state != SimklAuthV2Rules.Poll.APPROVED) {
+            return SimklPollOutcome(
+                state = state,
+                message = pollMessage(state),
+                intervalSeconds = if (state == SimklAuthV2Rules.Poll.SLOW_DOWN) {
+                    SimklAuthV2Rules.slowedIntervalSeconds(intervalSeconds)
+                } else {
+                    null
+                }
+            )
+        }
 
-        return response
+        val granted = body
+        val access = granted?.accessToken?.takeIf { it.isNotBlank() }
+            ?: return SimklPollOutcome(
+                state = SimklAuthV2Rules.Poll.FAILED,
+                message = "Simkl approved the code but sent no token."
+            )
+        // F1's case rule: V1 said `bearer`, V2 says `Bearer`. Every request this
+        // app makes sends `Bearer`, so a scheme it cannot use is named rather
+        // than stored and silently rejected later.
+        if (granted.tokenType != null && !SimklAuthV2Rules.isBearerTokenType(granted.tokenType)) {
+            return SimklPollOutcome(
+                state = SimklAuthV2Rules.Poll.MISCONFIGURED,
+                message = "Simkl granted a token type this app cannot use."
+            )
+        }
+
+        saveSession(
+            SimklSession(
+                accessToken = access,
+                refreshToken = granted.refreshToken?.takeIf { it.isNotBlank() },
+                expiresAtEpochMillis = SimklAuthV2Rules.expiresAtEpochMillis(
+                    nowMs = System.currentTimeMillis(),
+                    expiresInSeconds = granted.expiresIn
+                ),
+                scope = granted.scope
+            )
+        )
+        return SimklPollOutcome(state = SimklAuthV2Rules.Poll.APPROVED)
     }
+
+    private fun pollMessage(state: SimklAuthV2Rules.Poll): String? = when (state) {
+        SimklAuthV2Rules.Poll.EXPIRED -> "That code expired. Generating a new one…"
+        SimklAuthV2Rules.Poll.DENIED -> "Simkl approval was declined."
+        SimklAuthV2Rules.Poll.MISCONFIGURED ->
+            "Simkl rejected this app's client id. Reinstall a build with a working one."
+        SimklAuthV2Rules.Poll.FAILED -> "Could not reach Simkl."
+        else -> null
+    }
+
+    private fun deviceCodeFailureMessage(statusCode: Int, error: String?): String =
+        when (error?.trim()?.lowercase()) {
+            "invalid_client", "unauthorized_client" ->
+                "Simkl rejected this app's client id (invalid_client). Reinstall a build " +
+                    "with a working SIMKL_CLIENT_ID_V2."
+            "invalid_scope" ->
+                "Simkl refused the scopes this app asks for (invalid_scope): " +
+                    SimklAuthV2Rules.SCOPE
+            null -> "Simkl could not issue a code (HTTP $statusCode)."
+            else -> "Simkl could not issue a code ($error)."
+        }
+
+    /** The `error` code out of a non-2xx body, which Retrofit leaves unparsed. */
+    private fun errorCodeOf(response: retrofit2.Response<*>): String? =
+        runCatching {
+            val raw = response.errorBody()?.string()?.takeIf { it.isNotBlank() }
+                ?: return@runCatching null
+            org.json.JSONObject(raw).optString("error").takeIf { it.isNotBlank() }
+        }.getOrNull()
 
     suspend fun getActivities(
         accessToken: String =
@@ -3525,19 +3746,70 @@ class SimklRepository(
             )
     }
 
-    private fun saveAccessToken(
-        token: String
-    ) {
-        prefs
-            ?.edit()
-            ?.putString(
-                KEY_ACCESS_TOKEN,
-                token
-            )
-            ?.apply()
+    // ── AUTH V2: the stored session (spec 2026-11-16, F2/F3) ────────────
 
-        // Cross-device sync: share the Simkl session so other devices come
-        // up already connected.
+    /**
+     * The session this profile holds, V1 or V2.
+     *
+     * One reader for both registrations: a V1 row is the same shape with no
+     * refresh token, which is what lets a device sit on a legacy session and keep
+     * syncing exactly as it did until the viewer reconnects (F4).
+     */
+    fun session(): SimklSession? {
+        val access = prefs?.getString(KEY_ACCESS_TOKEN, null)?.takeIf { it.isNotBlank() }
+            ?: return null
+        return SimklSession(
+            accessToken = access,
+            refreshToken = prefs?.getString(KEY_REFRESH_TOKEN, null)?.takeIf { it.isNotBlank() },
+            expiresAtEpochMillis = prefs?.getLong(KEY_EXPIRES_AT_MS, 0L) ?: 0L,
+            scope = prefs?.getString(KEY_SCOPE, null)?.takeIf { it.isNotBlank() }
+        )
+    }
+
+    /** A V2 session: signed in against the new registration, on THIS device. */
+    fun hasV2Session(): Boolean = session()?.isV2 == true
+
+    /** A legacy session: connected, and the one that offers the reconnect row (F4). */
+    fun isLegacySession(): Boolean = session()?.let { !it.isV2 } == true
+
+    /**
+     * Whether the stored grant may WRITE to Simkl.
+     *
+     * True for a session that recorded no scope (V1 never did), false for a V2
+     * grant that was approved read-only - a case that should not exist while
+     * [SimklAuthV2Rules.SCOPE] is what the flow asks for, and that the screen must
+     * name rather than let a mark-watched fail silently.
+     */
+    fun hasWriteScope(): Boolean = session()?.hasWriteScope ?: true
+
+    /** Saves a session, and publishes it only when it is a legacy one (F3). */
+    fun saveSession(session: SimklSession) {
+        writeSession(session)
+        publishSessionIfLegacy(session)
+    }
+
+    private fun writeSession(session: SimklSession) {
+        prefs?.edit()
+            ?.putString(KEY_ACCESS_TOKEN, session.accessToken)
+            ?.putString(KEY_REFRESH_TOKEN, session.refreshToken.orEmpty())
+            ?.putLong(KEY_EXPIRES_AT_MS, session.expiresAtEpochMillis)
+            ?.putString(KEY_SCOPE, session.scope.orEmpty())
+            // A live session retires a lingering disconnect marker: a token that
+            // is present must never be published alongside a tombstone.
+            ?.putBoolean(SimklAuthRules.SIGNED_OUT_FIELD, false)
+            ?.apply()
+    }
+
+    /**
+     * Shares the session with the account - for V1 sessions ONLY (F3).
+     *
+     * V2's tokens are per device: two devices sharing one refresh token cut each
+     * other off, so a V2 pair never enters the sync payload. A legacy session
+     * keeps travelling exactly as it did, which is what lets a household stay
+     * signed in across devices without a forced sign-out.
+     */
+    private fun publishSessionIfLegacy(session: SimklSession) {
+        if (session.isV2) return
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
             com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
                 appContext,
@@ -3546,6 +3818,111 @@ class SimklRepository(
             )
         }
     }
+
+    /**
+     * The refresh half of F2, called from inside an interceptor on a 401.
+     *
+     * Single-flight by [refreshLock], and idempotent by the token it is handed: a
+     * second caller that queued behind a refresh finds a DIFFERENT access token to
+     * the one its request was sent with and uses that instead of refreshing again
+     * (one live pair per grant - a second refresh would invalidate the first).
+     *
+     * Null means "cannot be refreshed": no refresh token (a V1 session) or a
+     * refused one. The caller surfaces the original 401, which is the
+     * re-authorise prompt, and never loops.
+     */
+    internal fun refreshBlocking(failedAccessToken: String?): String? = synchronized(refreshLock) {
+        val current = session() ?: return null
+        if (!failedAccessToken.isNullOrBlank() && current.accessToken != failedAccessToken) {
+            // Somebody else already refreshed; the new token is the answer.
+            return current.accessToken
+        }
+        val refresh = current.refreshToken?.takeIf { it.isNotBlank() } ?: return null
+        val id = SimklAuthV2Rules.clientIdFor(
+            path = "oauth2/token",
+            legacyId = clientId,
+            v2Id = clientIdV2,
+            isV2Session = current.isV2
+        )
+        val granted = executeTokenRequest(
+            body = SimklRefreshRequest(refreshToken = refresh, clientId = id)
+        ) ?: return null
+        val access = granted.accessToken?.takeIf { it.isNotBlank() }
+        if (access == null ||
+            (granted.tokenType != null && !SimklAuthV2Rules.isBearerTokenType(granted.tokenType))
+        ) {
+            Log.w(TAG, "Simkl refresh answered without a usable token")
+            return null
+        }
+        val next = SimklSession(
+            accessToken = access,
+            // Simkl returns the SAME refresh token, slid forward 180 days. A
+            // response that omitted it must not drop the one we hold.
+            refreshToken = granted.refreshToken?.takeIf { it.isNotBlank() } ?: refresh,
+            expiresAtEpochMillis = SimklAuthV2Rules.expiresAtEpochMillis(
+                nowMs = System.currentTimeMillis(),
+                expiresInSeconds = granted.expiresIn
+            ),
+            scope = granted.scope ?: current.scope
+        )
+        writeSession(next)
+        Log.i(TAG, "Simkl access token refreshed")
+        next.accessToken
+    }
+
+    /**
+     * F5: a real revoke, which V1 never had.
+     *
+     * Revoking either token of a pair revokes both, so one call is enough. Always
+     * 200, even for a token that never existed (RFC 7009's anti-probing rule), so
+     * the answer is best-effort: the local session is dropped either way and the
+     * outcome is reported, never used to keep the viewer signed in.
+     */
+    internal fun revokeBlocking(token: String): Boolean {
+        if (token.isBlank()) return false
+        val id = SimklAuthV2Rules.clientIdFor(
+            path = "oauth2/revoke",
+            legacyId = clientId,
+            v2Id = clientIdV2,
+            isV2Session = true
+        )
+        val payload = runCatching {
+            moshi.adapter(SimklRevokeRequest::class.java).toJson(SimklRevokeRequest(token = token))
+        }.getOrNull() ?: return false
+        val request = okhttp3.Request.Builder()
+            .url(SimklConfig.BASE_URL + "oauth2/revoke")
+            .post(payload.toRequestBodyJson())
+            .build()
+        return runCatching {
+            refreshClient.newCall(request).execute().use { response ->
+                response.isSuccessful
+            }
+        }.getOrDefault(false)
+    }
+
+    /** One synchronous call to `oauth2/token`, off the interceptor's own client. */
+    private fun executeTokenRequest(body: SimklRefreshRequest): SimklTokenResponse? {
+        val payload = runCatching {
+            moshi.adapter(SimklRefreshRequest::class.java).toJson(body)
+        }.getOrNull() ?: return null
+        val request = okhttp3.Request.Builder()
+            .url(SimklConfig.BASE_URL + "oauth2/token")
+            .post(payload.toRequestBodyJson())
+            .build()
+        return runCatching {
+            refreshClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    Log.w(TAG, "Simkl token refresh failed: HTTP ${response.code()}")
+                    return null
+                }
+                val text = response.body?.string()?.takeIf { it.isNotBlank() } ?: return null
+                moshi.adapter(SimklTokenResponse::class.java).fromJson(text)
+            }
+        }.getOrNull()
+    }
+
+    private fun String.toRequestBodyJson(): okhttp3.RequestBody =
+        toRequestBody("application/json; charset=utf-8".toMediaType())
 
     private fun saveWatchedActivityAll(
         value: String
@@ -3590,6 +3967,26 @@ class SimklRepository(
 
         private const val KEY_ACCESS_TOKEN =
             "access_token"
+
+        /**
+         * AUTH V2's half of the session (spec 2026-11-16, F2), beside the access
+         * token in the same encrypted, profile-scoped row.
+         *
+         * Its presence is also what marks the row as a V2 session: V1 never
+         * issued a refresh token, so "does this device hold a legacy grant" is
+         * answered by these keys, offline, with no extra marker to keep in step.
+         */
+        private const val KEY_REFRESH_TOKEN =
+            "refresh_token"
+
+        private const val KEY_EXPIRES_AT_MS =
+            "expires_at_ms"
+
+        private const val KEY_SCOPE =
+            "scope"
+
+        private const val TAG =
+            "SIMKL_AUTH"
 
         private const val KEY_ACCOUNT_NAME =
             "account_name"

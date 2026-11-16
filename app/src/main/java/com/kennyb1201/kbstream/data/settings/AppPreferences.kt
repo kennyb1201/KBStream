@@ -1961,6 +1961,22 @@ object AppPreferences {
         syncDisplayPrefsBlob(context)
     }
 
+    // ── Dynamic color (Material You on the phone) ──────────────────────
+    // Device-local and default OFF (spec 2026-11-16, A1). It is a fact about
+    // THIS phone's wallpaper - a television has none - so it never travels, and
+    // it is not in the display blob: a synced value would tell a TV to tint
+    // itself from art that does not exist. Like the AMOLED toggles, the pref is
+    // the source of truth and `ui.theme.refreshThemeMirrors` mirrors it into the
+    // live theme state.
+    private const val KEY_DYNAMIC_COLOR = "dynamic_color"
+
+    fun getDynamicColor(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_DYNAMIC_COLOR, false)
+
+    fun setDynamicColor(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_DYNAMIC_COLOR, enabled).apply()
+    }
+
     // ── Accent colour (the app-wide theme accent) ──────────────────────
     // An INDEX into the accent palette (see ui.theme.KBAccentPalette) rather
     // than a stored ARGB value: this keeps the data layer free of UI imports

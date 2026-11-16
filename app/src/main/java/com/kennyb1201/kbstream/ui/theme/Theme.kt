@@ -44,6 +44,17 @@ val kbAmoledBlackState = mutableStateOf(false)
 val kbPureBlackSurfaceState = mutableStateOf(false)
 
 /**
+ * Backing state for the phone's Dynamic color setting (spec 2026-11-16, A1/A2).
+ *
+ * Device-local, default OFF. It only ever affects the PHONE theme
+ * ([MobileTheme]) - a television has no wallpaper to tint from - and while it is
+ * on the phone's scheme comes from the system palette instead of
+ * [KBAccentPalette]; turning it off restores the chosen accent exactly, because
+ * nothing about the accent is written while it is on.
+ */
+val kbDynamicColorState = mutableStateOf(false)
+
+/**
  * Re-reads the AMOLED / pure-black prefs into the live theme state.
  *
  * The stored prefs are the source of truth and the state below is a Compose
@@ -57,6 +68,7 @@ val kbPureBlackSurfaceState = mutableStateOf(false)
 fun refreshThemeMirrors(context: Context) {
     kbAmoledBlackState.value = AppPreferences.getAmoledBlack(context)
     kbPureBlackSurfaceState.value = AppPreferences.getPureBlackSurface(context)
+    kbDynamicColorState.value = AppPreferences.getDynamicColor(context)
     kbAccentIndexState.value =
         AppPreferences.getAccentIndex(context, DEFAULT_ACCENT_INDEX)
     kbCustomAccentState.value =

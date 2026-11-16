@@ -135,35 +135,6 @@ internal object PushScopeRules {
 }
 
 /**
- * Publish/apply rules for the Simkl session blob.
- *
- * The blob is account-wide state written as a FULL REPLACE, and the applier
- * treats a blank token as "the user signed out". Those two halves were not
- * aware of each other: EVERY device published the blob, so a device that had
- * simply never connected Simkl published an empty token — and the moment its
- * push won the race (pressing "Sync now" pushes before it pulls), it erased
- * the account's Simkl session on every device. That is the "Simkl sign-in
- * didn't sync" report: the other TV wiped it instead of adopting it.
- *
- * The fix is one rule per side:
- *  - a device only PUBLISHES the blob when it has a token to share, or a
- *    deliberate disconnect to propagate (a fresh device publishes nothing),
- *  - a blank token only CLEARS the local session when it carries the explicit
- *    sign-out tombstone, so a blank row can never wipe a live session.
- */
-internal object SimklAuthRules {
-
-    /** Payload field marking a blank token as a deliberate sign-out. */
-    const val SIGNED_OUT_FIELD = "signed_out"
-
-    fun shouldPublish(accessToken: String?, signedOut: Boolean): Boolean =
-        !accessToken.isNullOrBlank() || signedOut
-
-    fun clearsSession(accessToken: String?, signedOut: Boolean): Boolean =
-        accessToken.isNullOrBlank() && signedOut
-}
-
-/**
  * Publish/apply rules for the Trakt session blob.
  *
  * The shape is Simkl's ([SimklAuthRules]) because the failure modes are the
