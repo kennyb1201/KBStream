@@ -8164,6 +8164,13 @@ fun HomeScreen(
                 // title the panel is not showing is not handed over at all.
                 settledTitleKey = heroSettledKeyState.value,
                 settledBackdropUrl = heroBackdropPictureState.value,
+                // The settled title's season/episode counts (spec 2026-11-15):
+                // words off the same hero detail the backdrop comes from, so the
+                // panel's line gains them for a series and is untouched for a
+                // movie. The host gates them on the settle key; nothing is
+                // fetched here and nothing waits.
+                settledSeasonEpisodeCount =
+                    heroTmdbDetailState.value?.displaySeasonEpisodeCount(),
                 trailerKey = heroTrailerKeyState.value,
                 // The card's trailer resolves with the title's own ids, so the
                 // ladder's IMDb leg can fire on a YouTube death (F5).

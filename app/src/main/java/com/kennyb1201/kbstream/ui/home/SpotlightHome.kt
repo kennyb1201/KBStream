@@ -365,6 +365,22 @@ internal fun SpotlightPreviewHost(
      * tile rather than an upscaled small image.
      */
     settledBackdropUrl: String? = null,
+    /**
+     * The SETTLED title's "8 Seasons • 164 Episodes", or null (spec 2026-11-15).
+     *
+     * The same settled-title rule the backdrop follows, and for the same reason:
+     * the counts belong to whichever title the HERO last resolved, so handing
+     * them to a panel showing a different card would print one title's seasons
+     * under another title's name during a fast focus move. The host therefore
+     * passes this only when the panel's own key IS the settled key - the gate is
+     * here, once, not inside the panel.
+     *
+     * Computed from the hero detail the resolve already produced
+     * (`displaySeasonEpisodeCount()`): no new fetch, no new cache, no id lookup.
+     * A movie's detail carries no counts, so its value is null and its panel is
+     * untouched.
+     */
+    settledSeasonEpisodeCount: String? = null,
     onTrailerPlayingChange: (Boolean) -> Unit,
     onExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
@@ -576,6 +592,12 @@ internal fun SpotlightPreviewHost(
             // be a wait (loading) or the answer (none) rather than both.
             backdropSettled = panel.heroTitleKey() != null &&
                 panel.heroTitleKey() == settledTitleKey,
+            // The counts follow the backdrop's gate exactly (spec 2026-11-15):
+            // the settled title's counts, or none - never the previous card's
+            // seasons under this card's title.
+            seasonEpisodeCount = panel.heroTitleKey()
+                ?.takeIf { it == settledTitleKey }
+                ?.let { settledSeasonEpisodeCount },
             trailerKey = trailerKey,
             imdbId = imdbId,
             tmdbId = tmdbId,

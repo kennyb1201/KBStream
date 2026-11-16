@@ -252,7 +252,13 @@ class SpotlightHomeContractTest {
     fun `the panel carries the meta line and the two-line overview, and no action row`() {
         val preview = source(SPOTLIGHT_PREVIEW)
         assertTrue("title", preview.contains("meta?.name ?: snapshot.title.orEmpty()"))
-        assertTrue("meta line", preview.contains("spotlightMetaLine(meta)"))
+        // The line takes the settled title's season/episode counts as well now
+        // (spec 2026-11-15); the panel still builds it from `meta` alone, which
+        // is what this pins.
+        assertTrue(
+            "meta line",
+            preview.contains("spotlightMetaLine(meta, seasonEpisodeCount)")
+        )
         assertTrue(
             "the overview is capped at two lines, never a wall of text",
             preview.contains("maxLines = 2")

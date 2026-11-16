@@ -244,6 +244,21 @@ internal fun SpotlightPreviewPanel(
      * object can be non-null and about a different card entirely.
      */
     backdropSettled: Boolean = true,
+    /**
+     * The SETTLED title's season/episode counts, as the Detail screen's length
+     * line words them ("8 Seasons • 164 Episodes"), or null (spec 2026-11-15).
+     *
+     * Already gated by the caller: the host hands these over only when the
+     * panel's own title is the title whose resolve settled - the same rule the
+     * backdrop follows, for the same reason. This draws whatever it is given; it
+     * never decides whose counts they are, and it never fetches anything: the
+     * counts ride the hero detail the resolve already produced.
+     *
+     * Null is three answers this panel treats as one - a movie (TMDB has no
+     * counts), a series TMDB has no counts for, and a resolve that has not
+     * landed - and in all three the meta line is exactly today's line.
+     */
+    seasonEpisodeCount: String? = null,
     /** The hero meta has not landed yet, and has not failed: show placeholders. */
     metaLoading: Boolean = false,
     /** The hero meta resolve FAILED: say so and offer the retry (audit A4). */
@@ -426,12 +441,14 @@ internal fun SpotlightPreviewPanel(
             text = when {
                 metaFailed -> "DETAILS UNAVAILABLE"
                 metaLoading -> "LOADING DETAILS…"
-                else -> spotlightMetaLine(meta)
+                else -> spotlightMetaLine(meta, seasonEpisodeCount)
             },
             color = KBTextLo,
             style = androidx.tv.material3.MaterialTheme.typography.labelSmall,
-            // Year, runtime, rating and genre at the panel's width: two lines
-            // is the whole meta line, not an ellipsis'd start of it.
+            // Year, the seasons/episodes counts, runtime, rating and genre at the
+            // panel's width: two lines is the whole meta line, not an ellipsis'd
+            // start of it. The counts LENGTHEN the line rather than replacing a
+            // slot, so they wrap onto the second line (spec 2026-11-15, F2).
             maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
@@ -460,15 +477,34 @@ internal fun SpotlightPreviewPanel(
     }
 }
 
-/** The meta line the billboard hero prints: year, runtime, rating, genres. */
-internal fun spotlightMetaLine(meta: Meta?): String {
+/**
+ * The meta line the expanded card prints: year, length, runtime, rating, genres.
+ *
+ * [seasonEpisodeCount] is the settled title's "8 Seasons • 164 Episodes" (spec
+ * 2026-11-15), and it sits in the LENGTH slot - right after the year, before the
+ * runtime - because that is the order the Detail page's own line uses
+ * (`displayLengthLabel`: seasons • episodes • runtime). A series panel reads
+ * `2014 • 8 Seasons • 164 Episodes • 1h 12min • ★ 8.3 • Drama`.
+ *
+ * Null - a movie, a series TMDB has no counts for, or a resolve that has not
+ * landed - leaves exactly today's line. Nothing is added, nothing is reordered,
+ * and no `isMovie` branch is invented here: the counts are present or they are
+ * not, and their absence is the gate.
+ */
+internal fun spotlightMetaLine(
+    meta: Meta?,
+    seasonEpisodeCount: String? = null
+): String {
     if (meta == null) return ""
-    val parts = ArrayList<String>(4)
-    meta.releaseInfo?.trim()?.take(4)?.takeIf { it.isNotEmpty() }?.let { parts += it }
-    meta.runtime?.trim()?.takeIf { it.isNotEmpty() }?.let { parts += it }
-    meta.imdbRating?.trim()?.takeIf { it.isNotEmpty() }?.let { parts += "\u2605 $it" }
-    meta.genres?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let { parts += it }
-    return parts.joinToString(" \u00b7 ")
+    // The assembly itself is [spotlightMetaLineParts]: pure strings, so the
+    // order and the blank-part rule are pinned without a Composable.
+    return spotlightMetaLineParts(
+        year = meta.releaseInfo?.trim()?.take(4),
+        length = seasonEpisodeCount,
+        runtime = meta.runtime,
+        rating = meta.imdbRating,
+        genre = meta.genres?.firstOrNull()
+    )
 }
 
 /** How much bigger than its card the preview panel asks to draw. */
