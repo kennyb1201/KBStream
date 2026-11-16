@@ -2,8 +2,8 @@ package com.kennyb1201.kbstream.ui.theme
 
 import android.content.Context
 import android.graphics.Bitmap
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box

@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.data.sync
 import android.content.Context
 import com.kennyb1201.kbstream.data.anime.AniListToken
 import com.kennyb1201.kbstream.data.anime.AniListTokenStore
+import com.kennyb1201.kbstream.data.simkl.SimklAuthV2Rules
 import com.kennyb1201.kbstream.data.badges.BadgePackSyncRules
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.data.bingecat.BingeCatToken

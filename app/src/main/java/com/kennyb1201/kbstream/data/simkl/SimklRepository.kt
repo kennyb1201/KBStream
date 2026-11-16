@@ -793,7 +793,7 @@ class SimklRepository(
      * on a token that never had permission to make it - and the only fix would be
      * another authorisation by the viewer.
      */
-    suspend fun startDeviceAuthorization(): SimklDeviceAuthorization {
+    internal suspend fun startDeviceAuthorization(): SimklDeviceAuthorization {
         require(canStartDeviceAuthorization()) { "SIMKL_CLIENT_ID is missing" }
 
         val id = SimklAuthV2Rules.clientIdFor(
@@ -840,7 +840,7 @@ class SimklRepository(
      * Simkl consumes the code at exchange, so re-polling it can only answer
      * `expired_token`.
      */
-    suspend fun pollDeviceAuthorization(
+    internal suspend fun pollDeviceAuthorization(
         deviceCode: String,
         elapsedSeconds: Long,
         expiresInSeconds: Int,
@@ -3755,7 +3755,7 @@ class SimklRepository(
      * refresh token, which is what lets a device sit on a legacy session and keep
      * syncing exactly as it did until the viewer reconnects (F4).
      */
-    fun session(): SimklSession? {
+    internal fun session(): SimklSession? {
         val access = prefs?.getString(KEY_ACCESS_TOKEN, null)?.takeIf { it.isNotBlank() }
             ?: return null
         return SimklSession(
@@ -3783,7 +3783,7 @@ class SimklRepository(
     fun hasWriteScope(): Boolean = session()?.hasWriteScope ?: true
 
     /** Saves a session, and publishes it only when it is a legacy one (F3). */
-    fun saveSession(session: SimklSession) {
+    internal fun saveSession(session: SimklSession) {
         writeSession(session)
         publishSessionIfLegacy(session)
     }
@@ -3912,7 +3912,7 @@ class SimklRepository(
         return runCatching {
             refreshClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    Log.w(TAG, "Simkl token refresh failed: HTTP ${response.code()}")
+                    Log.w(TAG, "Simkl token refresh failed: HTTP ${response.code}")
                     return null
                 }
                 val text = response.body?.string()?.takeIf { it.isNotBlank() } ?: return null
