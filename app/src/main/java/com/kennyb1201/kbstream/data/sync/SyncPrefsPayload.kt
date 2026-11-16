@@ -179,7 +179,7 @@ private const val SIMKL_ACCESS_TOKEN_KEY = "access_token"
  * adopted from a sibling, and never cleared by a sibling's legacy tombstone. V1
  * never wrote this key, so every row that predates the migration is a legacy one.
  */
-private const val SIMKL_REFRESH_TOKEN_KEY = "refresh_token"
+private const val SIMKL_REFRESH_TOKEN_KEY = SimklAuthV2Rules.PREFS_REFRESH_TOKEN_KEY
 
 // Display-prefs store, plus the LOCAL bookkeeping that gives the display blob
 // its per-key edit timestamps. These shadow keys are never published —

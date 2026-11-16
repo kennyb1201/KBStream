@@ -172,9 +172,14 @@ class SpotlightFixContractTest {
         )
         // The trap this class of fix must not re-ship: a hero that consumes the
         // viewport, so the list has none.
+        // The hero's own branch: Home may hold other Spotlight-only blocks above
+        // it (the top-of-screen artwork tint, spec 2026-11-16 Part B), so this
+        // anchors on the LAST gate before the hand-off to HomeHeroHost rather
+        // than the first one in the file.
+        val host = home.indexOf("} else HomeHeroHost(")
         val hero = home.substring(
-            home.indexOf("if (spotlightActive) {"),
-            home.indexOf("} else HomeHeroHost(")
+            home.lastIndexOf("if (spotlightActive) {", host),
+            host
         )
         assertFalse(
             "the Spotlight branch must not size the hero to the whole screen",

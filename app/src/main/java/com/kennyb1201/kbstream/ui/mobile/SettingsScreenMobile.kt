@@ -2871,9 +2871,10 @@ private fun InterfacePaneMobile() {
     var amoled by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getAmoledBlack(context))
     }
-    // Device-local, so it re-reads on the same revision the rest of the theme
-    // rows do; the value never arrives from another device (spec A1).
-    var dynamicColor by remember(syncedRevision) {
+    // Device-local (spec A1), so it is deliberately NOT keyed on the sync
+    // revision: nothing another device does can change it, and re-reading it on
+    // every sync would only redraw the row for nothing.
+    var dynamicColor by remember {
         mutableStateOf(AppPreferences.getDynamicColor(context))
     }
     var pureBlack by remember(syncedRevision) {

@@ -102,10 +102,18 @@ class SimklConnectOutcomeContractTest {
                 "120 polls at five seconds is ten minutes, so a code the server " +
                 "said expires sooner used to read as a timeout",
             viewModel.contains("val expiresInSeconds = _uiState.value.expiresIn ?: 0") &&
-                viewModel.contains(
-                    "(SystemClock.elapsedRealtime() - issuedAtMs) / 1_000L >= expiresInSeconds"
-                ) &&
-                viewModel.contains("fail(\"That code expired. Generate a new one.\")")
+                viewModel.contains("(SystemClock.elapsedRealtime() - issuedAtMs) / 1_000L") &&
+                viewModel.contains("elapsed >= expiresInSeconds")
+        )
+        // AUTH V2 (spec 2026-11-16, F4) replaces the dead-on-screen code with a
+        // fresh one: telling the viewer to generate a new code by hand was the
+        // same work done on a D-pad. The lifetime still has to be consulted, and
+        // the restart is the proof it was.
+        assertTrue(
+            "an expired code starts a NEW one rather than leaving a dead one on " +
+                "screen, and nothing asks the viewer to do it by hand",
+            viewModel.contains("restartExpiredCode()") &&
+                !viewModel.contains("That code expired. Generate a new one.")
         )
         assertTrue(
             "and it is measured on the monotonic clock, so a wall-clock jump " +

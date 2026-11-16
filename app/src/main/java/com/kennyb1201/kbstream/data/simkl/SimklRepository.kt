@@ -3977,7 +3977,7 @@ class SimklRepository(
          * answered by these keys, offline, with no extra marker to keep in step.
          */
         private const val KEY_REFRESH_TOKEN =
-            "refresh_token"
+            SimklAuthV2Rules.PREFS_REFRESH_TOKEN_KEY
 
         private const val KEY_EXPIRES_AT_MS =
             "expires_at_ms"

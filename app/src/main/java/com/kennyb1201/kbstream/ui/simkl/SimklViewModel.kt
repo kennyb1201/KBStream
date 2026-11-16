@@ -354,7 +354,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                     com.kennyb1201.kbstream.data.simkl.SimklAuthV2Rules.Poll.PENDING -> {
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
-                            statusMessage = "Waiting for authorization…"
+                            statusMessage = WAITING_MESSAGE
                         )
                     }
 
@@ -363,7 +363,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
                             intervalSeconds = interval,
-                            statusMessage = "Waiting for authorization…"
+                            statusMessage = WAITING_MESSAGE
                         )
                     }
 
@@ -593,6 +593,16 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
          * network that is down tells the viewer nothing (trackers C4).
          */
         const val MAX_CONSECUTIVE_FAILURES = 3
+
+        /**
+         * The one answer that means "Simkl replied and there is no token yet".
+         *
+         * It is spelled once because it has exactly one meaning: both the plain
+         * `authorization_pending` answer and `slow_down` (the same answer with a
+         * longer interval) are Simkl telling us it is still waiting on the
+         * viewer, and a second copy of the string is how those two drift apart.
+         */
+        private const val WAITING_MESSAGE = "Waiting for authorization…"
 
         /** What a code request reports in a build with no client id (trackers I2). */
         const val NOT_CONFIGURED = "This build has no Simkl client id, so Simkl cannot connect."

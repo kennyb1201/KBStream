@@ -84,6 +84,17 @@ internal object SimklAuthV2Rules {
     /** `grant_type` for a refresh. */
     const val REFRESH_GRANT_TYPE = "refresh_token"
 
+    /**
+     * The key V2's refresh token is stored under, in the device-local `simkl_auth`
+     * preferences (see `SimklRepository`).
+     *
+     * Spelled once, here, because two files need it for opposite reasons: the
+     * repository writes the token, and the sync payload reads for its PRESENCE to
+     * know the row is device-local and must not travel. Two copies of the string
+     * would let a rename quietly start syncing a token.
+     */
+    const val PREFS_REFRESH_TOKEN_KEY = "refresh_token"
+
     /** V2's access-token lifetime, as a fallback when a response omits it. */
     const val ACCESS_TOKEN_TTL_SECONDS = 604_800L
 
