@@ -218,13 +218,15 @@ internal object PlayerTrackBridge {
     private var rememberedTrackApplied = false
 
     /**
-     * The last audio signature whose miss was reported, so one file reports
+     * The last audio signature whose miss was reported, so one FILE reports
      * once.
      *
      * A miss is retried on every READY transition (the flag above stays false,
      * which is deliberate - the tracks may arrive late), and each retry would
      * append the same line to a twelve-line ring. Cleared with the flag on a new
-     * player, because a new instance is a new file.
+     * player, AND on a new file inside the same player (spec 2026-11-16, F4):
+     * a source switch that reuses the player is a second file whose miss is
+     * its own evidence, not a retry of the first one's.
      */
     private var reportedAudioMissFor: String? = null
 
@@ -233,20 +235,40 @@ internal object PlayerTrackBridge {
     private var rememberedSubtitleTrackApplied = false
 
     /**
-     * One fall-through to the auto-pick per player instance, taken when a
-     * remembered subtitle pick missed this file (see [applySubtitleFallThrough]).
+     * One fall-through to the auto-pick per FILE, taken when a remembered
+     * subtitle pick missed that file (see [applySubtitleFallThrough]).
+     *
+     * Per file rather than per player (spec 2026-11-16, F2): the resource that
+     * switches source inside one player - a stream that dies, a next episode from
+     * the same pool - reuses it, so a latch consumed on the first file used to
+     * leave the second one on MPV's/Exo's default track instead of falling
+     * through. Rearmed by [rearmFallThroughsForThisFile] when the file's track
+     * list changes.
      */
     @Volatile
     private var subtitleFallThroughApplied = false
 
     /**
-     * One fall-through to the language pass per player instance, taken when a
-     * remembered AUDIO pick missed this file (see [applyAudioFallThrough]).
+     * One fall-through to the language pass per FILE, taken when a remembered
+     * AUDIO pick missed that file (see [applyAudioFallThrough]).
      * The subtitle latch's twin, and separate from it: one memory missing must
      * not consume the other's one attempt.
      */
     @Volatile
     private var audioFallThroughApplied = false
+
+    /**
+     * The audio track list the two latches above were last armed against, and
+     * the text one beside it - the fingerprint that tells a NEW FILE from a
+     * rebuffer (spec 2026-11-16, F1/F2).
+     *
+     * A rebuffer's READY re-reads the SAME list, so nothing is rearmed and the
+     * fall-through stays spent; a source switch, a next episode, or tracks that
+     * arrive after an early READY present a different list, so both latches (and
+     * the miss line) are given back to that file. Null until the first pass.
+     */
+    private var armedAudioTracksFor: String? = null
+    private var armedTextTracksFor: String? = null
 
     /** The player we already wired; [setPlayer] can repeat an instance. */
     @Volatile
@@ -584,6 +606,9 @@ internal object PlayerTrackBridge {
 
     /** One corrected pass over a ready player: languages, then the tracks. */
     private fun applyOnReady(player: Player) {
+        // BEFORE anything consults a latch: this may be a different file in the
+        // same player (spec 2026-11-16).
+        rearmFallThroughsForThisFile(player)
         reapplyLanguageSelection(player)
         // A remembered audio pick this file does not carry must not leave the
         // file's own default track in charge either - on a multi-audio release
@@ -593,6 +618,67 @@ internal object PlayerTrackBridge {
         // A remembered pick this file does not carry must not leave the file's
         // own default track in charge (see [applySubtitleFallThrough]).
         if (!applyRememberedSubtitleTrack(player)) applySubtitleFallThrough(player)
+    }
+
+    /**
+     * Gives the per-FILE fall-through latches back when the player is now
+     * carrying a different file from the one they were spent on (spec 2026-11-16).
+     *
+     * Field case (2026-11-16 07:06:50, TCL, build 336): autoplay ran E2 → E5 → E7
+     * on profile/3 and E7's source was switched mid-play. The switch reused the
+     * player, so neither reset that used to exist ran: the audio fall-through had
+     * already fired on the first file, the Zilean file's remembered pick missed
+     * like every multi-audio file's does, and the muxer's default - the Swedish
+     * first track - played. `rebuilds=3` for three episodes is what named the
+     * shape: the switch added no rebuild, so a once-per-player latch is
+     * once-too-few.
+     *
+     * The same shape covers the early-READY variant: a first READY before the
+     * tracks arrive runs the pass on an empty list and spends the latch, so the
+     * pass with tracks never runs. An empty list is a fingerprint too, so that
+     * transition rearms as well.
+     *
+     * The rebuffer case - the reason the latch exists - is untouched: the same
+     * file re-reads the same list, nothing changes, and the fall-through does not
+     * re-run under a viewer (S3). The invariant is "at most once per FILE", not
+     * "once per player".
+     */
+    private fun rearmFallThroughsForThisFile(player: Player) {
+        val audio = trackListFingerprint(player, C.TRACK_TYPE_AUDIO)
+        if (audio != armedAudioTracksFor) {
+            armedAudioTracksFor = audio
+            audioFallThroughApplied = false
+            // F4: the miss line follows the file too. A second file's miss in the
+            // same player is exactly what the paste could not show.
+            reportedAudioMissFor = null
+        }
+        val text = trackListFingerprint(player, C.TRACK_TYPE_TEXT)
+        if (text != armedTextTracksFor) {
+            armedTextTracksFor = text
+            subtitleFallThroughApplied = false
+        }
+    }
+
+    /**
+     * This file's tracks of [type] as one string, for telling files apart.
+     *
+     * Finer than the `language#position` log layout on purpose: the stored pick
+     * it decides a miss for is `language|codecs|channels|index|trackCount`, so a
+     * file whose languages match another's but whose codecs or channel counts do
+     * not must still count as a new file. Position in the list is the index, and
+     * the list length is the track count.
+     */
+    private fun trackListFingerprint(player: Player, type: Int): String {
+        val tracks = mutableListOf<String>()
+        for (group in player.currentTracks.groups) {
+            if (group.type != type) continue
+            for (i in 0 until group.length) {
+                val format = group.getTrackFormat(i)
+                tracks += "${format.language ?: "untagged"}|" +
+                    "${format.sampleMimeType ?: "-"}|${format.channelCount}"
+            }
+        }
+        return if (tracks.isEmpty()) "no tracks" else tracks.joinToString(", ")
     }
 
     /**
@@ -612,8 +698,10 @@ internal object PlayerTrackBridge {
      * Every guard is load-bearing:
      *  - only after a MISS with a non-blank stored signature. No signature is the
      *    ordinary path, whose auto-pick already ran earlier in this same pass;
-     *  - only once per player instance: a rebuffer's READY must not re-run it,
-     *    while a new player (source switch, rebuild) gets its own pass;
+     *  - only once per FILE: a rebuffer's READY must not re-run it, while a new
+     *    player (source switch, rebuild) - or a source switch INSIDE the same
+     *    player, which is what build 336 got wrong - gets its own pass
+     *    ([rearmFallThroughsForThisFile], spec 2026-11-16);
      *  - never over a hand pick this session: [chooseSubtitleTrack] marks the
      *    re-assert as used, and that pick sticks (the E-F1 latch discipline);
      *  - Off and live arm nothing here, a mode that is not On arms nothing, and
@@ -685,8 +773,10 @@ internal object PlayerTrackBridge {
      * Every guard is load-bearing:
      *  - only after a MISS with a non-blank stored signature. No signature is the
      *    ordinary path, whose language pass already ran earlier in this pass;
-     *  - only once per player instance: a rebuffer's READY must not re-run it,
-     *    while a new player (source switch, rebuild) gets its own pass;
+     *  - only once per FILE: a rebuffer's READY must not re-run it, while a new
+     *    player (source switch, rebuild) - or a source switch INSIDE the same
+     *    player, which is what build 336 got wrong - gets its own pass
+     *    ([rearmFallThroughsForThisFile], spec 2026-11-16);
      *  - never over a hand pick this session: [chooseAudioTrack] marks the
      *    re-assert as used ([rememberedTrackApplied]), so that pick sticks (the
      *    E-F1 latch discipline);

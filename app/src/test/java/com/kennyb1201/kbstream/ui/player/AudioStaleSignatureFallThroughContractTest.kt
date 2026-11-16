@@ -136,8 +136,9 @@ class AudioStaleSignatureFallThroughContractTest {
             attached.contains("audioFallThroughApplied = false")
         )
         assertEquals(
-            "reset per player build and per title load, nowhere else",
-            2,
+            "reset per player build, per title load, and per new file's track list " +
+                "(spec 2026-11-16: a source switch inside one player gets its own pass)",
+            3,
             bridge.lines().count { it.trim() == "audioFallThroughApplied = false" }
         )
         assertFalse(
