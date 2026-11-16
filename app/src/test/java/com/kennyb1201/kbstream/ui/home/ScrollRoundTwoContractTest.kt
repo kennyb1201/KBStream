@@ -219,7 +219,9 @@ class ScrollRoundTwoContractTest {
     fun `the hero does not hold two backdrops during a crossfade`() {
         val screen = source(SCREEN)
         val art = screen.substringAfter("private fun HeroBackdropArt(")
-            .substringBefore("private fun HeroClearLogo(")
+            // The logo drawer is `internal` since the Spotlight panel reuses it
+            // (spec 2026-11-15); the slice ends where it begins.
+            .substringBefore("internal fun HeroClearLogo(")
         assertEquals(
             "one AsyncImage, one buffer: the crossfade is Coil's own alpha on a " +
                 "single image, not two full-screen layers",

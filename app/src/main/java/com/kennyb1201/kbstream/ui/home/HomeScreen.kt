@@ -1297,11 +1297,35 @@ private fun HeroBackdropArt(url: String?) {
 }
 
 
+/**
+ * A clear logo, drawn to fill the box it is given - the hero's, and now the
+ * Spotlight panel's too (spec 2026-11-15).
+ *
+ * ONE drawer, not two: the panel's title box reuses this rather than growing a
+ * second image loader with its own fit, fallback and dark-mark handling.
+ *
+ * The two trailing parameters exist for that reuse and change nothing for the
+ * hero (their defaults are the hero's own behaviour):
+ *
+ * - [showPlaceholder] false tells this NOT to draw its own stand-in name, for a
+ *   caller that already has the name on screen underneath (the panel keeps its
+ *   title Text in the box to size it, and that Text is the fallback);
+ * - [onPainted] reports the moment the art actually paints, which is what lets
+ *   that caller hide its Text under the logo (and only then).
+ *
+ * The name standing in while the art loads - and staying up for good if it fails
+ * - is unchanged: that is [artPainted] and it is what makes S5 true for both
+ * callers.
+ */
 @Composable
-private fun HeroClearLogo(
+internal fun HeroClearLogo(
     url: String,
     name: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Draw the name while the art loads. False when the caller draws it itself. */
+    showPlaceholder: Boolean = true,
+    /** Called with true the first time the art paints (never with false). */
+    onPainted: (Boolean) -> Unit = {}
 ) {
     var logoIsDark by remember(url) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -1323,7 +1347,7 @@ private fun HeroClearLogo(
         modifier = modifier,
         contentAlignment = Alignment.Center
     ) {
-        if (!artPainted) {
+        if (!artPainted && showPlaceholder) {
             Text(
                 text = name,
                 color = KBTextHi,
@@ -1346,6 +1370,7 @@ private fun HeroClearLogo(
             contentScale = ContentScale.Fit,
             onSuccess = { state ->
                 artPainted = true
+                onPainted(true)
                 // Downscale, sample and luminance-sum the bitmap OFF the main
                 // thread: this runs on the hero's focus path (every logo
                 // change), and the analysis is real bitmap work that hitched
@@ -8171,6 +8196,11 @@ fun HomeScreen(
                 // fetched here and nothing waits.
                 settledSeasonEpisodeCount =
                     heroTmdbDetailState.value?.displaySeasonEpisodeCount(),
+                // The settled title's TMDB English wordmark (spec 2026-11-15): the
+                // same null the hero draws its plain title on, so the panel's
+                // fallback and the hero's agree by construction. The hero's own
+                // logo state, not a second resolve.
+                settledLogoUrl = heroLogoUrlState.value,
                 trailerKey = heroTrailerKeyState.value,
                 // The card's trailer resolves with the title's own ids, so the
                 // ladder's IMDb leg can fire on a YouTube death (F5).

@@ -18,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -28,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -259,6 +261,17 @@ internal fun SpotlightPreviewPanel(
      * landed - and in all three the meta line is exactly today's line.
      */
     seasonEpisodeCount: String? = null,
+    /**
+     * The SETTLED title's TMDB English clearlogo, or null (spec 2026-11-15).
+     *
+     * Gated by the caller exactly as the backdrop and the counts are: the logo, the
+     * backdrop, the detail and the trailer key all publish under the hero's ONE
+     * settle marker, so the panel can never hold a new title with an old logo. Null
+     * draws the text title, exactly as before - which is also what happens when
+     * the title has no TMDB wordmark at all (the hero's rule: TMDB's English mark
+     * and nothing else, never an add-on's or fanart's).
+     */
+    logoUrl: String? = null,
     /** The hero meta has not landed yet, and has not failed: show placeholders. */
     metaLoading: Boolean = false,
     /** The hero meta resolve FAILED: say so and offer the retry (audit A4). */
@@ -425,15 +438,43 @@ internal fun SpotlightPreviewPanel(
                 )
             }
         }
-        Text(
-            text = meta?.name ?: snapshot.title.orEmpty(),
-            color = KBTextHi,
-            style = androidx.tv.material3.MaterialTheme.typography.titleSmall,
-            // Two lines, because the panel is now wide enough to carry them: a
-            // long title wraps instead of ending in an ellipsis (F2).
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-        )
+        // ── The title box: the wordmark over the title text (spec 2026-11-15) ──
+        //
+        // The title Text stays composed and keeps its exact place - it is what
+        // SIZES this box, so the logo can never push the meta line or the
+        // overview down (S4), and it is the fallback when the mark is missing or
+        // fails to load (S2/S5). It is only made invisible, and only once the
+        // logo has actually painted, so the wordmark never has a title bleeding
+        // through it and the panel never shows a blank title area.
+        val titleText = meta?.name ?: snapshot.title.orEmpty()
+        val settledLogo = logoUrl?.takeIf { it.isNotBlank() }
+        var logoPainted by remember(settledLogo) { mutableStateOf(false) }
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                text = titleText,
+                // Transparent, not absent: the text still occupies its lines, so
+                // the box height does not change when the logo lands.
+                color = if (logoPainted) Color.Transparent else KBTextHi,
+                style = androidx.tv.material3.MaterialTheme.typography.titleSmall,
+                // Two lines, because the panel is now wide enough to carry them: a
+                // long title wraps instead of ending in an ellipsis (F2).
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (settledLogo != null) {
+                // The hero's own drawer, filling the title's box: `matchParentSize`
+                // measures it against the Text above, so a tall or stacked mark
+                // letterboxes inside the two-line slot and a wide one fills it -
+                // fitted, never cropped.
+                HeroClearLogo(
+                    url = settledLogo,
+                    name = titleText,
+                    showPlaceholder = false,
+                    onPainted = { logoPainted = it },
+                    modifier = Modifier.matchParentSize()
+                )
+            }
+        }
         // Silence while the meta resolves was the other half of audit A4: the
         // panel opened blank rather than saying it was still working. Each line
         // has a placeholder, and a failed resolve says so.

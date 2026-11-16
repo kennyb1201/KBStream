@@ -381,6 +381,16 @@ internal fun SpotlightPreviewHost(
      * untouched.
      */
     settledSeasonEpisodeCount: String? = null,
+    /**
+     * The SETTLED title's TMDB English clearlogo, or null (spec 2026-11-15).
+     *
+     * The same settled-title gate as the backdrop and the counts, and it needs no
+     * extra care of its own: the logo publishes under the hero's one
+     * `_heroSettledKey` beside the backdrop and the detail, so there is no state
+     * where this can be the previous title's mark. TMDB's English wordmark only -
+     * the hero's rule, not Detail's fanart fallback.
+     */
+    settledLogoUrl: String? = null,
     onTrailerPlayingChange: (Boolean) -> Unit,
     onExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
@@ -598,6 +608,11 @@ internal fun SpotlightPreviewHost(
             seasonEpisodeCount = panel.heroTitleKey()
                 ?.takeIf { it == settledTitleKey }
                 ?.let { settledSeasonEpisodeCount },
+            // ...and the settled title's wordmark under the same gate (F1): the
+            // panel draws it in the title's box, or draws the text title.
+            logoUrl = panel.heroTitleKey()
+                ?.takeIf { it == settledTitleKey }
+                ?.let { settledLogoUrl },
             trailerKey = trailerKey,
             imdbId = imdbId,
             tmdbId = tmdbId,
