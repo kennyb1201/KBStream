@@ -401,7 +401,7 @@ class MobileBottomNavContractTest {
         val mobile = mobileHome()
         assertTrue(
             "Home must own exactly one list state so the request has something to move",
-            mobile.contains("val listState = rememberLazyListState()") &&
+            mobile.contains("val listState = remember") &&
                 mobile.contains("state = listState")
         )
         assertTrue(

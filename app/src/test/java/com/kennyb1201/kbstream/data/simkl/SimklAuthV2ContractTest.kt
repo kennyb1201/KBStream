@@ -332,8 +332,9 @@ class SimklAuthV2ContractTest {
             syncPayload.contains("if (SimklAuthV2Rules.isV2Session(prefs.getString(SIMKL_REFRESH_TOKEN_KEY, null))) return")
         )
         assertTrue(
-            "and the publisher skips the account row for V2 before it is even built",
-            repository.contains("if (session.isV2) return")
+            "and a V2 session's own row is the link state only, decided before the " +
+                "row is built",
+            syncPayload.contains("SimklLinkRules.shouldPublish(name, isV2)")
         )
         assertTrue(
             "a V2 sign-out writes no tombstone, so no sibling is signed out",

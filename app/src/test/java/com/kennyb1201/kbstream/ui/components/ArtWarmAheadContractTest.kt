@@ -46,12 +46,15 @@ class ArtWarmAheadContractTest {
     fun `the size is measured from the list, never guessed`() {
         assertTrue(
             "the laid-out cell is the size the coming cell will be drawn at",
-            warm.contains("info.visibleItemsInfo.firstOrNull()?.size ?: IntSize.Zero") ||
-                warm.contains("visibleItemsInfo.firstOrNull()?.size")
+            // A LazyListItemInfo reports a MAIN-AXIS size only, so the box is
+            // handed in by the caller that knows it - and a zero/unknown box
+            // warms nothing rather than guessing one.
+            warm.contains("sizePx: IntSize") &&
+                warm.contains("if (last < 0 || size.width <= 0 || size.height <= 0) return@collect")
         )
         assertTrue(
             "and the snapshot is the last laid-out index, so the window moves with the scroll",
-            warm.contains("info.visibleItemsInfo.lastOrNull()?.index ?: -1")
+            warm.contains("layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1")
         )
         assertTrue(
             "the notification is a snapshotFlow, so layout changes are observed",

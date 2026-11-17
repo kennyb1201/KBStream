@@ -164,7 +164,7 @@ class FailureNotEmptinessContractTest {
                 "carries, catalogId included, because a name pair can collide",
             source("com/kennyb1201/kbstream/ui/mobile/CatalogGridScreenMobile.kt")
                 .contains(
-                    "val gridState = key(title, addonName, catalogId) { rememberLazyGridState() }"
+                    "val gridState = key(title, addonName, catalogId) { remember"
                 )
         )
     }

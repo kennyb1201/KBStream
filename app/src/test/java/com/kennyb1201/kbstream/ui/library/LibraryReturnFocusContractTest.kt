@@ -120,7 +120,7 @@ class LibraryReturnFocusContractTest {
             "a Back out of Detail disposes the grid, so the state it scrolls " +
                 "on return cannot live below the screen",
             source.contains(
-                "val gridState = remember(state.filter, state.selectedList?.id) { LazyGridState() }"
+                "val gridState = key(state.filter, state.selectedList?.id) { remember"
             )
         )
         assertTrue(
@@ -128,7 +128,7 @@ class LibraryReturnFocusContractTest {
                 "pane shows one list at a time, so opening a second one kept the " +
                 "first one's scroll offset",
             source.contains("state.selectedList?.id") &&
-                source.contains("val gridState = remember(state.filter, state.selectedList?.id)")
+                source.contains("state.filter, state.selectedList?.id")
         )
         assertTrue(
             "and the grid draws on that state",

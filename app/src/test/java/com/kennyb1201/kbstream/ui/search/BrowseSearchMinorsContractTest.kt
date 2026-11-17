@@ -106,11 +106,11 @@ class BrowseSearchMinorsContractTest {
     fun `both grids key their scroll state by title, addon name AND catalog id`() {
         assertTrue(
             "F2: the TV grid keys all three",
-            tvGrid.contains("val gridState = key(title, addonName, catalogId) { rememberLazyGridState() }")
+            tvGrid.contains("val gridState = key(title, addonName, catalogId) { remember")
         )
         assertTrue(
             "F2: and so does the phone's",
-            phoneGrid.contains("val gridState = key(title, addonName, catalogId) { rememberLazyGridState() }")
+            phoneGrid.contains("val gridState = key(title, addonName, catalogId) { remember")
         )
         assertTrue(
             "F2: the pair-only key is gone from both - it is the shape that collided",

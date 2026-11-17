@@ -309,7 +309,7 @@ class ScrollingDigFiveContractTest {
             .substringBefore("contentDescription")
         assertTrue(
             "the request names its own size instead of decoding the source",
-            art.contains(".size(1280, 800)")
+            art.contains(".size(coil3.size.Size(1280, 800))")
         )
         // Round four's billboard decision keeps the fade - a watched, deliberate
         // swap, on no scroll path - so the TV hero's one-buffer rule (round

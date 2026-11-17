@@ -158,7 +158,10 @@ class SpotlightHomeContractTest {
                 "the scroll-away spec (see SpotlightScrollHeroContractTest), which is " +
                 "still Spotlight's hero and nothing else's",
             home.contains("if (spotlightActive) {") &&
-                home.contains("SpotlightHeroSection(")
+                // The hero is the rails list's first item since the
+                // scroll-away spec, so the branch hands it to the list rather
+                // than composing a section of its own.
+                home.contains("heroPresent = spotlightActive")
         )
         assertTrue(
             "while Modern keeps the hero host untouched, in the same if's else",
@@ -202,7 +205,10 @@ class SpotlightHomeContractTest {
         )
         assertTrue(
             "after the hero's own dwell, unchanged",
-            spotlightBranch.contains("delay(HERO_RESOLVE_DEBOUNCE_MS)")
+            // The dwell moved into the scoped focus driver (F4) so a D-pad
+            // step does not recompose the whole screen.
+            home.contains("fun SpotlightHeroFocusDriver(") &&
+                home.contains("delay(HERO_RESOLVE_DEBOUNCE_MS)")
         )
     }
 

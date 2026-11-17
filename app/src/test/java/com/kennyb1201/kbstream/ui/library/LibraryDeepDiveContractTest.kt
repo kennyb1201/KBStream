@@ -181,7 +181,7 @@ class LibraryDeepDiveContractTest {
         assertTrue(
             "a scroll offset from list A means nothing in list B",
             source(SCREEN_TV).contains(
-                "val gridState = remember(state.filter, state.selectedList?.id)"
+                "val gridState = key(state.filter, state.selectedList?.id) { remember"
             )
         )
     }

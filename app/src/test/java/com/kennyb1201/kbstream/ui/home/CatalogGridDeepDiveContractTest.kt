@@ -329,8 +329,10 @@ class CatalogGridDeepDiveContractTest {
             "unkeyed, a catalog opened in the same composition slot restored the " +
                 "previous one's offset instead of starting at the top - the phone " +
                 "fixed this and the TV grid carried the unfixed shape (I1)",
-            tv.contains("val gridState = key(title, addonName, catalogId) { rememberLazyGridState() }") &&
-                phone.contains("val gridState = key(title, addonName, catalogId) { rememberLazyGridState() }")
+            // The factory is the idle-window one on both now (see
+            // rememberIdleLazyGridState); what matters is the keying.
+            tv.contains("val gridState = key(title, addonName, catalogId) { remember") &&
+                phone.contains("val gridState = key(title, addonName, catalogId) { remember")
         )
         assertTrue(
             "and all THREE identity keys: a name pair can collide (the route carries " +

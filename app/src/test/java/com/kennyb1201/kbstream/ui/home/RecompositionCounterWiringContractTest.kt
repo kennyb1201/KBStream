@@ -62,7 +62,9 @@ class RecompositionCounterWiringContractTest {
         assertTrue(
             "beside the image lines, where a walk's paste is read",
             diagnostics.contains("ImageLoadTrace.lines().forEach { report.appendLine(\"image: \$it\") }") &&
-                diagnostics.contains("RecompositionTrace.lines().forEach { report.appendLine(\"home: \$it\") }")
+                // The line names itself ("recomp: railItems=..."), so the report
+                // appends it as it comes.
+                diagnostics.contains("RecompositionTrace.lines().forEach { report.appendLine(it) }")
         )
         assertTrue(
             "the line names the peak per 16 ms window, which is the number F4 reads",

@@ -149,7 +149,10 @@ class DynamicColorContractTest {
         )
         assertTrue(
             "gated on the platform, so Android 11 and below keep today's scheme",
-            mobileTheme.contains("Build.VERSION.SDK_INT >= Build.VERSION_CODES.S")
+            // The platform gate is the shared rule's now, so the API-31 leg is
+            // covered once (DynamicAccentRulesTest) instead of in two places.
+            mobileTheme.contains("DynamicAccentRules.applies(") &&
+                mobileTheme.contains("sdkInt = Build.VERSION.SDK_INT")
         )
         assertTrue(
             "the row is a real toggle beside the accent picker it overrides",

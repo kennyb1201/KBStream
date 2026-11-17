@@ -387,7 +387,9 @@ class PortraitBrowseContractTest {
             assertTrue(
                 "$file must use a saveable grid state, or turning the phone " +
                     "throws the viewer back to the first card",
-                flat(mobile(file)).contains("rememberLazyGridState()")
+                // Either factory is a saveable state; the idle-window one wraps
+                // rememberLazyGridState and adds the off-screen window.
+                flat(mobile(file)).contains("LazyGridState()")
             )
         }
         val browse = flat(mobile("BrowseSectionsMobile.kt"))

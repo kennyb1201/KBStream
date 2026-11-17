@@ -203,7 +203,9 @@ class TokenlessResolveWiringContractTest {
         assertTrue(
             "on settle, not on a timer and not on the resolve",
             flat(mobileHome).contains(
-                "LaunchedEffect(pagerState.settledPage, nextPageTrailerKey) {"
+                // The gate is a key too (scrolling dig five, §3c): the warm is
+                // skipped when trailers cannot play on this page.
+                "LaunchedEffect(pagerState.settledPage, nextPageTrailerKey, nextPageWarm) {"
             )
         )
         assertTrue(
