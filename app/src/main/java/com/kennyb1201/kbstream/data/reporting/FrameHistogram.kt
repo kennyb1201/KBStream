@@ -1,0 +1,89 @@
+package com.kennyb1201.kbstream.data.reporting
+
+/**
+ * One scroll session's frame deltas, summarised.
+ *
+ * Four rounds of jank work were ranked by code shape because the app had no
+ * frame number anywhere (scrolling dig five, part 1). This is the number: the
+ * deltas a [android.view.Choreographer.FrameCallback] sees while a surface is
+ * scrolling, summarised so one diagnostics line can carry them.
+ *
+ * Percentiles, not an average. A 60 Hz surface averages 16.7 ms through a
+ * stutter as easily as through a clean scroll - the average hides exactly the
+ * frames the viewer felt. p50 says how a normal frame went, p95 says how the bad
+ * ones went, and the two counts say whether the misses were marginal (a 20 ms
+ * frame) or visible (a 40 ms one).
+ *
+ * Pure Kotlin on purpose: no Android type reaches this file, so the arithmetic
+ * is covered by the JVM harness the rest of the app's rules use.
+ */
+data class FrameStats(
+    /** Frames measured in the session. */
+    val frames: Int,
+    /** Median frame delta. */
+    val p50Ms: Int,
+    /** 95th-percentile frame delta - where a stutter shows up. */
+    val p95Ms: Int,
+    /** The worst frame in the session. */
+    val maxMs: Int,
+    /** Frames that missed a 60 Hz budget (over 16.7 ms, measured as 17+). */
+    val over16Ms: Int,
+    /** Frames that missed two budgets - a visible hitch. */
+    val over33Ms: Int
+)
+
+object FrameHistogram {
+
+    /** A 60 Hz frame's budget, rounded down to a whole millisecond. */
+    const val BUDGET_MS = 16
+
+    /** Two budgets: the point where a dropped frame is visible as a stutter. */
+    const val HITCH_MS = 33
+
+    /**
+     * How few frames are worth reporting.
+     *
+     * Under this, a session is a tap rather than a scroll: the first delta after
+     * a begin is measured against nothing, and the sample says more about when
+     * the effect started than about the scroll. Reporting it would put noise
+     * lines in every paste.
+     */
+    const val MIN_FRAMES = 6
+
+    /**
+     * Summarises the first [count] deltas of [deltas], or null when the sample is
+     * too short to mean anything.
+     */
+    fun of(deltas: IntArray, count: Int = deltas.size): FrameStats? {
+        val usable = deltas.take(count.coerceIn(0, deltas.size)).filter { it > 0 }
+        if (usable.size < MIN_FRAMES) return null
+        val sorted = usable.sorted()
+        return FrameStats(
+            frames = sorted.size,
+            p50Ms = percentile(sorted, 50),
+            p95Ms = percentile(sorted, 95),
+            maxMs = sorted.last(),
+            over16Ms = sorted.count { it > BUDGET_MS },
+            over33Ms = sorted.count { it > HITCH_MS }
+        )
+    }
+
+    /**
+     * The diagnostics line for one surface's last scroll session.
+     *
+     * One line, the same shape the other traces use (`label: a=N b=N`), and
+     * named by SURFACE: a session-global number would repeat the defect that made
+     * the hero decode counter unusable (dig four §1c) - it cannot say which
+     * surface was slow.
+     */
+    fun line(label: String, stats: FrameStats): String =
+        "frame: $label frames=${stats.frames} p50=${stats.p50Ms}ms " +
+            "p95=${stats.p95Ms}ms max=${stats.maxMs}ms " +
+            ">16=${stats.over16Ms} >33=${stats.over33Ms}"
+
+    /** Nearest-rank percentile over an ascending list. */
+    private fun percentile(sorted: List<Int>, percent: Int): Int {
+        val rank = (percent / 100.0 * sorted.size).let { kotlin.math.ceil(it).toInt() }
+        return sorted[(rank - 1).coerceIn(0, sorted.lastIndex)]
+    }
+}

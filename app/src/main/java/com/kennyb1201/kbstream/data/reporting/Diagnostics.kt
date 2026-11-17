@@ -377,6 +377,12 @@ object Diagnostics {
         PerfTrace.summary().takeIf { it.isNotEmpty() }?.let { perf ->
             perf.lineSequence().forEach { report.appendLine(it) }
         }
+        // What the scroll itself cost, per surface, for its most recent gesture:
+        // frame deltas p50/p95/max and how many frames missed 16 ms and 33 ms.
+        // Empty until something scrolls, so a short report stays as short as it
+        // was - and named by surface, because a screen that stutters is the one
+        // question a session-wide average cannot answer.
+        UiFrameTrace.lines().forEach { report.appendLine(it) }
         appendRecentErrors(report)
 
         val text = report.toString()
