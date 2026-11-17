@@ -41,6 +41,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -67,6 +68,9 @@ import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
 import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterTile
 import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
+import com.kennyb1201.kbstream.ui.components.LandscapeArtRequest
+import com.kennyb1201.kbstream.ui.components.PrefetchLandscapeAhead
+import com.kennyb1201.kbstream.ui.components.WarmGridAhead
 import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.touch.TouchChoiceChip
@@ -347,6 +351,39 @@ fun LibraryScreenMobile(
                 .fillMaxSize()
                 .background(KBVoid)
         ) {
+            // Round four F5: the next posters, decoded before the thumb reaches
+            // them. Keyed on the grid's own content keys, because this grid's
+            // index 0 is a header and its filter/sort strips are items too - an
+            // index offset would warm the wrong row on any filter change. Sized
+            // from the measured cell WIDTH and the tile's own 2:3 / 16:9 shape,
+            // since the cell is taller than the artwork it holds.
+            if (!landscape) {
+                WarmGridAhead(
+                    state = gridState,
+                    entries = items.map { item ->
+                        LocalLibraryStore.dedupeKey(item) to item.posterUrl
+                    },
+                    sizeFor = { cellWidth ->
+                        IntSize(cellWidth, (cellWidth * 3) / 2)
+                    }
+                )
+            } else {
+                // Landscape instead (F5's enrichment half): the tile's art is a
+                // resolve, not a url, so the upcoming titles' answers are filed
+                // before their cells compose. Same request shape the tile builds
+                // (see TouchGlobalPosterTile's artId/artType), so the memo keys
+                // match.
+                PrefetchLandscapeAhead(
+                    state = gridState,
+                    entries = items.map { item ->
+                        LocalLibraryStore.dedupeKey(item) to
+                            (item.tmdbId?.toString() ?: item.imdbId)?.let { artId ->
+                                LandscapeArtRequest(id = artId, type = item.mediaType)
+                            }
+                    }
+                )
+            }
+
             LazyVerticalGrid(
                 columns = GridCells.Fixed(columns),
                 state = gridState,

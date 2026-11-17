@@ -78,12 +78,14 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -143,6 +145,7 @@ import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_WAIT_MS
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.components.IdleListCacheWindow
+import com.kennyb1201.kbstream.ui.components.WarmRowAhead
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
 import com.kennyb1201.kbstream.ui.components.KB_ALPHA_FADE_MS
 import com.kennyb1201.kbstream.ui.components.KBCard
@@ -7032,6 +7035,26 @@ fun DetailScreen(
                             }
 
                             item(key = "peoplerow", contentType = "section-row") {
+                                // Round four F5: the cast rail's next portraits,
+                                // decoded before the D-pad walks to them. Sized at
+                                // the 88dp avatar the card draws - not at the rail
+                                // slot, which is taller because of the caption, so a
+                                // warm there would file an entry the card never
+                                // reads. A member with no portrait warms nothing.
+                                val castDensity = LocalDensity.current
+                                WarmRowAhead(
+                                    state = peopleRowState,
+                                    count = peopleItems.size,
+                                    sizePx = with(castDensity) {
+                                        val side = 88.dp.roundToPx()
+                                        IntSize(side, side)
+                                    }
+                                ) { index ->
+                                    (peopleItems.getOrNull(index) as? PeopleRowItem.Person)
+                                        ?.member?.profilePath
+                                        ?.let { "https://image.tmdb.org/t/p/w342$it" }
+                                }
+
                                 LazyRow(
                                     state = peopleRowState,
                                     contentPadding =
@@ -7949,6 +7972,25 @@ fun DetailScreen(
                                     mutableListOf<FocusRequester?>()
                                 }
                                 chipColumnRequesters[MEDIA_ROW_KEY] = mediaRowColumns
+
+                                // Round four F5 on the media strip: 240x135 is what
+                                // a landscape thumb is drawn at. A PORTRAIT card in
+                                // the same strip draws at the Poster Size instead,
+                                // and warming it at the landscape size would file an
+                                // entry it never reads - so those are skipped rather
+                                // than warmed wrongly.
+                                val mediaDensity = LocalDensity.current
+                                WarmRowAhead(
+                                    state = mediaRowState,
+                                    count = mediaCards.size,
+                                    sizePx = with(mediaDensity) {
+                                        IntSize(240.dp.roundToPx(), 135.dp.roundToPx())
+                                    }
+                                ) { index ->
+                                    mediaCards.getOrNull(index)
+                                        ?.takeIf { !it.portrait }
+                                        ?.imageUrl
+                                }
 
                                 LazyRow(
                                     state = mediaRowState,

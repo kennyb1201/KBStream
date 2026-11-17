@@ -101,6 +101,65 @@ class ArtWarmAheadContractTest {
         )
     }
 
+    @Test
+    fun `a grid with header rows is warmed by KEY, not by index`() {
+        assertTrue(
+            "the key is what the grid reports for its last laid-out cell, and it is " +
+                "looked up in the caller's own ordering",
+            warm.contains("(last?.key as? String) to (last?.size?.width ?: 0)") &&
+                warm.contains("val order = entries.map { it.first }") &&
+                warm.contains("val position = order.indexOf(lastKey)")
+        )
+        assertTrue(
+            "a key the map does not know (a header, a status row) warms nothing",
+            warm.contains("if (position < 0) return@collect")
+        )
+        assertTrue(
+            "the artwork's box comes from the measured cell WIDTH, because a poster " +
+                "cell is taller than the poster it holds",
+            warm.contains("sizeFor: (Int) -> IntSize")
+        )
+    }
+
+    @Test
+    fun `phone grids warm their next cells and file landscape answers`() {
+        val phoneLibrary = source("com/kennyb1201/kbstream/ui/mobile/LibraryScreenMobile.kt")
+        assertTrue(
+            "portrait warms at the tile's own 2:3 box",
+            phoneLibrary.contains("sizeFor = { cellWidth ->") &&
+                phoneLibrary.contains("IntSize(cellWidth, (cellWidth * 3) / 2)")
+        )
+        assertTrue(
+            "and landscape files the resolver's answers instead",
+            phoneLibrary.contains("PrefetchLandscapeAhead(")
+        )
+        val phoneCatalog = source("com/kennyb1201/kbstream/ui/mobile/CatalogGridScreenMobile.kt")
+        assertTrue(
+            "the paged grid keys its entries exactly as it keys its cells",
+            phoneCatalog.contains("placeholder#\$index") &&
+                phoneCatalog.contains("PrefetchLandscapeAhead(")
+        )
+    }
+
+    @Test
+    fun `landscape prefetch goes through the one resolver, bounded and memo-first`() {
+        val landscape = source("com/kennyb1201/kbstream/ui/components/GlobalLandscapeArt.kt")
+        assertTrue(
+            "a filed answer is not resolved again",
+            landscape.contains("if (memo.containsKey(request.key)) return@forEach")
+        )
+        assertTrue(
+            "and a failed prefetch changes nothing: the card resolves it itself",
+            landscape.contains("runCatchingCancellable { resolve(context, request) }")
+        )
+        val tvLibrary = source("com/kennyb1201/kbstream/ui/library/LibraryScreen.kt")
+        assertTrue(
+            "the TV grid's landscape branch prefetches too",
+            tvLibrary.contains("PrefetchLandscapeAhead(") &&
+                tvLibrary.contains("LandscapeArtRequest(id = artId, type = item.mediaType)")
+        )
+    }
+
     private fun source(relative: String): String {
         val file = File(mainRootPath(), relative)
         if (!file.isFile) throw AssertionError("source missing: " + file.absolutePath)

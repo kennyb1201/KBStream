@@ -192,6 +192,88 @@ internal fun WarmGridAhead(
 }
 
 /**
+ * The same window for a grid that puts its own rows above the art
+ * (`entries` = its content in grid order, each pair the item's key and the url
+ * its cell draws), and that draws a shape the cell's height does not describe.
+ *
+ * The index-based overload above cannot serve these: a phone Library grid's
+ * index 0 is a header, its 1 and 2 are filter and sort strips, and whether it
+ * has "lists" or "empty" rows is a state, so `lastVisible + 1` is not the next
+ * poster. The KEY can be looked up in the caller's own ordering instead, which
+ * needs no offset at all.
+ *
+ * [sizeFor] gets the measured cell WIDTH and answers the box the artwork is
+ * drawn in: a poster tile fills the cell's width and takes 2:3 (or 16:9), while
+ * the cell itself is taller because the captions stack under it. Passing the
+ * cell height would warm a bitmap the card never asks for.
+ */
+@Composable
+internal fun WarmGridAhead(
+    state: LazyGridState,
+    entries: List<Pair<String, String?>>,
+    sizeFor: (Int) -> IntSize,
+    ahead: Int = WARM_AHEAD_CELLS
+) {
+    val context = LocalContext.current
+    LaunchedEffect(state, entries, ahead) {
+        val urls = entries.associate { it.first to it.second }
+        val order = entries.map { it.first }
+        snapshotFlow {
+            val info = state.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()
+            (last?.key as? String) to (last?.size?.width ?: 0)
+        }
+            .distinctUntilChanged()
+            .collect { (lastKey, cellWidth) ->
+                if (lastKey == null || cellWidth <= 0) return@collect
+                val position = order.indexOf(lastKey)
+                if (position < 0) return@collect
+                val size = sizeFor(cellWidth)
+                if (size.width <= 0 || size.height <= 0) return@collect
+                val next = order.drop(position + 1).take(ahead)
+                    .mapNotNull { urls[it] }
+                ArtWarm.warmAll(context, next, size.width, size.height)
+            }
+    }
+}
+
+/**
+ * The landscape half of the same window (round four F5).
+ *
+ * In landscape mode a card's art is not a url it already holds: it is a resolve -
+ * memo, disk row, then one TMDB lookup - so composing a screenful of cards is a
+ * screenful of lookups arriving a frame late. This walks the same content keys
+ * as [WarmGridAhead] and files the answers ahead of the cards, so the shared
+ * resolver's `peek` can answer synchronously when they compose.
+ *
+ * Keyed like the warm for the same reason: a grid's index 0 may be a header.
+ */
+@Composable
+internal fun PrefetchLandscapeAhead(
+    state: LazyGridState,
+    entries: List<Pair<String, LandscapeArtRequest?>>,
+    ahead: Int = WARM_AHEAD_CELLS
+) {
+    val context = LocalContext.current
+    LaunchedEffect(state, entries, ahead) {
+        val requests = entries.associate { it.first to it.second }
+        val order = entries.map { it.first }
+        snapshotFlow {
+            (state.layoutInfo.visibleItemsInfo.lastOrNull()?.key as? String)
+        }
+            .distinctUntilChanged()
+            .collect { lastKey ->
+                if (lastKey == null) return@collect
+                val position = order.indexOf(lastKey)
+                if (position < 0) return@collect
+                val next = order.drop(position + 1).take(ahead).mapNotNull { requests[it] }
+                if (next.isEmpty()) return@collect
+                GlobalLandscapeArtCache.prefetch(context, next)
+            }
+    }
+}
+
+/**
  * The same window for a horizontal rail (a `LazyRow`): Detail's people and
  * media rows, the phone's Home rails.
  */

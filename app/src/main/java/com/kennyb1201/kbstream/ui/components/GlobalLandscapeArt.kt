@@ -71,6 +71,29 @@ internal object GlobalLandscapeArtCache {
      * [peek] deliberately does NOT read the disk layer: first composition has to
      * answer synchronously, and a suspend read cannot serve it.
      */
+    /**
+     * Files the answers for [requests] ahead of the cards that will ask for them
+     * (round four F5, the landscape half).
+     *
+     * In landscape mode a card's art is not a url it already holds - it is a
+     * resolve: memo, then the disk row, then one TMDB lookup. Composing a
+     * screenful of cards is therefore a screenful of lookups, each about a frame
+     * late. Warming the next window here means [peek] answers synchronously when
+     * those cards compose.
+     *
+     * Bounded by the same six permits [resolve] uses, and free when the answer is
+     * already filed: resolve checks the memo first.
+     */
+    suspend fun prefetch(
+        context: Context,
+        requests: List<LandscapeArtRequest>
+    ) {
+        requests.forEach { request ->
+            if (memo.containsKey(request.key)) return@forEach
+            runCatchingCancellable { resolve(context, request) }
+        }
+    }
+
     suspend fun resolve(
         context: Context,
         request: LandscapeArtRequest

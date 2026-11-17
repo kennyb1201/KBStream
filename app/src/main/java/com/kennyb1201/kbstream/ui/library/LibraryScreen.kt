@@ -87,6 +87,8 @@ import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
+import com.kennyb1201.kbstream.ui.components.LandscapeArtRequest
+import com.kennyb1201.kbstream.ui.components.PrefetchLandscapeAhead
 import com.kennyb1201.kbstream.ui.components.WarmGridAhead
 import com.kennyb1201.kbstream.ui.components.heroSourceElement
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
@@ -1441,6 +1443,21 @@ private fun ItemGrid(
                 IntSize(posterSize.width.roundToPx(), posterSize.height.roundToPx())
             }
         ) { index -> items.getOrNull(index)?.posterUrl }
+    } else {
+        // Landscape draws RESOLVED TMDB art, so the poster url cannot stand in
+        // for it (F5's enrichment half): file the upcoming titles' answers
+        // instead, in the shape the card asks for (see GlobalPosterCard's
+        // artId/artType). Keyed by the grid's own cell keys, because this grid's
+        // keys are the dedupe keys, not its indices.
+        PrefetchLandscapeAhead(
+            state = gridState,
+            entries = items.map { item ->
+                LocalLibraryStore.dedupeKey(item) to
+                    item.navigationId?.let { artId ->
+                        LandscapeArtRequest(id = artId, type = item.mediaType)
+                    }
+            }
+        )
     }
 
     LazyVerticalGrid(

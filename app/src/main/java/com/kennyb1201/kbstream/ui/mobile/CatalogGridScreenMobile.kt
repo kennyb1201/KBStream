@@ -32,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -52,6 +53,9 @@ import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterTile
 import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
+import com.kennyb1201.kbstream.ui.components.LandscapeArtRequest
+import com.kennyb1201.kbstream.ui.components.PrefetchLandscapeAhead
+import com.kennyb1201.kbstream.ui.components.WarmGridAhead
 import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
@@ -320,6 +324,50 @@ fun CatalogGridScreenMobile(
                 .fillMaxSize()
                 .background(KBVoid)
         ) {
+            // Round four F5: the next cells, decoded ahead of the fling. Keyed the
+            // way this grid keys its own cells (the paging index included, because
+            // a page may legitimately repeat a title), so the header and the
+            // status rows above it are simply not in the map. `peek` never loads a
+            // page. Portrait only: a landscape cell draws resolved TMDB art, which
+            // the poster url cannot stand in for.
+            if (!landscape) {
+                WarmGridAhead(
+                    state = gridState,
+                    entries = (0 until lazyItems.itemCount).map { index ->
+                        val meta = lazyItems.peek(index)
+                        val key = if (meta != null) {
+                            "${meta.type}:${meta.id}#$index"
+                        } else {
+                            "placeholder#$index"
+                        }
+                        key to meta?.poster
+                    },
+                    sizeFor = { cellWidth -> IntSize(cellWidth, (cellWidth * 3) / 2) }
+                )
+            } else {
+                // Landscape: the tile resolves its own backdrop + clearlogo, so
+                // the upcoming cells' answers are filed ahead of them (F5's
+                // enrichment half). Same request shape the tile builds.
+                PrefetchLandscapeAhead(
+                    state = gridState,
+                    entries = (0 until lazyItems.itemCount).map { index ->
+                        val meta = lazyItems.peek(index)
+                        val key = if (meta != null) {
+                            "${meta.type}:${meta.id}#$index"
+                        } else {
+                            "placeholder#$index"
+                        }
+                        key to meta?.let {
+                            LandscapeArtRequest(
+                                id = it.id,
+                                type = it.type,
+                                addonBackdrop = it.background
+                            )
+                        }
+                    }
+                )
+            }
+
             LazyVerticalGrid(
                 columns = GridCells.Fixed(columns),
                 state = gridState,
