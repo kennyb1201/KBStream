@@ -97,10 +97,24 @@ class ScrollSmoothnessContractTest {
                 "release now waits for RUNNING_CRITICAL",
             critical in 0 until graded
         )
+        // Dig four §3b/§3e (rank 2) split the response by level: a foreground
+        // CRITICAL trims (graded LRU), and only BACKGROUND and above - the
+        // process has left the screen - clears the whole cache.
+        val fullClear = trim.indexOf("releaseImageMemoryCache(this)")
+        val background = trim.indexOf("ComponentCallbacks2.TRIM_MEMORY_BACKGROUND")
         assertTrue(
-            "and CRITICAL must not clear the whole cache any more: that is what " +
-                "blanked the rail being scrolled",
-            !trim.contains("releaseImageMemoryCache(this)")
+            "a full clear is gated on BACKGROUND and above, where nothing is on " +
+                "screen to blank: $fullClear vs $background",
+            fullClear > 0 && background > 0 && fullClear > background
+        )
+        val foreground = trim
+            .substringAfter("} else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {")
+            .substringBefore("if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {")
+        assertTrue(
+            "and the CRITICAL branch itself trims, never clears: that is the rail " +
+                "being scrolled: $foreground",
+            foreground.contains("trimImageMemoryCache(this)") &&
+                !foreground.contains("releaseImageMemoryCache(this)")
         )
         assertTrue(
             "the level is still recorded, which is the evidence that a wipe " +

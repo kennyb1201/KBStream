@@ -660,8 +660,27 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             // rail on screen then re-decoded as the viewer kept moving. A full
             // clear is still what onLowMemory() does, and that is the level that
             // means the process itself is about to die.
-            if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+            // TWO STAGES (dig four, 2026-11-16, §3b/§3e rank 2). One branch used
+            // to serve "the process is under pressure mid-scroll" and "the viewer
+            // left" alike, which is why backgrounding got the scrolling
+            // treatment while a foreground CRITICAL got the same.
+            //
+            // BACKGROUND (40) and above means the process has left the screen and
+            // is on the system's LRU list; near-death levels (MODERATE 60 /
+            // COMPLETE 80) arrive only on API 33 and older, and mean it more. With
+            // nothing on screen a full clear is free, gives the system the most
+            // headroom and makes the box less likely to kill us; the return pays a
+            // disk re-decode, which is the honest cost of having been away.
+            //
+            // RUNNING_CRITICAL (15) is the only mid-scroll case, and only API 33
+            // and older deliver it: there the graded LRU trim runs, keeping the
+            // rail the viewer is actually looking at (see [trimImageMemoryCache]).
+            if (level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {
+                releaseImageMemoryCache(this)
+            } else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
                 trimImageMemoryCache(this)
+            }
+            if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
                 MemoryPressure.releaseBrowsingCaches()
                 // The trailer pre-warm's WebView is the reclaimable half of the
                 // PO-token layer: a cached token is a string, a live page is a

@@ -166,15 +166,23 @@ class ScrollRoundTwoContractTest {
     @Test
     fun `critical trims half the bitmap cache and low memory still clears it`() {
         val app = source(APPLICATION)
-        val critical = app.substringAfter("TRIM_MEMORY_RUNNING_CRITICAL) {")
-            .substringBefore("// The trailer pre-warm's WebView")
+        // Dig four §3b/§3e (rank 2) made the response two-stage, so the round-two
+        // pin is re-anchored on the branch it describes rather than on the whole
+        // critical block.
         assertTrue(
-            "CRITICAL is a graded trim now",
-            critical.contains("trimImageMemoryCache(this)")
+            "a foreground CRITICAL is a graded trim",
+            app.contains(
+                "} else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {\n" +
+                    "                trimImageMemoryCache(this)"
+            )
         )
-        assertFalse(
-            "a full clear at CRITICAL is the mid-scroll wipe this replaces",
-            critical.contains("releaseImageMemoryCache(this)")
+        assertTrue(
+            "and a full clear waits for BACKGROUND and above, where nothing is on " +
+                "screen: that is what makes it free",
+            app.contains(
+                "if (level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {\n" +
+                    "                releaseImageMemoryCache(this)"
+            )
         )
         assertTrue(
             "onLowMemory still drops everything - that is the process dying",
@@ -183,8 +191,10 @@ class ScrollRoundTwoContractTest {
                 .contains("releaseImageMemoryCache(this)")
         )
         assertTrue(
-            "the browsing caches are untouched",
-            critical.contains("MemoryPressure.releaseBrowsingCaches()")
+            "the browsing caches are still released in the same branch",
+            app.substringAfter("override fun onTrimMemory(level: Int) {")
+                .substringBefore("private fun trimLevelName")
+                .contains("MemoryPressure.releaseBrowsingCaches()")
         )
     }
 
