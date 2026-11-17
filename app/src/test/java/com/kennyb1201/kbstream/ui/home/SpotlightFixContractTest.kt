@@ -132,7 +132,12 @@ class SpotlightFixContractTest {
         )
         assertTrue(
             "the anchored pill is the one the Home points at",
-            mobile.contains("focusRequester = firstPillFocusRequester,")
+            // The Play pill takes the requester through one alias since
+            // 2026-11-17: the caller's entry requester IS the Play pill's, so the
+            // Home's park-on-entry still lands where it always did, and the
+            // page-change hand-off has a requester to reuse.
+            mobile.contains("val playPillRequester = firstPillFocusRequester") &&
+                mobile.contains("focusRequester = playPillRequester,")
         )
     }
 

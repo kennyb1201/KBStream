@@ -341,7 +341,7 @@ class SpotlightScrollHeroContractTest {
     //        (2026-11-15) only the PAGE half of that hold survives ──────────
 
     @Test
-    fun `the cycle holds while a hero pill holds focus and the sweep does not`() {
+    fun `the TV cycle holds while a hero pill holds focus, the phone's does not, and the sweep never does`() {
         val mobile = flat(source(MOBILE))
         assertTrue(
             "the pill group reports its own focus as one node, so three pills cannot " +
@@ -352,11 +352,26 @@ class SpotlightScrollHeroContractTest {
         )
         assertTrue(
             "the hold refuses to advance while that is true",
-            mobile.contains("if (pillsFocused) return@LaunchedEffect")
+            // The hold is a derived value since 2026-11-17: the TV asks for it, and
+            // the phone's billboard passes it off.
+            mobile.contains("if (pillsHoldCycle) return@LaunchedEffect") &&
+                mobile.contains("holdCycleWhilePillsFocused && pillsFocused")
         )
         assertTrue(
-            "and the delay re-arms when it lifts: the flag is a KEY of the hold effect",
-            mobile.contains("node they were stepping onto. pillsFocused ) {")
+            "and the delay re-arms when it lifts: the value is a KEY of the hold effect",
+            // `mobile` is flattened, so the key list's closing paren is one space
+            // after the last key.
+            mobile.contains("pillsHoldCycle ) {")
+        )
+        // The split that matters now is between SURFACES, not halves: the TV hero
+        // still holds under its pills, the phone cycles under them (Kenny,
+        // 2026-11-17) - and the phone answers F5's fight with press-time page
+        // resolution and a focus hand-off instead of a pause.
+        assertTrue(
+            "the phone's billboard opts out of the pill hold, and the default keeps " +
+                "the TV's",
+            mobile.contains("holdCycleWhilePillsFocused = false") &&
+                mobile.contains("holdCycleWhilePillsFocused: Boolean = true")
         )
         // The two halves are split on purpose (2026-11-15): a focused pill is
         // the viewer looking at this page, not a screen nobody is watching, so

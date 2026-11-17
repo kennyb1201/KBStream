@@ -132,6 +132,7 @@ import com.kennyb1201.kbstream.data.youtube.heroTrailerIdentityRefusal
 import com.kennyb1201.kbstream.data.youtube.heroTrailerResolveFailurePoisons
 import com.kennyb1201.kbstream.data.youtube.heroTrailerRetryPlan
 import com.kennyb1201.kbstream.data.youtube.signedUrl
+import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.components.TrackScrollFrames
 import com.kennyb1201.kbstream.ui.components.rememberIdleLazyListState
 import com.kennyb1201.kbstream.ui.home.LibraryHomeRailUi
@@ -228,6 +229,7 @@ import kotlin.random.Random
 import java.time.LocalDate
 import java.time.ZoneId
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -740,6 +742,12 @@ fun HomeScreenMobile(
                             // lambda keeps the read inside the billboard, so
                             // the Home is not recomposed per scroll.
                             scrollHeld = { listState.isScrollInProgress },
+                            // 2026-11-17 (Kenny): the phone's page keeps cycling
+                            // under a focused pill. The press resolves against
+                            // the page in front and focus follows the page, so
+                            // the fight F5 avoided cannot happen here - the TV
+                            // hero keeps its hold (the default).
+                            holdCycleWhilePillsFocused = false,
                             // Play asks the Detail page to press its own Play:
                             // the route carries the intent, and Detail's own
                             // handler does the resolving. Nothing here chooses a
@@ -2311,6 +2319,24 @@ internal fun MobileBillboard(
      */
     firstPillFocusRequester: FocusRequester? = null,
     /**
+     * Whether the auto-advance holds still while one of the hero's pills holds
+     * focus.
+     *
+     * True is the TV hero's rule (F5, 2026-11-15): the pills are a D-pad stop, and
+     * a page change under the viewer's Left/Right replaced the very node they were
+     * stepping onto.
+     *
+     * The phone passes FALSE (Kenny, 2026-11-17: "Let it cycle under focus too").
+     * A focused pill is a viewer looking at THIS page, not a reason to stop
+     * showing the others - and F5's fight is answered rather than avoided: a
+     * pill's press resolves against the page in front when it is pressed (see
+     * [billboardPressPage]), and a page change under a focused pill hands focus to
+     * the equivalent pill of the new page. The two behaviours share one flag on
+     * purpose: a surface that lets the page move under the pills is exactly a
+     * surface that has to move the focus with it.
+     */
+    holdCycleWhilePillsFocused: Boolean = true,
+    /**
      * True while ANOTHER surface owns the pooled player (Spotlight's expanded
      * card).
      *
@@ -2451,15 +2477,55 @@ internal fun MobileBillboard(
     // page under it. The SWEEP deliberately does not read it (2026-11-15): the
     // backdrop keeps panning under the pills, and only the page has to hold.
     var pillsFocused by remember { mutableStateOf(false) }
+    // WHICH pill the hand is on (F2, 2026-11-17), and the requesters that can put
+    // it back after a page change. A caller-supplied entry requester (the TV) is
+    // the Play pill's own - one node cannot carry two - so it IS the Play
+    // requester here rather than a second one beside it.
+    var focusedPill by remember { mutableStateOf<BillboardPill?>(null) }
+    val internalPlayPillRequester = remember { FocusRequester() }
+    val playPillRequester = firstPillFocusRequester ?: internalPlayPillRequester
+    val detailsPillRequester = remember { FocusRequester() }
+    val trailerPillRequester = remember { FocusRequester() }
+    // A surface that cycles under the pills must move the focus with the page;
+    // one that holds the cycle (the TV) never needs to.
+    val pillFocusFollowsPage = !holdCycleWhilePillsFocused
+    // The hold, as the cycle effect keys and returns on it: constant false on a
+    // surface that cycles under the pills (the phone), so focus changes there
+    // never re-enter or re-arm the timer (F1).
+    val pillsHoldCycle = holdCycleWhilePillsFocused && pillsFocused
     // A page change draws a NEW set of pills and disposes the old ones, so any
     // focus they held went with them. Cleared here as well as by the focus
     // observer, because a node that is simply removed is not guaranteed to
     // report its own blur - and a stale `true` would freeze the hold (and make
     // the UP carve-out think it had already landed).
     LaunchedEffect(pagerState.currentPage) {
+        val pill = focusedPill
         if (pillsFocused) {
             pillsFocused = false
             onPillFocusChange(false)
+        }
+        // F2 (2026-11-17): the page moved under a focused pill - hand focus to the
+        // equivalent pill of the page now in front, so the viewer's next press has
+        // somewhere to go. The equivalent may not exist (a page with no trailer
+        // draws no Trailer pill), so Play is the fallback: every page has it.
+        if (pillFocusFollowsPage && pill != null) {
+            val requester = when (pill) {
+                BillboardPill.PLAY -> playPillRequester
+                BillboardPill.DETAILS -> detailsPillRequester
+                BillboardPill.TRAILER -> trailerPillRequester
+            }
+            val restored = landFocusOn(requester)
+            if (!restored && pill != BillboardPill.PLAY) landFocusOn(playPillRequester)
+        }
+    }
+    // One frame of grace before forgetting which pill the hand was on: a page
+    // change disposes the old row in the same frame, and the hand-off above has to
+    // know what it is handing over. Focus that left the pills for anywhere else
+    // clears on the next frame, so a later manual swipe does not yank it back.
+    LaunchedEffect(pillsFocused, focusedPill) {
+        if (!pillsFocused && focusedPill != null) {
+            awaitFrame()
+            if (!pillsFocused) focusedPill = null
         }
     }
 
@@ -2860,11 +2926,13 @@ internal fun MobileBillboard(
         // restarts when the expanded card collapses instead of staying frozen
         // on the page it stopped (the landing intent, now the behaviour).
         trailerSuppressed,
-        // A pill holding focus is a pause for the same reason, and lifting it
-        // re-arms the delay (F5): the viewer's Left/Right move between Play,
-        // Details and Trailer, and a page change under them replaced the very
-        // node they were stepping onto.
-        pillsFocused
+        // A pill holding focus is a pause only where the caller asks for one
+        // (F5), and lifting it re-arms the delay: on the TV the viewer's
+        // Left/Right move between Play, Details and Trailer, and a page change
+        // under them replaced the very node they were stepping onto. The PHONE no
+        // longer holds here (F1, 2026-11-17) - so this derived value is constant
+        // false there and a focus change never re-enters or re-arms the timer.
+        pillsHoldCycle
     ) {
         if (cycleMs <= 0L || pages.size <= 1) return@LaunchedEffect
         if (backgrounded || playbackPageKey != null || playback != null) {
@@ -2877,10 +2945,10 @@ internal fun MobileBillboard(
         // had moved to on its own. Keyed on trailerSuppressed above, so lifting
         // it re-enters here and restarts the delay (the landing intent).
         if (trailerSuppressed) return@LaunchedEffect
-        // F5: the hero holds still under its own pills, so a title never changes
-        // under a viewer working Left/Right - the press and the page change used
-        // to fight, and the page change won by replacing the focused node.
-        if (pillsFocused) return@LaunchedEffect
+        // F5, still the TV hero's rule: it holds still under its own pills. The
+        // phone does not (F1) - it keeps cycling, and the press/focus answers live
+        // in the pill row below.
+        if (pillsHoldCycle) return@LaunchedEffect
         snapshotFlow { pagerState.settledPage to pagerState.isScrollInProgress }
             .collectLatest { (page, scrolling) ->
                 if (scrolling) return@collectLatest
@@ -3018,14 +3086,32 @@ internal fun MobileBillboard(
                 label = "Play",
                 icon = Icons.Filled.PlayArrow,
                 accent = true,
-                focusRequester = firstPillFocusRequester,
+                focusRequester = playPillRequester,
                 onUp = onPillUpPressed,
-                onClick = { currentPage?.let(onPlay) }
+                onFocused = { focusedPill = BillboardPill.PLAY },
+                onClick = {
+                    // F2: the page is resolved at PRESS time from the pager -
+                    // never a page captured when the pill took focus, which is
+                    // the title that may have scrolled away since.
+                    billboardPressPage(
+                        pages = pages,
+                        currentIndex = pagerState.currentPage,
+                        settledIndex = pagerState.settledPage
+                    )?.let(onPlay)
+                }
             )
             BillboardAction(
                 label = "Details",
+                focusRequester = detailsPillRequester,
                 onUp = onPillUpPressed,
-                onClick = { currentPage?.let(onDetails) }
+                onFocused = { focusedPill = BillboardPill.DETAILS },
+                onClick = {
+                    billboardPressPage(
+                        pages = pages,
+                        currentIndex = pagerState.currentPage,
+                        settledIndex = pagerState.settledPage
+                    )?.let(onDetails)
+                }
             )
             // Manual mode is the ONLY mode that draws this: with Off there is
             // no trailer affordance at all, and with Auto-play the mode itself
@@ -3045,6 +3131,11 @@ internal fun MobileBillboard(
                     // and after the trailer starts are focus-held, and the
                     // trailer itself pauses the cycle through `playback`.
                     onUp = onPillUpPressed,
+                    // Its press already reads the pager at press time (the index
+                    // handed to `startTrailer` below); this is only the identity
+                    // F2 hands back after a page change.
+                    focusRequester = trailerPillRequester,
+                    onFocused = { focusedPill = BillboardPill.TRAILER },
                     onClick = {
                         if (playback != null) {
                             stopTrailer()
@@ -3256,6 +3347,14 @@ private fun BillboardAction(
      * hold-UP. Null leaves the key alone - the phone has no bar to open.
      */
     onUp: (() -> Unit)? = null,
+    /**
+     * Fires when THIS pill takes focus (F2, 2026-11-17).
+     *
+     * The row already knows a pill holds focus; this says WHICH one, which is what
+     * a page change needs in order to hand focus to the equivalent pill of the new
+     * page instead of dropping it.
+     */
+    onFocused: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     val contentColor = if (accent) KBVoid else KBTextHi
@@ -3306,6 +3405,15 @@ private fun BillboardAction(
                 }
             )
             .then(
+                if (onFocused != null) {
+                    Modifier.onFocusChanged { state ->
+                        if (state.isFocused) onFocused()
+                    }
+                } else {
+                    Modifier
+                }
+            )
+            .then(
                 if (onUp != null) {
                     // The press is CONSUMED, so no stale focus search runs after
                     // it - the same contract the rail hook keeps (F6). Only the
@@ -3351,6 +3459,16 @@ private fun BillboardAction(
         }
     }
 }
+
+/**
+ * The three pills a hero page can draw (F2, 2026-11-17).
+ *
+ * Identity only: which pill the hand is on, so a page change can put focus back on
+ * the same one. The Trailer pill is drawn on some pages and not others (manual
+ * mode, a page with a trailer), which is why the hand-off needs a fallback rather
+ * than assuming the pill exists.
+ */
+private enum class BillboardPill { PLAY, DETAILS, TRAILER }
 
 /**
  * The rail key the billboard's feed picker stores for this rail.
