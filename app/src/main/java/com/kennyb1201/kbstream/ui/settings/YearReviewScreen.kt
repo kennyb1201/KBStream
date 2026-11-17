@@ -41,6 +41,7 @@ import com.kennyb1201.kbstream.data.history.YearTitle
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
+import com.kennyb1201.kbstream.ui.mobile.MobileBackButton
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
@@ -94,7 +95,19 @@ fun YearReviewScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            KBButton(label = "BACK", onClick = onBack)
+            // Phone: the shared arrow, never the word (spec 2026-11-16). This
+            // screen is one layout for both form factors, so the header branches
+            // where the padding already does - the same `onBack` either way, so
+            // the arrow and the text button take one path (and the same one
+            // BackHandler does).
+            //
+            // TV keeps the text button: it is the D-pad-focusable affordance
+            // there, and a television has no touch back arrow.
+            if (com.kennyb1201.kbstream.FormFactor.isTv) {
+                KBButton(label = "BACK", onClick = onBack)
+            } else {
+                MobileBackButton(onBack = onBack)
+            }
             KBPageTitle(text = "YOUR ${state.year} IN REVIEW")
         }
 
