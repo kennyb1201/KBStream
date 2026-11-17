@@ -84,7 +84,7 @@ import com.kennyb1201.kbstream.data.iptv.epgProgramChannelKey
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.PlayerMemoryBudget
-import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
+import com.kennyb1201.kbstream.data.memory.trimImageMemoryCache
 import com.kennyb1201.kbstream.data.reporting.PlaybackDeathMarker
 import com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace
 import com.kennyb1201.kbstream.data.reporting.Redaction
@@ -3799,8 +3799,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // left resident. Free that headroom up front instead of hoping the
         // system asks in time — decoded artwork and the EPG snapshot are both
         // rebuildable, and the player loads whatever art it needs itself.
+        //
+        // HALF, not everything (dig four, 2026-11-16, §3f rank 7). A full clear
+        // here is a resume cost on every single playback: the return to Home
+        // re-decodes the hero and every card from disk even though the box was
+        // never under pressure. The graded LRU trim frees the same order of
+        // headroom for the player (half of a 64MB cap, biggest-first by age)
+        // while keeping the most recently used art, which is exactly the art the
+        // return draws.
         runCatching {
-            releaseImageMemoryCache(this)
+            trimImageMemoryCache(this)
             MemoryPressure.releaseBrowsingCaches()
         }
 

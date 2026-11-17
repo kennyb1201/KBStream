@@ -61,7 +61,7 @@ import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
-import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
+import com.kennyb1201.kbstream.data.memory.trimImageMemoryCache
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
@@ -1108,8 +1108,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // freeing the browsing caches before it starts matters here at least as
         // much as it does on the ExoPlayer path, which has always done it (see
         // NativePlayerActivity.onCreate).
+        // Half the bitmap cache, not all of it (dig four, 2026-11-16, §3f rank
+        // 7): a full clear makes every return from playback re-decode the hero
+        // and the rails from disk. The graded LRU trim keeps the recently used
+        // art - the art that return draws - and still hands the player half a
+        // 64MB cap's worth of headroom. The browsing caches go as before.
         runCatching {
-            releaseImageMemoryCache(this)
+            trimImageMemoryCache(this)
             MemoryPressure.releaseBrowsingCaches()
         }
 
