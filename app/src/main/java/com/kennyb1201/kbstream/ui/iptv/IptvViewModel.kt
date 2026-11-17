@@ -1690,12 +1690,32 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         saveHiddenChannelIds()
     }
 
+    /** The playlist [knownChannelIdsCache] was built from, by identity. */
+    private var knownChannelIdsOwner: IptvPlaylist? = null
+
+    /** Every channel id in [knownChannelIdsOwner]; see [updateGuideChannels]. */
+    private var knownChannelIdsCache: Set<String> = emptySet()
+
     fun updateGuideChannels(visibleChannelIds: List<String>) {
         if (visibleChannelIds.isEmpty()) return
         val playlist = _playlist.value ?: return
         val hiddenIds = _hiddenChannelIds.value
         val queuedIds = _guideChannelIds.value
-        val knownIds = playlist.channels.asSequence().map { it.id }.toHashSet()
+        // The playlist's own id set, built ONCE per playlist rather than once
+        // per call. It used to be rebuilt on every visible-window answer, which
+        // the phone guide sends while the list is moving - so a fling over a
+        // 10k-channel lineup paid 10k map/insert operations per frame for a set
+        // that cannot change unless the playlist itself is replaced. Identity
+        // (not equality) is the invalidator: a new lineup is a new object.
+        val knownIds =
+            if (knownChannelIdsOwner === playlist) {
+                knownChannelIdsCache
+            } else {
+                playlist.channels.asSequence().map { it.id }.toHashSet().also { ids ->
+                    knownChannelIdsCache = ids
+                    knownChannelIdsOwner = playlist
+                }
+            }
         val newIds = visibleChannelIds.asSequence()
             .filter { it in knownIds && it !in hiddenIds && it !in queuedIds }
             .take(MAX_GUIDE_CHANNELS_PER_REQUEST)

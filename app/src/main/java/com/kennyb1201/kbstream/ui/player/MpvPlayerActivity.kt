@@ -5985,17 +5985,27 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // until both numbers exist.
         maybeDetectScheme()
         runOnUiThread {
-            // The position / duration / bar / play-pause glyph are painted by the
-            // shared chrome from this engine's playhead.
-            chrome?.refreshProgress()
-            // While the seekbar is being dragged it owns the readout, and the
-            // chrome leaves the thumb and the times alone then - so the chapter
-            // strip follows the same rule. It also keeps the chapter ticks in
-            // step with a duration that arrives after the first file-loaded
-            // tick, and moves the readout to the chapter the playhead is inside.
-            if (!scrubbing && chapterMarks.isNotEmpty()) {
-                chrome?.setChapters(chapterMarks, durationMs)
-                refreshChapterTitle(positionMs)
+            // The bar, the clock and the chapter strip are VIEWS the viewer may
+            // not be looking at: the chrome hides itself after six seconds of
+            // playback. Writing them while it is hidden bought a repaint of a
+            // gone surface on every tick - the sibling clock runnable has always
+            // returned early for exactly this reason (see clockRunnable), and
+            // this path simply never did. Everything below the gate is playhead
+            // bookkeeping that must run whether or not the chrome is up.
+            if (chrome?.isVisible == true) {
+                // The position / duration / bar / play-pause glyph are painted
+                // by the shared chrome from this engine's playhead.
+                chrome?.refreshProgress()
+                // While the seekbar is being dragged it owns the readout, and
+                // the chrome leaves the thumb and the times alone then - so the
+                // chapter strip follows the same rule. It also keeps the chapter
+                // ticks in step with a duration that arrives after the first
+                // file-loaded tick, and moves the readout to the chapter the
+                // playhead is inside.
+                if (!scrubbing && chapterMarks.isNotEmpty()) {
+                    chrome?.setChapters(chapterMarks, durationMs)
+                    refreshChapterTitle(positionMs)
+                }
             }
 
             // The card opens as the credits roll, exactly as it does in the main

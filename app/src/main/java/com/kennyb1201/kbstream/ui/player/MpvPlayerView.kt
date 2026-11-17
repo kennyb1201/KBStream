@@ -2541,7 +2541,25 @@ class MpvPlayerView @JvmOverloads constructor(
         }.onFailure { Log.w(TAG, "resume seek failed", it) }
     }
 
+    /**
+     * How often a `time-pos` event may reach the chrome, at most.
+     *
+     * mpv reports `time-pos` on its own schedule, and the activity's tick does
+     * real work (a chrome repaint, a chapter strip, the end-panel and skip-prompt
+     * checks). The comment that calls that schedule "roughly once a second" is
+     * mpv's, not this app's - nothing here enforced it, so an engine that emits
+     * per frame would have repainted the (possibly hidden) chrome per frame.
+     * Four ticks a second is more than a clock or a seekbar needs, and it is a
+     * floor the widget itself owns, whatever mpv sends.
+     */
+    private var lastProgressPostAtMs = 0L
+
     private fun publishProgress() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (lastProgressPostAtMs != 0L && now - lastProgressPostAtMs < PROGRESS_POST_MIN_INTERVAL_MS) {
+            return
+        }
+        lastProgressPostAtMs = now
         val position = lastPositionMs
         val duration = lastDurationMs
         post { onProgress?.invoke(position, duration) }
@@ -2765,3 +2783,6 @@ class MpvPlayerView @JvmOverloads constructor(
 
     }
 }
+
+/** The floor between two `time-pos`-driven progress posts; see [publishProgress]. */
+private const val PROGRESS_POST_MIN_INTERVAL_MS = 250L

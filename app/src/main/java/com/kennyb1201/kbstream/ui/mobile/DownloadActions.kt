@@ -83,23 +83,6 @@ internal fun downloadActionLabel(record: DownloadRecord): String = when (record.
     DownloadState.DELETED -> "DOWNLOAD"
 }
 
-/**
- * Whether any COMPLETED download belongs to one of these title keys.
- *
- * The Library's question, which is coarser than the Detail page's on purpose: a
- * library row is the SHOW, and it should badge when one of its episodes is on
- * the phone - so this matches on the title key and ignores the episode, while
- * the Detail page matches the exact season and episode it is showing.
- */
-internal fun downloadsHaveAny(
-    records: List<DownloadRecord>,
-    mediaKeys: Collection<String>
-): Boolean {
-    val keys = mediaKeys.filter { it.isNotBlank() }.toSet()
-    if (keys.isEmpty()) return false
-    return records.any { it.state.isComplete && it.mediaKey in keys }
-}
-
 /** The gate's decision for one row, as the screens ask it. */
 internal fun downloadGate(
     context: Context,

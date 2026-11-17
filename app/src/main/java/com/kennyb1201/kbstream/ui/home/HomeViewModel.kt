@@ -6120,6 +6120,13 @@ Log.d(
     //  - exhaustedRails: catalogs that returned an empty page (no more items)
     //  - railInfo: identity needed to build the next page URL (baseUrl, type,
     //    filter toggles active when the rail was built)
+    /**
+     * How long a page append waits before the watched-marker pass runs, so a
+     * fling that loads several pages runs it once instead of per page. See
+     * [requestWatchedRefreshAfterPage].
+     */
+    private val WATCHED_REFRESH_AFTER_PAGE_MS = 300L
+
     private val loadingRails = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val exhaustedRails = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val railInfo = java.util.concurrent.ConcurrentHashMap<String, RailInfo>()
@@ -6461,6 +6468,37 @@ Log.d(
      * is already loading a page or the catalog reported it has no more
      * items. Safe to call repeatedly from a scroll sentinel.
      */
+    // ---- Watched state after a page append ----
+
+    /** Whether a coalesced watched refresh is already scheduled. */
+    private var watchedRefreshAfterPageQueued = false
+
+    /**
+     * Re-resolve watched state after a rail grew.
+     *
+     * A page append only ADDS cards, and every card that was already on screen
+     * has its markers - yet this call used to run the full refresh, in full,
+     * once per page: flatten every rail, build every marker, and preload the
+     * watched keys for thousands of titles. A fling that appends five pages did
+     * that five times over, on the main-thread-adjacent path that must stay
+     * free for the scroll itself.
+     *
+     * Coalescing is the cheap, safe half: the append still updates the rail
+     * immediately (the cards paint, art lands behind them), while the marker
+     * pass runs once a beat later over whatever the rails hold by then. The
+     * cards' watched badges are the only thing that arrives a moment late, and
+     * they arrive on a settled list instead of on every frame of a flick.
+     */
+    private fun requestWatchedRefreshAfterPage() {
+        if (watchedRefreshAfterPageQueued) return
+        watchedRefreshAfterPageQueued = true
+        viewModelScope.launch {
+            delay(WATCHED_REFRESH_AFTER_PAGE_MS)
+            watchedRefreshAfterPageQueued = false
+            refreshWatchedStatus(_rails.value)
+        }
+    }
+
     fun loadMoreForRail(railKey: String) {
 
         val info =
@@ -6619,7 +6657,7 @@ Log.d(
                     exhaustedRails.add(railKey)
                 }
 
-                refreshWatchedStatus(_rails.value)
+                requestWatchedRefreshAfterPage()
             } catch (
                 e: kotlinx.coroutines.CancellationException
             ) {

@@ -9,6 +9,7 @@ import android.widget.TextView
 import androidx.compose.ui.graphics.toArgb
 import androidx.core.content.ContextCompat
 import androidx.core.content.res.ResourcesCompat
+import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
 import coil3.load
 import com.kennyb1201.kbstream.R
@@ -90,8 +91,48 @@ class PickerAdapter(
      * same position, only the bound content changes.
      */
     fun submit(newItems: List<PickerItem>) {
+        val old = items
         items = newItems
-        notifyDataSetChanged()
+        // A watched-mark refresh changes a ✓ on a few rows. notifyDataSetChanged
+        // rebound every visible one - re-setting four texts, re-issuing a Coil
+        // load for the still, and re-inflating the whole chip row for a badge
+        // set that did not change (see bindBadgeRow). The diff says which rows
+        // actually changed, so the ✓ lands without dragging the rest of the
+        // panel through a rebind.
+        //
+        // Identity is the label: it is the row's one stable, human-meaningful
+        // string ("1x03 · Title", "1080p · Addon", "Loading…"), and every item
+        // builder in the tree derives it from the thing the row stands for.
+        // Contents are compared field by field because a [PickerItem] carries
+        // click lambdas, and a lambda never equals itself across two builds - a
+        // plain `==` would report every row changed and buy nothing.
+        val diff = DiffUtil.calculateDiff(
+            object : DiffUtil.Callback() {
+                override fun getOldListSize(): Int = old.size
+
+                override fun getNewListSize(): Int = newItems.size
+
+                override fun areItemsTheSame(oldPosition: Int, newPosition: Int): Boolean =
+                    old[oldPosition].label == newItems[newPosition].label
+
+                override fun areContentsTheSame(oldPosition: Int, newPosition: Int): Boolean {
+                    val before = old[oldPosition]
+                    val after = newItems[newPosition]
+                    return before.label == after.label &&
+                        before.isSelected == after.isSelected &&
+                        before.badges == after.badges &&
+                        before.thumbnail == after.thumbnail &&
+                        before.fallbackImageUrl == after.fallbackImageUrl &&
+                        before.description == after.description &&
+                        before.date == after.date &&
+                        before.rating == after.rating &&
+                        before.watched == after.watched &&
+                        before.unavailable == after.unavailable &&
+                        before.nowPlaying == after.nowPlaying
+                }
+            }
+        )
+        diff.dispatchUpdatesTo(this)
     }
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {

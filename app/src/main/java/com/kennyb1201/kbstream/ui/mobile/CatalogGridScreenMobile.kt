@@ -44,6 +44,7 @@ import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.TrackScrollFrames
 import com.kennyb1201.kbstream.ui.components.trailerMenuAction
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
@@ -227,6 +228,7 @@ fun CatalogGridScreenMobile(
         // (seeded by catalogId), so a same-name replacement starts at the top
         // while reopening a catalog still restores its own offset.
         val gridState = key(title, addonName, catalogId) { rememberLazyGridState() }
+        TrackScrollFrames(label = "catalog", state = gridState)
 
         // Leaving the grid: a trip to a title page keeps its pager and its
         // place, any other way out drops them.
@@ -491,7 +493,18 @@ fun CatalogGridScreenMobile(
                             // as pages land, and a placement animation on top
                             // of that reads as the grid fighting itself.
                             modifier = Modifier.animateItem(
-                                fadeInSpec = tween(rememberMotionMs(KB_ART_FADE_MS))
+                                // A fade is a first-sight greeting, and the
+                                // viewer is watching for the page that lands
+                                // during a fling. Fading a screenful of tiles
+                                // while the grid is moving puts a per-frame alpha
+                                // animation on top of their first composition and
+                                // their first decode - so the fade is kept for a
+                                // grid at rest and skipped while it scrolls.
+                                fadeInSpec = if (gridState.isScrollInProgress) {
+                                    null
+                                } else {
+                                    tween(rememberMotionMs(KB_ART_FADE_MS))
+                                }
                             ),
                             landscape = landscape,
                             isWatched = isWatched,

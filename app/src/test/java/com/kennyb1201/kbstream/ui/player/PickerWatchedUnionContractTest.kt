@@ -229,7 +229,11 @@ class PickerWatchedUnionContractTest {
             "the adapter replaces its items instead of being swapped out, so focus and scroll survive",
             adapter.contains("private var items: List<PickerItem>") &&
                 adapter.contains("fun submit(newItems: List<PickerItem>)") &&
-                adapter.contains("notifyDataSetChanged()")
+                // Still the SAME adapter, still in place - the diff is how the
+                // in-place update stops rebinding every visible row for a
+                // watched mark (scrolling dig five, §4e).
+                adapter.contains("DiffUtil.calculateDiff(") &&
+                adapter.contains("diff.dispatchUpdatesTo(this)")
         )
     }
 

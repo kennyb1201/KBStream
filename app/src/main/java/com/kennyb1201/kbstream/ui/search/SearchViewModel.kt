@@ -910,10 +910,12 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         _titleSort.value = TitleSort.BEST_MATCH
         publishTitlesSummary()
         invalidateAddonSearch()
-        _addonResultGroups.value = emptyList()
         _searchError.value = null
 
         if (normalized.isBlank()) {
+            // An emptied field has no rails to wait for - clear them here, the
+            // one place the debounced wave will never run.
+            _addonResultGroups.value = emptyList()
             _results.value = emptyList()
             _actorResults.value = emptyList()
             _studioResults.value = emptyList()
@@ -954,6 +956,13 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             // TMDB/add-ons aren't hammered on every character.
             delay(SEARCH_DEBOUNCE_MS)
 
+            // The add-on rails empty HERE, with the wave that replaces them -
+            // not on the keystroke. Clearing them in front of the debounce
+            // blanked the page for each character typed, while the titles rail
+            // next to it kept the previous query's rows for the same 300 ms
+            // (see the comment on the carried `_results`), so the two halves of
+            // one screen disagreed about what a keystroke means.
+            _addonResultGroups.value = emptyList()
             _isLoading.value = true
             try {
                 // One endpoint failing is not a failed search - the other four

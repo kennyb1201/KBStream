@@ -88,6 +88,7 @@ import com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
+import com.kennyb1201.kbstream.ui.components.TrackScrollFrames
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.touch.KBPanelHeading
@@ -724,6 +725,8 @@ fun GuideScreenMobile(
         }
 
         val listState = rememberLazyListState()
+        // The channel list's own frame cost per gesture (scrolling dig five).
+        TrackScrollFrames(label = "guide", state = listState)
         // EPG windowing: ask the ViewModel for the rows the viewer can actually
         // see, and only those. Keyed by ROW KEY rather than index, because the
         // list also carries program-hit rows while a search is up - an index
@@ -733,12 +736,27 @@ fun GuideScreenMobile(
         }
         val latestChannelIds by rememberUpdatedState(channelIdsByRowKey)
         LaunchedEffect(listState) {
+            // A fling changes the visible rows every frame, and each answer
+            // used to be a request: the lineup query was re-queued (and the
+            // previous one cancelled) dozens of times per flick. A finger
+            // cannot read a lineup that fast, so the window is sampled on a
+            // beat instead - and only when the rows actually changed, which is
+            // what makes a slow drag free.
+            var lastSentAt = 0L
+            var lastSent: List<String> = emptyList()
             snapshotFlow {
                 listState.layoutInfo.visibleItemsInfo.mapNotNull { info ->
                     (info.key as? String)?.let { key -> latestChannelIds[key] }
                 }
             }.collect { ids ->
-                if (ids.isNotEmpty()) viewModel.updateGuideChannels(ids)
+                if (ids.isEmpty() || ids == lastSent) return@collect
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (lastSentAt != 0L && now - lastSentAt < GUIDE_VISIBLE_ROWS_MIN_INTERVAL_MS) {
+                    return@collect
+                }
+                lastSentAt = now
+                lastSent = ids
+                viewModel.updateGuideChannels(ids)
             }
         }
 
@@ -1179,6 +1197,14 @@ fun GuideScreenMobile(
         }
     }
 }
+
+/**
+ * How often the channel list may hand the ViewModel a new visible window while
+ * it is moving. Per-frame answers were a lineup query per frame (see the
+ * `LaunchedEffect` on `listState`); 120 ms is faster than a finger can read a
+ * guide row and slow enough that a flick costs a handful of queries.
+ */
+private const val GUIDE_VISIBLE_ROWS_MIN_INTERVAL_MS = 120L
 
 private const val GUIDE_TICK_MS = 30_000L
 

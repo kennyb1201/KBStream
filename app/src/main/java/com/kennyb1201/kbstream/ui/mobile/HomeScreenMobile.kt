@@ -132,6 +132,7 @@ import com.kennyb1201.kbstream.data.youtube.heroTrailerIdentityRefusal
 import com.kennyb1201.kbstream.data.youtube.heroTrailerResolveFailurePoisons
 import com.kennyb1201.kbstream.data.youtube.heroTrailerRetryPlan
 import com.kennyb1201.kbstream.data.youtube.signedUrl
+import com.kennyb1201.kbstream.ui.components.TrackScrollFrames
 import com.kennyb1201.kbstream.ui.home.LibraryHomeRailUi
 import com.kennyb1201.kbstream.ui.home.failedAddonsMessage
 import com.kennyb1201.kbstream.ui.home.rememberBingeCatReconnectNotice
@@ -304,6 +305,9 @@ fun HomeScreenMobile(
         // the shell: Home still opens at the top after a trip to Search, which
         // is what this screen did before the bar existed.
         val listState = rememberLazyListState()
+        // Scrolling dig five: what this screen's frames actually cost, per
+        // gesture, in COPY DIAGNOSTICS (see UiFrameTrace).
+        TrackScrollFrames(label = "home", state = listState)
         val homeTopRequested by MobileHomeTopRequest.requests
             .collectAsStateWithLifecycle()
         LaunchedEffect(homeTopRequested) {
@@ -2701,11 +2705,23 @@ internal fun MobileBillboard(
     // starts the mint earlier than turning the page would, and a completed
     // pre-warm is a cache hit at resolve time; the resolve's own re-mint covers
     // the rest (see InnerTubeExtractor.prewarmPoTokens).
+    // Both pre-warms below are for a trailer that can still play, on the page
+    // the viewer is still looking at. They used to fire on every settle
+    // unconditionally - minting a token and, on a miss, putting the IMDb page
+    // leg (a WebView on the main thread) in front of a page that could not use
+    // it: trailers off, a window that suppresses them (a panel is up, the app is
+    // away), or a page the viewer is about to swipe past. The auto-play arming
+    // just above is gated on exactly this; the warms that feed it now are too.
+    val nextPageWarm =
+        trailerMode != BillboardTrailerMode.OFF &&
+            !trailerSuppressed &&
+            !backgrounded
     val nextPageTrailerKey = pages
         .getOrNull((pagerState.settledPage + 1) % pages.size.coerceAtLeast(1))
         ?.trailerKey
         ?.takeIf { it.isNotBlank() }
-    LaunchedEffect(pagerState.settledPage, nextPageTrailerKey) {
+    LaunchedEffect(pagerState.settledPage, nextPageTrailerKey, nextPageWarm) {
+        if (!nextPageWarm) return@LaunchedEffect
         nextPageTrailerKey?.let { key -> InnerTubeExtractor.prewarmPoTokens(key) }
     }
     // The same page's IMDb trailer, warmed on the same settle: the billboard's
@@ -2713,7 +2729,8 @@ internal fun MobileBillboard(
     // included - is what should NOT be in front of it. Its own effect, so the
     // token warm above is never held behind it.
     val nextPage = pages.getOrNull((pagerState.settledPage + 1) % pages.size.coerceAtLeast(1))
-    LaunchedEffect(pagerState.settledPage, nextPage?.imdbId, nextPage?.tmdbId) {
+    LaunchedEffect(pagerState.settledPage, nextPage?.imdbId, nextPage?.tmdbId, nextPageWarm) {
+        if (!nextPageWarm) return@LaunchedEffect
         runCatchingCancellable {
             TrailerPlayerLauncher.prefetchImdbTrailer(
                 imdbId = nextPage?.imdbId,

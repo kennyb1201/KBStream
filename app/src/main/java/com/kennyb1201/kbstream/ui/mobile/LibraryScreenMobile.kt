@@ -57,6 +57,7 @@ import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.TrackScrollFrames
 import com.kennyb1201.kbstream.ui.components.heroSourceOnPress
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
@@ -152,6 +153,16 @@ fun LibraryScreenMobile(
         // them). Held as state rather than read per tile from the store, so a
         // download that finishes while the grid is up redraws it.
         val downloads = rememberDownloadRecords()
+        // The titles that are here offline, resolved ONCE per download-list
+        // change. Each tile used to ask the question by scanning every download
+        // record (downloadsHaveAny), so a grid of N tiles over M records paid
+        // N x M per composition - and a fling recomposes as it goes.
+        val completedDownloadKeys = remember(downloads) {
+            downloads.asSequence()
+                .filter { record -> record.state.isComplete }
+                .map { record -> record.mediaKey }
+                .toSet()
+        }
 
         val stateRaw by viewModel.uiState.collectAsStateWithLifecycle()
         // A hidden title leaves My List, the merged All list and every personal
@@ -181,6 +192,7 @@ fun LibraryScreenMobile(
         // position inside the filter on screen while a filter switch still
         // starts at the top.
         val gridState = key(state.filter) { rememberLazyGridState() }
+        TrackScrollFrames(label = "library", state = gridState)
         var returnTarget by remember { mutableStateOf<BrowseReturnTarget?>(null) }
 
         var menuItem by remember { mutableStateOf<LibraryItem?>(null) }
@@ -661,16 +673,21 @@ fun LibraryScreenMobile(
                         // never asked to reuse each other's slot.
                         contentType = { _, item -> item.mediaType }
                     ) { index, item ->
+                        // Once per tile, not three times: the watched-check, the
+                        // eye badge and the offline mark are all asking about the
+                        // same key list.
+                        val candidates = item.watchedKeyCandidates()
+                        val navigationId = item.navigationId
+                        // The show's whole title, not one episode: a library row
+                        // is the title, so any downloaded episode of it marks the
+                        // row - a set lookup per candidate now, not a scan of
+                        // every record.
+                        val isDownloaded =
+                            candidates.any { key -> key in completedDownloadKeys } ||
+                                (navigationId != null && navigationId in completedDownloadKeys)
                         LibraryTile(
                             item = item,
-                            // The show's whole title, not one episode: a library
-                            // row is the title, so any downloaded episode of it
-                            // marks the row.
-                            isDownloaded = downloadsHaveAny(
-                                downloads,
-                                item.watchedKeyCandidates() +
-                                    listOfNotNull(item.navigationId)
-                            ),
+                            isDownloaded = isDownloaded,
                             // Removals and filter/sort changes stop teleporting
                             // the grid: a tile fading out and its neighbours
                             // closing the gap is the phone's whole point here.
@@ -684,10 +701,9 @@ fun LibraryScreenMobile(
                                     item.navigationId.orEmpty()
                                 ),
                             rating = state.ratings[LocalLibraryStore.dedupeKey(item)],
-                            isWatched = item.watchedKeyCandidates()
-                                .any { it in state.watchedKeys },
-                            isPartiallyWatched = item.watchedKeyCandidates()
-                                .any { it in state.partiallyWatchedKeys },
+                            isWatched = candidates.any { key -> key in state.watchedKeys },
+                            isPartiallyWatched =
+                                candidates.any { key -> key in state.partiallyWatchedKeys },
                             onClick = { openItem(item, index) },
                             onLongClick = { menuItem = item }
                         )
