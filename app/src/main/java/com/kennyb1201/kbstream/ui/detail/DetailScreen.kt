@@ -327,6 +327,16 @@ internal fun episodeRowKey(parentId: String, season: Int?, episodeNumber: Int): 
  */
 private const val TAG = "DETAIL"
 
+/**
+ * How long the season posters' row must hold focus before the focused season
+ * becomes the selected one (dig four, 2026-11-16, §2a).
+ *
+ * Long enough that a deliberate D-pad walk across eight posters is one season
+ * load, not eight; short enough that stopping on a poster feels immediate. The
+ * hero's own resolve uses the same 150 ms shape for the same reason.
+ */
+private const val SEASON_FOCUS_DWELL_MS = 140L
+
 private const val GENRE_ROW_KEY = "genrerow"
 
 /**
@@ -1108,6 +1118,14 @@ fun DetailScreen(
     }
 
     var userManuallyChangedSeason by remember { mutableStateOf(false) }
+    // The season a focus move ASKED for, applied after a dwell (dig four,
+    // 2026-11-16, §2a). Focusing a season poster selects it, and a D-pad walk
+    // across that row is one focus move per poster - so eight posters were eight
+    // season switches, each emptying the episode row and refilling it. The dwell
+    // collapses a walk onto the poster the viewer settles on, exactly as the
+    // hero's own resolve does; tapping a poster still selects immediately
+    // (onSeasonSelected is untouched).
+    var pendingSeasonFocus by remember { mutableStateOf<Int?>(null) }
     val episodesRowState = rememberLazyListState()
     val seasonRowState = rememberLazyListState()
     val detailListState = rememberLazyListState()
@@ -2297,6 +2315,21 @@ fun DetailScreen(
             },
             isDeepLinkAutoPlay = initialTarget != null
         )
+    }
+
+    // The season-focus dwell (dig four §2a). Keyed on the REQUESTED season, so
+    // each focus move restarts it and only the one the viewer stops on applies;
+    // a tap, a chip or any other explicit selection wins because this re-checks
+    // `selectedSeason` after the wait.
+    LaunchedEffect(pendingSeasonFocus) {
+        val next = pendingSeasonFocus ?: return@LaunchedEffect
+        if (selectedSeason == next) return@LaunchedEffect
+        delay(SEASON_FOCUS_DWELL_MS)
+        if (selectedSeason != next) {
+            userManuallyChangedSeason = true
+            clearEpisodeTransitionState()
+            selectedSeason = next
+        }
     }
 
     LaunchedEffect(
@@ -6293,16 +6326,17 @@ fun DetailScreen(
                                         clearEpisodeTransitionState()
                                         selectedSeason = seasonNum
                                     },
+                                    // A focus move only ASKS for the season; the
+                                    // dwell effect above applies it if the focus
+                                    // stays (dig four §2a - a walk across the row
+                                    // used to reload the episode list per poster).
                                     onSeasonFocused = {
                                         seasonNum ->
                                         if (
                                             selectedSeason !=
                                                 seasonNum
                                         ) {
-                                            userManuallyChangedSeason =
-                                                true
-                                            clearEpisodeTransitionState()
-                                            selectedSeason =
+                                            pendingSeasonFocus =
                                                 seasonNum
                                         }
                                     },
