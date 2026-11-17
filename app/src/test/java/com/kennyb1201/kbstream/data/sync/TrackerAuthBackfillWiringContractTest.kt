@@ -29,13 +29,13 @@ class TrackerAuthBackfillWiringContractTest {
 
     @Test
     fun `the backfill is asked after a pull that ran, and nowhere else`() {
-        val pull = functionBody(sync, "private suspend fun pullAllNow(context: Context) {")
+        val pull = functionBody(sync, "private suspend fun pullAllNow(")
         val ask = pull.indexOf("runCatchingCancellable { backfillUnpublishedTrackerAuth(context) }")
         assertTrue("the pull must ask: $pull", ask >= 0)
         assertTrue(
             "after the four pulls, so a fresh device has already ingested the cloud " +
                 "before it offers anything of its own",
-            pull.indexOf("pullOverrides(context)") in 0 until ask
+            pull.indexOf("pullOverrides(context, profileId)") in 0 until ask
         )
         assertTrue(
             "and after the all-failed guard: a pull in which every table threw is not " +

@@ -154,7 +154,13 @@ class ImageOverrideSyncWiringContractTest {
         // guard that now follows the four calls (see
         // InstantSyncPropagationContractTest) made it longer than the 500
         // characters this assertion used to be satisfied inside.
-        assertTrue(body(sync, "private suspend fun pullAllNow(", 1_500).contains("pullOverrides(context)"))
+        // The pull now takes the incoming profile id (2026-11-17, F1: it runs
+        // before the switch announces that profile), and hands it to every
+        // table read - one of them being this one.
+        assertTrue(
+            body(sync, "private suspend fun pullAllNow(", 1_500)
+                .contains("pullOverrides(context, profileId)")
+        )
         // Same widening as the pull above: the push's stamp guard sits between
         // the call and its four siblings.
         assertTrue(body(sync, "private suspend fun pushAllNow(", 1_500).contains("pushOverrides(context)"))

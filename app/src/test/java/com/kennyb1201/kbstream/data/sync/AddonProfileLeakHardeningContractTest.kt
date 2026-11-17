@@ -71,20 +71,33 @@ class AddonProfileLeakHardeningContractTest {
         // ceiling - live on the incoming one.
         val setActive = body(profile, "fun setActive(context: Context, profile: Profile) {")
         val persist = setActive.indexOf("putString(KEY_ACTIVE, profile.id)")
+        val drop = setActive.indexOf("onActiveProfileChanged(profile.id)")
         val bind = setActive.indexOf("_activeProfile.value = profile")
-        val reload = setActive.indexOf("onActiveProfileChanged()")
 
         assertTrue("the new id must be persisted first", persist >= 0)
-        assertTrue("then bound in memory", bind in (persist + 1) until Int.MAX_VALUE)
-        assertTrue("and only then may the per-profile caches be dropped", reload > bind)
+        // The order hardened on 2026-11-17 (F1): the drop now runs BEFORE the
+        // announce, with the INCOMING id passed in, so no collector can observe
+        // the new profile beside a store still holding the old one. The pin's
+        // old requirement - drop AFTER the bind - is the window that order
+        // opened, so it is superseded rather than relaxed: the drop still has to
+        // follow the persist, and the announce still has to follow the drop.
+        assertTrue(
+            "then the previous profile's stores are dropped, for the incoming id",
+            drop > persist
+        )
+        assertTrue("and only then is the new profile announced", bind > drop)
     }
 
     @Test
     fun `the switch-time reload is not swallowed`() {
-        val changed = body(profile, "private fun onActiveProfileChanged() {")
+        val changed = body(profile, "private fun onActiveProfileChanged(profileId: String?) {")
         assertTrue(
-            "the addon reload must live in the switch sequence",
-            changed.contains("refreshAddons()")
+            "the addon reload must live in the switch sequence, and it must be " +
+                "told WHICH profile to load (2026-11-17, F1: the switch-time " +
+                "reload now runs before the announcement, so resolving the active " +
+                "profile back would load the one being left)",
+            changed.contains("refreshAddons(profileId)") &&
+                !changed.contains("refreshAddons()")
         )
         assertTrue(
             "and a failure to reload must be logged, not silently dropped",

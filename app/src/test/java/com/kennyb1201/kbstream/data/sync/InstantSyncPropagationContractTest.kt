@@ -381,14 +381,21 @@ class InstantSyncPropagationContractTest {
     fun `the sync stamp is only written for a pull that actually ran`() {
         val sync = readSource(SYNC)
         listOf("pullPrefs", "pullHistory", "pullWatched", "pullOverrides").forEach { name ->
+            // The signature is multi-line since 2026-11-17 (F1: every table read
+            // takes the incoming profile id, because the pull now runs before the
+            // switch announces it), so the check reads the span between the name
+            // and the return type rather than one exact line.
+            val signature = sync.substringAfter("private suspend fun $name(")
+                .substringBefore("): Boolean {")
             assertTrue(
                 "$name must ANSWER whether it ran: it swallows its own failure " +
                     "(one unreachable table cannot abort the other three), so the " +
                     "caller has nothing else to go on",
-                sync.contains("private suspend fun $name(context: Context): Boolean {")
+                signature.contains("context: Context") &&
+                    signature.contains("profileId: String? = null")
             )
         }
-        val body = functionBody(sync, "private suspend fun pullAllNow(context: Context) {")
+        val body = functionBody(sync, "private suspend fun pullAllNow(")
         // The guard gained a body with the sync-push verdicts (spec 2026-11-14,
         // F1): it now records that the backfill was skipped because no pull ran,
         // then returns from inside the block.
