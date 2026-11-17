@@ -6619,6 +6619,26 @@ fun DetailScreen(
                                                         }
                                                     }
 
+                                                    // Round four F8b: the same
+                                                    // tick round three put on
+                                                    // Home's rail items, on
+                                                    // Detail's own episode rail
+                                                    // - the one surface a
+                                                    // season walk moves. A
+                                                    // `SideEffect` runs after
+                                                    // the composition it
+                                                    // belongs to is applied, so
+                                                    // an item Compose skips is
+                                                    // not counted.
+                                                    androidx.compose.runtime.SideEffect {
+                                                        com.kennyb1201.kbstream.data.reporting
+                                                            .RecompositionTrace.noteItem(
+                                                                com.kennyb1201.kbstream.data.reporting
+                                                                    .RecompositionTrace.SURFACE_DETAIL,
+                                                                android.os.SystemClock.elapsedRealtime()
+                                                            )
+                                                    }
+
                                                     val isFirstEpisode =
                                                         ep.streamId ==
                                                             episodes

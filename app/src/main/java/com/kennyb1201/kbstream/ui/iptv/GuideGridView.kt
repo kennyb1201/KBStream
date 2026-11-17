@@ -260,23 +260,43 @@ internal fun GuideGridView(
     val channelRequesters = remember { mutableMapOf<String, FocusRequester>() }
     val sidebarRequesters = remember { mutableMapOf<String, FocusRequester>() }
 
+    // The row models are reused across page merges (round four F6a). Dig four
+    // put this list under a `remember` keyed on items + programs + window, which
+    // sounds like a cache but is not one: a page answer carries new list
+    // identities, so the key changes and EVERY channel's model is allocated
+    // again - hundreds of objects per merge - and each one that comes out new
+    // makes its row recompose even though its cells are the very same lists the
+    // per-channel memo handed back. Keeping the models and reusing the one whose
+    // item and cells are unchanged is what makes a merge cost the channels it
+    // carried rather than the whole lineup.
+    val previousRows = remember { mutableMapOf<String, GridRowModel>() }
     val rows = remember(items, programsByChannel, window) {
-        items.map { item ->
+        val next = ArrayList<GridRowModel>(items.size)
+        items.forEach { item ->
             val channelKey = gridChannelKey(item)
-            GridRowModel(
-                item = item,
+            // Memoised per channel (dig four §2b): a page answer only changes
+            // the channels it carried, so the rest reuse the cell lists they
+            // already have instead of being rebuilt, allocated and re-hashed for
+            // every channel on the lineup.
+            val cells = GuideRowCellMemo.cells(
                 channelKey = channelKey,
-                // Memoised per channel (dig four §2b): a page answer only
-                // changes the channels it carried, so the rest reuse the cell
-                // lists they already have instead of being rebuilt, allocated
-                // and re-hashed for every channel on the lineup.
-                cells = GuideRowCellMemo.cells(
-                    channelKey = channelKey,
-                    programs = programsByChannel[item.channel.id].orEmpty(),
-                    window = window,
-                ),
+                programs = programsByChannel[item.channel.id].orEmpty(),
+                window = window,
             )
+            val existing = previousRows[channelKey]
+            next += if (
+                existing != null &&
+                existing.item == item &&
+                existing.cells === cells
+            ) {
+                existing
+            } else {
+                GridRowModel(item = item, channelKey = channelKey, cells = cells)
+            }
         }
+        previousRows.clear()
+        next.forEach { previousRows[it.channelKey] = it }
+        next
     }
 
     /**

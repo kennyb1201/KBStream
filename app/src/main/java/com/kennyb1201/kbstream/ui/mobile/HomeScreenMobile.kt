@@ -80,7 +80,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -1103,6 +1105,27 @@ fun HomeScreenMobile(
                                         }
                                     )
 
+                                    // Round four F5 on the phone: the rail's next
+                                    // cards, decoded before the fling reaches
+                                    // them, at the poster size the card is drawn
+                                    // at - not at a guessed size, which would
+                                    // file a cache entry beside the one the card
+                                    // reads. Landscape rows resolve their own
+                                    // art, so the poster url cannot stand in.
+                                    if (!landscapeCards) {
+                                        val railDensity = LocalDensity.current
+                                        com.kennyb1201.kbstream.ui.components.WarmRowAhead(
+                                            state = railRowState,
+                                            count = rail.items.size,
+                                            sizePx = with(railDensity) {
+                                                IntSize(
+                                                    railPosterSize.width.roundToPx(),
+                                                    railPosterSize.height.roundToPx()
+                                                )
+                                            }
+                                        ) { index -> rail.items.getOrNull(index)?.poster }
+                                    }
+
                                     LazyRow(
                                         state = railRowState,
                                         contentPadding = PaddingValues(horizontal = 16.dp),
@@ -1115,6 +1138,22 @@ fun HomeScreenMobile(
                                             },
                                             contentType = { _, _ -> "rail-card" }
                                         ) { index, meta ->
+                                            // Round four F8b: the same tick as
+                                            // Home's TV rail items and Detail's
+                                            // episode rail, on the phone's own
+                                            // rails - where a fling is the
+                                            // per-step mover. A `SideEffect`
+                                            // runs after its composition is
+                                            // applied, so a skipped item does
+                                            // not tick.
+                                            androidx.compose.runtime.SideEffect {
+                                                com.kennyb1201.kbstream.data.reporting
+                                                    .RecompositionTrace.noteItem(
+                                                        com.kennyb1201.kbstream.data.reporting
+                                                            .RecompositionTrace.SURFACE_PHONE_HOME,
+                                                        android.os.SystemClock.elapsedRealtime()
+                                                    )
+                                            }
                                             val watched = viewModel.watchedKey(
                                                 meta.id,
                                                 meta.type

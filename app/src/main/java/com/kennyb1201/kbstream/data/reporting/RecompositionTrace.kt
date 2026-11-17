@@ -31,6 +31,15 @@ package com.kennyb1201.kbstream.data.reporting
  */
 internal object RecompositionTrace {
 
+    /** The TV Home rails; the counter this object was first built for. */
+    const val SURFACE_HOME = "home"
+
+    /** Detail's episode / people / media rails (round four F8b). */
+    const val SURFACE_DETAIL = "detail"
+
+    /** The phone's Home rails, where a fling is the per-step mover. */
+    const val SURFACE_PHONE_HOME = "phone"
+
     /**
      * The bucket width. One frame at 60 Hz; see the class note for why the report
      * calls this a 16 ms window rather than a frame.
@@ -39,11 +48,22 @@ internal object RecompositionTrace {
 
     private val lock = Any()
 
-    private var total = 0L
-    private var peakPerWindow = 0
-    private var busyWindows = 0
-    private var windowIndex = Long.MIN_VALUE
-    private var windowCount = 0
+    /**
+     * One bucket set per surface. A single set could not answer the question the
+     * instrument exists for: "which surface recomposes per step" - a Detail walk
+     * and a Home walk counted together are one number that names neither.
+     */
+    private val surfaces = LinkedHashMap<String, Counters>()
+
+    private class Counters {
+        var total = 0L
+        var peakPerWindow = 0
+        var busyWindows = 0
+        var windowIndex = Long.MIN_VALUE
+        var windowCount = 0
+    }
+
+    private fun counters(surface: String): Counters = surfaces.getOrPut(surface) { Counters() }
 
     /**
      * One recomposition of one rail item, at [nowMs] on a monotonic clock.
@@ -51,19 +71,26 @@ internal object RecompositionTrace {
      * Called from a `SideEffect`, i.e. after the composition it counts has been
      * applied, so a composition that Compose skips is not counted.
      */
-    fun noteRailItem(nowMs: Long) {
+    fun noteRailItem(nowMs: Long) = noteItem(SURFACE_HOME, nowMs)
+
+    /**
+     * One recomposition of one item on [surface] at [nowMs] - the same tick,
+     * counted apart from the other surfaces (see the class note).
+     */
+    fun noteItem(surface: String, nowMs: Long) {
         synchronized(lock) {
+            val c = counters(surface)
             val index = nowMs / WINDOW_MS
-            if (index != windowIndex) {
+            if (index != c.windowIndex) {
                 // The window that just ended held `windowCount` ticks; a window
                 // with none was idle and is not counted at all.
-                if (windowCount > 0) busyWindows++
-                windowIndex = index
-                windowCount = 0
+                if (c.windowCount > 0) c.busyWindows++
+                c.windowIndex = index
+                c.windowCount = 0
             }
-            windowCount++
-            total++
-            if (windowCount > peakPerWindow) peakPerWindow = windowCount
+            c.windowCount++
+            c.total++
+            if (c.windowCount > c.peakPerWindow) c.peakPerWindow = c.windowCount
         }
     }
 
@@ -72,22 +99,21 @@ internal object RecompositionTrace {
      * that never scrolled Home keeps the report length it had.
      */
     fun lines(): List<String> = synchronized(lock) {
-        if (total <= 0L) return emptyList()
-        val busy = busyWindows + if (windowCount > 0) 1 else 0
-        listOf(
-            "recomp: railItems=$total peak=$peakPerWindow per ${WINDOW_MS}ms " +
+        if (surfaces.isEmpty()) return emptyList()
+        surfaces.mapNotNull { (surface, c) ->
+            if (c.total <= 0L) return@mapNotNull null
+            val busy = c.busyWindows + if (c.windowCount > 0) 1 else 0
+            // Home keeps the sentence the round-three report introduced, so a
+            // paste read against an older one still lines up; the other surfaces
+            // name themselves instead of pretending to be rail items.
+            val what = if (surface == SURFACE_HOME) "railItems" else "$surface items"
+            "recomp: $what=${c.total} peak=${c.peakPerWindow} per ${WINDOW_MS}ms " +
                 "busyWindows=$busy"
-        )
+        }
     }
 
     /** Clears the counters (tests). */
     fun reset() {
-        synchronized(lock) {
-            total = 0L
-            peakPerWindow = 0
-            busyWindows = 0
-            windowIndex = Long.MIN_VALUE
-            windowCount = 0
-        }
+        synchronized(lock) { surfaces.clear() }
     }
 }
