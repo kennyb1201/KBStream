@@ -123,9 +123,12 @@ class SpotlightRenderGateContractTest {
             // The render line sits between them since the 2026-11-12 follow-up
             // (it is the same question one step further along: what did the
             // render do with this gate's answer), and the gate is still FIRST.
-            "and the trace carries them as the first billboard line",
-            source(TRACE).contains("listOf(\"gate\", \"render\", \"feed\", \"pages\"") ||
-                source(TRACE).contains("listOf(\"gate\", \"render\", \"feed\"")
+            // The rest line joined them on 2026-11-17: where the pager actually
+            // sits, the same frame question one step further again.
+            "and the trace carries them as the first billboard lines",
+            source(TRACE).contains("listOf(\"gate\", \"render\", \"rest\", \"feed\"") ||
+                source(TRACE).contains("listOf(\"gate\", \"render\", \"feed\"") ||
+                source(TRACE).contains("listOf(\"gate\", \"render\"")
         )
     }
 

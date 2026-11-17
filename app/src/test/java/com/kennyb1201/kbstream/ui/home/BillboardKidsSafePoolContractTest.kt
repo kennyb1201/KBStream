@@ -328,7 +328,10 @@ class BillboardKidsSafePoolContractTest {
         val trace = source(DIAG)
         assertTrue(
             "the trace keeps one line per walk, replaced as it goes",
-            trace.contains("listOf(\"gate\", \"render\", \"feed\", \"walk\", \"pages\", \"resolve\", \"clear\")")
+            trace.contains(
+                "listOf(\"gate\", \"render\", \"rest\", \"feed\", \"walk\", " +
+                    "\"pages\", \"resolve\", \"clear\")"
+            )
         )
         assertTrue(
             "a fresh deal refreshes the resolve slot, so a pool of 0 cannot sit beside a " +
