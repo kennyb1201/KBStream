@@ -39,6 +39,7 @@ import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
 import com.kennyb1201.kbstream.ui.simkl.SimklDisconnectCopy
+import com.kennyb1201.kbstream.ui.simkl.SimklLinkOfferCopy
 import com.kennyb1201.kbstream.ui.simkl.SimklParentAction
 import com.kennyb1201.kbstream.ui.simkl.SimklViewModel
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -245,6 +246,22 @@ fun SimklConnectScreenMobile(
                             )
                         }
                     } else {
+                        // F3, the phone's half: the TV's two lines and the same
+                        // single action, so both surfaces say one thing about one
+                        // state.
+                        uiState.linkedElsewhereName?.let { name ->
+                            Text(
+                                text = SimklLinkOfferCopy.line(name),
+                                color = KBTextHi,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = SimklLinkOfferCopy.EXPLANATION,
+                                color = KBTextLo,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+
                         SimklStatusPanel(
                             title = "Device link required",
                             message = "Generate a code, then open the verification " +
@@ -340,7 +357,12 @@ fun SimklConnectScreenMobile(
                                 )
                             }
                             KBButton(
-                                label = if (uiState.isLoading) "WORKING…" else "GENERATE CODE",
+                                label = when {
+                                    uiState.isLoading -> "WORKING…"
+                                    uiState.linkedElsewhereName != null ->
+                                        SimklLinkOfferCopy.ACTION
+                                    else -> "GENERATE CODE"
+                                },
                                 enabled = !uiState.isLoading,
                                 modifier = Modifier.fillMaxWidth(),
                                 onClick = vm::generateCode

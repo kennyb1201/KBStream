@@ -503,6 +503,20 @@ object PrefsPayloadBuilder {
     const val KEY_SIMKL_AUTH = "simkl_auth"
 
     /**
+     * The Simkl V2 LINK STATE (spec 2026-11-16): which account this profile is
+     * linked to, and that it is linked through V2 - the display name plus a
+     * marker, and NO token material.
+     *
+     * Its own row rather than fields inside [KEY_SIMKL_AUTH], because the two
+     * halves have opposite publishing rules and must not be able to affect each
+     * other: the session row is device-local for a V2 grant (a shared refresh
+     * token cuts both devices off), while the link state is exactly what the
+     * other devices need. Keeping them apart means the auth row and all of its
+     * tombstone semantics are untouched by this feature. See `SimklLinkRules`.
+     */
+    const val KEY_SIMKL_LINK = "simkl_link"
+
+    /**
      * The Trakt session, the same shape (and the same "never publish a blank"
      * rule) as [KEY_SIMKL_AUTH] - see [TraktAuthRules]. It carries the refresh
      * token and expiry as well, because Trakt's access tokens expire.
@@ -622,6 +636,10 @@ object PrefsPayloadBuilder {
         // SupabaseSync.pushPrefsBlobs) — an empty Simkl blob published by a
         // device that never connected erases the account's session elsewhere.
         KEY_SIMKL_AUTH to buildSimklAuth(context),
+        // The V2 link state, on its own row and its own rule: name + marker, no
+        // tokens, skipped by the push when this device has none (see
+        // hasSimklLinkToPublish and SimklLinkRules).
+        KEY_SIMKL_LINK to buildSimklLink(context),
         // The Trakt session, on exactly the Simkl rule: a profile that never
         // connected Trakt publishes nothing, and only a deliberate disconnect
         // publishes a tombstone (see [TraktAuthRules]).
@@ -1232,7 +1250,9 @@ object PrefsPayloadBuilder {
         // AUTH V2 (spec 2026-11-16, F3): a V2 session is per DEVICE - two devices
         // sharing one refresh token cut each other off - so the row carries
         // nothing at all for it. Not even a "connected" marker: a marker would
-        // claim a connection on a device whose own grant was revoked.
+        // claim a connection on a device whose own grant was revoked. The name
+        // and the marker that ARE safe live on their own row - see
+        // [KEY_SIMKL_LINK] and [buildSimklLink].
         val deviceLocal = SimklAuthV2Rules.isV2Session(refresh)
         if (deviceLocal) {
             return buildJsonObject {
@@ -1251,6 +1271,58 @@ object PrefsPayloadBuilder {
             put(SIMKL_ACCESS_TOKEN_KEY, token.orEmpty())
             put(SimklAuthRules.SIGNED_OUT_FIELD, signedOut)
         }
+    }
+
+    /**
+     * The V2 link state this device can share, or a row with nothing in it.
+     *
+     * NAME + MARKER ONLY. The tokens are per device and never enter this blob:
+     * two devices sharing one V2 refresh token cut each other off, so a row that
+     * carried the pair would be the bug this feature is defined against. A device
+     * that has no link state to share (no V2 session, or a name not resolved yet)
+     * publishes nothing - the push skips it, see [hasSimklLinkToPublish].
+     */
+    fun buildSimklLink(context: Context): JsonObject {
+        val prefs = simklAuthPrefs(context)
+        val name = prefs.getString(
+            com.kennyb1201.kbstream.data.simkl.SimklAuthV2Rules.PREFS_ACCOUNT_NAME_KEY,
+            null
+        )
+        val isV2 = com.kennyb1201.kbstream.data.simkl.SimklAuthV2Rules.isV2Session(
+            prefs.getString(SIMKL_REFRESH_TOKEN_KEY, null)
+        )
+        return buildJsonObject {
+            if (!com.kennyb1201.kbstream.data.simkl.SimklLinkRules.shouldPublish(name, isV2)) {
+                put(
+                    com.kennyb1201.kbstream.data.simkl.SimklLinkRules.UPDATED_FIELD,
+                    System.currentTimeMillis()
+                )
+                return@buildJsonObject
+            }
+            com.kennyb1201.kbstream.data.simkl.SimklLinkRules
+                .payloadFields(System.currentTimeMillis(), name)
+                .forEach { (field, value) ->
+                    when (value) {
+                        is Boolean -> put(field, value)
+                        is Long -> put(field, value)
+                        else -> put(field, value.toString())
+                    }
+                }
+        }
+    }
+
+    /** Whether this device has a link state to share (F1) - the push's own gate. */
+    fun hasSimklLinkToPublish(context: Context): Boolean {
+        val prefs = simklAuthPrefs(context)
+        return com.kennyb1201.kbstream.data.simkl.SimklLinkRules.shouldPublish(
+            prefs.getString(
+                com.kennyb1201.kbstream.data.simkl.SimklAuthV2Rules.PREFS_ACCOUNT_NAME_KEY,
+                null
+            ),
+            com.kennyb1201.kbstream.data.simkl.SimklAuthV2Rules.isV2Session(
+                prefs.getString(SIMKL_REFRESH_TOKEN_KEY, null)
+            )
+        )
     }
 
     /**
@@ -1626,6 +1698,18 @@ object PrefsPayloadBuilder {
         val simklSignedOut = simklToken.isNullOrBlank() &&
             simkl.getBoolean(SimklAuthRules.SIGNED_OUT_FIELD, false)
         if (SimklAuthRules.shouldPublish(simklToken, simklSignedOut)) keys += KEY_SIMKL_AUTH
+        if (com.kennyb1201.kbstream.data.simkl.SimklLinkRules.shouldPublish(
+                simkl.getString(
+                    com.kennyb1201.kbstream.data.simkl.SimklAuthV2Rules.PREFS_ACCOUNT_NAME_KEY,
+                    null
+                ),
+                com.kennyb1201.kbstream.data.simkl.SimklAuthV2Rules.isV2Session(
+                    simkl.getString(SIMKL_REFRESH_TOKEN_KEY, null)
+                )
+            )
+        ) {
+            keys += KEY_SIMKL_LINK
+        }
 
         val trakt = traktAuthStore(context, profileId)
         if (TraktAuthRules.shouldPublish(trakt.accessToken(), trakt.isSignedOut())) {
@@ -1931,6 +2015,8 @@ object PrefsPayloadApplier {
             PrefsPayloadBuilder.KEY_ADDONS -> applyAddons(context, payload, profileId)
             PrefsPayloadBuilder.KEY_SIMKL_AUTH ->
                 applySimklAuth(context, payload, profileId, live)
+            PrefsPayloadBuilder.KEY_SIMKL_LINK ->
+                applySimklLink(context, payload, profileId)
             PrefsPayloadBuilder.KEY_TRAKT_AUTH ->
                 applyTraktAuth(context, payload, profileId, live)
             PrefsPayloadBuilder.KEY_BINGECAT_AUTH ->
@@ -2691,6 +2777,37 @@ object PrefsPayloadApplier {
             .putBoolean(SimklAuthRules.SIGNED_OUT_FIELD, false)
             .apply()
         if (live) resetSimklStateAfterTokenChange(context)
+    }
+
+    /**
+     * The V2 LINK STATE a sibling published (spec 2026-11-16, F2).
+     *
+     * Three things it does not do, each of them a rule of the spec: it never
+     * writes to the token store, it never overwrites or clears a live local
+     * session (so [applySimklAuth]'s own V2 guard is not even consulted here),
+     * and it never CLEARS the stored link state - a row that says "not linked"
+     * is a device that had nothing to say, not an instruction.
+     *
+     * What it does is one write: the account's display name, in the device's own
+     * preferences. That is what the screen reads to offer this device its own
+     * one-time device flow.
+     */
+    private fun applySimklLink(context: Context, payload: JsonObject, profileId: String?) {
+        val linked = (payload[com.kennyb1201.kbstream.data.simkl.SimklLinkRules.LINK_FIELD]
+            as? kotlinx.serialization.json.JsonPrimitive)
+            ?.content?.toBooleanStrictOrNull() == true
+        val name = (payload[com.kennyb1201.kbstream.data.simkl.SimklLinkRules.NAME_FIELD]
+            as? kotlinx.serialization.json.JsonPrimitive)
+            ?.content
+        val store = com.kennyb1201.kbstream.data.simkl.SimklLinkRules
+            .linkNameToStore(linked, name) ?: return
+        simklAuthPrefs(context, profileId)
+            .edit()
+            .putString(
+                com.kennyb1201.kbstream.data.simkl.SimklLinkRules.PREFS_LINKED_NAME_FIELD,
+                store
+            )
+            .apply()
     }
 
     /**

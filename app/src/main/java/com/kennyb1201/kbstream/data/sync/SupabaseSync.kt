@@ -2560,6 +2560,15 @@ object SupabaseSync {
             ) {
                 return@forEach
             }
+            // And the V2 link state: a device with no V2 session, or one whose
+            // account name has not been resolved, has nothing to say - and its
+            // empty row must not overwrite the account's name on a sibling (see
+            // SimklLinkRules.shouldPublish).
+            if (key == PrefsPayloadBuilder.KEY_SIMKL_LINK &&
+                !PrefsPayloadBuilder.hasSimklLinkToPublish(context)
+            ) {
+                return@forEach
+            }
             // And the Trakt session on exactly the same rule: a profile that
             // has never connected Trakt publishes nothing, so it cannot blank
             // the account's session; a deliberate disconnect publishes through

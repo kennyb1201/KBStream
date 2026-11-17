@@ -621,7 +621,53 @@ class SimklRepository(
     fun saveAccountName(name: String?) {
         val trimmed = name?.trim()?.takeIf { it.isNotBlank() } ?: return
         prefs?.edit()?.putString(KEY_ACCOUNT_NAME, trimmed)?.apply()
+        // F1: the link state's whole content is this name, and the name is only
+        // known after an account read - which happens AFTER the session was
+        // saved. Publishing on the save alone would share a marker that can name
+        // nobody, so the name landing is the second half of the publish.
+        publishLinkState()
     }
+
+    /**
+     * Shares the V2 LINK STATE with the account: the display name + a V2 marker,
+     * and no token material of any kind (spec 2026-11-16, V2 link-state sync F1).
+     *
+     * This is the answer to "make Simkl V2 sync device to device" that is true:
+     * the SESSION cannot travel (two devices sharing one refresh token cut each
+     * other off), but the fact that the profile is linked - and to which account -
+     * can. A sibling that reads it offers its own device flow instead of the
+     * viewer having to remember to link there too.
+     *
+     * Silent when there is nothing to say: no V2 session, or a name that has not
+     * been resolved yet. See [SimklLinkRules.shouldPublish].
+     */
+    fun publishLinkState() {
+        if (session()?.isV2 != true) return
+        val appContext = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext ?: return
+        if (!com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.hasSimklLinkToPublish(appContext)) {
+            return
+        }
+        com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+            appContext,
+            com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_SIMKL_LINK,
+            com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildSimklLink(appContext)
+        )
+    }
+
+    /**
+     * The account this device should OFFER to link, or null (F3).
+     *
+     * "Linked as <name> on another device" is shown only to a device that holds
+     * no session of its own and has not deliberately disconnected - see
+     * [SimklLinkRules.offerName] for the four ways to get null. The offer is a
+     * button, never a popup: nothing here starts a flow by itself.
+     */
+    fun linkOfferName(): String? = SimklLinkRules.offerName(
+        hasSession = hasToken(),
+        signedOut = prefs?.getBoolean(SimklAuthRules.SIGNED_OUT_FIELD, false) == true,
+        offerSuppressed = prefs?.getBoolean(SimklLinkRules.PREFS_OFFER_OFF_FIELD, false) == true,
+        linkedName = prefs?.getString(SimklLinkRules.PREFS_LINKED_NAME_FIELD, null)
+    )
 
     /** Drops the cached name with the session, so a sign-out cannot name an account. */
     fun clearAccountName() {
@@ -735,6 +781,11 @@ class SimklRepository(
         } else {
             editor?.remove(SimklAuthRules.SIGNED_OUT_FIELD)
         }
+        // F4: "not this device, not now" - device-local, never published. The
+        // link state itself is left exactly as it is (removing it would be the
+        // one thing the spec forbids), so a device whose data was cleared, and
+        // any fresh device, still gets the offer.
+        editor?.putBoolean(SimklLinkRules.PREFS_OFFER_OFF_FIELD, true)
         editor?.apply()
 
         // F5: V2 has a revoke, so a disconnect really ends the grant. Best-effort
@@ -3795,21 +3846,34 @@ class SimklRepository(
             ?.putLong(KEY_EXPIRES_AT_MS, session.expiresAtEpochMillis)
             ?.putString(KEY_SCOPE, session.scope.orEmpty())
             // A live session retires a lingering disconnect marker: a token that
-            // is present must never be published alongside a tombstone.
+            // is present must never be published alongside a tombstone. The
+            // link-offer suppression is retired with it: this device now holds
+            // its own session, so showing it the offer would be the nag F4
+            // forbids - and clearing it here is what makes a later disconnect
+            // re-arm the rule honestly.
             ?.putBoolean(SimklAuthRules.SIGNED_OUT_FIELD, false)
+            ?.putBoolean(SimklLinkRules.PREFS_OFFER_OFF_FIELD, false)
             ?.apply()
     }
 
     /**
-     * Shares the session with the account - for V1 sessions ONLY (F3).
+     * Shares the session with the account - the TOKENS for V1 only (F3).
      *
      * V2's tokens are per device: two devices sharing one refresh token cut each
      * other off, so a V2 pair never enters the sync payload. A legacy session
      * keeps travelling exactly as it did, which is what lets a household stay
      * signed in across devices without a forced sign-out.
+     *
+     * A V2 session publishes its LINK STATE instead (see [publishLinkState]):
+     * the account's name and a marker, no token material at all.
      */
     private fun publishSessionIfLegacy(session: SimklSession) {
-        if (session.isV2) return
+        // F1: a V2 session publishes its LINK STATE instead of itself - the
+        // tokens stay here, the name travels.
+        if (session.isV2) {
+            publishLinkState()
+            return
+        }
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
             com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
                 appContext,
@@ -3988,8 +4052,11 @@ class SimklRepository(
         private const val TAG =
             "SIMKL_AUTH"
 
-        private const val KEY_ACCOUNT_NAME =
-            "account_name"
+        /**
+         * The account-name cache, spelled once in `SimklAuthV2Rules`: the sync
+         * payload reads the same key to publish the V2 link state.
+         */
+        private const val KEY_ACCOUNT_NAME = SimklAuthV2Rules.PREFS_ACCOUNT_NAME_KEY
 
         private const val KEY_LAST_WATCHED_ACTIVITY_ALL =
             "last_watched_activity_all"

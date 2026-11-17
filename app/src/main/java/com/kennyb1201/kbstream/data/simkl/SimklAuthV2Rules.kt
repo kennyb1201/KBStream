@@ -95,6 +95,16 @@ internal object SimklAuthV2Rules {
      */
     const val PREFS_REFRESH_TOKEN_KEY = "refresh_token"
 
+    /**
+     * The device-local cache of the connected account's display name.
+     *
+     * Spelled here for the same reason as [PREFS_REFRESH_TOKEN_KEY]: two files
+     * need it for opposite reasons. The repository writes it when an account read
+     * answers, and the sync payload reads it to publish the LINK STATE - the one
+     * thing about a V2 session that may travel (see `SimklLinkRules`).
+     */
+    const val PREFS_ACCOUNT_NAME_KEY = "account_name"
+
     /** V2's access-token lifetime, as a fallback when a response omits it. */
     const val ACCESS_TOKEN_TTL_SECONDS = 604_800L
 

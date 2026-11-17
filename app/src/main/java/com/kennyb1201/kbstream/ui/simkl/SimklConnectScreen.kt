@@ -249,6 +249,15 @@ fun SimklConnectScreen(
                         )
                     }
                 } else {
+                    // F3: the profile is V2-linked on ANOTHER device and this one
+                    // holds no session. Named here, directly above the button
+                    // that acts on it - the offer is a line on a screen the
+                    // viewer opened, never a popup, and nothing starts by itself.
+                    uiState.linkedElsewhereName?.let { name ->
+                        SimklStatusLine(SimklLinkOfferCopy.line(name))
+                        SimklStatusLine(SimklLinkOfferCopy.EXPLANATION)
+                    }
+
                     SimklStatusPanel(
                         title = "Device link required",
                         message = "Generate a code, then open the verification URL on your phone or computer and enter the code."
@@ -346,8 +355,17 @@ fun SimklConnectScreen(
                             KBButton(label = "RETRY", onClick = vm::retryPoll)
                         }
 
+                        // The same control either way: when the offer above is
+                        // showing, this IS "Connect this device" - one tap, one
+                        // code, one approval through the flow that already
+                        // exists. No second sign-in path.
                         KBButton(
-                            label = if (uiState.isLoading) "WORKING…" else "GENERATE CODE",
+                            label = when {
+                                uiState.isLoading -> "WORKING…"
+                                uiState.linkedElsewhereName != null ->
+                                    SimklLinkOfferCopy.ACTION
+                                else -> "GENERATE CODE"
+                            },
                             onClick = vm::generateCode
                         )
 

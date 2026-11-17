@@ -937,6 +937,17 @@ private fun IntegrationsPaneMobile(
         // The reconnect row (spec 2026-11-16, F4) - the TV pane's row, verbatim:
         // a legacy session keeps working until Simkl retires it, and this names
         // the state and leads to the device flow without a forced sign-out.
+        // V2 link-state sync (F3) - the TV pane's row, verbatim: linked on
+        // another device, no session here, so the row names the account.
+        val simklLinkedElsewhere =
+            remember(profileRowKey, syncedRevision, simklConnected) {
+                if (simklConnected) {
+                    null
+                } else {
+                    com.kennyb1201.kbstream.data.simkl.SimklRepository
+                        .getInstance(context).linkOfferName()
+                }
+            }
         val simklLegacy = remember(profileRowKey, syncedRevision, simklConnected) {
             simklConnected && com.kennyb1201.kbstream.data.simkl.SimklRepository
                 .getInstance(context).isLegacySession()
@@ -947,10 +958,13 @@ private fun IntegrationsPaneMobile(
                 simklLegacy -> "Simkl: connected (legacy)"
                 else -> connectedAsLabel("Simkl", simklAccount)
             },
-            description = if (simklLegacy) {
-                "Reconnect to keep Simkl syncing after the old sign-in is retired"
-            } else {
-                "Connect your Simkl account for scrobbling"
+            description = when {
+                simklLegacy ->
+                    "Reconnect to keep Simkl syncing after the old sign-in is retired"
+                simklLinkedElsewhere != null ->
+                    com.kennyb1201.kbstream.ui.simkl.SimklLinkOfferCopy
+                        .line(simklLinkedElsewhere)
+                else -> "Connect your Simkl account for scrobbling"
             },
             onClick = onOpenSimkl
         )

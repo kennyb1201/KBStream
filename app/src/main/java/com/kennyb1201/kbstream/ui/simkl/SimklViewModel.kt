@@ -30,6 +30,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
             isConfigured = repository.isConfigured(),
             isConnected = repository.hasToken(),
             isLegacySession = repository.isLegacySession(),
+            linkedElsewhereName = repository.linkOfferName(),
             statusMessage = if (repository.hasToken()) "Connected to Simkl." else null
         )
     )
@@ -99,6 +100,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                         isConfigured = repository.isConfigured(),
                         isConnected = connected,
                         isLegacySession = repository.isLegacySession(),
+                        linkedElsewhereName = repository.linkOfferName(),
                         statusMessage = if (connected) "Connected to Simkl." else null
                     )
                     if (connected) {
@@ -118,7 +120,15 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
     private fun loadAccountInfo() {
         viewModelScope.launch {
             val user = runCatchingCancellable { repository.getAccountInfo() }.getOrNull()
-            _uiState.value = _uiState.value.copy(accountName = user?.name)
+            // The link state's only content is this name, and this read is where
+            // it becomes known on a device that just linked (F1). Saving it is
+            // also what publishes the row: a V2 session saved a moment ago said
+            // nothing, because it could not name the account yet.
+            repository.saveAccountName(user?.name)
+            _uiState.value = _uiState.value.copy(
+                accountName = user?.name,
+                linkedElsewhereName = repository.linkOfferName()
+            )
         }
     }
 
@@ -493,6 +503,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
             isLoading = false,
             isConnected = repository.hasToken(),
             isLegacySession = repository.isLegacySession(),
+            linkedElsewhereName = repository.linkOfferName(),
             userCode = null,
             deviceCode = null,
             verificationUrl = null,
@@ -696,18 +707,24 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                     isConfigured = repository.isConfigured(),
                     isConnected = true,
                     isLegacySession = repository.isLegacySession(),
+                    linkedElsewhereName = repository.linkOfferName(),
                     errorMessage = "Could not sign out on this device — Simkl is still " +
                         "connected here. Try again."
                 )
                 cleared.isFailure -> SimklUiState(
                     isConfigured = repository.isConfigured(),
                     isConnected = false,
+                    // A disconnect SUPPRESSES the offer on this device (F4), so
+                    // this read answers null here even though the synced link
+                    // state still names the account.
+                    linkedElsewhereName = repository.linkOfferName(),
                     errorMessage = "Disconnected, but dropping the Simkl session failed: " +
                         cleared.exceptionOrNull()?.message
                 )
                 else -> SimklUiState(
                     isConfigured = repository.isConfigured(),
                     isConnected = false,
+                    linkedElsewhereName = repository.linkOfferName(),
                     // Says the quiet part out loud, because the old copy promised
                     // the opposite: nothing local was deleted.
                     statusMessage = "Disconnected. Your watch history stays on this device."

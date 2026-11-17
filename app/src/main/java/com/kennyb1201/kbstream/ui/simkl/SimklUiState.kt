@@ -40,6 +40,18 @@ data class SimklUiState(
      * a disconnected profile is neither.
      */
     val isLegacySession: Boolean = false,
+
+    /**
+     * The account this profile is V2-linked to on ANOTHER device, when this one
+     * holds no session of its own (spec 2026-11-16, V2 link-state sync F3).
+     *
+     * The tokens never sync, so a second device cannot be signed in for you -
+     * but it can be TOLD that the profile is linked, and offered its own one-time
+     * device flow instead of the viewer having to remember to link it. Null in
+     * every case where the offer is not owed: a session is already held here, the
+     * viewer disconnected on this device, or nobody ever published a link state.
+     */
+    val linkedElsewhereName: String? = null,
     val statusMessage: String? = null,
     val errorMessage: String? = null,
     /**

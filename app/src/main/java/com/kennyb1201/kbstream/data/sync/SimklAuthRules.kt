@@ -23,6 +23,11 @@ package com.kennyb1201.kbstream.data.sync
  * nothing to say about a V2 session, not even "connected", because a marker
  * would claim a connection on a device whose own grant was revoked.
  *
+ * What a V2 session DOES have to say travels on its own row instead: the link
+ * state (see `SimklLinkRules` and `PrefsPayloadBuilder.KEY_SIMKL_LINK`), which
+ * names the account and nothing else. Keeping that out of this blob is what
+ * leaves every rule above - and every tombstone below - exactly as they were.
+ *
  * This object is pure and lives in its own file so the rule can be exercised in
  * a plain JVM test, beside its V1/V2 sibling
  * [com.kennyb1201.kbstream.data.simkl.SimklAuthV2Rules].
