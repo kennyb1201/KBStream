@@ -184,13 +184,14 @@ class ScrollingStepCaseContractTest {
         // no window at all); the rails keep their name by delegation.
         val window = source("com/kennyb1201/kbstream/ui/components/IdleListCacheWindow.kt")
         assertTrue(
-            "a window both ways, filled while idle",
-            home.contains("private object HomeRailCacheWindow : LazyLayoutCacheWindow by IdleListCacheWindow") &&
-                window.contains("override fun Density.calculateAheadWindow(viewport: Int): Int = viewport / 2") &&
+            "a window both ways, through the one shared object",
+            window.contains("override fun Density.calculateAheadWindow(viewport: Int): Int = viewport / 2") &&
                 window.contains("override fun Density.calculateBehindWindow(viewport: Int): Int = viewport / 2") &&
-                window.contains("override val isNonScrollCachingEnabled: Boolean = true")
+                window.contains("rememberIdleLazyListState")
         )
-        val uses = Regex("cacheWindow = HomeRailCacheWindow").findAll(home).count()
+        // The window rides the STATE in this foundation: the rails' list and the
+        // rail rows each take their state from the shared helper.
+        val uses = Regex("rememberIdleLazyListState").findAll(home).count()
         assertTrue(
             "applied to the rails list and to the rail rows themselves: $uses",
             uses >= 3

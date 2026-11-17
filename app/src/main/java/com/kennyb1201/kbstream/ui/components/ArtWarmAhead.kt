@@ -165,7 +165,11 @@ internal fun WarmGridAhead(
     // The drawn size, when the surface knows it exactly (a poster is drawn at the
     // Poster Size setting's dp, which is not the cell's size - the caption takes
     // the rest). Null measures it from the grid instead.
-    sizePx: IntSize? = null,
+    // Required: a LazyListItemInfo reports a MAIN-AXIS size only (`size: Int`),
+    // so there was never a width and height to fall back to - the old
+    // `sizePx ?: measured` put an Int where an IntSize was expected and did not
+    // compile. Every caller knows the card's box, so it is always handed in.
+    sizePx: IntSize,
     ahead: Int = WARM_AHEAD_CELLS,
     urlAt: (Int) -> String?
 ) {
@@ -173,14 +177,11 @@ internal fun WarmGridAhead(
     val latestUrlAt = rememberUpdatedState(urlAt)
     LaunchedEffect(state, count, ahead) {
         snapshotFlow {
-            val info = state.layoutInfo
-            val last = info.visibleItemsInfo.lastOrNull()?.index ?: -1
-            val size = info.visibleItemsInfo.firstOrNull()?.size ?: IntSize.Zero
-            last to size
+            state.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
         }
             .distinctUntilChanged()
-            .collect { (last, measured) ->
-                val size = sizePx ?: measured
+            .collect { last ->
+                val size = sizePx
                 if (last < 0 || size.width <= 0 || size.height <= 0) return@collect
                 val from = last + 1
                 val to = minOf(count - 1, last + ahead)

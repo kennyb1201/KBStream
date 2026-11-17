@@ -32,10 +32,10 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.layout.LazyLayoutCacheWindow
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
+import com.kennyb1201.kbstream.ui.components.rememberIdleLazyListState
 import kotlin.math.abs
 import kotlin.math.max
 import androidx.compose.foundation.shape.CircleShape
@@ -3634,8 +3634,9 @@ private fun LibraryListHomeRail(
                 ),
                 horizontalArrangement = Arrangement.spacedBy(0.dp),
                 // F5: cards just off screen are composed while the rail is idle,
-                // so walking into them is a draw, not a build.
-                cacheWindow = HomeRailCacheWindow
+                // so walking into them is a draw, not a build (the window rides
+                // the state - see rememberIdleLazyListState).
+                state = rememberIdleLazyListState(),
             ) {
                 itemsIndexed(
                     items = rail.items,
@@ -3862,7 +3863,7 @@ private fun BuiltinTopPicksRail(
                 ),
                 horizontalArrangement = Arrangement.spacedBy(0.dp),
                 // F5: the same idle window the catalog rails keep.
-                cacheWindow = HomeRailCacheWindow
+                state = rememberIdleLazyListState(),
             ) {
                 itemsIndexed(
                     items = picks,
@@ -5715,7 +5716,7 @@ fun HomeScreen(
     // this composable is disposed when Detail opens - it is a route in the same
     // activity - so a plain rememberLazyListState came back at the top of the
     // rails on every return, on the most common loop in the app.
-    val railListState = rememberLazyListState(
+    val railListState = rememberIdleLazyListState(
         initialFirstVisibleItemIndex = viewModel.railScrollIndex,
         initialFirstVisibleItemScrollOffset = viewModel.railScrollOffset
     )
@@ -7148,8 +7149,7 @@ fun HomeScreen(
                     state = railListState,
                     // F5: the rails above and below are composed while the list
                     // is idle, so a vertical move never pays a first composition
-                    // on the press.
-                    cacheWindow = HomeRailCacheWindow,
+                    // on the press (the window rides `railListState`).
                     // Hold-Up from ANY rail reveals the top bar (see
                     // rememberHomeTopBarHoldUpHook): on the list rather than on
                     // a card, so every rail kind is covered by construction and
@@ -8478,7 +8478,7 @@ fun HomeScreen(
  * Home); this name is kept because the rails are where it was first proven and
  * the F5 contract pins it.
  */
-private object HomeRailCacheWindow : LazyLayoutCacheWindow by IdleListCacheWindow
+
 
 /**
  * Spotlight's top-of-screen tint, scoped to its own focus read (spec 2026-11-16,

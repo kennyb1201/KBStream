@@ -35,6 +35,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -79,7 +80,6 @@ import com.kennyb1201.kbstream.data.library.renameUnavailableNote
 import com.kennyb1201.kbstream.data.library.sameListAs
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.simkl.simklItemUrl
-import com.kennyb1201.kbstream.ui.components.IdleListCacheWindow
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
@@ -99,6 +99,7 @@ import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.rememberIdleLazyGridState
 import com.kennyb1201.kbstream.ui.components.rememberKBFeedback
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
@@ -209,7 +210,7 @@ fun LibraryScreen(
     // keyed on the filter alone. A return reads the same filter (and list) it
     // recorded under, so its own state is the one it scrolls (see
     // [BrowseReturnFocus]).
-    val gridState = remember(state.filter, state.selectedList?.id) { LazyGridState() }
+    val gridState = key(state.filter, state.selectedList?.id) { rememberIdleLazyGridState() }
     var returnTarget by remember {
         mutableStateOf<BrowseReturnTarget?>(null)
     }
@@ -1466,11 +1467,6 @@ private fun ItemGrid(
         // disposes this grid, so a return has a state to scroll (see
         // [BrowseReturnFocus]).
         state = gridState,
-        // Dig four found no pre-composition outside Home: the rows off screen
-        // were composed on the frame a flick reached them, on top of their
-        // decode. Half a viewport each way, filled while the grid is idle (see
-        // [IdleListCacheWindow]).
-        cacheWindow = IdleListCacheWindow,
         // The top gap is not decoration: a focused KBCard scales to 1.03 and
         // throws a 12.dp glow, and a lazy grid clips its viewport — with
         // bottom-only padding the FIRST row was sliced flat along its top edge

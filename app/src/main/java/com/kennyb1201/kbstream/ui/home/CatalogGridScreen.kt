@@ -15,7 +15,6 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
@@ -45,7 +44,6 @@ import androidx.paging.filter
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import androidx.compose.animation.core.tween
-import com.kennyb1201.kbstream.ui.components.IdleListCacheWindow
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.WarmGridAhead
 import com.kennyb1201.kbstream.ui.components.KBCard
@@ -57,6 +55,7 @@ import com.kennyb1201.kbstream.ui.components.landscapeTileHeight
 import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
 import com.kennyb1201.kbstream.ui.components.posterEdgeShape
 import com.kennyb1201.kbstream.ui.components.rememberHomeLandscape
+import com.kennyb1201.kbstream.ui.components.rememberIdleLazyGridState
 import com.kennyb1201.kbstream.ui.components.rememberMotionMs
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
@@ -301,7 +300,7 @@ fun CatalogGridScreen(
     // scroll on the pair alone opened B at A's offset. A null catalogId is the
     // route saying the pair already identifies the catalog, and keeps the old
     // behaviour.
-    val gridState = key(title, addonName, catalogId) { rememberLazyGridState() }
+    val gridState = key(title, addonName, catalogId) { rememberIdleLazyGridState() }
 
     // Leaving the grid: a trip to a title page keeps its pager and its place,
     // any other way out drops them.
@@ -511,8 +510,8 @@ fun CatalogGridScreen(
                     state = gridState,
                     // Dig four's global finding: no pre-composition outside Home.
                     // Rows off screen are composed while the grid is idle, so a
-                    // press into them is a draw rather than a build.
-                    cacheWindow = IdleListCacheWindow,
+                    // press into them is a draw rather than a build - the window
+                    // rides the state (rememberIdleLazyGridState).
                     // Sized from the tile, not a hardcoded six. Six cells of the
                     // POSTER width cannot hold a landscape card: the cell clamps
                     // the card's width back to roughly the poster width while its

@@ -28,7 +28,8 @@ class BillboardPrecomposeContractTest {
             .substringBefore(") { index ->")
         assertTrue(
             "one page either way: $pager",
-            pager.contains("beyondBoundsPageCount = 1")
+            // The pager's own name for it in the foundation this app resolves.
+            pager.contains("beyondViewportPageCount = 1")
         )
         assertTrue(
             "and it is the billboard's own pager, still keyed on its state",

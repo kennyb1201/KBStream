@@ -133,8 +133,8 @@ import com.kennyb1201.kbstream.data.youtube.heroTrailerIdentityRefusal
 import com.kennyb1201.kbstream.data.youtube.heroTrailerResolveFailurePoisons
 import com.kennyb1201.kbstream.data.youtube.heroTrailerRetryPlan
 import com.kennyb1201.kbstream.data.youtube.signedUrl
-import com.kennyb1201.kbstream.ui.components.IdleListCacheWindow
 import com.kennyb1201.kbstream.ui.components.TrackScrollFrames
+import com.kennyb1201.kbstream.ui.components.rememberIdleLazyListState
 import com.kennyb1201.kbstream.ui.home.LibraryHomeRailUi
 import com.kennyb1201.kbstream.ui.home.failedAddonsMessage
 import com.kennyb1201.kbstream.ui.home.rememberBingeCatReconnectNotice
@@ -306,7 +306,7 @@ fun HomeScreenMobile(
         // [MobileHomeTopRequest]). Deliberately remembered here rather than at
         // the shell: Home still opens at the top after a trip to Search, which
         // is what this screen did before the bar existed.
-        val listState = rememberLazyListState()
+        val listState = rememberIdleLazyListState()
         // Scrolling dig five: what this screen's frames actually cost, per
         // gesture, in COPY DIAGNOSTICS (see UiFrameTrace).
         TrackScrollFrames(label = "home", state = listState)
@@ -715,10 +715,6 @@ fun HomeScreenMobile(
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 state = listState,
-                // Dig four's "nowhere but Home" window, on the phone: half a
-                // viewport each way, refilled while the list is idle, so the row
-                // a flick lands on is already composed.
-                cacheWindow = IdleListCacheWindow,
                 contentPadding = PaddingValues(bottom = 28.dp),
                 verticalArrangement = Arrangement.spacedBy(22.dp)
             ) {
@@ -3080,7 +3076,7 @@ internal fun MobileBillboard(
                 // itself. One page either way keeps the neighbour composed and
                 // its art decoded (there are at most BILLBOARD_MAX_PAGES pages,
                 // and neighbours are dropped again as the cycle moves on).
-                beyondBoundsPageCount = 1,
+                beyondViewportPageCount = 1,
                 modifier = Modifier.fillMaxWidth()
             ) { index ->
                 val page = pages[index]

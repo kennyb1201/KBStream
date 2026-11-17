@@ -23,7 +23,6 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -55,7 +54,6 @@ import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.simkl.simklItemUrl
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
-import com.kennyb1201.kbstream.ui.components.IdleListCacheWindow
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.TrackScrollFrames
@@ -64,6 +62,7 @@ import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
 import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscape
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
+import com.kennyb1201.kbstream.ui.components.rememberIdleLazyGridState
 import com.kennyb1201.kbstream.ui.components.rememberKBFeedback
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
@@ -192,7 +191,7 @@ fun LibraryScreenMobile(
         // filter its own slot in the saveable registry, so a ROTATION keeps the
         // position inside the filter on screen while a filter switch still
         // starts at the top.
-        val gridState = key(state.filter) { rememberLazyGridState() }
+        val gridState = key(state.filter) { rememberIdleLazyGridState() }
         TrackScrollFrames(label = "library", state = gridState)
         var returnTarget by remember { mutableStateOf<BrowseReturnTarget?>(null) }
 
@@ -400,7 +399,6 @@ fun LibraryScreenMobile(
             LazyVerticalGrid(
                 columns = GridCells.Fixed(columns),
                 state = gridState,
-                cacheWindow = IdleListCacheWindow,
                 contentPadding = PaddingValues(
                     start = 16.dp,
                     end = 16.dp,

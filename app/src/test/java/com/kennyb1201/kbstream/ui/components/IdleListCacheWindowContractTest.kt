@@ -39,9 +39,13 @@ class IdleListCacheWindowContractTest {
             window.contains("override fun Density.calculateAheadWindow(viewport: Int): Int = viewport / 2") &&
                 window.contains("override fun Density.calculateBehindWindow(viewport: Int): Int = viewport / 2")
         )
+        // The "fill while idle" flag does not exist in the foundation this app
+        // resolves (the interface there carries the two window functions only),
+        // so the rule is the window itself plus where it is applied.
         assertTrue(
-            "and it fills while the viewer sits still, which is what a D-pad needs",
-            window.contains("override val isNonScrollCachingEnabled: Boolean = true")
+            "the window is handed to the state, which is the only place this foundation reads it",
+            window.contains("rememberLazyListState(\n    cacheWindow = IdleListCacheWindow") &&
+                window.contains("rememberLazyGridState(cacheWindow = IdleListCacheWindow)")
         )
     }
 
@@ -50,10 +54,9 @@ class IdleListCacheWindowContractTest {
         surfaces.forEach { (name, path) ->
             val source = source(path)
             assertTrue(
-                "$name: cacheWindow = IdleListCacheWindow",
-                source.contains("cacheWindow = IdleListCacheWindow") ||
-                    // Home keeps its own name, by delegation.
-                    source.contains("HomeRailCacheWindow : LazyLayoutCacheWindow by IdleListCacheWindow")
+                "$name takes its state from the shared window helper",
+                source.contains("rememberIdleLazyListState(") ||
+                    source.contains("rememberIdleLazyGridState(")
             )
         }
     }
@@ -64,7 +67,8 @@ class IdleListCacheWindowContractTest {
         assertFalse(
             "a Guide row composes its whole six-hour span; pre-composing one is a " +
                 "regression, not a saving",
-            guide.contains("cacheWindow = IdleListCacheWindow")
+            guide.contains("rememberIdleLazyListState(") ||
+                guide.contains("rememberIdleLazyGridState(")
         )
         assertTrue(
             "and the reason is written down where the window is defined",

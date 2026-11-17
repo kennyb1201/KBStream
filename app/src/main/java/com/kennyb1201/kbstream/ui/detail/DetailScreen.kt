@@ -89,6 +89,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.kennyb1201.kbstream.ui.components.rememberIdleLazyListState
 import kotlinx.coroutines.android.awaitFrame
 import androidx.tv.material3.Border
 import androidx.tv.material3.Card
@@ -144,7 +145,6 @@ import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_WAIT_MS
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
-import com.kennyb1201.kbstream.ui.components.IdleListCacheWindow
 import com.kennyb1201.kbstream.ui.components.WarmRowAhead
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
 import com.kennyb1201.kbstream.ui.components.KB_ALPHA_FADE_MS
@@ -1132,7 +1132,7 @@ fun DetailScreen(
     var pendingSeasonFocus by remember { mutableStateOf<Int?>(null) }
     val episodesRowState = rememberLazyListState()
     val seasonRowState = rememberLazyListState()
-    val detailListState = rememberLazyListState()
+    val detailListState = rememberIdleLazyListState()
     // Every rail a drill-down off this page can be opened from, each with the
     // scroll state and the per-card requesters a return needs: the rail is put
     // back on screen, scrolled to the card that was pressed, and that card
@@ -5887,8 +5887,8 @@ fun DetailScreen(
                         // Dig four: Detail had no pre-composition either, so the
                         // row below the viewport was composed on the frame the
                         // scroll reached it. Half a viewport each way, filled
-                        // while the page is idle.
-                        cacheWindow = IdleListCacheWindow,
+                        // while the page is idle (the window rides
+                        // `detailListState`).
                         modifier = Modifier
                             .weight(1f, fill = true)
                             .fillMaxWidth()

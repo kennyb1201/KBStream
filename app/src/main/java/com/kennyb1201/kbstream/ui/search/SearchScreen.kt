@@ -38,8 +38,8 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_STEPS
 import com.kennyb1201.kbstream.ui.browse.rememberFocusHandBack
-import com.kennyb1201.kbstream.ui.components.IdleListCacheWindow
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
+import com.kennyb1201.kbstream.ui.components.rememberIdleLazyListState
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
@@ -81,7 +81,7 @@ fun SearchScreen(
     onOpenDecadeScreen: ((Int, String) -> Unit)? = null,
     // Hoisted by MainActivity (survives Search -> Detail -> Back) so Back
     // lands on the same title. Defaults keep previews/standalone use working.
-    listState: LazyListState = rememberLazyListState(),
+    listState: LazyListState = rememberIdleLazyListState(),
     viewModel: SearchViewModel = viewModel()
 ) {
     // The phone entry: the same ViewModel, callbacks and hoisted list state,
@@ -373,8 +373,7 @@ fun SearchScreen(
             state = listState,
             // Dig four's global finding: no pre-composition outside Home. The
             // rail below the viewport (and the one above it) is composed while
-            // the list is idle.
-            cacheWindow = IdleListCacheWindow,
+            // the list is idle (the window rides `listState`).
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
                 start = SEARCH_RAIL_EDGE_PADDING,
@@ -774,22 +773,28 @@ fun SearchScreen(
                             // dp, because that is the box GlobalPosterCard is
                             // handed; portrait only, because a landscape tile
                             // draws resolved TMDB art instead.
-                            val searchPosterSize = rememberPosterSize()
-                            val searchLandscape = AppPreferences.landscapePostersActive(
-                                LocalContext.current
-                            )
-                            if (!searchLandscape) {
-                                val searchDensity = LocalDensity.current
-                                WarmRowAhead(
-                                    state = titlesRailState,
-                                    count = results.size,
-                                    sizePx = with(searchDensity) {
-                                        IntSize(
-                                            searchPosterSize.width.roundToPx(),
-                                            searchPosterSize.height.roundToPx()
-                                        )
-                                    }
-                                ) { index -> results.getOrNull(index)?.poster }
+                            //
+                            // Inside an ITEM, not in the rail's scope: this is
+                            // composable work (a density read, a remembered size),
+                            // and a LazyListScope builder cannot call any of it.
+                            item(key = "titles_warm") {
+                                val searchPosterSize = rememberPosterSize()
+                                val searchLandscape = AppPreferences.landscapePostersActive(
+                                    LocalContext.current
+                                )
+                                if (!searchLandscape) {
+                                    val searchDensity = LocalDensity.current
+                                    WarmRowAhead(
+                                        state = titlesRailState,
+                                        count = results.size,
+                                        sizePx = with(searchDensity) {
+                                            IntSize(
+                                                searchPosterSize.width.roundToPx(),
+                                                searchPosterSize.height.roundToPx()
+                                            )
+                                        }
+                                    ) { index -> results.getOrNull(index)?.poster }
+                                }
                             }
                             itemsIndexed(
                                 items = results,

@@ -295,7 +295,7 @@ class ScrollingDigFiveContractTest {
             val screen = source("com/kennyb1201/kbstream/$path")
             assertTrue(
                 "$path passes the shared window",
-                screen.contains("cacheWindow = IdleListCacheWindow")
+                screen.contains("rememberIdleLazy")
             )
         }
     }

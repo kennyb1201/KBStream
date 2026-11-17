@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -42,10 +41,10 @@ import androidx.paging.filter
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
-import com.kennyb1201.kbstream.ui.components.IdleListCacheWindow
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.TrackScrollFrames
+import com.kennyb1201.kbstream.ui.components.rememberIdleLazyGridState
 import com.kennyb1201.kbstream.ui.components.trailerMenuAction
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
@@ -228,7 +227,7 @@ fun CatalogGridScreenMobile(
         // Keying all three puts the scroll on the same identity as the content
         // (seeded by catalogId), so a same-name replacement starts at the top
         // while reopening a catalog still restores its own offset.
-        val gridState = key(title, addonName, catalogId) { rememberLazyGridState() }
+        val gridState = key(title, addonName, catalogId) { rememberIdleLazyGridState() }
         TrackScrollFrames(label = "catalog", state = gridState)
 
         // Leaving the grid: a trip to a title page keeps its pager and its
@@ -374,7 +373,6 @@ fun CatalogGridScreenMobile(
             LazyVerticalGrid(
                 columns = GridCells.Fixed(columns),
                 state = gridState,
-                cacheWindow = IdleListCacheWindow,
                 contentPadding = PaddingValues(
                     start = 16.dp,
                     end = 16.dp,
