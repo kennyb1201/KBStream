@@ -52,6 +52,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -74,6 +75,7 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -93,7 +95,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
-import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.runCatchingCancellable
@@ -2080,29 +2081,42 @@ private fun MobileHero(
             )
             .clickable(onClick = onClick)
     ) {
+        // The last frame THIS page painted, held as the placeholder (spec
+        // 2026-11-17, F2). Coil sets the image to the request's placeholder the
+        // moment a new request starts; without one that is an EMPTY frame while
+        // the new art decodes, then a fade in - the black-through-fade the
+        // first-entry report describes. With the previous painter as the
+        // placeholder, the old art stays up until the new art is ready and is
+        // then replaced outright: one direct swap, never an empty frame.
+        var heldArt by remember { mutableStateOf<Painter?>(null) }
         AsyncImage(
-            // The hero is one of the few surfaces that keeps the crossfade
-            // handover (see the TV hero's own note): it is a single image the
-            // viewer is looking at, not a tile in a scrolling rail. Round four's
-            // billboard decision says so explicitly - a watched, deliberate swap
-            // - which is why the TV hero's one-buffer rule (round three F6) is
-            // NOT applied here.
+            // Keyed on the art URL alone (F3): the settle burst rewrites this
+            // page's meta several times, and keying on it rebuilt the request -
+            // and its empty frame - for an image that had not changed at all.
             //
             // The size is: without it Coil decodes the source at its own
             // resolution (a 1920- or 3840-wide backdrop) for a frame that is
             // ~358dp wide. 1280x800 matches this 16:10 frame and still covers a
             // 3x phone - the same handful of megabytes, asked for once.
-            model = remember(backdropUrl, meta) {
+            model = remember(backdropUrl) {
                 ImageRequest.Builder(context)
-                    .data(backdropUrl ?: meta.background ?: meta.poster)
+                    .data(backdropUrl)
                     // Coil's own size type, spelled in full: this file's `Size`
                     // is the geometry one, which the sweep's drawRect already
                     // imports and which a second import of the same name cannot
                     // share a file with.
                     .size(coil3.size.Size(1280, 800))
-                    .crossfade(true)
+                    // No crossfade (F2): Coil's fade blends from the PLACEHOLDER,
+                    // not from the previous image, so on a swap it fades in over
+                    // the empty frame above. The hold is the placeholder.
                     .build()
             },
+            placeholder = heldArt,
+            // A new art that FAILS keeps the last good frame too, for the same
+            // reason B4 borrows at all: a hero showing the previous image is
+            // better than a black one, and the failure is the paste's to report.
+            error = heldArt,
+            onSuccess = { state -> heldArt = state.painter },
             contentDescription = meta.name,
             contentScale = ContentScale.Crop,
             // The sweep is a graphics layer on the IMAGE only: a scale and a
@@ -2295,6 +2309,22 @@ private fun MobileHero(
             }
         }
     }
+}
+
+/**
+ * The render line's word for what the hero is drawing (spec 2026-11-17, F4).
+ *
+ * Shared with the `art` line so the two can never disagree about one frame:
+ * the page's own backdrop, its own fallback art (a poster/background), a
+ * BORROWED image (B4), or nothing at all. `no-page` is the render line's own
+ * case - there is no page to draw - and the art line is not written for it.
+ */
+private fun billboardArtSource(page: BillboardPage?, heroArt: String?): String = when {
+    page == null -> "no-page"
+    !page.backdropUrl.isNullOrBlank() -> "backdrop"
+    billboardPageArt(page) != null -> "own-art"
+    heroArt != null -> "borrowed"
+    else -> "none"
 }
 
 /**
@@ -2524,6 +2554,31 @@ internal fun MobileBillboard(
 
     val currentPage = pages.getOrNull(pagerState.currentPage)
 
+    // ── The art a page draws, held still (spec 2026-11-17, F1/F3) ────────
+    //
+    // The first entry settles the pool in a burst, and every settle rebuilds
+    // `pages`. The borrowed fallback is chosen from that live list, so it MOVED
+    // under a page that was already showing - each move a new URL, a new image
+    // request, a flash. This is the hold: the first art each page showed,
+    // sticky per page and per deal (a new deal is a new page-key list, and a
+    // fresh map with it).
+    val heldHeroArt =
+        remember(pages.map { page -> page.key }) { mutableStateMapOf<String, String>() }
+
+    // What a page draws: its own art the moment one exists, else the art it was
+    // held at, else - on the very first frame, before anything is held - the
+    // live fallback. See billboardStickyHeroArt.
+    fun heroArtFor(page: BillboardPage, index: Int): String? =
+        billboardStickyHeroArt(
+            ownArt = billboardPageArt(page),
+            heldArt = heldHeroArt[page.key],
+            liveFallback = billboardHeroArt(pages, index)
+        )
+
+    val currentHeroArt = currentPage?.let { page ->
+        heroArtFor(page, pagerState.currentPage)
+    }
+
     // What the render actually has in front of it (spec 2026-11-12, follow-up
     // F1): the page the pager is on, whether that page has art of its own, and
     // the settled tally. Written in a SideEffect so it never writes into a
@@ -2531,20 +2586,26 @@ internal fun MobileBillboard(
     // cannot see.
     SideEffect {
         val page = currentPage
+        val artSource = billboardArtSource(page, currentHeroArt)
         SpotlightDiagTrace.billboardRenderHero(
             composed = true,
             gate = null,
             pageKey = page?.key,
-            art = when {
-                page == null -> "no-page"
-                !page.backdropUrl.isNullOrBlank() -> "backdrop"
-                billboardPageArt(page) != null -> "own-art"
-                billboardHeroArt(pages, pagerState.currentPage) != null -> "borrowed"
-                else -> "none"
-            },
+            art = artSource,
             settled = pages.count { it.settled },
             total = pages.size
         )
+        // F4 (2026-11-17): the art line, one step further than the render `art=`
+        // field - the same source vocabulary, plus how many times that page's
+        // image has SWAPPED this session. A first entry has to read at most one
+        // swap per page; the old bug read several in the first second.
+        if (page != null) {
+            SpotlightDiagTrace.billboardHeroArt(
+                page = pagerState.currentPage,
+                source = artSource,
+                url = currentHeroArt
+            )
+        }
     }
 
     // "Remove animations" (system animator duration scale 0): the house helper,
@@ -3321,6 +3382,20 @@ internal fun MobileBillboard(
                 modifier = Modifier.fillMaxWidth()
             ) { index ->
                 val page = pages[index]
+                // The art this page draws, held from its first frame (F1): its
+                // own when it has one, else what it showed first. The record is
+                // written in a SideEffect so composition stays pure; until it
+                // lands the live fallback draws, and that is the same URL the
+                // hold records, so nothing changes on screen.
+                val heroArt = heroArtFor(page, index)
+                SideEffect {
+                    if (billboardPageArt(page) == null &&
+                        heldHeroArt[page.key] == null &&
+                        heroArt != null
+                    ) {
+                        heldHeroArt[page.key] = heroArt
+                    }
+                }
                 // The sweep belongs to the page's POSITION and the dwell, so it
                 // is remembered rather than rebuilt per frame - and it is
                 // computed UNCONDITIONALLY, because a remember inside an `if`
@@ -3329,10 +3404,11 @@ internal fun MobileBillboard(
                 val sweep = remember(index, cycleMs) { billboardSweep(index, cycleMs) }
                 MobileHero(
                     meta = page.meta,
-                    // The page's own art, or - when it settled with none at all -
-                    // the next settled page's, so the hero is never a black
-                    // frame (spec 2026-11-12, B4).
-                    backdropUrl = billboardHeroArt(pages, index),
+                    // The page's own art, or - when it has none at all - the art
+                    // it was first dealt, so the hero is never a black frame
+                    // (spec 2026-11-12, B4) and never changes under the viewer
+                    // while the rest of the pool settles (2026-11-17, F1).
+                    backdropUrl = heroArt,
                     logoUrl = page.logoUrl,
                     // Animations off is a STILL backdrop, not a slower one.
                     backdropSweep = sweep.takeUnless { reducedMotion },

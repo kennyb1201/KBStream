@@ -329,8 +329,8 @@ class BillboardKidsSafePoolContractTest {
         assertTrue(
             "the trace keeps one line per walk, replaced as it goes",
             trace.contains(
-                "listOf(\"gate\", \"render\", \"rest\", \"feed\", \"walk\", " +
-                    "\"pages\", \"resolve\", \"clear\")"
+                "listOf(\"gate\", \"render\", \"art\", \"rest\", \"feed\", " +
+                    "\"walk\", \"pages\", \"resolve\", \"clear\")"
             )
         )
         assertTrue(

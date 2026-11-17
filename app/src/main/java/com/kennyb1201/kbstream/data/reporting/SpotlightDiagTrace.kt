@@ -53,7 +53,7 @@ internal object SpotlightDiagTrace {
 
     /** Summary slots in print order, so two pastes of one state read alike. */
     private val BILLBOARD_ORDER =
-        listOf("gate", "render", "rest", "feed", "walk", "pages", "resolve", "clear")
+        listOf("gate", "render", "art", "rest", "feed", "walk", "pages", "resolve", "clear")
     private val SPOTLIGHT_ORDER = listOf("tracker", "dwell", "panel")
 
     private val lock = Any()
@@ -86,6 +86,22 @@ internal object SpotlightDiagTrace {
     // one correction is a stray settle, a growing one is a pager being fought
     // by something, and the number is the difference.
     private var restCorrections = 0
+
+    // ── The hero's art swaps (spec 2026-11-17, F4) ─────────────────────────
+    //
+    // The first entry to the app flashed: every settle moved the art under the
+    // showing page, and each move was a new request over an empty frame. The
+    // render line says what the art IS; these say how many times it CHANGED -
+    // per page, and for the session - so a paste can prove the flash is gone.
+    // A first entry has to read at most one swap per page (borrowed -> own).
+    //
+    // Keyed by the pager's page index, which is why a fresh deal clears them:
+    // page 0 of the next deal is a different title, not the same page. The
+    // session total does NOT reset on a deal - it is the whole session's count.
+    private val artUrls = mutableMapOf<Int, String?>()
+    private val artSources = mutableMapOf<Int, String>()
+    private val artSwaps = mutableMapOf<Int, Int>()
+    private var artSwapsSession = 0
 
     // ── The last trending-day walk (spec 2026-11-16, F2) ───────────────────
     //
@@ -296,6 +312,56 @@ internal object SpotlightDiagTrace {
         }
     }
 
+    /**
+     * The art the hero is drawing (spec 2026-11-17, F4).
+     *
+     * [source] is the render line's own vocabulary (`backdrop`, `own-art`,
+     * `borrowed`, `none`); [url] is the URL actually drawn, and it is only
+     * COMPARED - it never travels in the paste (a signed hostname per page is
+     * noise). A changed URL for a page is one HERO IMAGE SWAP, the number the
+     * flash report is about: the old bug moved the borrowed art several times a
+     * second, so a first entry now has to read at most one per page.
+     *
+     * The summary slot always carries the page in front, that page's own swaps,
+     * the session total and an `index:source/swaps` row for every page that has
+     * been in front this deal, so the paste answers "did page 0 settle without
+     * flickering" directly. A transition line is written for the swap itself,
+     * naming both sources - a `borrowed -> borrowed` row there is exactly the
+     * old bug's signature.
+     */
+    fun billboardHeroArt(page: Int, source: String, url: String?) {
+        var swapFrom: String? = null
+        var swaps = 0
+        val line = synchronized(lock) {
+            val previous = artUrls[page]
+            swaps = artSwaps[page] ?: 0
+            if (previous != null && url != null && previous != url) {
+                swaps++
+                artSwaps[page] = swaps
+                artSwapsSession++
+                swapFrom = artSources[page]
+            }
+            artUrls[page] = url
+            artSources[page] = source
+            artLine(page, source, swaps, artSwapsSession)
+        }
+        putBillboard("art", line)
+        swapFrom?.let { from ->
+            note(BILLBOARD + "art swap page=$page from=$from to=$source swaps=$swaps")
+        }
+    }
+
+    /** One art line: the page in front, its swaps, the session, and every page. */
+    private fun artLine(page: Int, source: String, swaps: Int, session: Int): String {
+        val perPage = artSources.entries
+            .sortedBy { entry -> entry.key }
+            .joinToString(" ") { entry ->
+                "${entry.key}:${entry.value}/${artSwaps[entry.key] ?: 0}"
+            }
+        return "art page=$page source=$source swaps=$swaps session=$session " +
+            "perPage=[$perPage]"
+    }
+
     /** A fresh deal: the tally restarts, and the deal itself is a transition. */
     fun billboardDealt(pages: Int, pool: Int, epoch: Int) {
         synchronized(lock) {
@@ -304,6 +370,10 @@ internal object SpotlightDiagTrace {
             resolved = 0
             nulls = 0
             failure = null
+            // Page indexes belong to THIS deal (see artUrls).
+            artUrls.clear()
+            artSources.clear()
+            artSwaps.clear()
         }
         putBillboard("pages", pagesLine())
         // F4 (2026-11-16): the RESOLVE slot is refreshed with the counters that
@@ -634,6 +704,10 @@ internal object SpotlightDiagTrace {
             renderSettled = 0
             renderPages = 0
             restCorrections = 0
+            artUrls.clear()
+            artSources.clear()
+            artSwaps.clear()
+            artSwapsSession = 0
             dwellToken = 0
             dwellCard = null
             dwellCancel = null

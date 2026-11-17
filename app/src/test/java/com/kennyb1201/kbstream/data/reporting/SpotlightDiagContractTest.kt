@@ -516,6 +516,110 @@ class SpotlightDiagContractTest {
         assertTrue("the frame's rest state reads with the frame, ahead of the pool", rest < feed)
     }
 
+    // ── F4 (first-entry flash spec): the hero's art swaps ────────────────
+
+    @Test
+    fun `the first art a page draws is not a swap`() {
+        SpotlightDiagTrace.billboardHeroArt(
+            page = 0,
+            source = "borrowed",
+            url = "https://image.example/a.jpg"
+        )
+
+        val line = SpotlightDiagTrace.summaries()
+            .first { it.contains("billboard: art ") }
+        assertTrue(line, line.contains("page=0"))
+        assertTrue(line, line.contains("source=borrowed"))
+        assertTrue("drawing the first frame is not a swap", line.contains("swaps=0"))
+        assertTrue(line, line.contains("session=0"))
+        assertTrue("and the per-page table carries it", line.contains("perPage=[0:borrowed/0]"))
+        assertTrue(
+            "nothing swapped, so the ring stays quiet",
+            SpotlightDiagTrace.lines().none { it.contains("art swap") }
+        )
+    }
+
+    @Test
+    fun `the borrowed to own swap counts once and names both sources`() {
+        SpotlightDiagTrace.billboardHeroArt(0, "borrowed", "https://image.example/a.jpg")
+        SpotlightDiagTrace.billboardHeroArt(0, "backdrop", "https://image.example/b.jpg")
+
+        val line = SpotlightDiagTrace.summaries()
+            .first { it.contains("billboard: art ") }
+        assertTrue("the page in front now draws its own art", line.contains("source=backdrop"))
+        assertTrue("one swap, which is the most a first entry may show", line.contains("swaps=1"))
+        assertTrue(line, line.contains("session=1"))
+        assertTrue(line, line.contains("perPage=[0:backdrop/1]"))
+        assertEquals(
+            "the ring keeps the event: which page, from what, to what",
+            "billboard: art swap page=0 from=borrowed to=backdrop swaps=1",
+            SpotlightDiagTrace.lines().last()
+        )
+    }
+
+    @Test
+    fun `a borrowed art moving under a page is still a swap - the old bug's signature`() {
+        SpotlightDiagTrace.billboardHeroArt(0, "borrowed", "https://image.example/a.jpg")
+        SpotlightDiagTrace.billboardHeroArt(0, "borrowed", "https://image.example/z.jpg")
+
+        val line = SpotlightDiagTrace.summaries()
+            .first { it.contains("billboard: art ") }
+        assertTrue(
+            "the source never changed, but the IMAGE did - which is exactly what the " +
+                "live fallback used to do on every settle: $line",
+            line.contains("swaps=1")
+        )
+        assertEquals(
+            "so the transition names borrowed -> borrowed, the flashing signature",
+            "billboard: art swap page=0 from=borrowed to=borrowed swaps=1",
+            SpotlightDiagTrace.lines().last()
+        )
+    }
+
+    @Test
+    fun `the session count survives a new deal, the per-page table does not`() {
+        SpotlightDiagTrace.billboardHeroArt(0, "backdrop", "https://image.example/a.jpg")
+        SpotlightDiagTrace.billboardHeroArt(0, "backdrop", "https://image.example/b.jpg")
+        assertEquals(
+            "one swap so far",
+            1,
+            SpotlightDiagTrace.lines().count { it.contains("art swap") }
+        )
+
+        // A fresh deal: page 0 is a different title, so its page-indexed row is
+        // dropped - but the SESSION total is the session's.
+        SpotlightDiagTrace.billboardDealt(pages = 20, pool = 20, epoch = 2)
+        SpotlightDiagTrace.billboardHeroArt(0, "borrowed", "https://image.example/c.jpg")
+
+        val line = SpotlightDiagTrace.summaries()
+            .first { it.contains("billboard: art ") }
+        assertTrue("a new deal's first draw is not a swap", line.contains("swaps=0"))
+        assertTrue(line, line.contains("session=1"))
+        assertTrue(
+            "and the table restarted for the new deal's page 0",
+            line.contains("perPage=[0:borrowed/0]")
+        )
+    }
+
+    @Test
+    fun `the art line sits beside the render line, before the pool`() {
+        SpotlightDiagTrace.billboardGate(enabled = true, layout = "spotlight", spotlightActive = true)
+        SpotlightDiagTrace.billboardRenderHero(
+            composed = true,
+            gate = null,
+            pageKey = "movie:1",
+            art = "backdrop",
+            settled = 1,
+            total = 20
+        )
+        SpotlightDiagTrace.billboardHeroArt(0, "backdrop", "https://image.example/a.jpg")
+        SpotlightDiagTrace.billboardFeed(listOf("trending_day"), trendingDaySize = 20, merged = 20)
+
+        val kinds = SpotlightDiagTrace.summaries()
+            .map { it.removePrefix("billboard: ").substringBefore(" ") }
+        assertEquals(listOf("gate", "render", "art", "feed"), kinds)
+    }
+
     private fun source(relative: String): String {
         var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
         while (dir != null) {

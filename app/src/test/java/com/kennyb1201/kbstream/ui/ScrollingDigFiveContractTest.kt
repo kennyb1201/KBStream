@@ -300,21 +300,26 @@ class ScrollingDigFiveContractTest {
         }
     }
 
-    // ── the billboard backdrop: sized, and the crossfade left alone ──
+    // ── the billboard backdrop: sized, held, and swapped directly ──
 
     @Test
     fun `the phone billboard asks for a sized backdrop`() {
         val home = source("com/kennyb1201/kbstream/ui/mobile/HomeScreenMobile.kt")
-        val art = home.substringAfter("model = remember(backdropUrl, meta) {")
+        val art = home.substringAfter("model = remember(backdropUrl) {")
             .substringBefore("contentDescription")
         assertTrue(
             "the request names its own size instead of decoding the source",
             art.contains(".size(coil3.size.Size(1280, 800))")
         )
-        // Round four's billboard decision keeps the fade - a watched, deliberate
-        // swap, on no scroll path - so the TV hero's one-buffer rule (round
-        // three F6) does not travel here. Pinned so a later pass does not
-        // "fix" it by surprise.
-        assertTrue("the crossfade stays, by decision", art.contains(".crossfade(true)"))
+        // Round four kept the fade; the first-entry flash spec (2026-11-17, F2)
+        // reversed it, because Coil fades from the PLACEHOLDER and the placeholder
+        // was empty - so every swap was a black frame fading into the new art.
+        // The previous frame is held instead and the swap is direct. Pinned so a
+        // later pass does not put the fade back by surprise.
+        assertFalse("no crossfade, by the flash spec", art.contains(".crossfade(true)"))
+        assertTrue(
+            "the last painted frame is held as the placeholder",
+            home.contains("placeholder = heldArt")
+        )
     }
 }

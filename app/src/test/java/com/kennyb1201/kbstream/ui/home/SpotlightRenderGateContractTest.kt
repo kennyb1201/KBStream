@@ -103,8 +103,12 @@ class SpotlightRenderGateContractTest {
         assertTrue(
             "and the art falls back backdrop -> background -> poster, so a page with no " +
                 "backdrop is never a blank frame",
-            source(MOBILE_HOME)
-                .contains(".data(backdropUrl ?: meta.background ?: meta.poster)")
+            // The chain lives in the billboard's own rule (billboardPageArt, pinned
+            // by SpotlightHeroRenderContractTest); the hero draws what it is handed
+            // since the 2026-11-17 first-entry spec, so the model cannot fall back
+            // on a stale meta either.
+            source(MOBILE_HOME).contains("ownArt = billboardPageArt(page)") &&
+                source(MOBILE_HOME).contains(".data(backdropUrl)")
         )
     }
 
@@ -124,11 +128,10 @@ class SpotlightRenderGateContractTest {
             // (it is the same question one step further along: what did the
             // render do with this gate's answer), and the gate is still FIRST.
             // The rest line joined them on 2026-11-17: where the pager actually
-            // sits, the same frame question one step further again.
+            // sits, the same frame question one step further again - and the art
+            // line the same day, one step further than the render's `art=` field.
             "and the trace carries them as the first billboard lines",
-            source(TRACE).contains("listOf(\"gate\", \"render\", \"rest\", \"feed\"") ||
-                source(TRACE).contains("listOf(\"gate\", \"render\", \"feed\"") ||
-                source(TRACE).contains("listOf(\"gate\", \"render\"")
+            source(TRACE).contains("listOf(\"gate\", \"render\"")
         )
     }
 

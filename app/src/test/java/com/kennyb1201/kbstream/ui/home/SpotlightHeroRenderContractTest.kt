@@ -131,7 +131,12 @@ class SpotlightHeroRenderContractTest {
         )
         assertTrue(
             "the hero draws through that rule, so a black frame is not reachable",
-            mobile.contains("backdropUrl = billboardHeroArt(pages, index)")
+            // Since the 2026-11-17 first-entry spec the page's art is HELD once it
+            // is shown, and the live fallback is only the first choice - so the
+            // rule is asked inside the billboard (heroArtFor) and the hero is
+            // handed its answer.
+            mobile.contains("backdropUrl = heroArt") &&
+                mobile.contains("liveFallback = billboardHeroArt(pages, index)")
         )
         assertFalse(
             "not the raw field, which is what let the frame be blank",

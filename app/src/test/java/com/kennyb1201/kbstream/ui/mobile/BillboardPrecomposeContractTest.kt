@@ -14,8 +14,10 @@ import org.junit.Test
  * either way keeps the neighbour ready, which is what a timer-driven swap can
  * afford - there are at most a handful of pages.
  *
- * The crossfade stays: the billboard is a slow, deliberate swap the viewer is
- * watching, not a tile in a scrolling rail, and it is on no scroll path.
+ * The crossfade is GONE as of the first-entry flash spec (2026-11-17, F2): it
+ * faded from an EMPTY frame, because Coil fades from the request's placeholder
+ * and that was null. The hero now holds its previous frame as the placeholder
+ * and swaps directly, which is the no-empty-frame handover this class pins.
  */
 class BillboardPrecomposeContractTest {
 
@@ -38,10 +40,19 @@ class BillboardPrecomposeContractTest {
     }
 
     @Test
-    fun `the hero crossfade is untouched here`() {
+    fun `the hero swaps directly, over its own previous frame`() {
+        val hero = home
+            .substringAfter("private fun MobileHero(")
+            .substringBefore("private fun BillboardPageChevron(")
         assertTrue(
-            "the phone hero keeps its fade - it is a watched swap, not a scroll",
-            home.contains(".crossfade(true)")
+            "the last painted frame is held as the placeholder",
+            hero.contains("placeholder = heldArt") &&
+                hero.contains("onSuccess = { state -> heldArt = state.painter }")
+        )
+        assertTrue(
+            "and no crossfade is asked for: it fades from the placeholder, which on a " +
+                "swap is the empty frame the flash rode on",
+            !hero.contains(".crossfade(true)")
         )
     }
 
