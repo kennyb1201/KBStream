@@ -75,6 +75,32 @@ class DynamicColorContractTest {
     }
 
     @Test
+    fun `a dark and moody title still tints`() {
+        // F3 (2026-11-16): a night scene is mostly faint colour, and answering
+        // "no tint" to it left exactly the titles that need the wash untinted.
+        val moody = IntArray(100) { argb(255, 34, 38, 52) }
+        val tint = ArtworkTintRules.fromPixels(moody)
+        assertNotNull("a dark blue-grey scene is still art with a hue", tint)
+        assertTrue(
+            "and its tint is pulled up to where it can be seen, not darkened " +
+                "into the page",
+            brightness(tint!!.base) >= 60
+        )
+        assertTrue("the hue survives the lift", blueOf(tint.base) > redOf(tint.base))
+    }
+
+    @Test
+    fun `faint colour is enough, but true grey is still not a tint`() {
+        // 0.143 saturation: below the first bar, above the faint one.
+        val faint = IntArray(100) { argb(255, 60, 64, 70) }
+        assertNotNull(ArtworkTintRules.fromPixels(faint))
+        assertNull(
+            "a grey backdrop has no hue to tint with, at either bar",
+            ArtworkTintRules.fromPixels(IntArray(100) { argb(255, 128, 128, 128) })
+        )
+    }
+
+    @Test
     fun `one bright logo does not decide the colour of the whole title`() {
         // 96 warm pixels, 4 screaming magenta ones: the bucket WEIGHT wins.
         val pixels = IntArray(100) { index ->
@@ -166,6 +192,17 @@ class DynamicColorContractTest {
             surfaceSource.contains("memoryCachePolicy(CachePolicy.READ_ONLY)")
         )
         assertTrue(
+            "and the DISK must answer too: the file was downloaded to show the art, " +
+                "and Coil's memory key includes the size, so a 96px lookup can never " +
+                "reuse the hero-sized bitmap (F1's whole bug)",
+            surfaceSource.contains("diskCachePolicy(CachePolicy.READ_ONLY)")
+        )
+        assertTrue(
+            "the bitmap is decoded for reading pixels, not for the screen: getPixel " +
+                "throws on a hardware bitmap",
+            surfaceSource.contains("allowHardware(false)")
+        )
+        assertTrue(
             "the network may not - a focus move must never wait on a download",
             surfaceSource.contains("networkCachePolicy(CachePolicy.DISABLED)")
         )
@@ -181,6 +218,30 @@ class DynamicColorContractTest {
             "the result is memoised so a second surface costs the first one's work",
             surfaceSource.contains("object ArtworkTintCache") &&
                 surfaceSource.contains("fun rememberArtworkTint(")
+        )
+    }
+
+    @Test
+    fun `a miss is not remembered as an answer`() {
+        // F2: the first version cached null as final, so a title sampled while its
+        // backdrop was still downloading stayed untinted for the whole process.
+        assertTrue(
+            "a miss is recorded separately, with a life of its own",
+            surfaceSource.contains("fun putMiss(") &&
+                surfaceSource.contains("fun isRecentMiss(")
+        )
+        assertTrue(
+            "and it expires, so a revisit after the art lands tints",
+            surfaceSource.contains("MISS_TTL_MS")
+        )
+        assertTrue(
+            "a sample that finds no file waits for the art rather than giving up",
+            surfaceSource.contains("repeat(TINT_SAMPLE_ATTEMPTS)") &&
+                surfaceSource.contains("ArtworkTintCache.putMiss(key)")
+        )
+        assertTrue(
+            "a hit is cached the moment it resolves",
+            surfaceSource.contains("ArtworkTintCache.put(key, computed)")
         )
     }
 

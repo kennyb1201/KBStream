@@ -24,6 +24,7 @@ import coil3.request.ImageRequest
 import coil3.request.SuccessResult
 import coil3.toBitmap
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
@@ -45,31 +46,60 @@ internal data class ArtworkTint(
  * Bounded and tiny on purpose: it exists so a focus move back to a card the viewer
  * has already seen is instant, and so the same poster in the Spotlight rail and the
  * Detail header is sampled once (C2's "the second surface costs the first one's
- * work"). A MISSING entry and a null (computed, nothing usable) are different
- * answers, which is why [contains] exists.
+ * work").
+ *
+ * A HIT is final. A MISS is not (F2, 2026-11-16): the first version stored "nothing
+ * usable" as if it were an answer, so a title sampled while its backdrop was still
+ * downloading stayed untinted for the rest of the process - and because the artwork
+ * arrives AFTER the screen opens, that was every title. A miss is now remembered
+ * only briefly: long enough that redrawing the screen cannot re-decode the same
+ * file, short enough that the next visit, once the art is on disk, tints.
  */
 internal object ArtworkTintCache {
 
     private const val MAX_ENTRIES = 96
 
-    private val entries = object : LinkedHashMap<String, ArtworkTint?>(MAX_ENTRIES, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ArtworkTint?>?): Boolean =
+    /** How long a "nothing usable in this art" answer stays fresh. */
+    private const val MISS_TTL_MS = 20_000L
+
+    private val hits = object : LinkedHashMap<String, ArtworkTint>(MAX_ENTRIES, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ArtworkTint>?): Boolean =
+            size > MAX_ENTRIES
+    }
+
+    private val misses = object : LinkedHashMap<String, Long>(MAX_ENTRIES, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>?): Boolean =
             size > MAX_ENTRIES
     }
 
     @Synchronized
-    fun contains(url: String): Boolean = entries.containsKey(url)
+    fun get(url: String): ArtworkTint? = hits[url]
 
+    /** True while a "nothing usable" answer for [url] is still fresh. */
     @Synchronized
-    fun get(url: String): ArtworkTint? = entries[url]
-
-    @Synchronized
-    fun put(url: String, tint: ArtworkTint?) {
-        entries[url] = tint
+    fun isRecentMiss(url: String): Boolean {
+        val at = misses[url] ?: return false
+        if (System.currentTimeMillis() - at < MISS_TTL_MS) return true
+        misses.remove(url)
+        return false
     }
 
     @Synchronized
-    fun clear() = entries.clear()
+    fun put(url: String, tint: ArtworkTint) {
+        hits[url] = tint
+        misses.remove(url)
+    }
+
+    @Synchronized
+    fun putMiss(url: String) {
+        misses[url] = System.currentTimeMillis()
+    }
+
+    @Synchronized
+    fun clear() {
+        hits.clear()
+        misses.clear()
+    }
 }
 
 /**
@@ -86,11 +116,22 @@ internal fun rememberArtworkTint(url: String?): ArtworkTint? {
         mutableStateOf(key?.let { ArtworkTintCache.get(it) })
     }
     LaunchedEffect(key) {
-        if (key == null) return@LaunchedEffect
-        if (ArtworkTintCache.contains(key)) return@LaunchedEffect
-        val computed = withContext(Dispatchers.IO) { sampleFromCache(context, key) }
-        ArtworkTintCache.put(key, computed)
-        tint = computed
+        if (key == null || tint != null) return@LaunchedEffect
+        if (ArtworkTintCache.isRecentMiss(key)) return@LaunchedEffect
+        // This runs before the header's own image request has necessarily
+        // finished - and the tint exists to describe THAT art - so a sample that
+        // finds no file yet asks again shortly instead of giving up for the rest
+        // of the visit (F2). Once the file lands, the very next attempt hits.
+        repeat(TINT_SAMPLE_ATTEMPTS) { attempt ->
+            if (attempt > 0) delay(TINT_SAMPLE_RETRY_MS)
+            val computed = withContext(Dispatchers.IO) { sampleFromCache(context, key) }
+            if (computed != null) {
+                ArtworkTintCache.put(key, computed)
+                tint = computed
+                return@LaunchedEffect
+            }
+        }
+        ArtworkTintCache.putMiss(key)
     }
     return tint
 }
@@ -98,8 +139,18 @@ internal fun rememberArtworkTint(url: String?): ArtworkTint? {
 /**
  * The one place a bitmap is sampled (B1/C2).
  *
- * `READ_ONLY` memory + `DISABLED` network is the spec's "never fetches" rule at the
- * wire: an image that is not already in memory is simply not a tint source.
+ * `READ_ONLY` memory + `READ_ONLY` disk + `DISABLED` network is the spec's "never
+ * fetches" rule at the wire: the disk file was downloaded to DISPLAY the art, so
+ * decoding it small is reading what is already there, while the network leg stays
+ * shut and a title that was never loaded has no tint to give.
+ *
+ * Memory alone was not enough, and that was the bug the phone reported (2026-11-16,
+ * F1): Coil's memory key includes the requested SIZE, so a 96px lookup can never
+ * reuse the hero-sized bitmap the header loaded, and it always missed. The disk key
+ * is the URL's, so the file the header just wrote IS found here.
+ *
+ * `allowHardware(false)` for a related reason: `getPixel` on a hardware bitmap
+ * throws, which would have turned every hit into a null anyway.
  */
 internal fun sampleFromCache(context: Context, url: String): ArtworkTint? = runCatching {
     val appContext = context.applicationContext
@@ -107,7 +158,9 @@ internal fun sampleFromCache(context: Context, url: String): ArtworkTint? = runC
     val request = ImageRequest.Builder(appContext)
         .data(url)
         .size(SAMPLE_EDGE_PX, SAMPLE_EDGE_PX)
+        .allowHardware(false)
         .memoryCachePolicy(CachePolicy.READ_ONLY)
+        .diskCachePolicy(CachePolicy.READ_ONLY)
         .networkCachePolicy(CachePolicy.DISABLED)
         .build()
     val result = runBlocking { loader.execute(request) }
@@ -189,5 +242,14 @@ internal fun ArtworkTintGradient(
 }
 
 private const val SAMPLE_EDGE_PX = 96
+
+/**
+ * How many times a sample that found no file waits for the art to land (F2).
+ *
+ * Six tries a quarter-second apart: long enough to cover a backdrop finishing its
+ * download, short enough that an untintable title does not spin.
+ */
+private const val TINT_SAMPLE_ATTEMPTS = 6
+private const val TINT_SAMPLE_RETRY_MS = 250L
 private const val TINT_CROSSFADE_MS = 420
 private const val TINT_FADE_MS = 320

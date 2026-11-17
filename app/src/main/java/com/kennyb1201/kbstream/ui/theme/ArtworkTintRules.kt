@@ -27,9 +27,29 @@ internal object ArtworkTintRules {
     /** Above this a pixel is a near-white caption or logo. */
     private const val MAX_CHANNEL = 232
 
-    /** Grey art is left alone: a tint of grey is just a darker screen. */
+    /**
+     * Grey art is left alone: a tint of grey is just a darker screen. Everything
+     * with a hue is fair game.
+     *
+     * There are two bars, not one (F3, 2026-11-16). The first bar wants a colour
+     * that is actually coloured. The second exists because a moody backdrop - a
+     * night scene, a dark poster - is mostly FAINT colour, and the first version
+     * answered "no tint" to it, which the spec calls the worse answer: a dark wash
+     * under the scrim beats nothing at all. So a second pass accepts faint hue, and
+     * only art with no hue anywhere (true grey, black, white) still returns null.
+     */
     private const val MIN_SATURATION = 0.18f
     private const val MIN_VALUE = 0.12f
+    private const val FAINT_SATURATION = 0.05f
+    private const val FAINT_VALUE = 0.05f
+
+    /**
+     * The value dark art is pulled up to before it is darkened for the gradient.
+     *
+     * Without this a correct hue at value 0.2 darkens into the background and the
+     * "tint" is invisible - which reads exactly like the feature being broken.
+     */
+    private const val READABLE_VALUE = 96f
 
     private const val HUE_BUCKETS = 12
     private const val BASE_SCALE = 0.55f
@@ -45,6 +65,17 @@ internal object ArtworkTintRules {
      */
     fun fromPixels(pixels: IntArray): TintArgb? {
         if (pixels.isEmpty()) return null
+        return dominant(pixels, MIN_SATURATION, MIN_VALUE)
+            ?: dominant(pixels, FAINT_SATURATION, FAINT_VALUE)
+    }
+
+    /**
+     * The heaviest hue bucket at or above the given floors, or null.
+     *
+     * Run twice by [fromPixels]: once for colour a viewer would call coloured, and
+     * once, only if that found nothing, for the faint hue of a dark scene.
+     */
+    private fun dominant(pixels: IntArray, minSaturation: Float, minValue: Float): TintArgb? {
         val weights = FloatArray(HUE_BUCKETS)
         val sumsR = FloatArray(HUE_BUCKETS)
         val sumsG = FloatArray(HUE_BUCKETS)
@@ -60,9 +91,9 @@ internal object ArtworkTintRules {
             val min = minOf(r, g, b)
             if (max < MIN_CHANNEL || min > MAX_CHANNEL) return@forEach
             val saturation = (max - min).toFloat() / max.toFloat()
-            if (saturation < MIN_SATURATION) return@forEach
+            if (saturation < minSaturation) return@forEach
             val value = max / 255f
-            if (value < MIN_VALUE) return@forEach
+            if (value < minValue) return@forEach
 
             val bucket = hueBucket(r, g, b)
             val weight = saturation * value
@@ -79,9 +110,22 @@ internal object ArtworkTintRules {
         val r = (sumsR[best] / weight).toInt().coerceIn(0, 255)
         val g = (sumsG[best] / weight).toInt().coerceIn(0, 255)
         val b = (sumsB[best] / weight).toInt().coerceIn(0, 255)
+        val lit = readable(r, g, b)
         return TintArgb(
-            base = darken(r, g, b, BASE_SCALE),
-            glow = lift(r, g, b)
+            base = darken(lit.first, lit.second, lit.third, BASE_SCALE),
+            glow = lift(lit.first, lit.second, lit.third)
+        )
+    }
+
+    /** Pulls dark art up until a tint of it can be seen at all (F3). */
+    private fun readable(r: Int, g: Int, b: Int): Triple<Int, Int, Int> {
+        val max = maxOf(r, g, b)
+        if (max <= 0 || max >= READABLE_VALUE) return Triple(r, g, b)
+        val scale = READABLE_VALUE / max.toFloat()
+        return Triple(
+            (r * scale).toInt().coerceIn(0, 255),
+            (g * scale).toInt().coerceIn(0, 255),
+            (b * scale).toInt().coerceIn(0, 255)
         )
     }
 
