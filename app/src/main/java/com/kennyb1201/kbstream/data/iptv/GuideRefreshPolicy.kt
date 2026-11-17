@@ -139,4 +139,21 @@ internal object GuideRefreshPolicy {
 
     /** Whether [urgency] wants an import at all. */
     fun needsImport(urgency: Urgency): Boolean = urgency != Urgency.NONE
+
+    /**
+     * The age half of the rule, in one place: the marker is old enough that a
+     * pass which stopped landing is invisible to the window test.
+     *
+     * [lastImportMs] == 0 is "nothing was ever imported" - stale by definition,
+     * not fresh because the subtraction is large. [fileMoved] is the guide
+     * database having been replaced under a marker that still names the old one,
+     * which is the same thing said a different way: the guide on disk is not the
+     * guide the marker describes.
+     *
+     * The Guide screen and the diagnostics compose these same three signals
+     * inline; this exists so the catch-up path (spec 2026-11-16) cannot invent a
+     * fourth spelling of "stale".
+     */
+    fun ageStale(nowMs: Long, lastImportMs: Long, fileMoved: Boolean = false): Boolean =
+        lastImportMs <= 0L || fileMoved || nowMs - lastImportMs >= AGE_STALE_MS
 }

@@ -84,7 +84,14 @@ internal object EpgRefreshDiagnostics {
         val decision: Decision,
         val sources: List<SourceResult> = emptyList(),
         val imported: Int = 0,
-        val stopped: Boolean = false
+        val stopped: Boolean = false,
+        /**
+         * True when this pass was the playback-end catch-up rather than a 6h
+         * tick (spec 2026-11-16, F4). Prefixed onto the line, because "the
+         * refresh ran while I never opened the Guide" and "the tick finally got
+         * through" are different answers to the same field question.
+         */
+        val catchUp: Boolean = false
     )
 
     /** The token for a source, in the paste's short form: `1:landed`, `2:timeout`. */
@@ -109,18 +116,31 @@ internal object EpgRefreshDiagnostics {
      * no trace at all.
      */
     fun verdictLine(verdict: PassVerdict): String {
-        if (verdict.stopped) {
-            val partial = verdict.sources.takeIf { it.isNotEmpty() }?.joinToString(",") { sourceToken(it) }
-            return if (partial.isNullOrEmpty()) "stopped mid-import" else "stopped mid-import after $partial"
-        }
-        return when (verdict.decision) {
-            Decision.FRESH -> "fresh — skipped"
-            Decision.DEFER -> "defer (player)"
-            Decision.NO_SOURCES -> "no sources"
-            Decision.IMPORT -> {
-                val sources = verdict.sources.joinToString(",") { sourceToken(it) }
-                "import $sources, landed=${verdict.imported}"
+        val body = when {
+            verdict.stopped -> {
+                val partial = verdict.sources.takeIf { it.isNotEmpty() }
+                    ?.joinToString(",") { sourceToken(it) }
+                if (partial.isNullOrEmpty()) {
+                    "stopped mid-import"
+                } else {
+                    "stopped mid-import after $partial"
+                }
             }
+            else -> bodyLine(verdict)
+        }
+        // The catch-up marker is a PREFIX, so the rest of the grammar is
+        // untouched: `refresh: catch-up import 1:landed` reads as the line it
+        // always did, with the one fact this spec adds in front of it.
+        return if (verdict.catchUp) "catch-up $body" else body
+    }
+
+    private fun bodyLine(verdict: PassVerdict): String = when (verdict.decision) {
+        Decision.FRESH -> "fresh — skipped"
+        Decision.DEFER -> "defer (player)"
+        Decision.NO_SOURCES -> "no sources"
+        Decision.IMPORT -> {
+            val sources = verdict.sources.joinToString(",") { sourceToken(it) }
+            "import $sources, landed=${verdict.imported}"
         }
     }
 

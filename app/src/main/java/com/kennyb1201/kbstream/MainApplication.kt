@@ -249,6 +249,16 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                 com.kennyb1201.kbstream.data.iptv.EpgRefreshScheduler
                     .schedule(applicationContext)
             }
+            // ...and the third guide path (spec 2026-11-16): when a title ends
+            // and the player closes, a stale guide gets a one-time refresh then,
+            // instead of waiting for a 6h tick that a playing television keeps
+            // deferring. Arming it here rather than in a player is what makes it
+            // fire on BOTH engines and from the hero's trailer player too - the
+            // listener lives on the write gate, not on an activity.
+            startupStep("startup.epgCatchUp", "app_create_epg_catch_up") {
+                com.kennyb1201.kbstream.data.iptv.EpgRefreshCatchUp
+                    .install(applicationContext)
+            }
             // Launch-time auto-update: picks up addon manifest changes on the
             // first launch after any restart. Throttled internally (shared with
             // the periodic worker) so frequent app relaunches don't spam every

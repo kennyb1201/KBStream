@@ -33,6 +33,18 @@ class EpgRefreshWorker(
     private var stoppedImported: Int = 0
 
     /**
+     * Whether this run is the playback-end catch-up rather than a 6h tick (spec
+     * 2026-11-16, F4).
+     *
+     * It changes nothing about what the pass does - the gates, the budgets and
+     * the stamping are identical - only what its recorded verdict says it was, so
+     * a paste can tell the two apart and the field test can prove the trigger
+     * fired.
+     */
+    private val catchUp: Boolean =
+        inputData.getBoolean(EpgRefreshScheduler.INPUT_CATCH_UP, false)
+
+    /**
      * Records a pass WorkManager stopped mid-import.
      *
      * This cannot be an `onStopped()` override: WorkManager 2.12 makes it final,
@@ -48,7 +60,8 @@ class EpgRefreshWorker(
                 decision = decision,
                 sources = stoppedSources,
                 imported = stoppedImported,
-                stopped = true
+                stopped = true,
+                catchUp = catchUp
             )
         )
     }
@@ -113,7 +126,12 @@ class EpgRefreshWorker(
         // kept showing the last window that happened to be imported in-app.
         val epgUrls = guideUrls(prefs)
         if (epgUrls.isEmpty()) {
-            recordPass(EpgRefreshDiagnostics.PassVerdict(EpgRefreshDiagnostics.Decision.NO_SOURCES))
+            recordPass(
+                EpgRefreshDiagnostics.PassVerdict(
+                    EpgRefreshDiagnostics.Decision.NO_SOURCES,
+                    catchUp = catchUp
+                )
+            )
             return Result.success()
         }
 
@@ -166,7 +184,12 @@ class EpgRefreshWorker(
                 // Recorded, not merely logged: "the worker declines every six
                 // hours because the marker is young" and "the worker is dead"
                 // were the same paste (spec 2026-11-14, F1c).
-                recordPass(EpgRefreshDiagnostics.PassVerdict(EpgRefreshDiagnostics.Decision.FRESH))
+                recordPass(
+                    EpgRefreshDiagnostics.PassVerdict(
+                        EpgRefreshDiagnostics.Decision.FRESH,
+                        catchUp = catchUp
+                    )
+                )
                 Log.i(TAG, "EPG refresh skipped: data fresh (age=${(now - lastImport) / 60_000}min)")
                 return Result.success()
             }
@@ -175,7 +198,12 @@ class EpgRefreshWorker(
                 // The quiet one that explains a 22-hour gap with clean flags: a
                 // process whose playback gate never clears defers forever, and
                 // nothing said so.
-                recordPass(EpgRefreshDiagnostics.PassVerdict(EpgRefreshDiagnostics.Decision.DEFER))
+                recordPass(
+                    EpgRefreshDiagnostics.PassVerdict(
+                        EpgRefreshDiagnostics.Decision.DEFER,
+                        catchUp = catchUp
+                    )
+                )
                 Log.i(TAG, "EPG refresh deferred: playback active")
                 return Result.retry()
             }
@@ -279,7 +307,8 @@ class EpgRefreshWorker(
             EpgRefreshDiagnostics.PassVerdict(
                 decision = EpgRefreshDiagnostics.Decision.IMPORT,
                 sources = results.toList(),
-                imported = imported
+                imported = imported,
+                catchUp = catchUp
             )
         )
 
@@ -417,7 +446,13 @@ class EpgRefreshWorker(
         )
     }.distinct()
 
-    private companion object {
+    /**
+     * Internal rather than private: [EpgRefreshCatchUp] reads the same two stamps
+     * (the freshness marker and the attempt stamp) to make the same staleness
+     * decision, and a fourth spelling of `"epg_updated_at"` is how the extras
+     * guide URL came to be read differently in two places once already.
+     */
+    internal companion object {
         const val TAG = "EpgRefreshWorker"
 
         // Keys of the profile-scoped "iptv_prefs" store; must stay in step

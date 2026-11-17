@@ -3,9 +3,12 @@ package com.kennyb1201.kbstream.data.iptv
 import android.content.Context
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.work.workDataOf
 import java.util.concurrent.TimeUnit
 
 /**
@@ -49,22 +52,36 @@ object EpgRefreshScheduler {
      */
     private const val REFRESH_INTERVAL_HOURS = EpgWindow.REFRESH_INTERVAL_HOURS
 
-    fun schedule(context: Context) {
-        // Network is not the only thing a multi-minute download + parse needs:
-        // running it on a nearly-flat battery or with storage about to fill is
-        // how an import fails halfway and leaves a windowed guide short. Both
-        // gates defer the run (WorkManager retries) rather than failing it.
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .setRequiresBatteryNotLow(true)
-            .setRequiresStorageNotLow(true)
-            .build()
+    /**
+     * The ONE-TIME catch-up, under its own unique name (spec 2026-11-16).
+     *
+     * Separate from [WORK_NAME] on purpose: enqueueing a one-time request under
+     * the periodic job's name would replace the 6h cadence, and the catch-up
+     * exists precisely because that cadence is starving - it must not cost the
+     * schedule it is compensating for.
+     *
+     * `KEEP`: one pending catch-up is enough. A second one enqueued while the
+     * first is still waiting to run has nothing to add, and the run reads the
+     * guide at the moment it starts anyway.
+     */
+    const val CATCH_UP_WORK_NAME = "iptv_epg_refresh_catch_up"
 
+    /**
+     * The input flag that tells [EpgRefreshWorker] this run was a catch-up.
+     *
+     * It changes nothing about what the pass DOES - same gates, same budgets,
+     * same stamping - only what the recorded verdict says it was, so a paste can
+     * tell a catch-up from a 6h tick and the field test can prove the trigger
+     * fired.
+     */
+    const val INPUT_CATCH_UP = "catch_up"
+
+    fun schedule(context: Context) {
         val request = PeriodicWorkRequestBuilder<EpgRefreshWorker>(
             REFRESH_INTERVAL_HOURS,
             TimeUnit.HOURS
         )
-            .setConstraints(constraints)
+            .setConstraints(guideConstraints())
             .build()
 
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
@@ -73,6 +90,40 @@ object EpgRefreshScheduler {
             request
         )
     }
+
+    /**
+     * Enqueues the playback-end catch-up ([EpgRefreshCatchUp] decides whether it
+     * is worth one; this only asks for the work).
+     *
+     * Same constraints as the periodic run, because it is the same multi-minute
+     * download and parse and the same reasons apply.
+     */
+    fun enqueueCatchUp(context: Context) {
+        val request = OneTimeWorkRequestBuilder<EpgRefreshWorker>()
+            .setConstraints(guideConstraints())
+            .setInputData(workDataOf(INPUT_CATCH_UP to true))
+            .build()
+
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            CATCH_UP_WORK_NAME,
+            ExistingWorkPolicy.KEEP,
+            request
+        )
+    }
+
+    /**
+     * What a multi-minute download + parse needs before it may start: the network,
+     * and not a nearly-flat battery or a storage that is about to fill, either of
+     * which is how an import fails halfway and leaves a windowed guide short.
+     *
+     * Both gates DEFER the run (WorkManager retries) rather than failing it - see
+     * the worker's own note on why failure is never the answer here.
+     */
+    private fun guideConstraints(): Constraints = Constraints.Builder()
+        .setRequiredNetworkType(NetworkType.CONNECTED)
+        .setRequiresBatteryNotLow(true)
+        .setRequiresStorageNotLow(true)
+        .build()
 
     /** What WorkManager currently says about the scheduled refresh. */
     data class ScheduledWork(

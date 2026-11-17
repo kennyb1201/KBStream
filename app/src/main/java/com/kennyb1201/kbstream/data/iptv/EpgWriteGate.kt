@@ -69,12 +69,40 @@ object EpgWriteGate {
     val isPlayerActive: Boolean get() = !idle.value
 
     /**
+     * Observers of the ACTIVE → IDLE edge of the fullscreen player, i.e. "a title
+     * just ended and the player closed" (spec 2026-11-16, guide refresh on
+     * playback end).
+     *
+     * Fired from [setPlayerActive] only. The hero's inline trailer also moves the
+     * gate, and it rotates constantly while the viewer browses Home - treating
+     * each of those as a playback end would run the catch-up's staleness check
+     * every few seconds, for a trailer nobody watched to the end.
+     *
+     * Copy-on-write: registration happens once at process start, notification
+     * from whichever thread the player tears down on.
+     */
+    private val idleListeners = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
+
+    /**
+     * Registers a playback-end observer. Idempotence is the caller's business -
+     * [EpgRefreshCatchUp.install] arms this exactly once per process.
+     */
+    fun addIdleListener(listener: () -> Unit) {
+        idleListeners += listener
+    }
+
+    /**
      * Called by the fullscreen player as it enters ([active] = true) and leaves
      * (false) the screen.
      */
     fun setPlayerActive(active: Boolean) {
         fullscreenActive.set(active)
-        refresh()
+        val becameIdle = refresh()
+        // The player closing is the one signal the guide catch-up wants, and it
+        // is taken AFTER the gate has already reached idle: nothing here can
+        // delay the teardown, and the refresh it may enqueue starts on its own
+        // dispatcher (see EpgRefreshCatchUp).
+        if (becameIdle) notifyIdle()
     }
 
     /**
@@ -83,7 +111,17 @@ object EpgWriteGate {
      */
     fun setInlinePlaybackActive(active: Boolean) {
         inlineActive.set(active)
+        // Deliberately no notification: a trailer stopping is not "playback
+        // ended" in the sense the catch-up means (see [idleListeners]).
         refresh()
+    }
+
+    private fun notifyIdle() {
+        idleListeners.forEach { listener ->
+            // A viewer closing a player must never see an exception from a
+            // listener, and this one only enqueues work.
+            runCatching { listener() }
+        }
     }
 
     /**
@@ -91,8 +129,11 @@ object EpgWriteGate {
      * a new session, so the budget is granted once per viewing rather than
      * once per callback — and so one source stopping cannot reset the budget
      * while the other is still playing.
+     *
+     * Returns whether this call is what made the gate idle (the no-transition
+     * case returns false through the non-local return below).
      */
-    private fun refresh() {
+    private fun refresh(): Boolean {
         // Decide under the lock, EMIT outside it.
         //
         // Assigning idle.value inside the monitor resumes idle's collectors
@@ -103,11 +144,12 @@ object EpgWriteGate {
         // The lock still makes the read-modify-write below atomic.
         val nowIdle = synchronized(lock) {
             val active = fullscreenActive.get() || inlineActive.get()
-            if (active == !idle.value) return
+            if (active == !idle.value) return false
             if (active) heldMs.set(0L)
             !active
         }
         idle.value = nowIdle
+        return nowIdle
     }
 
     /**
