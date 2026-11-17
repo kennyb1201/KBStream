@@ -40,6 +40,7 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListPlaybackItem
 import com.kennyb1201.kbstream.data.mdblist.mdbListWatchedEpisodesByShow
 import com.kennyb1201.kbstream.data.notifications.NewEpisodeRules
 import com.kennyb1201.kbstream.data.player.rerootedEpisodeStreamId
+import com.kennyb1201.kbstream.data.reporting.ImageLoadTrace
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.reporting.SpotlightDiagTrace
 import com.kennyb1201.kbstream.data.reporting.UpcomingDiagTrace
@@ -2783,12 +2784,22 @@ Log.d(
         val url = artwork?.backdropUrl?.takeIf { it.isNotBlank() } ?: return
         val application = getApplication<Application>()
         runCatchingCancellable {
-            coil3.SingletonImageLoader.get(application).execute(
+            val result = coil3.SingletonImageLoader.get(application).execute(
                 coil3.request.ImageRequest.Builder(application)
                     .data(url)
                     .size(HERO_LOOKAHEAD_BITMAP_WIDTH, HERO_LOOKAHEAD_BITMAP_HEIGHT)
                     .build()
             )
+            // Dig four §1c: a warm is counted only when it actually decoded.
+            // The global loader funnel counts a 1280x720 decode with no call-site
+            // identity, so `heroDecodes` today mixes this - never displayed -
+            // decode with the hero's own draw. `heroDecodes - heroWarms` is the
+            // draws that cost a decode.
+            if (result is coil3.request.SuccessResult &&
+                result.dataSource != coil3.decode.DataSource.MEMORY_CACHE
+            ) {
+                ImageLoadTrace.noteHeroWarm()
+            }
         }
     }
 
@@ -2973,12 +2984,21 @@ Log.d(
 
         val application = getApplication<Application>()
         runCatchingCancellable {
-            coil3.SingletonImageLoader.get(application).execute(
+            val result = coil3.SingletonImageLoader.get(application).execute(
                 coil3.request.ImageRequest.Builder(application)
                     .data(url)
                     .size(widthPx, heightPx)
                     .build()
             )
+            // Counted only when the warm really decoded (see noteRailTileWarm):
+            // this decode is the one the card would have paid on the frame it
+            // appeared, so `cardDiskDecodes` does not fall when the warm works -
+            // it counts both. `cardDiskDecodes - tileWarms` is what is left.
+            if (result is coil3.request.SuccessResult &&
+                result.dataSource != coil3.decode.DataSource.MEMORY_CACHE
+            ) {
+                ImageLoadTrace.noteRailTileWarm()
+            }
         }
     }
 

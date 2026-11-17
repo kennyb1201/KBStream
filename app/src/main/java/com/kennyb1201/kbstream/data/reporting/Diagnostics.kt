@@ -136,6 +136,11 @@ object Diagnostics {
         report.appendLine(displayLine(app))
         imageCacheLine(app)?.let { report.appendLine(it) }
         ImageLoadTrace.lines().forEach { report.appendLine("image: $it") }
+        // The rail items' recomposition count (spec 2026-11-16, round three F4;
+        // S1 in dig four). Printed beside the image lines because the two are
+        // read together: a walk whose decodes fell but whose item count is
+        // per-step is a recomposition problem, not a decode one.
+        RecompositionTrace.lines().forEach { report.appendLine("home: $it") }
         report.appendLine(accountLine())
         report.appendLine(profileLine())
         report.appendLine(cleanupLine(app))

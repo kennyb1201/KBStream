@@ -158,6 +158,8 @@ import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.data.library.key
 import com.kennyb1201.kbstream.data.library.libraryRailTypeSuffix
 import com.kennyb1201.kbstream.data.reporting.CwFilterTrace
+import com.kennyb1201.kbstream.data.reporting.ImageLoadTrace
+import com.kennyb1201.kbstream.data.reporting.RecompositionTrace
 import com.kennyb1201.kbstream.data.reporting.SpotlightDiagTrace
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
 import com.kennyb1201.kbstream.ui.browse.FocusLandingVerdict
@@ -1316,7 +1318,13 @@ private fun HeroBackdropArt(url: String?) {
         contentDescription = null,
         modifier = Modifier.fillMaxSize(),
         contentScale = ContentScale.Crop,
-        alignment = Alignment.Center
+        alignment = Alignment.Center,
+        // Dig four §1c: count the hero DRAW where it is drawn. The app-wide
+        // loader funnel counts a decode by pixel width alone, so it cannot say
+        // whether a 1280x720 decode was this draw, Detail's, Actor's, or a warm
+        // that was never displayed. Fires for a memory hit too: the question is
+        // what the hero had to draw, not what it had to decode.
+        onSuccess = { ImageLoadTrace.noteHeroDraw() }
     )
 }
 
@@ -3618,6 +3626,17 @@ private fun LibraryListHomeRail(
                     },
                     contentType = { _, _ -> "library-list-card" }
                 ) { index, meta ->
+                    // F4's measurement (spec 2026-11-16, round three; S1 in
+                    // dig four): one tick per recomposition of a rail ITEM, so
+                    // a held walk has a number to read before anything is
+                    // wrapped in `remember`. A `SideEffect` runs after the
+                    // composition it belongs to is applied, so an item Compose
+                    // skips does not tick.
+                    SideEffect {
+                        RecompositionTrace.noteRailItem(
+                            android.os.SystemClock.elapsedRealtime()
+                        )
+                    }
                     val requester = remember { FocusRequester() }
                     val cardKey =
                         "librail|" + rail.pin.key + "|" + meta.type + ":" + meta.id
@@ -3836,6 +3855,15 @@ private fun BuiltinTopPicksRail(
                     DisposableEffect(requester, cardKey) {
                         cardFocusRequesters[cardKey] = requester
                         onDispose { cardFocusRequesters.remove(cardKey) }
+                    }
+
+                    // F4's measurement - the Top Picks row ticks the same
+                    // counter as the catalog rails, so a walk across a mixed
+                    // Home produces one number.
+                    SideEffect {
+                        RecompositionTrace.noteRailItem(
+                            android.os.SystemClock.elapsedRealtime()
+                        )
                     }
 
                     // The shape, the card and the slot all follow the Home

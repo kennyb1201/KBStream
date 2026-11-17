@@ -78,6 +78,17 @@ internal object ImageLoadTrace {
     private var heroDecodes = 0
     private var railDiskDecodes = 0
 
+    // Dig four (2026-11-16, §1c): the counts the width threshold cannot
+    // separate. `heroDecodes` is every non-memory decode >= 960 px at one
+    // app-wide funnel - the hero's own draw, Detail's backdrop, Actor's, and the
+    // lookahead WARMS (which are never displayed). Counting the draw where it is
+    // drawn and the warm where it is warmed is the only way to tell them apart;
+    // the tile warms get the same treatment so a post-walk paste can subtract
+    // "decoded because we warmed it" from "decoded because the viewer arrived".
+    private var heroDraws = 0
+    private var heroWarms = 0
+    private var tileWarms = 0
+
     /** "WxH" -> count, first-seen order kept (LinkedHashMap). */
     private val sizes = LinkedHashMap<String, Int>()
 
@@ -114,6 +125,30 @@ internal object ImageLoadTrace {
         }
     }
 
+    /** The hero drew a backdrop (memory hit or decode - it was on screen). */
+    fun noteHeroDraw() {
+        synchronized(lock) { heroDraws++ }
+    }
+
+    /**
+     * The lookahead decoded a hero-size backdrop ahead of focus. A warm that the
+     * hero then draws from memory is not a decode twice, but it IS a decode the
+     * session paid; `heroDecodes - heroWarms` is the draws that cost a decode.
+     */
+    fun noteHeroWarm() {
+        synchronized(lock) { heroWarms++ }
+    }
+
+    /**
+     * The rail-tile warm decoded a card's tile ahead of the walk - the same
+     * decode the card would otherwise have paid on the frame it appeared, which
+     * is why `cardDiskDecodes` does not fall when this works: it counts both.
+     * `cardDiskDecodes - tileWarms` is the first-sight decodes that remain.
+     */
+    fun noteRailTileWarm() {
+        synchronized(lock) { tileWarms++ }
+    }
+
     /**
      * One `onTrimMemory` delivery, by name.
      *
@@ -139,7 +174,9 @@ internal object ImageLoadTrace {
      */
     fun lines(): List<String> = synchronized(lock) {
         val loads = memoryHits + diskDecodes + networkDecodes + otherDecodes
-        if (loads == 0 && trims.isEmpty()) {
+        if (loads == 0 && trims.isEmpty() && heroDraws == 0 &&
+            heroWarms == 0 && tileWarms == 0
+        ) {
             return emptyList()
         }
         val out = mutableListOf<String>()
@@ -155,6 +192,13 @@ internal object ImageLoadTrace {
         // why they are counts rather than sizes.
         if (heroDecodes > 0 || railDiskDecodes > 0) {
             out += "scroll: heroDecodes=$heroDecodes cardDiskDecodes=$railDiskDecodes"
+        }
+        // Where the hero-size decodes came from (dig four §1c). Printed beside
+        // the counts above so a paste can be read as "warms are working" rather
+        // than "the walk is still slow".
+        if (heroDraws > 0 || heroWarms > 0 || tileWarms > 0) {
+            out += "art: heroDraws=$heroDraws heroWarms=$heroWarms " +
+                "tileWarms=$tileWarms"
         }
         if (sizes.isNotEmpty()) {
             out += "decoded at: " +
@@ -176,6 +220,9 @@ internal object ImageLoadTrace {
             otherDecodes = 0
             heroDecodes = 0
             railDiskDecodes = 0
+            heroDraws = 0
+            heroWarms = 0
+            tileWarms = 0
             sizes.clear()
             trims.clear()
         }
