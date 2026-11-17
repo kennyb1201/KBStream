@@ -18,6 +18,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -47,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -103,12 +105,22 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 // F12a: 48dp, TiviMate's own row, down from 62. The program cell is 20 + 16 +
 // 8 = 44dp of content with its 4dp padding, so the optional second line
 // (reminder, score) still fits and no row needs a height exception (F5: the
 // score line is why the row does not shrink further).
 private val GRID_ROW_HEIGHT: Dp = 48.dp
+
+/**
+ * Frames a pending handoff retries the focus request for (F6b).
+ *
+ * The scroll that brings the target into the window runs BEFORE the first retry
+ * and the target is anchored composed across it, so this is only a couple of
+ * frames of layout slack - it is not a wait for an animation.
+ */
+private const val PENDING_FOCUS_ATTEMPTS = 8
 
 // F13a/F14b: the top band's two heights. With the preview on it is exactly the
 // preview's own 16:9 box, so the band adds no padding around it; the text
@@ -251,6 +263,11 @@ internal fun GuideGridView(
     var focusedRow by remember { mutableStateOf(0) }
     var focusedCellId by remember { mutableStateOf<String?>(null) }
     var pendingFocus by remember { mutableStateOf<GridPendingFocus?>(null) }
+    // F6b: the cell a handoff is scrolling the axis towards. A windowed row only
+    // composes the viewport plus slack, so the target of an in-flight handoff has
+    // to be anchored or its retry finds no focus node and the press dies - the
+    // window is narrowed, not the focus graph.
+    var pendingScrollCellId by remember { mutableStateOf<String?>(null) }
     var pendingSidebarFocus by remember { mutableStateOf(false) }
     var focusLiveOnNextWindow by remember { mutableStateOf(false) }
     var focusHome by remember { mutableStateOf(GridFocusHome.CHANNEL) }
@@ -388,25 +405,37 @@ internal fun GuideGridView(
 
         val row = rows[target.rowIndex]
         val cell = target.cellId?.let { id -> row.cells.firstOrNull { it.id == id } }
-        if (cell != null) scrollTimeTo(row, cell, animate = !reducedMotion)
-
         var attempts = 0
         var requesterSeen = false
-        while (attempts < 8) {
-            val requester = when {
-                target.channelFocus -> channelRequesters[row.channelKey]
-                cell != null -> cellRequesters[cell.id]
-                else -> null
+        var landed = false
+        pendingScrollCellId = cell?.id
+        try {
+            if (cell != null) scrollTimeTo(row, cell, animate = !reducedMotion)
+
+            // The window composes the handoff's target while this runs, so the
+            // retry below has a node to ask from the first frame after the scroll.
+            while (attempts < PENDING_FOCUS_ATTEMPTS) {
+                val requester = when {
+                    target.channelFocus -> channelRequesters[row.channelKey]
+                    cell != null -> cellRequesters[cell.id]
+                    else -> null
+                }
+                if (requester != null) requesterSeen = true
+                if (requester != null &&
+                    runCatching { requester.requestFocus() }.getOrDefault(false)
+                ) {
+                    focusedRow = target.rowIndex
+                    focusedCellId = cell?.id
+                    landed = true
+                    break
+                }
+                withFrameNanos { }
+                attempts++
             }
-            if (requester != null) requesterSeen = true
-            if (requester != null && runCatching { requester.requestFocus() }.getOrDefault(false)) {
-                focusedRow = target.rowIndex
-                focusedCellId = cell?.id
-                return@LaunchedEffect
-            }
-            withFrameNanos { }
-            attempts++
+        } finally {
+            pendingScrollCellId = null
         }
+        if (landed) return@LaunchedEffect
         // F1c: the retry is the fallback, not a silent end. A handoff that dies
         // without a line is the bug this spec is about - the press was consumed
         // and nothing moved, and the log said nothing either.
@@ -1168,6 +1197,7 @@ internal fun GuideGridView(
                                 channelId = row.item.channel.id,
                                 requesters = cellRequesters,
                                 timeScroll = timeScroll,
+                                pendingCellId = pendingScrollCellId,
                                 onCellFocus = { cell ->
                                     focusedRow = index
                                     focusedCellId = cell.id
@@ -1440,13 +1470,48 @@ private fun ProgramRow(
     channelId: String,
     requesters: MutableMap<String, FocusRequester>,
     timeScroll: ScrollState,
+    /** The cell a handoff is scrolling towards, kept composed (F6b). */
+    pendingCellId: String?,
     onCellFocus: (GridCell) -> Unit,
     onKey: (GridCell, Key) -> Boolean,
 ) {
     val nowOffsetDp = ((nowMs - window.startUtcMillis) / 60_000L * GRID_SCALE_DP_PER_MIN).toInt()
     val nowInWindow = nowMs in window.startUtcMillis until window.endUtcMillis
 
-    Box(modifier = modifier.clipToBounds()) {
+    BoxWithConstraints(modifier = modifier.clipToBounds()) {
+        // The row draws the viewport plus a screen of slack, not its whole span
+        // (round four F6b). The scroll POSITION is sampled per viewport-width
+        // rather than per pixel: a per-pixel read here would recompose every row
+        // on every scroll frame, which is the cost this is meant to remove. The
+        // scrolled content keeps its full width below, so the range, the hour
+        // marks and the now-line are untouched - only what is COMPOSED changes.
+        val density = LocalDensity.current
+        // The scroll state is in PIXELS and the cells are measured in dp, so both
+        // forms of the viewport are needed: the px one to turn a scroll offset
+        // into a page, the dp one to hand the slice its geometry.
+        val viewportPx = with(density) { maxWidth.roundToPx() }.coerceAtLeast(1)
+        val viewportDp = maxWidth.value.roundToInt().coerceAtLeast(1)
+        val page by remember(viewportPx) { derivedStateOf { timeScroll.value / viewportPx } }
+        val cellWidths = remember(row.cells) {
+            row.cells.map { cellWidthDp(it.startUtcMillis, it.endUtcMillis) }
+        }
+        // Both the cell focus is on and the cell it is being handed to: a cell
+        // that is not composed has no focus node, so the window is what gives.
+        val anchors = remember(row.cells, focusedCellId, pendingCellId) {
+            listOfNotNull(
+                row.cells.indexOfFirst { it.id == focusedCellId }.takeIf { it >= 0 },
+                row.cells.indexOfFirst { it.id == pendingCellId }.takeIf { it >= 0 }
+            ).distinct()
+        }
+        val slice = remember(cellWidths, page, viewportDp, anchors) {
+            guideRowSlice(
+                cellWidths = cellWidths,
+                scrollDp = page * viewportDp,
+                viewportDp = viewportDp,
+                anchors = anchors
+            )
+        }
+
         Row(modifier = Modifier.horizontalScroll(timeScroll).height(GRID_ROW_HEIGHT)) {
             // The scrolled content is the WINDOW's width (F1b): 2880dp for the
             // six-hour span, and the cells are laid out at their real widths
@@ -1457,7 +1522,14 @@ private fun ProgramRow(
                     .height(GRID_ROW_HEIGHT)
             ) {
                 Row(modifier = Modifier.fillMaxSize()) {
-                    row.cells.forEach { cell ->
+                    // The cells before the slice are their real width, as a
+                    // spacer: the row's geometry is unchanged, its composition is
+                    // not.
+                    if (slice.leadDp > 0) {
+                        Spacer(modifier = Modifier.width(slice.leadDp.dp))
+                    }
+                    for (cellIndex in slice.from..slice.to) {
+                        val cell = row.cells.getOrNull(cellIndex) ?: continue
                         key(cell.id) {
                             // F3b: ONE lookup for both surfaces - the phone cell
                             // calls the same function.

@@ -926,3 +926,83 @@ internal fun moveGroupOrder(labels: List<String>, index: Int, direction: Int): L
     out.add(target, moved)
     return out
 }
+
+/**
+ * The slice of a row's cells that the compose pass draws (round four F6b).
+ *
+ * A row used to compose its WHOLE six-hour span - 2880dp of cells, every one of
+ * them - because the span scrolls as one `horizontalScroll` and a non-lazy `Row`
+ * has no other way to lay it out. Dig four's count is against exactly that: the
+ * cells off screen are composed, remembered and re-composed on every clock tick
+ * for nothing.
+ *
+ * [from]/[to] are the cell indices to draw and [leadDp] is the width of the cells
+ * skipped before them, drawn as a spacer. The scrolled content keeps its full
+ * [gridContentWidthDp] width, so the scroll range, the hour marks and the
+ * now-line do not move: only what is COMPOSED changes.
+ */
+internal data class GuideRowSlice(
+    val from: Int,
+    val to: Int,
+    val leadDp: Int,
+) {
+    val isEmpty: Boolean get() = to < from
+}
+
+/**
+ * Which of [cellWidths] a row at [scrollDp] has to draw.
+ *
+ * The window is the viewport plus [bufferScreens] viewports each side, which is
+ * the same slack the app's lists pre-compose with; every index in [anchors] is kept
+ * composed together with its immediate neighbours,
+ * because focus is what walks this axis and a cell that is not composed has no
+ * focus node to land on - the one failure that would make a windowed row feel
+ * broken rather than faster.
+ *
+ * Pure on purpose: the arithmetic is the part worth testing, and it needs no
+ * Compose, no context and no clock.
+ */
+internal fun guideRowSlice(
+    cellWidths: List<Int>,
+    scrollDp: Int,
+    viewportDp: Int,
+    anchors: List<Int> = emptyList(),
+    bufferScreens: Int = 1,
+): GuideRowSlice {
+    if (cellWidths.isEmpty()) return GuideRowSlice(from = 0, to = -1, leadDp = 0)
+    val viewport = viewportDp.coerceAtLeast(1)
+    val buffer = bufferScreens.coerceAtLeast(0)
+    val lowDp = scrollDp - buffer * viewport
+    val highDp = scrollDp + (buffer + 1) * viewport
+
+    // Cumulative start of each cell, so a binary search can answer both edges.
+    val starts = IntArray(cellWidths.size)
+    var run = 0
+    cellWidths.forEachIndexed { index, width ->
+        starts[index] = run
+        run += width
+    }
+
+    // The first cell still visible at the low edge: the last one that starts at
+    // or before it, stepped forward when that cell has already ended there.
+    var from = starts.indexOfLast { it <= lowDp }.coerceAtLeast(0)
+    if (starts[from] + cellWidths[from] <= lowDp) {
+        from = (from + 1).coerceAtMost(cellWidths.lastIndex)
+    }
+    // The last cell that starts before the high edge.
+    val firstPastHigh = starts.indexOfFirst { it >= highDp }
+    var to = if (firstPastHigh < 0) cellWidths.lastIndex else firstPastHigh - 1
+    to = to.coerceIn(from, cellWidths.lastIndex)
+
+    // Every anchor is a cell focus is ON or is being handed TO, and both have to
+    // be composed: a cell with no composition has no focus node, and a window
+    // that pushed the handoff's target out would be the D-pad trap this rule
+    // exists to avoid.
+    anchors.forEach { focus ->
+        if (focus !in cellWidths.indices) return@forEach
+        if (focus - 1 < from) from = (focus - 1).coerceAtLeast(0)
+        if (focus + 1 > to) to = (focus + 1).coerceAtMost(cellWidths.lastIndex)
+    }
+
+    return GuideRowSlice(from = from, to = to, leadDp = starts[from])
+}

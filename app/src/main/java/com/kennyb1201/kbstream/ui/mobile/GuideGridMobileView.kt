@@ -68,6 +68,11 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.platform.LocalDensity
+import kotlin.math.roundToInt
+import com.kennyb1201.kbstream.ui.iptv.guideRowSlice
 
 /**
  * The phone's timeline grid (spec F5a).
@@ -228,7 +233,34 @@ internal fun GuideGridMobileView(
                             loadingIds = loadingGuideIds,
                         ),
                     )
-                    Box(modifier = Modifier.weight(1f).fillMaxHeight().clipToBounds()) {
+                    BoxWithConstraints(
+                        modifier = Modifier.weight(1f).fillMaxHeight().clipToBounds()
+                    ) {
+                        // F6b: the same window the TV row draws - the viewport and
+                        // a screen either side, sampled per viewport rather than
+                        // per pixel so a scroll does not recompose every row. The
+                        // scrolled content keeps its full width, so the axis and
+                        // the now-line are unchanged; only the cells that are
+                        // composed change. No anchors here: this surface is
+                        // touched, so no cell holds focus behind the viewport.
+                        val mobileDensity = LocalDensity.current
+                        val viewportPx = with(mobileDensity) {
+                            maxWidth.roundToPx()
+                        }.coerceAtLeast(1)
+                        val viewportDp = maxWidth.value.roundToInt().coerceAtLeast(1)
+                        val page by remember(viewportPx) {
+                            derivedStateOf { timeScroll.value / viewportPx }
+                        }
+                        val cellWidths = remember(cells) {
+                            cells.map { cellWidthDp(it.startUtcMillis, it.endUtcMillis) }
+                        }
+                        val slice = remember(cellWidths, page, viewportDp) {
+                            guideRowSlice(
+                                cellWidths = cellWidths,
+                                scrollDp = page * viewportDp,
+                                viewportDp = viewportDp
+                            )
+                        }
                         Row(
                             modifier = Modifier
                                 .horizontalScroll(timeScroll)
@@ -240,7 +272,11 @@ internal fun GuideGridMobileView(
                                     .height(MOBILE_ROW_HEIGHT)
                             ) {
                                 Row(modifier = Modifier.fillMaxSize()) {
-                                    cells.forEach { cell ->
+                                    if (slice.leadDp > 0) {
+                                        Spacer(modifier = Modifier.width(slice.leadDp.dp))
+                                    }
+                                    for (cellIndex in slice.from..slice.to) {
+                                        val cell = cells.getOrNull(cellIndex) ?: continue
                                         // F3m-a: the SAME single lookup the TV
                                         // cell uses - no second score pipeline,
                                         // no second match in this file.
