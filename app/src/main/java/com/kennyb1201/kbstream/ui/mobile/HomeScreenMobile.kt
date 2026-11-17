@@ -137,6 +137,8 @@ import com.kennyb1201.kbstream.data.youtube.signedUrl
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.components.TrackScrollFrames
 import com.kennyb1201.kbstream.ui.components.rememberIdleLazyListState
+import com.kennyb1201.kbstream.ui.home.HeroLogoHeight
+import com.kennyb1201.kbstream.ui.home.HeroLogoWidth
 import com.kennyb1201.kbstream.ui.home.LibraryHomeRailUi
 import com.kennyb1201.kbstream.ui.home.failedAddonsMessage
 import com.kennyb1201.kbstream.ui.home.rememberBingeCatReconnectNotice
@@ -2234,13 +2236,29 @@ private fun MobileHero(
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             if (logo != null && !logoFailed) {
+                // The wordmark is sized for the SURFACE, not for the phone
+                // (2026-11-17, F1). 40dp was right on the phone's 358dp frame -
+                // the mark can span most of its width - but the same box sat on
+                // the TV's 928dp frame at under a quarter of it, and under half
+                // the TV hero's own logo: "real small", on the same titles. The
+                // TV box is the hero's box, so the mark on the billboard and the
+                // mark on the hero read as one size, one alignment, one fit.
+                //
+                // [heroHeight] is the same flag the rest of this page uses to
+                // tell the TV's fixed frame from the phone's width-derived one.
                 BrandMarkImage(
                     url = logo,
                     contentDescription = meta.name,
                     onUnusable = { logoFailed = true },
-                    modifier = Modifier
-                        .height(40.dp)
-                        .widthIn(max = 220.dp)
+                    modifier = if (heroHeight != null) {
+                        Modifier
+                            .height(HeroLogoHeight)
+                            .widthIn(max = HeroLogoWidth)
+                    } else {
+                        Modifier
+                            .height(40.dp)
+                            .widthIn(max = 220.dp)
+                    }
                 )
             } else {
                 Text(
