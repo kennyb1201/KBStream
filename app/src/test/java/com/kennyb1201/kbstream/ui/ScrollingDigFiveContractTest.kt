@@ -224,4 +224,97 @@ class ScrollingDigFiveContractTest {
             )
         }
     }
+
+    // ── §4a: the Exo ASS overlay's static repaint ──
+
+    @Test
+    fun `a held ASS line stops re-rendering every 100 ms`() {
+        val source = source("com/kennyb1201/kbstream/ui/player/AssSubtitleSource.kt")
+        assertTrue(
+            "the script's own event times are parsed once",
+            source.contains("fun eventBoundariesMs(raw: String): LongArray") &&
+                source.contains("ASS_TIME.findAll(trimmed).take(2)")
+        )
+        val activity = source("com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt")
+        assertTrue(
+            "parsed on attach, cleared when the script goes",
+            activity.contains("assEventBoundaries = AssSubtitleSource.eventBoundariesMs(content)") &&
+                activity.contains("assEventBoundaries = null")
+        )
+        assertTrue(
+            "the static branch holds to the next boundary, capped",
+            activity.contains("else -> assStaticHoldMs(") &&
+                activity.contains("ASS_STATIC_HOLD_MAX_MS")
+        )
+        assertTrue(
+            "and a playhead jump re-arms the tick instead of waiting out the hold",
+            activity.contains("private fun rearmAssFrameTick()") &&
+                activity.contains("player.seekTo(newPos)\n        rearmAssFrameTick()")
+        )
+    }
+
+    // ── §2d: the recomposition count, on the surfaces a phone fling moves ──
+
+    @Test
+    fun `the recomposition counter covers the phone fling surfaces`() {
+        val trace = source("com/kennyb1201/kbstream/data/reporting/RecompositionTrace.kt")
+        assertTrue(
+            "the three surfaces are named",
+            trace.contains("SURFACE_GUIDE") &&
+                trace.contains("SURFACE_LIBRARY") &&
+                trace.contains("SURFACE_CATALOG")
+        )
+        listOf(
+            "ui/mobile/GuideScreenMobile.kt" to "SURFACE_GUIDE",
+            "ui/mobile/LibraryScreenMobile.kt" to "SURFACE_LIBRARY",
+            "ui/mobile/CatalogGridScreenMobile.kt" to "SURFACE_CATALOG",
+        ).forEach { (path, surface) ->
+            val screen = source("com/kennyb1201/kbstream/$path")
+            assertTrue("$path counts its items", screen.contains("RecompositionTrace.$surface"))
+        }
+        val diagnostics = source("com/kennyb1201/kbstream/data/reporting/Diagnostics.kt")
+        assertFalse(
+            "the report no longer stamps every surface line as home",
+            diagnostics.contains("RecompositionTrace.lines().forEach { report.appendLine(\"home: \$it\") }")
+        )
+        assertTrue(
+            "each line names itself",
+            diagnostics.contains("RecompositionTrace.lines().forEach { report.appendLine(it) }")
+        )
+    }
+
+    // ── round three F5 / dig four: the idle window, on the phone too ──
+
+    @Test
+    fun `the phone's main lists get the idle pre-composition window`() {
+        listOf(
+            "ui/mobile/HomeScreenMobile.kt",
+            "ui/mobile/LibraryScreenMobile.kt",
+            "ui/mobile/CatalogGridScreenMobile.kt",
+        ).forEach { path ->
+            val screen = source("com/kennyb1201/kbstream/$path")
+            assertTrue(
+                "$path passes the shared window",
+                screen.contains("cacheWindow = IdleListCacheWindow")
+            )
+        }
+    }
+
+    // ── the billboard backdrop: sized, and the crossfade left alone ──
+
+    @Test
+    fun `the phone billboard asks for a sized backdrop`() {
+        val home = source("com/kennyb1201/kbstream/ui/mobile/HomeScreenMobile.kt")
+        val art = home.substringAfter("model = remember(backdropUrl, meta) {")
+            .substringBefore("contentDescription")
+        assertTrue(
+            "the request names its own size instead of decoding the source",
+            art.contains(".size(1280, 800)")
+        )
+        // Round four's billboard decision keeps the fade - a watched, deliberate
+        // swap, on no scroll path - so the TV hero's one-buffer rule (round
+        // three F6) does not travel here. Pinned so a later pass does not
+        // "fix" it by surprise.
+        assertTrue("the crossfade stays, by decision", art.contains(".crossfade(true)"))
+    }
 }

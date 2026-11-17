@@ -92,6 +92,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import coil3.request.size
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.runCatchingCancellable
@@ -132,6 +133,7 @@ import com.kennyb1201.kbstream.data.youtube.heroTrailerIdentityRefusal
 import com.kennyb1201.kbstream.data.youtube.heroTrailerResolveFailurePoisons
 import com.kennyb1201.kbstream.data.youtube.heroTrailerRetryPlan
 import com.kennyb1201.kbstream.data.youtube.signedUrl
+import com.kennyb1201.kbstream.ui.components.IdleListCacheWindow
 import com.kennyb1201.kbstream.ui.components.TrackScrollFrames
 import com.kennyb1201.kbstream.ui.home.LibraryHomeRailUi
 import com.kennyb1201.kbstream.ui.home.failedAddonsMessage
@@ -713,6 +715,10 @@ fun HomeScreenMobile(
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 state = listState,
+                // Dig four's "nowhere but Home" window, on the phone: half a
+                // viewport each way, refilled while the list is idle, so the row
+                // a flick lands on is already composed.
+                cacheWindow = IdleListCacheWindow,
                 contentPadding = PaddingValues(bottom = 28.dp),
                 verticalArrangement = Arrangement.spacedBy(22.dp)
             ) {
@@ -2059,10 +2065,19 @@ private fun MobileHero(
         AsyncImage(
             // The hero is one of the few surfaces that keeps the crossfade
             // handover (see the TV hero's own note): it is a single image the
-            // viewer is looking at, not a tile in a scrolling rail.
+            // viewer is looking at, not a tile in a scrolling rail. Round four's
+            // billboard decision says so explicitly - a watched, deliberate swap
+            // - which is why the TV hero's one-buffer rule (round three F6) is
+            // NOT applied here.
+            //
+            // The size is: without it Coil decodes the source at its own
+            // resolution (a 1920- or 3840-wide backdrop) for a frame that is
+            // ~358dp wide. 1280x800 matches this 16:10 frame and still covers a
+            // 3x phone - the same handful of megabytes, asked for once.
             model = remember(backdropUrl, meta) {
                 ImageRequest.Builder(context)
                     .data(backdropUrl ?: meta.background ?: meta.poster)
+                    .size(1280, 800)
                     .crossfade(true)
                     .build()
             },

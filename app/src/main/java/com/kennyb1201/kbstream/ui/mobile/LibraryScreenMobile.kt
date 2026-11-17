@@ -55,6 +55,7 @@ import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.simkl.simklItemUrl
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
+import com.kennyb1201.kbstream.ui.components.IdleListCacheWindow
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.TrackScrollFrames
@@ -399,6 +400,7 @@ fun LibraryScreenMobile(
             LazyVerticalGrid(
                 columns = GridCells.Fixed(columns),
                 state = gridState,
+                cacheWindow = IdleListCacheWindow,
                 contentPadding = PaddingValues(
                     start = 16.dp,
                     end = 16.dp,
@@ -673,6 +675,13 @@ fun LibraryScreenMobile(
                         // never asked to reuse each other's slot.
                         contentType = { _, item -> item.mediaType }
                     ) { index, item ->
+                        androidx.compose.runtime.SideEffect {
+                            com.kennyb1201.kbstream.data.reporting.RecompositionTrace.noteItem(
+                                com.kennyb1201.kbstream.data.reporting
+                                    .RecompositionTrace.SURFACE_LIBRARY,
+                                android.os.SystemClock.elapsedRealtime()
+                            )
+                        }
                         // Once per tile, not three times: the watched-check, the
                         // eye badge and the offline mark are all asking about the
                         // same key list.

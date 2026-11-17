@@ -24,7 +24,12 @@ class IdleListCacheWindowContractTest {
         "Library grid" to "com/kennyb1201/kbstream/ui/library/LibraryScreen.kt",
         "Catalog grid" to "com/kennyb1201/kbstream/ui/home/CatalogGridScreen.kt",
         "Search rails" to "com/kennyb1201/kbstream/ui/search/SearchScreen.kt",
-        "Detail page" to "com/kennyb1201/kbstream/ui/detail/DetailScreen.kt"
+        "Detail page" to "com/kennyb1201/kbstream/ui/detail/DetailScreen.kt",
+        // The phone's own lists (dig five: the window was TV-only, and a flick
+        // into a new row pays the same first composition a D-pad walk does).
+        "phone Home" to "com/kennyb1201/kbstream/ui/mobile/HomeScreenMobile.kt",
+        "phone Library grid" to "com/kennyb1201/kbstream/ui/mobile/LibraryScreenMobile.kt",
+        "phone Catalog grid" to "com/kennyb1201/kbstream/ui/mobile/CatalogGridScreenMobile.kt"
     )
 
     @Test

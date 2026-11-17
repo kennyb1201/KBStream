@@ -1090,6 +1090,15 @@ fun GuideScreenMobile(
                             items = filtered,
                             key = { item -> item.channelKey() }
                         ) { item ->
+                            // Dig five's owed count, on the surface a fling
+                            // actually moves (see RecompositionTrace).
+                            androidx.compose.runtime.SideEffect {
+                                com.kennyb1201.kbstream.data.reporting.RecompositionTrace.noteItem(
+                                    com.kennyb1201.kbstream.data.reporting
+                                        .RecompositionTrace.SURFACE_GUIDE,
+                                    android.os.SystemClock.elapsedRealtime()
+                                )
+                            }
                             MobileGuideChannelRow(
                                 item = item,
                                 nowMs = nowMs,

@@ -41,6 +41,17 @@ internal object RecompositionTrace {
     const val SURFACE_PHONE_HOME = "phone"
 
     /**
+     * The three phone surfaces dig five named as the place the count was still
+     * owed (round-three S1 asked for it on TV Home; a phone fling is the same
+     * question on a different mover). A Guide row, a Library tile and a Catalog
+     * tile each cost real work per composition, and until they are counted the
+     * per-tile wiring fixes stay capped at code shape.
+     */
+    const val SURFACE_GUIDE = "guide"
+    const val SURFACE_LIBRARY = "library"
+    const val SURFACE_CATALOG = "catalog"
+
+    /**
      * The bucket width. One frame at 60 Hz; see the class note for why the report
      * calls this a 16 ms window rather than a frame.
      */

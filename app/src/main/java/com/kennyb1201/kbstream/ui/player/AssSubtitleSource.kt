@@ -159,6 +159,53 @@ internal object AssSubtitleSource {
     }
 
     /**
+     * Every moment this script's picture can change: each `Dialogue:` line's
+     * start and end, in milliseconds, ascending.
+     *
+     * libass can only say whether a frame CHANGED after rendering it, and the
+     * render is the whole cost (a full-viewport native pass into the reused
+     * bitmap). Scrolling dig five measured that shape: while playing, the overlay
+     * re-rendered at 33 ms when something moved and 100 ms while the line was
+     * static - ten full-viewport renders a second for a line that cannot change.
+     *
+     * These boundaries are the moments it CAN: the tick holds past a static
+     * stretch and wakes at the next one (see the player's `assStaticHoldMs`). They
+     * are parsed once per script on attach, never per frame.
+     *
+     * Text animation (`\t`, `\fad`, `\move`, karaoke) is not modelled here, and
+     * does not need to be: an animating cue makes libass report a change on every
+     * render, so the tick never reaches its static branch while one is playing.
+     */
+    fun eventBoundariesMs(raw: String): LongArray {
+        if (raw.isBlank()) return LongArray(0)
+        val times = ArrayList<Long>()
+        normalize(raw).lineSequence().forEach { line ->
+            val trimmed = line.trim()
+            if (!trimmed.startsWith(DIALOGUE_PREFIX, ignoreCase = true)) return@forEach
+            // Start and End are the first two timestamps a `Dialogue:` line
+            // carries. Read by shape rather than by splitting on commas: SSA
+            // permits a decimal comma in a time, which a split would tear in
+            // half (and the Text field may carry a time of its own, which is why
+            // only the first two are taken).
+            ASS_TIME.findAll(trimmed).take(2).forEach { match ->
+                assTimeToMs(match.value)?.let(times::add)
+            }
+        }
+        return times.toLongArray().apply { sort() }
+    }
+
+    /** `0:00:05.00` / `0:00:05,00` to milliseconds, or null when it is not a time. */
+    private fun assTimeToMs(text: String): Long? {
+        val match = ASS_TIME.find(text.trim()) ?: return null
+        val parts = match.value.replace(',', '.').split(':')
+        if (parts.size != 3) return null
+        val hours = parts[0].toLongOrNull() ?: return null
+        val minutes = parts[1].toLongOrNull() ?: return null
+        val seconds = parts[2].toDoubleOrNull() ?: return null
+        return ((hours * 3600 + minutes * 60 + seconds) * 1000).toLong()
+    }
+
+    /**
      * Font files directly inside [dirs], in name order, capped at [limit].
      *
      * Only the top level is read: the directories that matter here (the

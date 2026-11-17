@@ -42,6 +42,7 @@ import androidx.paging.filter
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
+import com.kennyb1201.kbstream.ui.components.IdleListCacheWindow
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.TrackScrollFrames
@@ -373,6 +374,7 @@ fun CatalogGridScreenMobile(
             LazyVerticalGrid(
                 columns = GridCells.Fixed(columns),
                 state = gridState,
+                cacheWindow = IdleListCacheWindow,
                 contentPadding = PaddingValues(
                     start = 16.dp,
                     end = 16.dp,
@@ -481,6 +483,13 @@ fun CatalogGridScreenMobile(
                         // item; placeholders are off, so this is only the
                         // differ's brief window.
                         val meta = lazyItems[index] ?: return@items
+                        androidx.compose.runtime.SideEffect {
+                            com.kennyb1201.kbstream.data.reporting.RecompositionTrace.noteItem(
+                                com.kennyb1201.kbstream.data.reporting
+                                    .RecompositionTrace.SURFACE_CATALOG,
+                                android.os.SystemClock.elapsedRealtime()
+                            )
+                        }
 
                         val isWatched =
                             viewModel.watchedKey(meta.id, meta.type) in watchedKeys

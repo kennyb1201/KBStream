@@ -157,6 +157,18 @@ private const val ASS_IDLE_INTERVAL_MS = 250L
 // the two above: slow enough to stop re-rendering a still frame at refresh rate,
 // fast enough that a new line or a karaoke step appears without visible lag.
 private const val ASS_STATIC_INTERVAL_MS = 100L
+
+/**
+ * The longest the overlay may sleep on a render that reported no change.
+ *
+ * Half a second: the count this replaces was ten renders a second, so this is
+ * already a 5x cut, and it bounds the damage if the script's timing is wrong or
+ * missing (see [assStaticHoldMs]).
+ */
+private const val ASS_STATIC_HOLD_MAX_MS = 500L
+
+/** Renders this far past an event boundary, so the boundary's frame is included. */
+private const val ASS_BOUNDARY_LEAD_MS = 25L
 // Drop-in directory for fansub fonts under the app's private files dir.
 private const val ASS_FONT_DIR = "fonts"
 // A subtitle file is kilobytes; an unbounded readText() on a hostile or
@@ -9123,6 +9135,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             "No data for ${quietMs}ms (pos=${positionMs}ms buf=${bufferedMs}ms) — seeking to ${targetMs}ms to force a fresh read (recovery $stallRecoveries/$stallMaxRecoveries)"
         )
         player.seekTo(targetMs)
+        // The overlay may be holding to a boundary far past the new playhead.
+        rearmAssFrameTick()
         handler.postDelayed({ tickStallWatchdog(token) }, stallTickMs)
     }
 
@@ -10040,6 +10054,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         scrubTargetPosMs = newPos
         scrubMoved = true
         player.seekTo(newPos)
+        rearmAssFrameTick()
         updateSeekBarPosition(newPos, duration)
     }
 
@@ -11376,6 +11391,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * so the next tick rebuilds the renderer rather than leaving the sidecar
      * dark for the rest of the session.
      */
+    /**
+     * The moments the attached script's picture can change, ascending, or null
+     * when the script's timing is not known (the embedded streaming path).
+     *
+     * Parsed once per attach (see [AssSubtitleSource.eventBoundariesMs]) and used
+     * only by [assStaticHoldMs].
+     */
+    @Volatile
+    private var assEventBoundaries: LongArray? = null
+
     private val assFrameTick = object : Runnable {
         override fun run() {
             val renderer = assRenderer
@@ -11424,13 +11449,19 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // render still runs on every tick - detect_change is only known
             // after it - so a 5-second held line cost ~150 full-frame renders at
             // 30 fps on a 1.7 GB box. Backing off to 100 ms when the render
-            // reports no change cuts that ~3x while keeping a new cue's start
-            // within a tenth of a second (the 250 ms idle cadence would be a
-            // visible delay on animated signs).
+            // reports no change cut that ~3x.
+            //
+            // Dig five closed the rest of it: a held line can only change again
+            // at an event boundary, and those are known from the script, so the
+            // tick sleeps to the next one instead of asking libass ten times a
+            // second whether a picture it already knows is static has moved. The
+            // 500 ms cap keeps a plain recovery from ever feeling stuck.
             val delay = when {
                 exoPlayer?.isPlaying != true -> ASS_IDLE_INTERVAL_MS
                 changed -> ASS_FRAME_INTERVAL_MS
-                else -> ASS_STATIC_INTERVAL_MS
+                else -> assStaticHoldMs(
+                    (exoPlayer?.currentPosition ?: 0L) + subtitleOffsetMs
+                )
             }
             handler.postDelayed(this, delay)
         }
@@ -11469,6 +11500,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         assSubtitleContent = content
         assOverlaySource = source
         assOverlayAddonUrl = addonUrl
+        // Parsed once, here: the tick's static cadence reads it, and nothing may
+        // reach into the script text per frame.
+        assEventBoundaries = AssSubtitleSource.eventBoundariesMs(content)
         Log.i(
             TAG_ASS,
             "ASS overlay attached: source=$source events=$events" +
@@ -11570,6 +11604,31 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         return frame.changed || becomingVisible
     }
 
+    /**
+     * How long the tick may sleep after a render that reported no change.
+     *
+     * The next event start or end is the next moment anything can move, so that
+     * is the answer - plus a small lead, so the boundary's own frame is rendered
+     * after it, never a millisecond before it. [ASS_STATIC_HOLD_MAX_MS] caps the
+     * confidence: a script whose timing this path does not hold (the embedded
+     * stream), or a very long held line, still re-asks libass twice a second,
+     * which is where the count was before this fix.
+     */
+    private fun assStaticHoldMs(timeMs: Long): Long {
+        val boundaries = assEventBoundaries
+        if (boundaries == null || boundaries.isEmpty()) return ASS_STATIC_INTERVAL_MS
+        val next = boundaries.firstOrNull { boundary -> boundary > timeMs }
+            ?: return ASS_STATIC_INTERVAL_MS
+        return (next - timeMs + ASS_BOUNDARY_LEAD_MS)
+            .coerceIn(ASS_FRAME_INTERVAL_MS, ASS_STATIC_HOLD_MAX_MS)
+    }
+
+    /** Re-renders the overlay now, for a playhead jump. */
+    private fun rearmAssFrameTick() {
+        handler.removeCallbacks(assFrameTick)
+        handler.post(assFrameTick)
+    }
+
     /** Stops the overlay and frees the native instance, keeping the script. */
     private fun releaseAssRenderer() {
         handler.removeCallbacks(assFrameTick)
@@ -11585,6 +11644,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         assSubtitleContent = null
         assOverlaySource = AssOverlaySource.NONE
         assOverlayAddonUrl = null
+        assEventBoundaries = null
         assClaimLogged = null
         releaseAssRenderer()
     }
@@ -11598,6 +11658,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         assOverlaySource = AssOverlaySource.EMBEDDED
         assSubtitleContent = null
         assOverlayAddonUrl = null
+        // No whole script, so no timing to hold on: the tick keeps its 100 ms
+        // static cadence.
+        assEventBoundaries = null
         handler.removeCallbacks(assFrameTick)
         handler.post(assFrameTick)
     }

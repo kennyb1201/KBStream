@@ -140,7 +140,10 @@ object Diagnostics {
         // S1 in dig four). Printed beside the image lines because the two are
         // read together: a walk whose decodes fell but whose item count is
         // per-step is a recomposition problem, not a decode one.
-        RecompositionTrace.lines().forEach { report.appendLine("home: $it") }
+        // Each line names its own surface ("recomp: guide items=…"), so the
+        // prefix that used to say "home: " was wrong the moment a second
+        // surface started counting.
+        RecompositionTrace.lines().forEach { report.appendLine(it) }
         report.appendLine(accountLine())
         report.appendLine(profileLine())
         report.appendLine(cleanupLine(app))
