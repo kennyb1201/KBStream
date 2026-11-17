@@ -9,7 +9,12 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.tv.material3.MaterialTheme as TvMaterialTheme
@@ -64,10 +69,28 @@ fun MobileTheme(content: @Composable () -> Unit) {
     // Below API 31 there is no palette to ask for, so the switch simply keeps
     // today's scheme (A3) - the row stays visible and does nothing, which is the
     // honest answer on a device that has no wallpaper palette to give.
-    val dynamic = kbDynamicColorState.value && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    val dynamic = DynamicAccentRules.applies(
+        sdkInt = Build.VERSION.SDK_INT,
+        switchOn = kbDynamicColorState.value
+    )
     val amoled = kbAmoledBlackState.value
-    val scheme = remember(dynamic, amoled, KBAccent) {
-        if (dynamic) dynamicScheme(context, amoled) else KBStreamMobileColorScheme
+    // F2: a wallpaper change has to re-derive the scheme, or the accent is a
+    // snapshot of whatever the wallpaper was when this screen was first drawn.
+    val wallpaperRevision = rememberWallpaperRevision(context, active = dynamic)
+    val scheme = if (dynamic) {
+        remember(context, amoled, wallpaperRevision) { dynamicScheme(context, amoled) }
+    } else {
+        // The unchanged path, key for key: with the switch off this still caches
+        // the brand scheme and still rebuilds it when the accent moves.
+        remember(dynamic, amoled, KBAccent) { KBStreamMobileColorScheme }
+    }
+    // Part A F1: the accent itself follows the wallpaper. Published AFTER the
+    // pass rather than written during it - a snapshot value the content below
+    // reads must not change under the composition that is building it, and the
+    // extra pass this costs is the one where every KBAccent read moves at once.
+    // Cleared when the switch is off, so the picked accent comes back exactly.
+    SideEffect {
+        kbDynamicAccentState.value = if (dynamic) scheme.primary else null
     }
     MaterialTheme(
         colorScheme = scheme,
@@ -97,6 +120,52 @@ private fun dynamicScheme(context: Context, amoled: Boolean): ColorScheme {
         surfaceVariant = KBSurfaceRaised,
         onSurfaceVariant = KBTextLo
     )
+}
+
+/**
+ * The wallpaper palette's primary, for the callers that are not Compose (the
+ * player chrome and the guide rows read [themeAccentColor] as an ARGB int).
+ *
+ * Material You answers this from the system resources the platform keeps in step
+ * with the wallpaper; there is no cache to invalidate here.
+ */
+@androidx.annotation.RequiresApi(Build.VERSION_CODES.S)
+internal fun dynamicWallpaperPrimary(context: Context): Color =
+    dynamicDarkColorScheme(context).primary
+
+/**
+ * A counter that ticks when the wallpaper changes, for [MobileTheme]'s scheme.
+ *
+ * Android gives a running app no recomposition on a wallpaper change, so with
+ * F2's "the accent follows the wallpaper" this is the missing wire: the system
+ * broadcast bumps this, the scheme is recomputed against the new palette, and
+ * [SideEffect] publishes the new primary. Registered only while the switch
+ * actually applies - on a device without a palette there is nothing to follow.
+ */
+@Composable
+private fun rememberWallpaperRevision(context: Context, active: Boolean): Int {
+    var revision by remember { mutableIntStateOf(0) }
+    DisposableEffect(context, active) {
+        if (!active) return@DisposableEffect onDispose { }
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(receiverContext: Context?, intent: android.content.Intent?) {
+                revision++
+            }
+        }
+        // A protected SYSTEM broadcast, which is why no exported flag is needed
+        // on API 33+: the platform sends this one, not another app.
+        @Suppress("DEPRECATION", "UnspecifiedRegisterReceiverFlag")
+        val registered = runCatching {
+            context.registerReceiver(
+                receiver,
+                android.content.IntentFilter(android.content.Intent.ACTION_WALLPAPER_CHANGED)
+            )
+        }.isSuccess
+        onDispose {
+            if (registered) runCatching { context.unregisterReceiver(receiver) }
+        }
+    }
+    return revision
 }
 
 /**

@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.theme
 
 import android.content.Context
+import android.os.Build
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
@@ -55,6 +56,22 @@ val kbPureBlackSurfaceState = mutableStateOf(false)
 val kbDynamicColorState = mutableStateOf(false)
 
 /**
+ * The accent the wallpaper palette hands the app, while Dynamic color is on
+ * (spec 2026-11-16, Part A F1).
+ *
+ * PUBLISHED BY THE PHONE THEME, not stored: [MobileTheme] builds the wallpaper
+ * scheme, publishes its primary here after each pass, and clears it the moment
+ * the switch goes off - which is what makes turning the switch off restore the
+ * picked accent exactly, with nothing written and nothing to undo. It is null on
+ * a television and below API 31, because nothing ever publishes it there.
+ *
+ * Held as state rather than passed down because [KBAccent] is a global getter
+ * read by dozens of screens: the accent has to move for all of them at once, the
+ * same way [kbAmoledBlackState] moves the surfaces.
+ */
+val kbDynamicAccentState = mutableStateOf<Color?>(null)
+
+/**
  * Re-reads the AMOLED / pure-black prefs into the live theme state.
  *
  * The stored prefs are the source of truth and the state below is a Compose
@@ -83,15 +100,31 @@ fun refreshThemeMirrors(context: Context) {
  */
 fun themeAccentColor(context: Context): Int {
     val index = AppPreferences.getAccentIndex(context, DEFAULT_ACCENT_INDEX)
-    if (index == CUSTOM_ACCENT_INDEX) {
+    val picked = if (index == CUSTOM_ACCENT_INDEX) {
         customAccentColorOrNull(AppPreferences.getCustomAccent(context))
-            ?.let { return it.toArgb() }
+            ?: KBAccentPalette[DEFAULT_ACCENT_INDEX].color
+    } else {
+        KBAccentPalette.getOrNull(index)?.color
+            ?: KBAccentPalette[DEFAULT_ACCENT_INDEX].color
     }
-    return KBAccentPalette
-        .getOrNull(index)
-        ?.color
-        ?.toArgb()
-        ?: KBAccentPalette[DEFAULT_ACCENT_INDEX].color.toArgb()
+    // Part A F1, the half that is not Compose: the player chrome and the guide
+    // rows tint themselves from this int, so leaving it on the picked accent
+    // would make the one screen that covers everything else ignore the switch.
+    // Reads the STORED pref, like the rest of this function (it runs before any
+    // composition exists).
+    if (DynamicAccentRules.applies(
+            Build.VERSION.SDK_INT,
+            AppPreferences.getDynamicColor(context)
+        ) &&
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    ) {
+        return DynamicAccentRules.resolve(
+            applies = true,
+            wallpaperPrimaryArgb = dynamicWallpaperPrimary(context).toArgb(),
+            pickedArgb = picked.toArgb()
+        )
+    }
+    return picked.toArgb()
 }
 
 /**
@@ -209,9 +242,21 @@ fun accentForIndex(index: Int, custom: Color?): Color =
  * changing [kbAccentIndexState] or [kbCustomAccentState] recomposes the whole
  * UI - the same mechanism the AMOLED surface tokens above use. The palette is
  * never empty, so the default is always a real colour.
+ *
+ * Dynamic color (spec 2026-11-16, Part A) redirects it: while the phone's switch
+ * is on, the wallpaper palette's primary wins and the picked accent waits behind
+ * [kbDynamicAccentState]. That is the whole fix for "the switch changes nothing" -
+ * the picked accent was always what the UI read, so the switch has to move THIS
+ * value, not just the Material scheme nobody consults.
  */
 val KBAccent: Color
-    get() = accentForIndex(kbAccentIndexState.value, kbCustomAccentState.value)
+    get() = Color(
+        DynamicAccentRules.resolve(
+            applies = kbDynamicColorState.value,
+            wallpaperPrimaryArgb = kbDynamicAccentState.value?.toArgb(),
+            pickedArgb = accentForIndex(kbAccentIndexState.value, kbCustomAccentState.value).toArgb()
+        )
+    )
 
 /**
  * The stored custom accent as a colour, or null when none is set.
