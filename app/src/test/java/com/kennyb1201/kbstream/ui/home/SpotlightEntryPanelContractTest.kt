@@ -255,13 +255,22 @@ class SpotlightEntryPanelContractTest {
             .substringAfter("LaunchedEffect(heldNode, expandDelayMs, menuOpen, heldSnapshotIdentity) {")
             .substringBefore("// A scroll under a still-focused card")
 
+        // Spec 2026-11-16 (A2) turned this early exit into a PAUSE: with no
+        // snapshot there is still nothing to expand yet, and the run returns -
+        // but the time the card had already held is banked first, so the wait
+        // resumes when the details land instead of the hold being thrown away.
         assertTrue(
             "with no snapshot there is nothing to expand yet",
-            effect.contains("val armedOn = tracker.snapshot ?: return@LaunchedEffect")
+            effect.contains("val armedOn = tracker.snapshot ?: run {") &&
+                effect.contains("return@LaunchedEffect")
+        )
+        assertTrue(
+            "and the time already held is banked on the way out",
+            effect.contains("dwellClock.pause(SystemClock.uptimeMillis())")
         )
         assertTrue(
             "the held NODE is still required - a card the viewer left never expands",
-            effect.indexOf("if (heldNode == null) return@LaunchedEffect") in
+            effect.indexOf("if (heldNode == null) {") in
                 0 until effect.indexOf("val armedOn = tracker.snapshot")
         )
         assertTrue(
