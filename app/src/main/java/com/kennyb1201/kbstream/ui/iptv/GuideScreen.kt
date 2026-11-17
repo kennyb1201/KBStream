@@ -116,6 +116,7 @@ import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBProgressBar
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBTextField
+import com.kennyb1201.kbstream.ui.components.TrackScrollFrames
 import com.kennyb1201.kbstream.ui.mobile.GuideScreenMobile
 import com.kennyb1201.kbstream.ui.components.KB_ALPHA_FADE_MS
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
@@ -232,6 +233,11 @@ fun GuideScreen(
     val freeLineupFailed by viewModel.freeLineupFailed.collectAsStateWithLifecycle()
 
     val channelListState = rememberLazyListState()
+    // The guide's own frame line, in the same shape the phone's Guide writes
+    // (label "guide"): a fling down a long lineup is the other gesture these
+    // pastes were silent about (2026-11-17). The per-channel focus and the EPG
+    // grid are untouched - this measures the list, not a new metric.
+    TrackScrollFrames(label = "guide", state = channelListState)
     val firstChannelFocusRequester = remember { FocusRequester() }
     // The channel LIST's own requester. Unlike a row's, this node outlives a
     // group change: a row is keyed by channel, so a new group destroys the row

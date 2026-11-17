@@ -35,6 +35,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
+import com.kennyb1201.kbstream.ui.components.TrackScrollFrames
 import com.kennyb1201.kbstream.ui.components.rememberIdleLazyListState
 import kotlin.math.abs
 import kotlin.math.max
@@ -5720,6 +5721,13 @@ fun HomeScreen(
         initialFirstVisibleItemIndex = viewModel.railScrollIndex,
         initialFirstVisibleItemScrollOffset = viewModel.railScrollOffset
     )
+    // What this screen's frames actually cost, per gesture, in COPY DIAGNOSTICS
+    // (see UiFrameTrace). The phone's Home has written this line since scrolling
+    // dig five; the TV's never did, so the surface that scrolls farthest - a long
+    // walk plus a fling, with the rails' own decodes on top - was the one surface
+    // a paste could not measure (2026-11-17). Same "home" label as the phone, so a
+    // paste from either reads the same.
+    TrackScrollFrames(label = "home", state = railListState)
 
     // ...and the position is put back into the ViewModel as the viewer scrolls,
     // so the seed above is current. A snapshot flow rather than a state read in
