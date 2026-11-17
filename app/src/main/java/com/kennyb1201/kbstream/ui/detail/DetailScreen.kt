@@ -142,6 +142,7 @@ import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_WAIT_MS
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
+import com.kennyb1201.kbstream.ui.components.IdleListCacheWindow
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
 import com.kennyb1201.kbstream.ui.components.KB_ALPHA_FADE_MS
 import com.kennyb1201.kbstream.ui.components.KBCard
@@ -5880,6 +5881,11 @@ fun DetailScreen(
 
                     LazyColumn(
                         state = detailListState,
+                        // Dig four: Detail had no pre-composition either, so the
+                        // row below the viewport was composed on the frame the
+                        // scroll reached it. Half a viewport each way, filled
+                        // while the page is idle.
+                        cacheWindow = IdleListCacheWindow,
                         modifier = Modifier
                             .weight(1f, fill = true)
                             .fillMaxWidth()

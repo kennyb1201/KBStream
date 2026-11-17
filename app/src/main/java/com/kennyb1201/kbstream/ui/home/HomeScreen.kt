@@ -43,6 +43,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material3.Icon
 import com.kennyb1201.kbstream.FormFactor
+import com.kennyb1201.kbstream.ui.components.IdleListCacheWindow
 import com.kennyb1201.kbstream.ui.components.LocalGlideActive
 import com.kennyb1201.kbstream.ui.components.keepComposedWhileFocused
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
@@ -8450,22 +8451,12 @@ fun HomeScreen(
  * The rails' idle pre-composition window (spec 2026-11-16, scrolling round three
  * F5).
  *
- * A D-pad press into a new row used to pay that row's FIRST composition on the
- * frame the press landed - on top of the disk decode and the metadata lookup the
- * card also pays. Compose's lazy layouts keep an out-of-viewport window of items
- * prepared in advance; the default keeps nothing behind and only a narrow slice
- * ahead, and it does not refill while the list is idle.
- *
- * Half a viewport each way is about one row / one screenful of cards, which is
- * what a walk actually steps into, and `isNonScrollCachingEnabled` is what makes
- * the window fill while the viewer is sitting still rather than only once a
- * scroll has started.
+ * The rule itself lives in [IdleListCacheWindow], shared with the poster grids
+ * and Detail's rows (dig four found no beyond-bounds window anywhere outside
+ * Home); this name is kept because the rails are where it was first proven and
+ * the F5 contract pins it.
  */
-private object HomeRailCacheWindow : LazyLayoutCacheWindow {
-    override fun Density.calculateAheadWindow(viewport: Int): Int = viewport / 2
-    override fun Density.calculateBehindWindow(viewport: Int): Int = viewport / 2
-    override val isNonScrollCachingEnabled: Boolean = true
-}
+private object HomeRailCacheWindow : LazyLayoutCacheWindow by IdleListCacheWindow
 
 /**
  * Spotlight's top-of-screen tint, scoped to its own focus read (spec 2026-11-16,

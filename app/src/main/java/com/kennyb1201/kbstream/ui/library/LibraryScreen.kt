@@ -75,6 +75,7 @@ import com.kennyb1201.kbstream.data.library.removeConfirmBody
 import com.kennyb1201.kbstream.data.library.removeConfirmTitle
 import com.kennyb1201.kbstream.data.library.renameUnavailableNote
 import com.kennyb1201.kbstream.data.library.sameListAs
+import com.kennyb1201.kbstream.ui.components.IdleListCacheWindow
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
@@ -1427,6 +1428,11 @@ private fun ItemGrid(
         // disposes this grid, so a return has a state to scroll (see
         // [BrowseReturnFocus]).
         state = gridState,
+        // Dig four found no pre-composition outside Home: the rows off screen
+        // were composed on the frame a flick reached them, on top of their
+        // decode. Half a viewport each way, filled while the grid is idle (see
+        // [IdleListCacheWindow]).
+        cacheWindow = IdleListCacheWindow,
         // The top gap is not decoration: a focused KBCard scales to 1.03 and
         // throws a 12.dp glow, and a lazy grid clips its viewport — with
         // bottom-only padding the FIRST row was sliced flat along its top edge

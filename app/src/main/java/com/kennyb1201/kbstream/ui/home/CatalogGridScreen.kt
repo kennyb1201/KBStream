@@ -43,6 +43,7 @@ import androidx.paging.filter
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import androidx.compose.animation.core.tween
+import com.kennyb1201.kbstream.ui.components.IdleListCacheWindow
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KB_ART_FADE_MS
@@ -491,6 +492,10 @@ fun CatalogGridScreen(
             else -> {
                 LazyVerticalGrid(
                     state = gridState,
+                    // Dig four's global finding: no pre-composition outside Home.
+                    // Rows off screen are composed while the grid is idle, so a
+                    // press into them is a draw rather than a build.
+                    cacheWindow = IdleListCacheWindow,
                     // Sized from the tile, not a hardcoded six. Six cells of the
                     // POSTER width cannot hold a landscape card: the cell clamps
                     // the card's width back to roughly the poster width while its

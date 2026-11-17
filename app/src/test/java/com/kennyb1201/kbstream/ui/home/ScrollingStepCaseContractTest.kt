@@ -180,12 +180,15 @@ class ScrollingStepCaseContractTest {
 
     @Test
     fun `the lazy lists keep an idle window around the viewport`() {
+        // Dig four moved the rule into one shared object (the rest of the app had
+        // no window at all); the rails keep their name by delegation.
+        val window = source("com/kennyb1201/kbstream/ui/components/IdleListCacheWindow.kt")
         assertTrue(
             "a window both ways, filled while idle",
-            home.contains("private object HomeRailCacheWindow : LazyLayoutCacheWindow") &&
-                home.contains("override fun Density.calculateAheadWindow(viewport: Int): Int = viewport / 2") &&
-                home.contains("override fun Density.calculateBehindWindow(viewport: Int): Int = viewport / 2") &&
-                home.contains("override val isNonScrollCachingEnabled: Boolean = true")
+            home.contains("private object HomeRailCacheWindow : LazyLayoutCacheWindow by IdleListCacheWindow") &&
+                window.contains("override fun Density.calculateAheadWindow(viewport: Int): Int = viewport / 2") &&
+                window.contains("override fun Density.calculateBehindWindow(viewport: Int): Int = viewport / 2") &&
+                window.contains("override val isNonScrollCachingEnabled: Boolean = true")
         )
         val uses = Regex("cacheWindow = HomeRailCacheWindow").findAll(home).count()
         assertTrue(

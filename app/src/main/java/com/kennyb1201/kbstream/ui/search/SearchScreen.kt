@@ -38,6 +38,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_STEPS
 import com.kennyb1201.kbstream.ui.browse.rememberFocusHandBack
+import com.kennyb1201.kbstream.ui.components.IdleListCacheWindow
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
@@ -367,6 +368,10 @@ fun SearchScreen(
     ) {
         LazyColumn(
             state = listState,
+            // Dig four's global finding: no pre-composition outside Home. The
+            // rail below the viewport (and the one above it) is composed while
+            // the list is idle.
+            cacheWindow = IdleListCacheWindow,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
                 start = SEARCH_RAIL_EDGE_PADDING,
