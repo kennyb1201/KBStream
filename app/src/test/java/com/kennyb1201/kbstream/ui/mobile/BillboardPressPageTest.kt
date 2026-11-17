@@ -45,4 +45,32 @@ class BillboardPressPageTest {
     fun `an empty billboard has nothing to press`() {
         assertNull(billboardPressPage(emptyList<String>(), currentIndex = 0, settledIndex = 0))
     }
+
+    // ── 2026-11-17, F1: the chevrons wrap like the auto-advance ───────────
+
+    @Test
+    fun `a step moves one page and wraps at both ends`() {
+        assertEquals(1, billboardWrapPage(size = 3, from = 0, step = 1))
+        assertEquals(2, billboardWrapPage(size = 3, from = 1, step = 1))
+        assertEquals("last -> first, the auto-advance's own wrap", 0, billboardWrapPage(3, 2, 1))
+        assertEquals(2, billboardWrapPage(size = 3, from = 0, step = -1))
+        assertEquals("first -> last", 1, billboardWrapPage(3, 2, -1))
+    }
+
+    @Test
+    fun `a single page has nowhere to step`() {
+        assertEquals(0, billboardWrapPage(size = 1, from = 0, step = 1))
+        assertEquals(0, billboardWrapPage(size = 1, from = 0, step = -1))
+    }
+
+    @Test
+    fun `an index that outlived its feed steps from the nearest real page`() {
+        assertEquals("9 clamps to the last page, then steps to the first", 0, billboardWrapPage(3, 9, 1))
+        assertEquals("-4 clamps to the first page, then wraps back to the last", 2, billboardWrapPage(3, -4, -1))
+    }
+
+    @Test
+    fun `an empty billboard has nowhere to step`() {
+        assertNull(billboardWrapPage(size = 0, from = 0, step = 1))
+    }
 }

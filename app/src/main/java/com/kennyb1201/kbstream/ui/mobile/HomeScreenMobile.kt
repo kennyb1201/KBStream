@@ -36,6 +36,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
@@ -2013,6 +2015,16 @@ private fun MobileHero(
      * taller than the viewport - see MobileBillboard's cap.
      */
     heroHeight: Dp? = null,
+    /**
+     * The page-step chevrons (2026-11-17, F1): left and right, drawn on the art.
+     *
+     * Null draws nothing, which is the caller's rule: the phone passes them only
+     * with more than one page, and the TV hero passes neither (its pages are the
+     * cycle and the D-pad, and spec 2.7 removed the chevrons there for good
+     * reasons). A non-null lambda is the whole gate - one arrow, one guard.
+     */
+    onPreviousPage: (() -> Unit)? = null,
+    onNextPage: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
@@ -2155,6 +2167,33 @@ private fun MobileHero(
                     )
                 )
         )
+        // The page-step chevrons (F1/F3). Mid-height at the two edges, because
+        // that band is the one place the page's own content never reaches: the
+        // copy, the clearlogo and the pills are the bottom block, the segments
+        // run along the bottom edge, and the trailer's close mark is top-end.
+        // That is how spec 2.7's collision is designed out rather than avoided -
+        // the arrows cannot sit on a clearlogo that never leaves the bottom.
+        //
+        // After the scrim and before the copy column, so the pills and the meta
+        // stay above them in z-order if a very tall clearlogo ever reaches up.
+        if (onPreviousPage != null) {
+            BillboardPageChevron(
+                forward = false,
+                onClick = onPreviousPage,
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 2.dp)
+            )
+        }
+        if (onNextPage != null) {
+            BillboardPageChevron(
+                forward = true,
+                onClick = onNextPage,
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 2.dp)
+            )
+        }
         // A playing trailer needs a way out that is not "press Trailer again":
         // the page is a video surface, so a close mark on it is the affordance
         // a thumb looks for (the same one the phone's Detail header draws).
@@ -3063,6 +3102,15 @@ internal fun MobileBillboard(
         )
     }
 
+    // One manual page step, for the chevrons (F1). Wrapping and launching the
+    // same animation the segments use means a tap is indistinguishable from a
+    // swipe or a segment press: the pager moves, `currentPage` becomes the new
+    // page, the cycle effect's key changes and the hold re-arms from there.
+    val stepPage: (Int) -> Unit = { offset ->
+        val target = billboardWrapPage(pages.size, pagerState.currentPage, offset)
+        if (target != null) scope.launch { pagerState.animateScrollToPage(target) }
+    }
+
     // The pills, handed to the CURRENT page's hero and drawn on the art. One
     // block, one reveal: the copy and the pills are the page.
     val pageActions: @Composable () -> Unit = {
@@ -3224,6 +3272,30 @@ internal fun MobileBillboard(
                     // Only the page in front carries the pills: a neighbour
                     // sliding in must not drag its own live buttons with it.
                     actions = if (index == pagerState.currentPage) pageActions else null,
+                    // The page-step chevrons: phone only (the TV hero's rule is
+                    // the cycle and the D-pad), the page in front only, and only
+                    // when there is another page to step to (F6). A tap is manual
+                    // navigation - a new `currentPage` - so the cycle effect
+                    // re-arms from the page it lands on, exactly like a swipe or a
+                    // segment press (F1/F4 of the timer).
+                    onPreviousPage = if (
+                        heroHeight == null &&
+                        index == pagerState.currentPage &&
+                        pages.size > 1
+                    ) {
+                        { stepPage(-1) }
+                    } else {
+                        null
+                    },
+                    onNextPage = if (
+                        heroHeight == null &&
+                        index == pagerState.currentPage &&
+                        pages.size > 1
+                    ) {
+                        { stepPage(1) }
+                    } else {
+                        null
+                    },
                     onClick = { onDetails(page) }
                 )
             }
@@ -3461,6 +3533,79 @@ private fun BillboardAction(
 }
 
 /**
+ * One page-step chevron on the billboard's art (2026-11-17, F1/F2).
+ *
+ * Kenny: "just dont make them huge and ugly and too noticable." So the VISIBLE
+ * part is small - an 18dp glyph on a barely-there 26dp backing, at 0.55 alpha -
+ * and it firms up only for the two states that need an answer: pressed (1.0) and
+ * focused (0.95, with the app's accent ring). The HIT TARGET is 48dp regardless:
+ * a quiet control that is hard to hit would just be a worse control, and this one
+ * exists because the thumb could not find the swipe.
+ *
+ * No border and no heavy plate at rest, by the same request: the glyph has to read
+ * as something lying on the artwork, not as chrome bolted over it.
+ */
+@Composable
+private fun BillboardPageChevron(
+    forward: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val focused by interactionSource.collectIsFocusedAsState()
+    val pressed by interactionSource.collectIsPressedAsState()
+    val glyphAlpha by animateFloatAsState(
+        targetValue = when {
+            pressed -> 1f
+            focused -> 0.95f
+            else -> 0.55f
+        },
+        animationSpec = tween(durationMillis = BILLBOARD_CHEVRON_FADE_MS),
+        label = "billboardChevronAlpha"
+    )
+    Box(
+        modifier = modifier
+            // The hit area, not the drawing: 48dp is the thumb's target.
+            .size(48.dp)
+            .clip(CircleShape)
+            .then(
+                if (focused) {
+                    Modifier.border(1.5.dp, KBAccent, CircleShape)
+                } else {
+                    Modifier
+                }
+            )
+            .clickable(
+                interactionSource = interactionSource,
+                indication = LocalIndication.current,
+                onClick = onClick
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            // The faint disc is 26dp: enough to keep a pale glyph legible on a
+            // bright backdrop, far from a plate.
+            modifier = Modifier
+                .size(26.dp)
+                .clip(CircleShape)
+                .background(KBVoid.copy(alpha = 0.18f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = if (forward) {
+                    Icons.Filled.ChevronRight
+                } else {
+                    Icons.Filled.ChevronLeft
+                },
+                contentDescription = if (forward) "Next title" else "Previous title",
+                tint = KBTextHi.copy(alpha = glyphAlpha),
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+}
+
+/**
  * The three pills a hero page can draw (F2, 2026-11-17).
  *
  * Identity only: which pill the hand is on, so a page change can put focus back on
@@ -3469,6 +3614,9 @@ private fun BillboardAction(
  * than assuming the pill exists.
  */
 private enum class BillboardPill { PLAY, DETAILS, TRAILER }
+
+/** How fast a chevron's glyph settles between rest, focus and press (F2). */
+private const val BILLBOARD_CHEVRON_FADE_MS = 140
 
 /**
  * The rail key the billboard's feed picker stores for this rail.

@@ -24,3 +24,21 @@ internal fun <T> billboardPressPage(
     currentIndex: Int,
     settledIndex: Int
 ): T? = pages.getOrNull(currentIndex) ?: pages.getOrNull(settledIndex) ?: pages.firstOrNull()
+
+/**
+ * The page one manual step lands on, wrapping at both ends (2026-11-17, F1).
+ *
+ * The billboard's chevrons step the pager by one: right from the last page is the
+ * first, left from the first is the last. That is the SAME wrap the auto-advance
+ * uses (`(page + 1) % pages.size`), stated once so a tap and a timer tick cannot
+ * disagree about where the sequence goes.
+ *
+ * [from] is clamped rather than trusted: a page index that has outlived a feed
+ * that shrank steps from the nearest real page instead of wrapping off the end.
+ * Null means there is nothing to step through.
+ */
+internal fun billboardWrapPage(size: Int, from: Int, step: Int): Int? {
+    if (size <= 0) return null
+    val start = from.coerceIn(0, size - 1)
+    return ((start + step) % size + size) % size
+}
