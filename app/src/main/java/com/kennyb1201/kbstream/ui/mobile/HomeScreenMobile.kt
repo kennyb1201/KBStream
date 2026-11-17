@@ -2018,10 +2018,10 @@ private fun MobileHero(
     /**
      * The page-step chevrons (2026-11-17, F1): left and right, drawn on the art.
      *
-     * Null draws nothing, which is the caller's rule: the phone passes them only
-     * with more than one page, and the TV hero passes neither (its pages are the
-     * cycle and the D-pad, and spec 2.7 removed the chevrons there for good
-     * reasons). A non-null lambda is the whole gate - one arrow, one guard.
+     * Null draws nothing, and BOTH surfaces now pass them (the TV was excluded by
+     * a `heroHeight == null` conjunct until the TV spec of the same day, 2026-11-17).
+     * The only rule left is "is there another page": a single-page billboard has
+     * nowhere to step. A non-null lambda is the whole gate - one arrow, one guard.
      */
     onPreviousPage: (() -> Unit)? = null,
     onNextPage: (() -> Unit)? = null,
@@ -3272,14 +3272,21 @@ internal fun MobileBillboard(
                     // Only the page in front carries the pills: a neighbour
                     // sliding in must not drag its own live buttons with it.
                     actions = if (index == pagerState.currentPage) pageActions else null,
-                    // The page-step chevrons: phone only (the TV hero's rule is
-                    // the cycle and the D-pad), the page in front only, and only
-                    // when there is another page to step to (F6). A tap is manual
+                    // The page-step chevrons: the page in front only, and only
+                    // when there is another page to step to. A tap is manual
                     // navigation - a new `currentPage` - so the cycle effect
                     // re-arms from the page it lands on, exactly like a swipe or a
-                    // segment press (F1/F4 of the timer).
+                    // segment press.
+                    //
+                    // BOTH surfaces get them (2026-11-17): the phone's thumb had
+                    // only the swipe and the segments, and the TV's D-pad had only
+                    // the undiscoverable left-from-Play-then-scroll route. The
+                    // chevrons are a focusable 48dp stop on both, so the gate is
+                    // "is there another page", not "which screen is this" - the
+                    // TV used to be excluded here, and that exclusion is the
+                    // difference this spec removes. Entry focus is untouched on
+                    // either surface: the TV still parks on the Play pill.
                     onPreviousPage = if (
-                        heroHeight == null &&
                         index == pagerState.currentPage &&
                         pages.size > 1
                     ) {
@@ -3288,7 +3295,6 @@ internal fun MobileBillboard(
                         null
                     },
                     onNextPage = if (
-                        heroHeight == null &&
                         index == pagerState.currentPage &&
                         pages.size > 1
                     ) {
@@ -3303,9 +3309,11 @@ internal fun MobileBillboard(
             // with a 24 dp target and no focus handling, so on the TV the bar was
             // a control the D-pad could not reach. Making it focusable would put
             // a second focus stop between the hero's pills and the rails; the
-            // hero's TV paging is the cycle plus the pills, so the segments are
-            // touch-only and are not drawn on TV at all. What must not remain is
-            // a visible control the D-pad cannot reach.
+            // hero's TV paging is the cycle, the pills and (since 2026-11-17) the
+            // art's own chevrons - which ARE focus stops, because they were built
+            // as ones - so the segments are touch-only and are not drawn on TV at
+            // all. What must not remain is a visible control the D-pad cannot
+            // reach.
             if (pages.size > 1 && heroHeight == null) {
                 // The segmented progress bar (spec 2.6), in the dots' place and
                 // with the dots' job intact: one segment per page, every segment

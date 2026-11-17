@@ -51,24 +51,53 @@ class BillboardChevronsContractTest {
     }
 
     @Test
-    fun `they draw on the page in front, on the phone, and only when there is another page`() {
+    fun `they draw on the page in front, on either surface, and only with another page`() {
         val call = mobile.substringAfter("onPreviousPage = if (")
             .substringBefore("onClick = { onDetails(page) }")
-        assertTrue(
-            "a fixed TV frame means the TV hero - no arrows there",
-            call.contains("heroHeight == null")
+        assertFalse(
+            "the TV used to be excluded by a fixed heroHeight; the gate is now " +
+                "about the pages, not the screen (2026-11-17)",
+            call.contains("heroHeight")
         )
         assertTrue(
             "only the page in front carries live controls",
             call.contains("index == pagerState.currentPage")
         )
         assertTrue(
-            "F6: nothing to cycle, nothing drawn",
+            "nothing to cycle, nothing drawn",
             call.contains("pages.size > 1")
         )
+        // The TV gets them through this shared component, not through its own
+        // call: SpotlightHeroSection still hands in nothing extra, which is what
+        // keeps one gate in one place.
         assertTrue(
-            "and the TV Home never hands them in at all",
+            "the TV hero owns no chevron wiring of its own",
             !spotlight.contains("onPreviousPage") && !spotlight.contains("onNextPage")
+        )
+        assertTrue(
+            "and the segments stay phone-only - that gate is not this one",
+            mobile.contains("if (pages.size > 1 && heroHeight == null) {")
+        )
+    }
+
+    @Test
+    fun `both surfaces get the same quiet control`() {
+        // F2/F4 of the TV spec: a D-pad stop with the phone's measurements. The
+        // component is shared, so "same subtlety" is a property of there being one
+        // implementation, not two that agree today.
+        val chevron = chevron()
+        assertTrue(
+            "a 48dp focusable hit area with its own interaction source",
+            chevron.contains(".size(48.dp)") && chevron.contains("MutableInteractionSource()")
+        )
+        assertTrue(
+            "and the focus ring and firm-up are the only extra furniture",
+            chevron.contains("if (focused) {") && chevron.contains("focused -> 0.95f")
+        )
+        assertFalse(
+            "entry focus is still the caller's to place - the chevron asks for it " +
+                "from nowhere",
+            chevron.contains("FocusRequester") || chevron.contains("focusRequester")
         )
     }
 
