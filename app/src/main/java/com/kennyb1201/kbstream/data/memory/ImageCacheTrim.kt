@@ -13,9 +13,18 @@ package com.kennyb1201.kbstream.data.memory
  * useful one here: a 1280x720 hero backdrop is ~3.7MB and a rail tile is a
  * fraction of that, so the hero-size entries are both the most to reclaim and
  * the cheapest to re-decode from Coil's disk cache (the hero re-fetches the art
- * it is already showing only when focus moves). Coil exposes no per-entry age -
- * `MemoryCache` is a size-capped map, not an LRU with timestamps - so "oldest"
- * is not knowable here; size is, and it is the better lever anyway.
+ * it is already showing only when focus moves).
+ *
+ * Correction (dig four, 2026-11-16): Coil's `MemoryCache` IS a
+ * least-recently-used cache - `RealStrongMemoryCache` wraps `coil3.util.LruCache`
+ * (pinned Coil 3.6.3), whose `trimToSize` evicts eldest-first, and an evicted
+ * entry is demoted into the weak cache rather than removed outright. So
+ * `trimToSize` on its own already trims by age. This helper's explicit pass is
+ * still how the graded order is chosen here, but it is not the only ordering
+ * available: see `MemoryPressure.trimImageMemoryCache`, where `trimToSize` runs
+ * last as a backstop. The known cost of this order (dig four §3d) is that the
+ * hero-first group contains exactly the lookahead-warmed backdrops the hero
+ * resolve just paid for.
  *
  * Pure on purpose: the ordering is the whole behavior, and it is testable
  * without a Context, an image loader or a bitmap.

@@ -624,11 +624,17 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
      * database read to rebuild, so they wait for real pressure or for the app
      * going away — by then the user is not looking at the guide anyway.
      */
-    // TRIM_MEMORY_RUNNING_LOW / _CRITICAL are deprecated in API 35 because the
-    // platform stopped DELIVERING those two levels in API 34. The thresholds
-    // are still the right ones: they classify the levels that ARE delivered
-    // (UI_HIDDEN 20, BACKGROUND 40, MODERATE 60, COMPLETE 80) as real pressure,
-    // while deliberately not firing on RUNNING_MODERATE (5).
+    // FIVE levels stopped being DELIVERED in API 34 - RUNNING_MODERATE (5),
+    // RUNNING_LOW (10), RUNNING_CRITICAL (15), MODERATE (60) and COMPLETE (80) -
+    // and onLowMemory() is never called there either (all deprecated in API 35;
+    // see the AOSP ComponentCallbacks2 javadoc). Only UI_HIDDEN (20) and
+    // BACKGROUND (40) still arrive on API 34+, and both are >= the threshold
+    // below, so on those boxes this branch is a BACKGROUNDING response only: a
+    // resume cost, never a mid-scroll one. On API 33 and older (the TCL field
+    // box) the RUNNING_* levels still arrive and a foreground CRITICAL can fire
+    // mid-scroll, which is the case the graded trim exists for.
+    // Do not reason about MODERATE/COMPLETE arriving on an API 34+ box: they
+    // never do.
     @Suppress("DEPRECATION")
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
@@ -671,9 +677,10 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
     /**
      * The platform's trim level, spelled for the diagnostics paste.
      *
-     * The two RUNNING_* halves are deprecated in API 35 (the platform stopped
-     * delivering them in API 34) but they still arrive on the TV builds this is
-     * read from, so they are named rather than dropped.
+     * The RUNNING_* halves and MODERATE/COMPLETE are deprecated in API 35 (the
+     * platform stopped delivering all five in API 34); they are still named
+     * because an API 33 or older box - the TCL - does deliver them, and a paste
+     * from one must not read as LEVEL_15.
      */
     @Suppress("DEPRECATION")
     private fun trimLevelName(level: Int): String = when (level) {

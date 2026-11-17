@@ -7033,9 +7033,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     @Suppress("DEPRECATION")
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        // Same threshold as MainApplication and the main player: the two RUNNING
-        // levels are what a foreground app gets, and newer platforms deliver
-        // MODERATE / COMPLETE instead.
+        // Same threshold as MainApplication and the main player. API 34+ delivers
+        // only UI_HIDDEN (20) and BACKGROUND (40), so there this fires on
+        // BACKGROUNDING; API 33 and older also deliver the RUNNING_* levels
+        // during playback. MODERATE / COMPLETE are never delivered on API 34+
+        // (all five were deprecated in API 35).
         if (level < android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) return
         runCatching {
             if (loadingContainer?.visibility != View.VISIBLE) {

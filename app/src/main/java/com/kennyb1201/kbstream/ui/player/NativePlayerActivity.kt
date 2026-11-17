@@ -8222,9 +8222,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     @Suppress("DEPRECATION")
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        // Same threshold as MainApplication: the two RUNNING levels are the
-        // ones a foreground app gets, and newer platforms deliver MODERATE /
-        // COMPLETE instead. Everything at or above this is real pressure.
+        // Same threshold as MainApplication. Everything at or above it is real
+        // pressure, but WHICH levels arrive depends on the platform: API 34+
+        // delivers only UI_HIDDEN (20) and BACKGROUND (40), i.e. this fires on
+        // backgrounding there, while API 33 and older also deliver the RUNNING_*
+        // levels. MODERATE / COMPLETE are never delivered on API 34+.
         if (level < ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) return
         runCatching {
             // Read before dropping: the line is about what was held when the box
