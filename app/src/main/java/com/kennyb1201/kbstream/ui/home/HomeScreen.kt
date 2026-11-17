@@ -5092,6 +5092,22 @@ fun HomeScreen(
     viewModel: HomeViewModel =
         viewModel()
 ) {
+    // Re-warm after a pressure event (dig four, 2026-11-16, §3f). Every warm in
+    // the ViewModel is driven by a resolve, and a resolve by a focus change - so
+    // a trim taken while Home was away left the hero and the tiles on disk until
+    // the viewer moved. The epoch check makes this a no-op on an ordinary
+    // resume; the ViewModel does the warming when it has moved.
+    val homeLifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(homeLifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                viewModel.reWarmIfCachesWereReleased()
+            }
+        }
+        homeLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { homeLifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     // The phone entry: same callbacks, same ViewModel, a touch-first layout.
     // This is the one branch the port adds to this file - everything below is
     // the TV screen, unchanged (see HomeScreenMobile for what a finger gets).

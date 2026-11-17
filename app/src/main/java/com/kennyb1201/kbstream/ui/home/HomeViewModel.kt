@@ -40,6 +40,7 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListPlaybackItem
 import com.kennyb1201.kbstream.data.mdblist.mdbListWatchedEpisodesByShow
 import com.kennyb1201.kbstream.data.notifications.NewEpisodeRules
 import com.kennyb1201.kbstream.data.player.rerootedEpisodeStreamId
+import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.reporting.ImageLoadTrace
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.reporting.SpotlightDiagTrace
@@ -1552,6 +1553,11 @@ class HomeViewModel(
 
         val requestedId = item.id
         val requestedType = item.type
+        // Remembered for the post-pressure re-warm (dig four §3f): after a trim
+        // or a clear the warmed bitmaps are gone, and the next thing that will
+        // need them is the hero the viewer is already on - not a focus move that
+        // may never come.
+        lastWarmedHero = item
 
         // NOTHING is cleared here any more (spec 2026-11-16, scrolling round
         // three F1).
@@ -2016,6 +2022,29 @@ Log.d(
     logo = logo,
     description = item.description
 )
+
+    /**
+     * Re-warms the hero and the rail tiles if the bitmap cache was trimmed or
+     * cleared since the last time this ran (dig four, 2026-11-16, §3f).
+     *
+     * The dig's gap: "no re-warm exists after any trim or clear". Every warm in
+     * this ViewModel is driven by a resolve, and a resolve is driven by a focus
+     * change - so after a backgrounding trim, the hero the viewer returns to
+     * sits on a disk decode until they move, and the tiles around it decode on
+     * first sight. Home calls this on resume; the epoch tells it whether there
+     * is anything to do.
+     *
+     * Cheap by construction: a no-op when the epoch has not moved, and one warm
+     * pass (the same two the resolve already runs) when it has.
+     */
+    fun reWarmIfCachesWereReleased() {
+        val epoch = MemoryPressure.imageCacheRevision()
+        if (epoch == lastImageCacheEpoch) return
+        lastImageCacheEpoch = epoch
+        val item = lastWarmedHero ?: return
+        warmHeroLookahead(item)
+        warmRailTiles(item)
+    }
 
     // ── The phone Home billboard ──────────────────────────────────────
     //
@@ -2626,6 +2655,10 @@ Log.d(
     // prefetched item's focus resolution becomes a cache hit that returns
     // instantly. Throttled below the hero's own priority; failures are
     // silent (the focus path retries over the network as before).
+    /** The hero the last resolve warmed for; see [reWarmIfCachesWereReleased]. */
+    private var lastWarmedHero: MetaPreview? = null
+    private var lastImageCacheEpoch: Long = -1L
+
     private val heroArtPrefetchInFlight =
         java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
 

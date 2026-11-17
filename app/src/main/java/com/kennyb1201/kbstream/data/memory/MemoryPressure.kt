@@ -75,6 +75,12 @@ object MemoryPressure {
     private val imageTrims = AtomicInteger(0)
     private val imageClears = AtomicInteger(0)
 
+    // Every bitmap release/trim bumps this (dig four, 2026-11-16, §3f). It is
+    // how a screen that was showing art when the caches went can tell that its
+    // warmed bitmaps are gone and warm them again - the dig's "no re-warm after
+    // any trim or clear" - without subscribing to anything or polling sizes.
+    private val imageCacheEpoch = java.util.concurrent.atomic.AtomicLong(0)
+
     /** Called by a cache owner as it is constructed. */
     fun register(owner: CacheOwner) {
         tracked.add(WeakReference(owner))
@@ -105,12 +111,21 @@ object MemoryPressure {
     internal fun noteImageCacheReleased() {
         imageReleases.incrementAndGet()
         imageClears.incrementAndGet()
+        imageCacheEpoch.incrementAndGet()
     }
+
+    /**
+     * How many times the decoded-bitmap cache has been trimmed or cleared this
+     * process. A caller that warms art remembers the value it warmed at and
+     * re-warms when this has moved (see HomeViewModel.reWarmIfCachesWereReleased).
+     */
+    internal fun imageCacheRevision(): Long = imageCacheEpoch.get()
 
     /** Called by [trimImageMemoryCache]: a graded trim, not a clear. */
     internal fun noteImageCacheTrimmed() {
         imageReleases.incrementAndGet()
         imageTrims.incrementAndGet()
+        imageCacheEpoch.incrementAndGet()
     }
 
     /**
