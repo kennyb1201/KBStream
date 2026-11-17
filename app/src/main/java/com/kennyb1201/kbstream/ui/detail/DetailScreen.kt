@@ -90,6 +90,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.kennyb1201.kbstream.data.reporting.SeasonRowRevealTrace
 import com.kennyb1201.kbstream.ui.components.rememberIdleLazyListState
 import kotlinx.coroutines.android.awaitFrame
 import androidx.tv.material3.Border
@@ -493,7 +494,8 @@ private suspend fun LazyListState.revealRail(rowKey: String, hintIndex: Int): Bo
 
 /**
  * The poster row's neighbour half (spec 2026-11-17, F3): whichever row beside
- * the season posters the hand is on, the poster row is kept WHOLE.
+ * the season posters the hand is on, the poster row is kept WHOLE wherever the
+ * viewport allows it to be.
  *
  * A focus landing is a minimal scroll - the framework shows the row that took
  * the focus and nothing else - so the row next in the scroll direction stays
@@ -503,9 +505,12 @@ private suspend fun LazyListState.revealRail(rowKey: String, hintIndex: Int): Bo
  * the bottom edge from the row above, cut at the top edge from the row below.
  *
  * So each neighbour row asks, on arrival, for one scroll that leaves both rows
- * whole; [seasonRowRevealScroll] is the arithmetic and returns zero when there
- * is nothing to fix. Two things here keep it from being a scroll of its own the
- * viewer has to sit through:
+ * whole; [seasonRowRevealDecision] is the arithmetic and returns zero when there
+ * is nothing to fix. **When both cannot be whole, the focused row wins** - the
+ * priority the reveal fix of 2026-11-17 flipped, after this page cut the episode
+ * cards instead of a poster (see the rule's own KDoc; S1/S2 in the spec). Two
+ * things here keep it from being a scroll of its own the viewer has to sit
+ * through:
  *
  *  - each pass waits for the list to STOP scrolling before measuring, because
  *    the focus landing of the row that just arrived may still be travelling -
@@ -525,12 +530,24 @@ private class SeasonRowReveal(
 ) {
     private var job: Job? = null
 
+    /**
+     * The newest row that asked, while a job is running.
+     *
+     * A fast D-pad walk (S5) asks once per row it crosses, and the collapse
+     * below drops the later asks rather than starting a second job - so without
+     * this the running job would keep measuring the row the hand had already
+     * left. The job re-reads the field on every pass, which is what makes the
+     * last row of a walk the one the reveal serves.
+     */
+    private var requestedKey: String? = null
+
     /** [neighbourKey] is the list item key of the row that just took the focus. */
     fun ask(neighbourKey: String) {
+        requestedKey = neighbourKey
         if (job?.isActive == true) return
         job =
             scope.launch {
-                repeat(SEASON_ROW_REVEAL_PASSES) {
+                repeat(SEASON_ROW_REVEAL_PASSES) { pass ->
                     awaitFrame()
                     var settled = 0
                     while (
@@ -540,20 +557,74 @@ private class SeasonRowReveal(
                         awaitFrame()
                         settled++
                     }
-                    val delta = deltaFor(neighbourKey)
-                    if (delta == 0) return@launch
-                    runCatching { listState.animateScrollBy(delta.toFloat()) }
+                    val key = requestedKey ?: return@launch
+                    val decision = measure(key)
+
+                    if (decision == null) {
+                        // A row is not in the list's measure - the poster row is
+                        // off screen (nothing is being cut) or the neighbour has
+                        // not been laid out yet. That is not a decision: the next
+                        // pass measures again. Only the LAST pass may turn it into
+                        // one, and that answer is "nothing to do".
+                        if (pass == SEASON_ROW_REVEAL_PASSES - 1) {
+                            SeasonRowRevealTrace.record(
+                                neighbourKey = key,
+                                branch = SEASON_ROW_REVEAL_UNMEASURED,
+                                delta = 0
+                            )
+                        }
+                        return@repeat
+                    }
+
+                    if (listState.isScrollInProgress) {
+                        // The settle wait ran out while the landing was still
+                        // travelling. A number read here describes where the row
+                        // is mid-flight, so it is not a decision either - least of
+                        // all a zero, which is what ended the whole job under the
+                        // old rule (F2).
+                        return@repeat
+                    }
+
+                    if (decision.delta == 0) {
+                        // A measured zero on a settled list: both rows are whole.
+                        // The one exception worth its own name is the don't-fit
+                        // page where the focused row was already whole - the rule
+                        // decided, and it decided to leave the poster cut (F1).
+                        val branch =
+                            if (decision.branch == SEASON_ROW_REVEAL_DONT_FIT_NEIGHBOUR) {
+                                SEASON_ROW_REVEAL_DONT_FIT_NEIGHBOUR
+                            } else {
+                                SEASON_ROW_REVEAL_SETTLED_ZERO
+                            }
+                        SeasonRowRevealTrace.record(
+                            neighbourKey = key,
+                            branch = branch,
+                            delta = 0
+                        )
+                        return@launch
+                    }
+
+                    // A scroll is a decision however the page looked: the trace
+                    // line says which branch produced it, and the delta says how
+                    // far the next pass has to re-measure from.
+                    SeasonRowRevealTrace.record(
+                        neighbourKey = key,
+                        branch = decision.branch,
+                        delta = decision.delta
+                    )
+                    runCatching { listState.animateScrollBy(decision.delta.toFloat()) }
                 }
             }
     }
 
-    private fun deltaFor(neighbourKey: String): Int {
+    /** Null when either row is not laid out - see the unmeasured branch above. */
+    private fun measure(neighbourKey: String): SeasonRowRevealDecision? {
         val info = listState.layoutInfo
         val season =
-            info.visibleItemsInfo.firstOrNull { it.key == SEASON_ROW_KEY } ?: return 0
+            info.visibleItemsInfo.firstOrNull { it.key == SEASON_ROW_KEY } ?: return null
         val neighbour =
-            info.visibleItemsInfo.firstOrNull { it.key == neighbourKey } ?: return 0
-        return seasonRowRevealScroll(
+            info.visibleItemsInfo.firstOrNull { it.key == neighbourKey } ?: return null
+        return seasonRowRevealDecision(
             seasonStart = season.offset,
             seasonEnd = season.offset + season.size,
             neighbourStart = neighbour.offset,

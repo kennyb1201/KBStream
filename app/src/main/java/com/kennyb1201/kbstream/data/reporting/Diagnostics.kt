@@ -386,6 +386,12 @@ object Diagnostics {
         // was - and named by surface, because a screen that stutters is the one
         // question a session-wide average cannot answer.
         UiFrameTrace.lines().forEach { report.appendLine(it) }
+        // What the Detail page's season-row reveal decided, per ask: the neighbour
+        // row's key, the branch that fired (fit / dont-fit-neighbour /
+        // settled-zero / unmeasured) and the delta applied. Empty until a row
+        // asks, so a short paste stays short - and the reason the next report of a
+        // cut row can be answered from the field instead of from source.
+        SeasonRowRevealTrace.lines().forEach { report.appendLine(it) }
         appendRecentErrors(report)
 
         val text = report.toString()

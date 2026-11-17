@@ -88,8 +88,46 @@ class DetailSeasonRowRevealTest {
     }
 
     @Test
-    fun `when both rows cannot fit, the poster row is the one revealed`() {
-        val delta = seasonRowRevealScroll(
+    fun `when both rows cannot fit, the focused row wins and the poster takes the sliver`() {
+        // The 2026-11-17 photo's case, in numbers: the episode row below the
+        // poster row is the one the hand is on, cut at the viewport's bottom edge
+        // by 20px. The neighbour's cut is the scroll; the poster row is the row
+        // left cut afterwards - which is the whole point of F1.
+        val decision = seasonRowRevealDecision(
+            seasonStart = 0,
+            seasonEnd = 150,
+            neighbourStart = 160,
+            neighbourEnd = 260,
+            viewportStart = 0,
+            viewportEnd = 240
+        )
+        assertEquals("the focused row's cut is the one fixed", 20, decision.delta)
+        assertEquals(SEASON_ROW_REVEAL_DONT_FIT_NEIGHBOUR, decision.branch)
+        assertEquals("the focused row ends at the viewport's edge", 240, 260 - decision.delta)
+        assertTrue(
+            "and the poster row is the row left cut",
+            0 - decision.delta < 0
+        )
+    }
+
+    @Test
+    fun `a focused row cut at the top is revealed from below, not left cut`() {
+        val decision = seasonRowRevealDecision(
+            seasonStart = 40,
+            seasonEnd = 190,
+            neighbourStart = -60,
+            neighbourEnd = 40,
+            viewportStart = 0,
+            viewportEnd = 200
+        )
+        assertEquals("backward by exactly the focused row's 60px", -60, decision.delta)
+        assertEquals(SEASON_ROW_REVEAL_DONT_FIT_NEIGHBOUR, decision.branch)
+        assertEquals("the focused row starts at the viewport's edge", 0, -60 - decision.delta)
+    }
+
+    @Test
+    fun `a focused row that is already whole in a dont-fit page costs no scroll`() {
+        val decision = seasonRowRevealDecision(
             seasonStart = 100,
             seasonEnd = 220,
             neighbourStart = 0,
@@ -97,7 +135,22 @@ class DetailSeasonRowRevealTest {
             viewportStart = 0,
             viewportEnd = 200
         )
-        assertEquals("the poster row's cut amount wins", 20, delta)
+        assertEquals("nothing to fix on the row the hand is on", 0, decision.delta)
+        assertEquals(SEASON_ROW_REVEAL_DONT_FIT_NEIGHBOUR, decision.branch)
+    }
+
+    @Test
+    fun `the fit case still names itself and still costs nothing when settled`() {
+        val decision = seasonRowRevealDecision(
+            seasonStart = 300,
+            seasonEnd = 450,
+            neighbourStart = 200,
+            neighbourEnd = 290,
+            viewportStart = 0,
+            viewportEnd = 1000
+        )
+        assertEquals(SEASON_ROW_REVEAL_FIT, decision.branch)
+        assertEquals(0, decision.delta)
     }
 
     @Test
@@ -140,7 +193,7 @@ class DetailSeasonRowRevealTest {
             .substringAfter("private class SeasonRowReveal(")
             .substringBefore("private enum class EpisodeFocusEdge")
         assertTrue("it measures the poster row's item", reveal.contains("it.key == SEASON_ROW_KEY"))
-        assertTrue("the rule decides the delta", reveal.contains("seasonRowRevealScroll("))
+        assertTrue("the rule decides the delta", reveal.contains("seasonRowRevealDecision("))
         assertTrue("and it applies it as a scroll", reveal.contains("listState.animateScrollBy("))
         assertTrue(
             "after the focus landing has stopped moving the list",
@@ -150,6 +203,57 @@ class DetailSeasonRowRevealTest {
         assertTrue(
             "with a collapsed, bounded number of passes",
             reveal.contains("SEASON_ROW_REVEAL_PASSES")
+        )
+    }
+
+    @Test
+    fun `a mid-flight zero does not end the reveal`() {
+        val reveal = normalized(stripComments(detailSource()))
+            .substringAfter("private class SeasonRowReveal(")
+            .substringBefore("private enum class EpisodeFocusEdge")
+        // The old rule ended the whole job on the first zero, whatever it
+        // measured. Now the zero has to be measured on a settled list.
+        assertTrue(
+            "a still-moving list falls through to the next pass",
+            reveal.contains("if (listState.isScrollInProgress) {")
+        )
+        assertFalse(
+            "no early return on a raw delta",
+            reveal.contains("if (delta == 0) return@launch")
+        )
+        assertTrue(
+            "an unmeasured pass is named, and only the last one is reported",
+            reveal.contains("SEASON_ROW_REVEAL_UNMEASURED") &&
+                reveal.contains("pass == SEASON_ROW_REVEAL_PASSES - 1")
+        )
+        assertTrue(
+            "and a walk across rows re-measures the newest row, not the first",
+            reveal.contains("requestedKey")
+        )
+    }
+
+    @Test
+    fun `the reveal files its decision in the diagnostics report`() {
+        val reveal = normalized(stripComments(detailSource()))
+        assertTrue(
+            "every decision is recorded with its branch and its delta",
+            reveal.contains("SeasonRowRevealTrace.record(") &&
+                reveal.contains("branch = decision.branch") &&
+                reveal.contains("delta = decision.delta")
+        )
+        assertTrue(
+            "and a settled pass says so by name",
+            reveal.contains("SEASON_ROW_REVEAL_SETTLED_ZERO")
+        )
+        val diagnostics = source("com/kennyb1201/kbstream/data/reporting/Diagnostics.kt")
+        assertTrue(
+            "the paste carries the lines",
+            diagnostics.contains("SeasonRowRevealTrace.lines().forEach { report.appendLine(it) }")
+        )
+        val trace = source("com/kennyb1201/kbstream/data/reporting/SeasonRowRevealTrace.kt")
+        assertTrue(
+            "one prefixed line per decision, named by the neighbour row's key",
+            trace.contains("\"detail: seasonRowReveal neighbour=\$neighbourKey branch=\$branch delta=\$delta\"")
         )
     }
 
