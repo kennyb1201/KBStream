@@ -70,15 +70,20 @@ class SimklConnectOutcomeContractTest {
     @Test
     fun `a poll that cannot be asked is not reported as waiting`() {
         assertTrue(
-            "three unreachable polls in a row end the attempt",
+            "three unreachable polls in a row end the attempt, and both failure " +
+                "paths reach the same terminal message (spec 2026-11-16, F1/F2)",
             viewModel.contains("MAX_CONSECUTIVE_FAILURES = 3") &&
                 viewModel.contains("consecutiveFailures++") &&
-                viewModel.contains("fail(\"Could not reach Simkl. Try again.\")")
+                viewModel.contains("fail(UNREACHABLE_MESSAGE)") &&
+                viewModel.contains("private const val UNREACHABLE_MESSAGE = \"Could not reach Simkl.\"")
         )
         assertTrue(
             "and the retrying state says the poll is not reaching Simkl, rather " +
                 "than reusing the pending answer (trackers C4)",
-            viewModel.contains("statusMessage = \"Could not reach Simkl — retrying…\"")
+            viewModel.contains("statusMessage = RETRYING_MESSAGE") &&
+                viewModel.contains(
+                    "private const val RETRYING_MESSAGE = \"Could not reach Simkl — retrying…\""
+                )
         )
         assertEquals(
             "the pending wording now belongs to exactly one case: Simkl answered " +

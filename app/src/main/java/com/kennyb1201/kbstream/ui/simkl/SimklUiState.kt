@@ -53,4 +53,18 @@ data class SimklUiState(
     val continueWatching: List<SimklContinueWatchingItem> = emptyList(),
     val watchedCounts: SimklWatchedCounts? = null,
     val accountName: String? = null
-)
+) {
+    /**
+     * A finished attempt whose code is still alive on screen.
+     *
+     * The screen offers RETRY for this case, which resumes polling the SAME code
+     * (spec 2026-11-16, F4). Without it the only offer after a failure was
+     * GENERATE CODE, which mints a new code and abandons one the viewer may
+     * already have approved in the browser.
+     */
+    val canResumePoll: Boolean
+        get() = errorMessage != null &&
+            deviceCode != null &&
+            userCode != null &&
+            (secondsRemaining ?: 0) > 0
+}

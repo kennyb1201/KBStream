@@ -320,6 +320,13 @@ fun SimklConnectScreen(
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        // The stranded-code way out (spec 2026-11-16, F4), and
+                        // first in the row: a code that is still valid, and may
+                        // already be approved on the web, resumes here.
+                        if (uiState.canResumePoll) {
+                            KBButton(label = "RETRY", onClick = vm::retryPoll)
+                        }
+
                         KBButton(
                             label = if (uiState.isLoading) "WORKING…" else "GENERATE CODE",
                             onClick = vm::generateCode

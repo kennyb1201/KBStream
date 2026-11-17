@@ -307,6 +307,17 @@ fun SimklConnectScreenMobile(
                         }
 
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            // The stranded-code way out (spec 2026-11-16, F4):
+                            // this code is still valid, and it may already be
+                            // approved on the web - resume it rather than make the
+                            // viewer re-approve a new one.
+                            if (uiState.canResumePoll) {
+                                KBButton(
+                                    label = "RETRY",
+                                    modifier = Modifier.fillMaxWidth(),
+                                    onClick = vm::retryPoll
+                                )
+                            }
                             KBButton(
                                 label = if (uiState.isLoading) "WORKING…" else "GENERATE CODE",
                                 enabled = !uiState.isLoading,

@@ -41,6 +41,16 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
     private var countdownJob: Job? = null
 
     /**
+     * When the code on screen was issued, on the monotonic clock.
+     *
+     * Both the countdown and the poll loop measure against this rather than
+     * against their own start, because a poll can be RESUMED (F4) after a
+     * terminal failure - and a resumed poll that restarted its clock would let an
+     * expired code keep polling for another fifteen minutes.
+     */
+    private var codeIssuedAtMs: Long = 0L
+
+    /**
      * The PIN request, so a re-entry cancels the previous one.
      *
      * It used to be an unnamed launch: a double-tap left two createPinCode()
@@ -238,6 +248,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                         statusMessage = "Enter this code on Simkl to connect.",
                         errorMessage = null
                     )
+                    codeIssuedAtMs = SystemClock.elapsedRealtime()
                     startCountdown(authorization.expiresInSeconds)
                     startPolling()
                 }
@@ -262,7 +273,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
     private fun startCountdown(expiresInSeconds: Int) {
         countdownJob?.cancel()
         countdownJob = viewModelScope.launch {
-            val startedAtMs = SystemClock.elapsedRealtime()
+            val startedAtMs = codeIssuedAtMs
             while (true) {
                 val elapsed = (SystemClock.elapsedRealtime() - startedAtMs) / 1_000L
                 val left = com.kennyb1201.kbstream.data.simkl.SimklAuthV2Rules
@@ -308,7 +319,10 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
 
         pollJob?.cancel()
         pollJob = viewModelScope.launch {
-            val issuedAtMs = SystemClock.elapsedRealtime()
+            // The code's clock, not this loop's: a poll RESUMED after a terminal
+            // failure (F4) must still expire when the code does, not fifteen
+            // fresh minutes later.
+            val issuedAtMs = codeIssuedAtMs
             var consecutiveFailures = 0
 
             while (true) {
@@ -332,12 +346,12 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                 if (outcome == null) {
                     consecutiveFailures++
                     if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-                        fail("Could not reach Simkl. Try again.")
+                        fail(UNREACHABLE_MESSAGE)
                         return@launch
                     }
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
-                        statusMessage = "Could not reach Simkl — retrying…"
+                        statusMessage = RETRYING_MESSAGE
                     )
                     continue
                 }
@@ -372,6 +386,27 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                         return@launch
                     }
 
+                    // A request that never landed is a blip, not an answer (spec
+                    // 2026-11-16, F1). The viewer is usually in a browser when it
+                    // happens, with a code that stays valid for minutes: ending
+                    // the attempt on one failed request left an approved code
+                    // unseen and GENERATE CODE as the only way out. It joins the
+                    // SAME failure run as a thrown poll, so three in a row still
+                    // end the attempt (F2) and a reached Simkl still resets it.
+                    com.kennyb1201.kbstream.data.simkl.SimklAuthV2Rules.Poll.FAILED -> {
+                        consecutiveFailures++
+                        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                            fail(UNREACHABLE_MESSAGE)
+                            return@launch
+                        }
+                        _uiState.value = _uiState.value.copy(
+                            isLoading = false,
+                            statusMessage = RETRYING_MESSAGE
+                        )
+                    }
+
+                    // A decline and a bad client id are ANSWERS: retrying them is
+                    // spinning, not recovering (F3).
                     else -> {
                         fail(outcome.message ?: "Simkl could not authorise this app.")
                         return@launch
@@ -408,6 +443,34 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
             appContext,
             TasteRatingTracker.SIMKL
         )
+    }
+
+    /**
+     * Resume the attempt on the code already on screen (spec 2026-11-16, F4).
+     *
+     * This is the stranded-code case: the code was approved in the browser while
+     * the poll was failing, the app then failed out, and the only offer was
+     * GENERATE CODE - which mints a new code and abandons the approved one. While
+     * this code still has life, retrying picks the poll back up where it was; a
+     * code that has already run out takes the ordinary expiry path instead of
+     * polling a dead credential.
+     */
+    fun retryPoll() {
+        val state = _uiState.value
+        val deviceCode = state.deviceCode ?: return
+        val expiresInSeconds = state.expiresIn ?: 0
+        val elapsed = (SystemClock.elapsedRealtime() - codeIssuedAtMs) / 1_000L
+        if (expiresInSeconds > 0 && elapsed >= expiresInSeconds) {
+            restartExpiredCode()
+            return
+        }
+        if (deviceCode.isBlank()) return
+        _uiState.value = _uiState.value.copy(
+            isLoading = false,
+            errorMessage = null,
+            statusMessage = RETRYING_MESSAGE
+        )
+        startPolling()
     }
 
     /**
@@ -603,6 +666,12 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
          * viewer, and a second copy of the string is how those two drift apart.
          */
         private const val WAITING_MESSAGE = "Waiting for authorization…"
+
+        /** A blip the loop rides out; three in a row become [UNREACHABLE_MESSAGE]. */
+        private const val RETRYING_MESSAGE = "Could not reach Simkl — retrying…"
+
+        /** Terminal, and now literally true: three failed polls in a row. */
+        private const val UNREACHABLE_MESSAGE = "Could not reach Simkl."
 
         /** What a code request reports in a build with no client id (trackers I2). */
         const val NOT_CONFIGURED = "This build has no Simkl client id, so Simkl cannot connect."
