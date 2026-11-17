@@ -222,21 +222,33 @@ object ProfileManager {
      * Switches the active profile. The three steps are ORDERED and load-bearing:
      *
      *  1. persist the new id to [KEY_ACTIVE],
-     *  2. bind it in memory ([_activeProfile]),
-     *  3. THEN drop the per-profile caches ([onActiveProfileChanged]).
+     *  2. THEN drop the previous profile's stores
+     *     ([onActiveProfileChanged], with the incoming id),
+     *  3. and only THEN bind it in memory ([_activeProfile]).
      *
-     * Step 3 reads the active profile back through
-     * [ProfileStorage.activeProfileId] -> [resolveActiveId], which prefers the
-     * in-memory [activeProfile]. Reloading an addon list before steps 1-2 would
-     * therefore resolve the profile we are LEAVING, reload its own list as a
-     * no-op, and leave the old list (and the old kids ceiling) in place - which
-     * is how a kids profile was showing the main profile's addons.
+     * The drop used to come last, and it had to, because it read the active
+     * profile back through [ProfileStorage.activeProfileId] ->
+     * [resolveActiveId] (which prefers the in-memory [activeProfile]): dropping
+     * before the emit reloaded the addon list of the profile we were LEAVING and
+     * left the old list and kids ceiling live. Handing the drop the incoming id
+     * ([onActiveProfileChanged]'s parameter) removes that read-back, so the order
+     * can be what it should always have been.
+     *
+     * Why the drop must come BEFORE the emit (2026-11-17): a `StateFlow`
+     * collector resumes ON the emission, which means a Home collector could run
+     * - and seed / re-subscribe a Room flow - DURING step 3, while the previous
+     * profile's database was still open. It then bound itself to the instance the
+     * drop was about to close, and only exit-and-reopen repaired it, which is
+     * exactly the "old Continue Watching and Upcoming stay on Home" report.
+     * Nothing can observe the new profile while an old store is still bound now.
      */
     fun setActive(context: Context, profile: Profile) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().putString(KEY_ACTIVE, profile.id).apply()
+        // Persist first (anything falling back to disk must already name the new
+        // profile), then drop with that id explicit, then announce it.
+        onActiveProfileChanged(profile.id)
         _activeProfile.value = profile
-        onActiveProfileChanged()
         // The kids time guard evaluates on its 30 s tick, on app start/stop and
         // on a parent override — NOT on a switch. So picking a profile that is
         // already locked (or leaving one) left the veil answering for the other
@@ -251,8 +263,25 @@ object ProfileManager {
      * caches, addon list, Simkl continue-watching cache — then re-pull the
      * new profile's cloud rows. Without this, the first renders after a
      * switch show stale data from the profile you just left (the kb leak).
+     *
+     * [profileId] is the INCOMING profile, passed explicitly (2026-11-17, F1):
+     * this runs before [_activeProfile] is bound, so every step that needs to
+     * know WHICH profile it is loading for must be told. Reading it back here
+     * would resolve the profile we are leaving - the in-memory one still wins in
+     * [resolveActiveId] - and load its addons, its cloud rows and its database.
+     * This parameter is why the drop can happen before the announcement, which is
+     * what stops a collector from ever seeing the new profile beside an old
+     * store (see [setActive]).
+     *
+     * Steps that only CLOSE or CLEAR need no id and keep their shape: closing the
+     * old instance is the point, and a cache being emptied has no profile.
+     *
+     * Null is NOT "I forgot": it is the three paths where the profile the drop
+     * was serving no longer exists - a deleted active profile (on-device and via
+     * sync) and nothing activated in its place. Those resolve to the legacy,
+     * un-namespaced store, exactly as `resolveActiveId` does with no profile.
      */
-    private fun onActiveProfileChanged() {
+    private fun onActiveProfileChanged(profileId: String?) {
         runCatching {
             com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
                 .closeScopedInstanceForSwitch()
@@ -271,7 +300,9 @@ object ProfileManager {
         try {
             com.kennyb1201.kbstream.data.addon.AddonManager
                 .getInstance(appContextForSwitch())
-                .refreshAddons()
+                // Explicit id: this used to resolve the active profile back, and
+                // now runs BEFORE that profile is the active one.
+                .refreshAddons(profileId)
         } catch (e: Exception) {
             android.util.Log.w(TAG, "addon reload failed on profile switch", e)
         }
@@ -291,12 +322,18 @@ object ProfileManager {
         // watched history for nothing.
         runCatching { com.kennyb1201.kbstream.data.mdblist.MdbListClient.clearTransientMemory() }
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
-            SupabaseSync.onProfileSwitched(appContext)
+            // The same explicit id, for the same reason: the pull scopes its
+            // keys, its rows and the history DB it writes into by this profile,
+            // and it is launched before the announcement.
+            SupabaseSync.onProfileSwitched(appContext, profileId)
             // The TV-launcher Watch Next channel is a GLOBAL OS surface but
             // its rows mirror the ACTIVE profile's continue-watching. Without
             // this republish the launcher keeps showing the profile you just
             // left until the new profile writes history.
-            SupabaseSync.launchLauncherRepublish(appContext)
+            // ...and the channel republish reads the same profile's history, so
+            // it takes the id too instead of resolving whoever is active when
+            // its coroutine happens to start.
+            SupabaseSync.launchLauncherRepublish(appContext, profileId)
         }
     }
 
@@ -717,7 +754,9 @@ object ProfileManager {
             _activeProfile.value = null
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit().remove(KEY_ACTIVE).apply()
-            onActiveProfileChanged()
+            // No profile is active afterwards, so the drop has none to load for
+            // (see the parameter's note).
+            onActiveProfileChanged(null)
         }
     }
 
@@ -989,7 +1028,7 @@ object ProfileManager {
             // sequence so every singleton (watch history DB handle, watched
             // caches, addon list, Simkl CW cache, sync pull) rebinds against
             // the profile that now holds the migrated data.
-            onActiveProfileChanged()
+            onActiveProfileChanged(profile.id)
         }
         return profile
     }
@@ -1144,7 +1183,7 @@ object ProfileManager {
             _activeProfile.value = null
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit().remove(KEY_ACTIVE).apply()
-            onActiveProfileChanged()
+            onActiveProfileChanged(null)
         }
         // Nothing is activated when this device has no active profile, for the
         // same reason the delete branches above activate nothing: a pull is not

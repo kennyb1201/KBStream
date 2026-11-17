@@ -191,7 +191,7 @@ class BrowseRailReentryContractTest {
     fun `a profile switch drops every cached page`() {
         val switch = section(
             source(PROFILE_MANAGER),
-            "private fun onActiveProfileChanged()",
+            "private fun onActiveProfileChanged(profileId: String?)",
             "private fun appContextForSwitch()"
         )
 

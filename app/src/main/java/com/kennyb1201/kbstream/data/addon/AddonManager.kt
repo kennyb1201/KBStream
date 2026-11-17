@@ -1265,10 +1265,19 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         }
     }
 
-    /** Force a reload from the ACTIVE profile's store (called on a switch). */
-    fun refreshAddons() {
+    /**
+     * Force a reload from a profile's store (called on a switch).
+     *
+     * [profileId] is the incoming profile, passed explicitly by the switch
+     * (2026-11-17, F1): the drop now runs BEFORE the new profile becomes the
+     * active one, so resolving it here would reload the store of the profile
+     * being left - the old list and the old kids ceiling, which is the leak this
+     * reload exists to prevent. Null keeps the old meaning (whoever is active),
+     * for every caller that is not the switch.
+     */
+    fun refreshAddons(profileId: String? = null) {
         synchronized(stateLock) {
-            loadForLocked(activeStoreProfileId())
+            loadForLocked(profileId ?: activeStoreProfileId())
         }
 }
 

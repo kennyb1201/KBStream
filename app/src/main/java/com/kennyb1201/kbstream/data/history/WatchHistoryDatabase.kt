@@ -225,13 +225,28 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
          * Profile-scoped DB: every profile gets its own isolated history.
          * Call sites that store per-user data use this; the un-scoped
          * [getInstance] remains for global caches (tmdb_json_cache).
+         *
+         * [profileId] names the profile when the caller already knows it
+         * (2026-11-17, F1). That is the switch path: the drop, and the pull it
+         * launches, run BEFORE the incoming profile is announced, so resolving
+         * "the active profile" there answers with the profile being left - and
+         * the pull would write the incoming profile's rows into the outgoing
+         * profile's file. Null keeps the old meaning: whoever is active.
          */
-        fun getInstanceScoped(context: Context): WatchHistoryDatabase {
+        fun getInstanceScoped(
+            context: Context,
+            profileId: String? = null
+        ): WatchHistoryDatabase {
             synchronized(this) {
-                // Resolve the active file INSIDE the monitor: reading it
-                // outside left a window where a profile switch retargeted the
-                // open while the caller still pinned the old file.
-                val dbName = activeFileName(context)
+                // Resolve the file INSIDE the monitor: reading it outside left a
+                // window where a profile switch retargeted the open while the
+                // caller still pinned the old file.
+                val dbName = if (profileId != null) {
+                    com.kennyb1201.kbstream.data.sync.ProfileStorage
+                        .dbName(profileId, "kbstream_watch_history")
+                } else {
+                    activeFileName(context)
+                }
                 profileInstance?.let { if (profileInstanceName == dbName) return it }
                 // Same file, retired moments ago and not closed yet: take that
                 // instance back instead of opening a second connection to it.

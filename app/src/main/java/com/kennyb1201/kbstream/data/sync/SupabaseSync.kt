@@ -1827,8 +1827,11 @@ object SupabaseSync {
 
     // ── Pull + merge ────────────────────────────────────────────────
 
-    fun pullAll(context: Context): kotlinx.coroutines.Job = scope.launch {
-        pullAllNow(context)
+    fun pullAll(
+        context: Context,
+        profileId: String? = null
+    ): kotlinx.coroutines.Job = scope.launch {
+        pullAllNow(context, profileId)
     }
 
     fun pushAll(context: Context): kotlinx.coroutines.Job = scope.launch {
@@ -1856,7 +1859,10 @@ object SupabaseSync {
      * profile exists would drop every scoped row (the fresh-device sign-in
      * transferred nothing, even when the pull itself succeeded).
      */
-    private suspend fun pullAllNow(context: Context) {
+    private suspend fun pullAllNow(
+        context: Context,
+        profileId: String? = null
+    ) {
         // The four pulls answer whether they RAN (see [pullHistory]). The order
         // is unchanged and still load-bearing: prefs FIRST, because the
         // profiles blob inside it creates/activates the account's profile on a
@@ -1866,10 +1872,10 @@ object SupabaseSync {
         // when the pull itself succeeded).
         val ran =
             listOf(
-                pullPrefs(context),
-                pullHistory(context),
-                pullWatched(context),
-                pullOverrides(context)
+                pullPrefs(context, profileId),
+                pullHistory(context, profileId),
+                pullWatched(context, profileId),
+                pullOverrides(context, profileId)
             )
         // All four false is not a slow sync, it is no sync: the client is gone
         // (signed out, or the session died under it), the tables are
@@ -1941,9 +1947,9 @@ object SupabaseSync {
      * required action is re-pulling the NEW profile's rows (history/watched/
      * prefs) so the UI reflects the profile you switched to immediately.
      */
-    fun onProfileSwitched(context: Context) {
+    fun onProfileSwitched(context: Context, profileId: String?) {
         if (isSignedIn()) {
-            pullAll(context)
+            pullAll(context, profileId)
         }
     }
 
@@ -1984,11 +1990,14 @@ object SupabaseSync {
      * history. Runs on [scope] because the DAO read is suspend and callers
      * (ProfileManager's switch sequence) are non-suspend.
      */
-    fun launchLauncherRepublish(context: Context) {
+    fun launchLauncherRepublish(context: Context, profileId: String? = null) {
         scope.launch {
             runCatchingCancellable {
+                // [profileId] when a switch launched this: the drop runs before
+                // the announcement, so resolving here would publish the channel
+                // from the profile being left (S5).
                 val entries = com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
-                    .getInstanceScoped(context)
+                    .getInstanceScoped(context, profileId)
                     .watchHistoryDao()
                     .getAll()
                 com.kennyb1201.kbstream.data.tv.TvLauncherPublisher.sync(context, entries)
@@ -2039,13 +2048,22 @@ object SupabaseSync {
         return rows
     }
 
-    private suspend fun pullHistory(context: Context): Boolean {
+    private suspend fun pullHistory(
+        context: Context,
+        profileId: String? = null
+    ): Boolean {
         val c = client ?: return false
-        // Scope the whole pull to the profile active at START: a switch
-        // mid-pull would otherwise filter rows against the NEW profile while
-        // still writing into the OLD profile's Room instance (captured
-        // below), stranding rows in the wrong database.
-        val pid = currentProfileId()
+        // Scope the whole pull to ONE profile: a switch mid-pull would
+        // otherwise filter rows against the NEW profile while still writing
+        // into the OLD profile's Room instance (captured below), stranding rows
+        // in the wrong database.
+        //
+        // [profileId] is explicit on the switch path (2026-11-17, F1): the drop
+        // runs before the new profile is announced, so resolving the active
+        // profile there names the one being left. Null keeps the old meaning -
+        // resolved HERE, so a pull that had to wait still scopes to the profile
+        // that is current when it runs.
+        val pid = profileId ?: currentProfileId()
         // Whether this pull actually RAN. [pullAllNow] stamps "last sync" from
         // the four answers: a pull that fails swallows its exception here (it
         // must - one broken table cannot abort the other three), so without an
@@ -2059,7 +2077,10 @@ object SupabaseSync {
             // below, which only applies this profile's.
             recordHistoryTitleOwners(rows)
 
-            val db = WatchHistoryDatabase.getInstanceScoped(context)
+            // Scoped to [pid], not to "whoever is active": on the switch path
+            // the announcement has not happened yet, so the active answer is
+            // still the profile being left.
+            val db = WatchHistoryDatabase.getInstanceScoped(context, pid)
             // Batch-load every local row once, then merge in memory: the old
             // per-row getById() loop was an N+1 (one query per remote row) on
             // every pull — a multi-hundred-row history stalled sync for
@@ -2204,15 +2225,19 @@ object SupabaseSync {
         return ok
     }
 
-    private suspend fun pullWatched(context: Context): Boolean {
+    private suspend fun pullWatched(
+        context: Context,
+        profileId: String? = null
+    ): Boolean {
         val c = client ?: return false
-        // Same captured-scope rule as pullHistory above.
-        val pid = currentProfileId()
+        // Same captured-scope rule as pullHistory above (and the same explicit
+        // id on the switch path).
+        val pid = profileId ?: currentProfileId()
         var ok = true
         try {
             val rows = pullRows(TABLE_WATCHED, "item_key")
 
-            val db = WatchHistoryDatabase.getInstanceScoped(context)
+            val db = WatchHistoryDatabase.getInstanceScoped(context, pid)
             // Same N+1 fix as pullHistory: load the relevant local rows once
             // and merge in memory instead of one getByKeys() round-trip per
             // remote row.
@@ -2282,10 +2307,14 @@ object SupabaseSync {
      * line below is the row count the account holds, not the number that
      * actually changed.
      */
-    private suspend fun pullOverrides(context: Context): Boolean {
+    private suspend fun pullOverrides(
+        context: Context,
+        profileId: String? = null
+    ): Boolean {
         val c = client ?: return false
-        // Same captured-scope rule as pullHistory above.
-        val pid = currentProfileId()
+        // Same captured-scope rule as pullHistory above (and the same explicit
+        // id on the switch path).
+        val pid = profileId ?: currentProfileId()
         var ok = true
         try {
             val rows = pullRows(TABLE_OVERRIDES, KEY_OVERRIDES)
@@ -2352,7 +2381,10 @@ object SupabaseSync {
         return true
     }
 
-    private suspend fun pullPrefs(context: Context): Boolean {
+    private suspend fun pullPrefs(
+        context: Context,
+        profileId: String? = null
+    ): Boolean {
         val c = client ?: return false
         // Declared before the try, not inside it: the catchers are what set it
         // to false, and a variable declared in the try body is not in their
@@ -2370,7 +2402,13 @@ object SupabaseSync {
             }
             // Pass 2: apply the active profile's scoped rows (plus unscoped
             // rows when no profiles exist — legacy/no-profiles mode).
-            val pid = currentProfileId()
+            //
+            // Resolved AFTER the blob above, not at call time: on a fresh device
+            // the blob is what creates and activates the profile, and an id read
+            // before it would filter by null and drop every scoped row. The
+            // switch path passes the incoming id instead, because the drop runs
+            // before that profile is announced.
+            val pid = profileId ?: currentProfileId()
             for (row in rows) {
                 val storedKey = row.prefKey ?: continue
                 if (storedKey == PrefsPayloadBuilder.KEY_PROFILES) continue
