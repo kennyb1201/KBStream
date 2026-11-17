@@ -77,13 +77,21 @@ fun MobileTheme(content: @Composable () -> Unit) {
     // F2: a wallpaper change has to re-derive the scheme, or the accent is a
     // snapshot of whatever the wallpaper was when this screen was first drawn.
     val wallpaperRevision = rememberWallpaperRevision(context, active = dynamic)
-    val scheme = if (dynamic) {
-        remember(context, amoled, wallpaperRevision) { dynamicScheme(context, amoled) }
-    } else {
-        // The unchanged path, key for key: with the switch off this still caches
-        // the brand scheme and still rebuilds it when the accent moves.
-        remember(dynamic, amoled, KBAccent) { KBStreamMobileColorScheme }
-    }
+    // The SDK floor is part of the CONDITION, not a fact the reader has to take
+    // on trust: [DynamicAccentRules.applies] already refuses a palette below API
+    // 31, but it answers with a Boolean and Lint cannot see through it - so the
+    // release gate read this call as an unguarded API-31 use and stopped the
+    // build (0.9.356 never published). The guard spells out the same decision in
+    // the form both the compiler and a reader can check at the call site.
+    val scheme =
+        if (dynamic && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            remember(context, amoled, wallpaperRevision) { dynamicScheme(context, amoled) }
+        } else {
+            // The unchanged path, key for key: with the switch off this still
+            // caches the brand scheme and still rebuilds it when the accent
+            // moves.
+            remember(dynamic, amoled, KBAccent) { KBStreamMobileColorScheme }
+        }
     // Part A F1: the accent itself follows the wallpaper. Published AFTER the
     // pass rather than written during it - a snapshot value the content below
     // reads must not change under the composition that is building it, and the
