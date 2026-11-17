@@ -88,7 +88,9 @@ class ScrollSmoothnessContractTest {
         // F4 of the 2026-11-15 scrolling round-two spec: CRITICAL trims HALF the
         // bitmap cache (biggest first) instead of clearing it. The full clear is
         // onLowMemory now - the level that means the process is about to die.
-        val graded = trim.indexOf("trimImageMemoryCache(this)")
+        // The graded trim takes the fraction it gives back (ImageCacheTrim),
+        // because the CRITICAL bite is smaller than the backgrounding clear.
+        val graded = trim.indexOf("trimImageMemoryCache(this,")
         assertTrue("the graded trim is under the critical guard", graded > 0)
         assertTrue(
             "F2: RUNNING_LOW is a hint, and on these boxes it fires during " +
@@ -113,7 +115,7 @@ class ScrollSmoothnessContractTest {
         assertTrue(
             "and the CRITICAL branch itself trims, never clears: that is the rail " +
                 "being scrolled: $foreground",
-            foreground.contains("trimImageMemoryCache(this)") &&
+            foreground.contains("trimImageMemoryCache(this,") &&
                 !foreground.contains("releaseImageMemoryCache(this)")
         )
         assertTrue(

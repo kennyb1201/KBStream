@@ -188,9 +188,12 @@ class SpotlightHomeContractTest {
             section.contains("onPlay = { page ->") && section.contains("onDetails = { page ->")
         )
         assertFalse(
-            "and NOTHING in it reads the focused card: the hero cycling is the " +
-                "point, not an oversight",
-            section.contains("focusedItem")
+            "and the billboard's own arguments never name the focused card: the hero " +
+                "cycling is the point, not an oversight. (The file's one focused-card " +
+                "read is the trailer pre-warm's id, below this call.)",
+            section.substringAfter("MobileBillboard(")
+                .substringBefore("onPillUpPressed")
+                .contains("focusedItem")
         )
     }
 
