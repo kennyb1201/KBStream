@@ -12,6 +12,8 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.kennyb1201.kbstream.data.addon.AppContextHolder
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -92,6 +94,23 @@ internal object ImdbTrailerResolver {
     }
 
     /**
+     * The coalescing map (dig four, 2026-11-16, §1a).
+     *
+     * The resolver had only `synchronized(cache)` around the map itself, so two
+     * prefetches for the same title that overlapped ran the FULL chain twice -
+     * two GraphQL calls, and, when neither answered, two title-page loads
+     * queued one behind the other on the single [webViewGate] permit. The hero
+     * effect restarted per hero-state change and the Home screen is the only
+     * caller, but nothing in the resolver prevented that shape.
+     *
+     * Only the page-allowed (prefetch) path coalesces: a PLAY press must never
+     * wait on a prefetch that may be spending the eighteen-second page budget,
+     * which is [resolve]'s whole reason for taking `allowPage`.
+     */
+    private val inFlight =
+        java.util.concurrent.ConcurrentHashMap<String, CompletableDeferred<ImdbStreamSelector.Pick?>>()
+
+    /**
      * ONE temporary WebView at a time, on Main, destroyed before the permit is
      * handed on. The gate is the whole point: a hero rotation or two surfaces
      * asking at once must not stack WebViews on a TV.
@@ -126,6 +145,38 @@ internal object ImdbTrailerResolver {
         val id = ImdbTrailerData.imdbIdOf(imdbId) ?: return null
         cached(id)?.let { entry -> return entry.pick }
 
+        // A play press resolves on its own (see [inFlight]): it must not wait on
+        // a prefetch that is allowed to spend the page budget.
+        if (!allowPage) return resolveUncoalesced(id, allowPage = false)
+
+        val mine = CompletableDeferred<ImdbStreamSelector.Pick?>()
+        val existing = inFlight.putIfAbsent(id, mine)
+        if (existing != null) return existing.await()
+
+        return try {
+            val pick = resolveUncoalesced(id, allowPage = true)
+            mine.complete(pick)
+            pick
+        } catch (e: CancellationException) {
+            // The owner was cancelled (the focus moved again). Awaiters are not
+            // cancelled with it - a cancellation in another scope must not cancel
+            // theirs - they are told "nothing came back", which is what a caller
+            // does with a null anyway, and nothing is cached on this path.
+            mine.complete(null)
+            throw e
+        } catch (e: Throwable) {
+            mine.complete(null)
+            throw e
+        } finally {
+            inFlight.remove(id, mine)
+        }
+    }
+
+    /** The lookup itself, with no coalescing (see [resolve]). */
+    private suspend fun resolveUncoalesced(
+        id: String,
+        allowPage: Boolean
+    ): ImdbStreamSelector.Pick? {
         when (val answer = ImdbTrailerApi.primaryVideo(id)) {
             is ImdbTrailerData.Result.Found -> {
                 val pick = select(answer.video)

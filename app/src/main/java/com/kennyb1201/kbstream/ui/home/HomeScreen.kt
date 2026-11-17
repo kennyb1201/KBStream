@@ -3319,7 +3319,22 @@ private fun HomeHeroHost(
     // The IMDb pre-resolve, on its own effect so its title-page fallback (~8 s,
     // 18 s worst case) can never delay the YouTube pre-warm below: the two are
     // independent sources and the play reads whichever is ready.
-    LaunchedEffect(heroImdbId, heroTmdbDetail.value?.id) {
+    //
+    // Gated (dig four, 2026-11-16, §1a). This used to fire on every hero-id
+    // change whether or not a trailer could ever play - no autoplay check, no
+    // suppression check - and its miss path builds a WebView and loads the IMDb
+    // title page on `Dispatchers.Main.immediate`, up to 18 s of it. It now fires
+    // under exactly the condition the YouTube pre-warm below uses, and the
+    // resolver coalesces overlapping prefetches for the same title so the hero
+    // effect restarting cannot run the chain twice.
+    val heroTrailerAutoplay = AppPreferences.getHeroTrailerAutoplay(context)
+    LaunchedEffect(
+        heroImdbId,
+        heroTmdbDetail.value?.id,
+        heroTrailerAutoplay,
+        trailerSuppressed
+    ) {
+        if (!heroTrailerAutoplay || trailerSuppressed) return@LaunchedEffect
         runCatchingCancellable {
             TrailerPlayerLauncher.prefetchImdbTrailer(
                 imdbId = heroImdbId,
