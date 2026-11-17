@@ -318,12 +318,9 @@ internal fun SpotlightHeroSection(
         // below only keeps it from starting a new one.
         trailerSuppressed = cardExpanded,
         onTrailerPlayingChange = onTrailerPlayingChange,
-        // Play is the billboard's own press: it asks the Detail page to press its
-        // own Play (see BillboardPlaySelection), exactly as the phone does.
-        onPlay = { page ->
-            BillboardPlaySelection.request(page.preview.id)
-            onPlay(page.preview)
-        },
+        // Play carries the autoplay intent on the route, exactly as the phone
+        // does (spec 2026-11-17, F1): Detail presses its own Play on arrival.
+        onPlay = { page -> onPlay(page.preview) },
         onDetails = { page -> onDetails(page.preview) },
         // F4's signal, and F6's UP chain: both belong to the pill group, so the
         // billboard reports the first and asks the second.

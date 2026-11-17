@@ -424,10 +424,14 @@ class MobileBillboardContractTest {
     fun `Play is Detail's own Play, not a second resolve`() {
         val home = mobileHome()
 
+        // Play carries the intent on the ROUTE (spec 2026-11-17, F1): the same
+        // Details navigation, plus the flag Detail presses its own Play with.
         assertTrue(
-            home.contains(
-                "onPlay = { page -> BillboardPlaySelection.request(page.preview.id) onItemClick(page.preview) }"
-            )
+            home.contains("onPlay = { page -> onBillboardPlay(page.preview) }")
+        )
+        assertFalse(
+            "and Details stays a plain open, with no autoplay flag",
+            home.contains("onDetails = { page -> onBillboardPlay(page.preview) }")
         )
         // The billboard must not build a streams target or resolve a source: it
         // carries no copy of Detail's autoplay/episode rules.
@@ -439,10 +443,11 @@ class MobileBillboardContractTest {
         assertFalse(billboard.contains("awaitStreamRootId"))
         assertFalse(billboard.contains("ManualSourceSelection"))
 
-        // Detail consumes the request and presses the SAME function its Play
-        // button calls.
+        // Detail reads the ROUTE's flag and presses the SAME function its Play
+        // button calls (F2) - no global one-shot to expire or be consumed by
+        // another page.
         val detail = mobileDetail()
-        assertTrue(detail.contains("billboardPlay = BillboardPlaySelection.consume(id)"))
+        assertTrue(detail.contains("autoPlay: Boolean = false,"))
         val effect = detail.substring(
             detail.indexOf("billboardPlayDelivered = true"),
             detail.indexOf("billboardPlayDelivered = true") + 80
@@ -450,7 +455,7 @@ class MobileBillboardContractTest {
         assertTrue(effect.contains("playCurrent()"))
         // Once, and only after the page has its title (and a series its listing).
         assertTrue(detail.contains("if (normalizedType == \"series\" && episodesLoading) return@LaunchedEffect"))
-        assertTrue(detail.contains("if (!billboardPlay || billboardPlayDelivered || isLoading) return@LaunchedEffect"))
+        assertTrue(detail.contains("if (!autoPlay || billboardPlayDelivered || isLoading) return@LaunchedEffect"))
     }
 
     // ── trailers ────────────────────────────────────────────────────────

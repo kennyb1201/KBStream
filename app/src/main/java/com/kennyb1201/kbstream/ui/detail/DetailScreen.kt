@@ -682,6 +682,16 @@ fun DetailScreen(
         List<TmdbCastMember>
     ) -> Unit,
     initialTarget: StreamsTarget? = null,
+    /**
+     * The billboard's Play travelled here on the route (spec 2026-11-17, F1/F3):
+     * press this page's own Play once it is ready.
+     *
+     * Not a [StreamsTarget] on purpose - the billboard must not name a stream or
+     * an episode, and this page already resolves the movie's resume and the
+     * series' resume/next-up. False for every other way in, so the Details
+     * button never autoplays.
+     */
+    autoPlay: Boolean = false,
     initialPoster: String? = null,
     initialBackdrop: String? = null,
     initialClearLogo: String? = null,
@@ -725,6 +735,7 @@ fun DetailScreen(
             // carries its target, the cover splash is painted from the art it
             // arrived with, and both hand-backs below feed that same splash.
             initialTarget = initialTarget,
+            autoPlay = autoPlay,
             initialPoster = initialPoster,
             initialBackdrop = initialBackdrop,
             initialClearLogo = initialClearLogo,
@@ -4985,6 +4996,10 @@ fun DetailScreen(
             var autoPlayed by remember { mutableStateOf(false) }
             LaunchedEffect(
                 initialTarget,
+                // F3: the billboard's Play is a press like any other, so it is a
+                // key of this effect rather than a second delivery path - the
+                // target built here IS the target the Play button builds.
+                autoPlay,
                 playPress,
                 manualPick,
                 startOver,
@@ -5007,7 +5022,10 @@ fun DetailScreen(
                 if (
                     !manualPick &&
                     !startOver &&
-                    initialTarget == null
+                    initialTarget == null &&
+                    // The billboard's Play is the page's own press, so it
+                    // deliberately has no deep-linked episode to wait for.
+                    !autoPlay
                 ) return@LaunchedEffect
                 // The episode list: a press waits for it while it is LOADING -
                 // the target is the season's next episode, and the list is what
@@ -5047,6 +5065,10 @@ fun DetailScreen(
                 if (
                     !manualPick &&
                     !startOver &&
+                    // A billboard Play on a never-watched movie has no resume
+                    // row to wait for: it plays from the start, exactly like the
+                    // button beside it.
+                    !autoPlay &&
                     normalizedType != "series" &&
                     resumeInfo == null
                 ) return@LaunchedEffect
@@ -5076,7 +5098,8 @@ fun DetailScreen(
                 Log.d(
                     DETAIL_PLAY_TAG,
                     "play delivered: manual=$manualPick startOver=$startOver " +
-                        "deepLink=${initialTarget != null} press=$playPress " +
+                        "deepLink=${initialTarget != null} billboard=$autoPlay " +
+                        "press=$playPress " +
                         "target=${autoPlayTarget.contentType}:${autoPlayTarget.streamId}"
                 )
                 if (manualPick) {

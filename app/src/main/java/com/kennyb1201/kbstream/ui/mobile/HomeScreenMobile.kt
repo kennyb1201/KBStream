@@ -176,7 +176,6 @@ import com.kennyb1201.kbstream.ui.home.BILLBOARD_KEN_BURNS_MANUAL_MS
 import com.kennyb1201.kbstream.ui.home.BILLBOARD_MAX_PAGES
 import com.kennyb1201.kbstream.ui.home.BILLBOARD_SEGMENT_TRACK_DP
 import com.kennyb1201.kbstream.ui.home.BillboardPage
-import com.kennyb1201.kbstream.ui.home.BillboardPlaySelection
 import com.kennyb1201.kbstream.ui.home.billboardHeroArt
 import com.kennyb1201.kbstream.ui.home.billboardPageArt
 import com.kennyb1201.kbstream.ui.home.BillboardSweep
@@ -267,6 +266,12 @@ import kotlinx.coroutines.withTimeoutOrNull
 @Composable
 fun HomeScreenMobile(
     onItemClick: (MetaPreview) -> Unit,
+    /**
+     * The billboard's Play press (spec 2026-11-17, F1): the Details route plus
+     * the flag that makes Detail press its own Play on arrival. Separate from
+     * [onItemClick] so Details never autoplays.
+     */
+    onBillboardPlay: (MetaPreview) -> Unit = onItemClick,
     onOpenDetailTarget: (MetaPreview, StreamsTarget, String?) -> Unit,
     // The Continue Watching menu's "Play Manually": the shell's own streams
     // route (the one the TV card uses), so a phone pick reaches the picker with
@@ -729,14 +734,10 @@ fun HomeScreenMobile(
                             // the Home is not recomposed per scroll.
                             scrollHeld = { listState.isScrollInProgress },
                             // Play asks the Detail page to press its own Play:
-                            // the request carries this title's id, and Detail's
-                            // existing handler does the resolving (see
-                            // BillboardPlaySelection). Nothing here chooses a
-                            // stream or an episode.
-                            onPlay = { page ->
-                                BillboardPlaySelection.request(page.preview.id)
-                                onItemClick(page.preview)
-                            },
+                            // the route carries the intent, and Detail's own
+                            // handler does the resolving. Nothing here chooses a
+                            // stream, an episode or a source (F1).
+                            onPlay = { page -> onBillboardPlay(page.preview) },
                             onDetails = { page -> onItemClick(page.preview) }
                         )
                     }

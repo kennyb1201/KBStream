@@ -63,7 +63,10 @@ class DetailSilentDeadEndsContractTest {
     /** The auto-play effect: its keys and the wait that decides to proceed. */
     private val autoPlay by lazy {
         tv.substring(
-            tv.indexOf("initialTarget,\n                playPress,"),
+            // Anchored on the effect's signature rather than on its first two
+            // keys: new keys land between them (the billboard's route flag,
+            // spec 2026-11-17 F3), and the body being pinned is the wait below.
+            tv.indexOf("LaunchedEffect(\n                initialTarget,"),
             tv.indexOf("autoPlayed = true")
         )
     }

@@ -358,6 +358,19 @@ sealed class Screen {
         val type: String,
         val id: String,
         val pendingTarget: StreamsTarget? = null,
+        /**
+         * "Press Play once this page is ready" (spec 2026-11-17, F1).
+         *
+         * The billboard's Play is Detail's own Play press, so it carries the
+         * INTENT with the navigation instead of leaving a global request behind
+         * for the page to find. It is deliberately not a [StreamsTarget]: the
+         * billboard must not name a stream or an episode - Detail already
+         * resolves the movie's resume and the series' resume/next-up.
+         *
+         * False everywhere else, so the Details button and every ordinary visit
+         * never autoplay.
+         */
+        val autoPlay: Boolean = false,
         val itemPoster: String? = null,
         val returnTo: Screen = Home,
         val itemBackdrop: String? = null,
@@ -2916,6 +2929,18 @@ fun AppRoot(
                     )
                 },
 
+                // The billboard's Play (spec 2026-11-17, F1): the same route as
+                // Details, plus the flag that makes Detail press its own Play on
+                // arrival. Nothing here chooses a stream, an episode or a source.
+                onBillboardPlay = { meta: MetaPreview ->
+                    screen = Screen.Detail(
+                        meta.type,
+                        meta.id,
+                        autoPlay = true,
+                        returnTo = Screen.Home
+                    )
+                },
+
                 onOpenDetailTarget = {
                         meta,
                         target,
@@ -3627,20 +3652,24 @@ fun AppRoot(
 
         is Screen.Detail -> {
 
-            // A pending target is a one-shot Continue Watching / up-next
-            // request, so it must never be stored as a Back destination:
+            // A pending target and a billboard Play flag are one-shot requests,
+            // so neither may be stored as a Back destination:
             // returning to that Detail screen fires its LaunchedEffect again,
             // which reopens the player and makes Back look like it did
             // nothing. Every drill-down opened from this page (actor, studio,
             // genre, streams) returns here, and keeping the poster / backdrop
             // / logo / overview is what lets it repaint instantly instead of
             // re-resolving meta.
-            val stableReturnTo = current.copy(pendingTarget = null)
+            val stableReturnTo = current.copy(pendingTarget = null, autoPlay = false)
 
             DetailScreen(
                 type = current.type,
                 id = current.id,
                 initialTarget = current.pendingTarget,
+                // F1/F3: the billboard's Play press rides the route, so Return
+                // from the player lands on this same Detail without re-firing
+                // it (see stableReturnTo above).
+                autoPlay = current.autoPlay,
                 initialPoster = current.itemPoster,
                 initialBackdrop = current.itemBackdrop,
                 initialClearLogo = current.itemClearLogo,

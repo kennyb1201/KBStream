@@ -4982,6 +4982,14 @@ private fun CompactUpNextCard(
 @Composable
 fun HomeScreen(
     onItemClick: (MetaPreview) -> Unit,
+    /**
+     * The billboard's Play press (spec 2026-11-17, F1).
+     *
+     * Same route as [onItemClick], plus the flag that makes Detail press its own
+     * Play on arrival. It stays a separate callback so Details and every card
+     * press keep opening the page without autoplaying.
+     */
+    onBillboardPlay: (MetaPreview) -> Unit = onItemClick,
     onOpenDetailTarget: (
         MetaPreview,
         StreamsTarget,
@@ -5026,6 +5034,7 @@ fun HomeScreen(
     if (!FormFactor.isTv) {
         HomeScreenMobile(
             onItemClick = onItemClick,
+            onBillboardPlay = onBillboardPlay,
             onOpenDetailTarget = onOpenDetailTarget,
             // The Continue Watching menu's "Play Manually" is the one phone
             // route that needs the shell's streams screen: the card's tap and
@@ -7195,7 +7204,9 @@ fun HomeScreen(
                                         )
                                     },
                                     cardExpanded = spotlightCardExpanded,
-                                    onPlay = onItemClick,
+                                    // Play carries the autoplay intent; Details
+                                    // opens the page without it.
+                                    onPlay = onBillboardPlay,
                                     onDetails = onItemClick,
                                     onTrailerPlayingChange = { playing ->
                                         spotlightBillboardTrailerPlaying = playing

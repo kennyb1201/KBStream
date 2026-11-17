@@ -154,7 +154,6 @@ import com.kennyb1201.kbstream.data.youtube.heroTrailerIdentityRefusal
 import com.kennyb1201.kbstream.data.youtube.heroTrailerRetryPlan
 import com.kennyb1201.kbstream.data.youtube.signedUrl
 import com.kennyb1201.kbstream.ui.detail.DetailTrailerLaunch
-import com.kennyb1201.kbstream.ui.home.BillboardPlaySelection
 import com.kennyb1201.kbstream.ui.home.HeroInlineTrailerPlayer
 import com.kennyb1201.kbstream.ui.home.HeroTrailerPlayback
 import com.kennyb1201.kbstream.ui.home.UNKNOWN_SHOW_NAME
@@ -265,6 +264,12 @@ fun DetailScreenMobile(
         List<TmdbCastMember>
     ) -> Unit,
     initialTarget: StreamsTarget? = null,
+    /**
+     * The billboard's Play travelled here on the route (spec 2026-11-17, F2):
+     * press this page's own Play once it is ready. False for every other way in,
+     * so the Details button and an ordinary visit never autoplay.
+     */
+    autoPlay: Boolean = false,
     initialPoster: String? = null,
     initialBackdrop: String? = null,
     initialClearLogo: String? = null,
@@ -895,35 +900,31 @@ fun DetailScreenMobile(
             episode?.let { openEpisode(it, currentSeason) }
         }
 
-        // ---- Home's billboard Play handoff ----
+        // ---- Home's billboard Play, carried on the route ----
         //
         // The billboard's Play button is spec'd to behave EXACTLY like pressing
-        // Play on this page, so it does not play anything itself: it raises
-        // [BillboardPlaySelection] with the title's id and navigates here, and
-        // this effect calls the SAME `playCurrent()` the Play button calls. That
-        // is what keeps the two in step for free - the autoplay/picker branch
-        // under Auto-select, the movie resume, and the series' resume/next-up
-        // choice are resolved once, here, and the billboard carries no second
-        // copy of those rules.
+        // Play on this page, so it does not play anything itself: the route
+        // carries [autoPlay] and this effect calls the SAME `playCurrent()` the
+        // Play button calls. That is what keeps the two in step for free - the
+        // autoplay/picker branch under Auto-select, the movie resume, and the
+        // series' resume/next-up choice are resolved once, here, and the
+        // billboard carries no second copy of those rules.
         //
-        // Read once, and only for the id it was raised for: a request can never
-        // start the wrong title (a stale back-stack entry, or a reused Detail
-        // view model), and a request whose navigation never happened cannot
-        // turn a later, ordinary Play press into an autoplay.
-        var billboardPlay by remember(type, id) { mutableStateOf(false) }
-        LaunchedEffect(type, id) {
-            billboardPlay = BillboardPlaySelection.consume(id)
-        }
+        // Keyed on the FLAG rather than on a global one-shot (spec 2026-11-17,
+        // F2/F5): the intent arrives with the navigation, so it cannot expire
+        // mid-load, cannot be consumed by another page, and cannot start the
+        // wrong title. Back-stack copies clear it (MainActivity's stableReturnTo),
+        // so returning here and any later visit never autoplay.
         var billboardPlayDelivered by remember(type, id) { mutableStateOf(false) }
         LaunchedEffect(
-            billboardPlay,
+            autoPlay,
             isLoading,
             meta,
             tmdbDetail,
             episodesLoading,
             episodes
         ) {
-            if (!billboardPlay || billboardPlayDelivered || isLoading) return@LaunchedEffect
+            if (!autoPlay || billboardPlayDelivered || isLoading) return@LaunchedEffect
             if (meta == null && tmdbDetail == null) return@LaunchedEffect
             // A series needs its listing before it can name an episode, the
             // same wait the Play button's own target has below.
