@@ -170,11 +170,12 @@ class ScrollRoundTwoContractTest {
         // pin is re-anchored on the branch it describes rather than on the whole
         // critical block.
         assertTrue(
-            "a foreground CRITICAL is a graded trim",
+            "a foreground CRITICAL is a graded trim - and the smaller bite " +
+                "(round four F3c), because this is the only trim with a rail on screen",
             app.contains(
                 "} else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {\n" +
-                    "                trimImageMemoryCache(this)"
-            )
+                    "                // The smaller bite (round four F3c): this path runs with the\n"
+            ) && app.contains("trimImageMemoryCache(this, ImageCacheTrim.SCROLL_FRACTION)")
         )
         assertTrue(
             "and a full clear waits for BACKGROUND and above, where nothing is on " +
@@ -217,8 +218,9 @@ class ScrollRoundTwoContractTest {
         // (see LruTrimWiringContractTest), so this pin names the shape that
         // replaced the hero-first pass rather than the pass itself.
         assertTrue(
-            "the trim's size comes from the pure fraction rule",
-            memory.contains("ImageCacheTrim.targetBytes(resident)")
+            "the trim's size comes from the pure fraction rule, at the fraction the " +
+                "caller asked for",
+            memory.contains("ImageCacheTrim.targetBytes(resident, fraction)")
         )
         assertTrue(
             "and the eviction order is the cache's own LRU, not a computed list",

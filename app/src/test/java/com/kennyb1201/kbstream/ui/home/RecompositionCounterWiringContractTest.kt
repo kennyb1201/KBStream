@@ -66,11 +66,12 @@ class RecompositionCounterWiringContractTest {
         )
         assertTrue(
             "the line names the peak per 16 ms window, which is the number F4 reads",
-            trace.contains("peak=\$peakPerWindow per") && trace.contains("WINDOW_MS")
+            trace.contains("peak=\${c.peakPerWindow} per") && trace.contains("WINDOW_MS")
         )
         assertTrue(
-            "and it says nothing before a rail item has recomposed",
-            trace.contains("if (total <= 0L) return emptyList()")
+            "and a surface says nothing before one of its items has recomposed " +
+                "(round four F8b made this per surface)",
+            trace.contains("if (c.total <= 0L) return@mapNotNull null")
         )
     }
 
