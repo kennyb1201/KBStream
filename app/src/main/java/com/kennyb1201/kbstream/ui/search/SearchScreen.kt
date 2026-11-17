@@ -61,6 +61,9 @@ import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.mobile.SearchScreenMobile
 import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import com.kennyb1201.kbstream.ui.components.WarmRowAhead
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntSize
 
 @Composable
 fun SearchScreen(
@@ -765,6 +768,28 @@ fun SearchScreen(
                                             .padding(vertical = 8.dp)
                                     )
                                 }
+                            }
+                            // Round four F5: the titles rail's next posters,
+                            // decoded before the D-pad walks to them. Poster Size
+                            // dp, because that is the box GlobalPosterCard is
+                            // handed; portrait only, because a landscape tile
+                            // draws resolved TMDB art instead.
+                            val searchPosterSize = rememberPosterSize()
+                            val searchLandscape = AppPreferences.landscapePostersActive(
+                                LocalContext.current
+                            )
+                            if (!searchLandscape) {
+                                val searchDensity = LocalDensity.current
+                                WarmRowAhead(
+                                    state = titlesRailState,
+                                    count = results.size,
+                                    sizePx = with(searchDensity) {
+                                        IntSize(
+                                            searchPosterSize.width.roundToPx(),
+                                            searchPosterSize.height.roundToPx()
+                                        )
+                                    }
+                                ) { index -> results.getOrNull(index)?.poster }
                             }
                             itemsIndexed(
                                 items = results,

@@ -72,6 +72,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
@@ -90,6 +91,7 @@ import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.notifications.ReminderRules
 import com.kennyb1201.kbstream.data.reporting.GuideTrace
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
+import com.kennyb1201.kbstream.ui.components.WarmRowAhead
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
@@ -1103,6 +1105,24 @@ internal fun GuideGridView(
                                 }
                             }
                         }
+                    }
+                }
+
+                // Round four F5: the next channels' logos, decoded before the
+                // scroll reaches them. 20dp is what the mark is drawn at inside
+                // its 28dp plate (see ChannelCell's 4dp inset) - warming the plate
+                // would be a bitmap the cell never asks for.
+                val logoDensity = LocalDensity.current
+                WarmRowAhead(
+                    state = rowListState,
+                    count = rows.size,
+                    sizePx = with(logoDensity) {
+                        val side = 20.dp.roundToPx()
+                        IntSize(side, side)
+                    }
+                ) { index ->
+                    rows.getOrNull(index)?.let { row ->
+                        row.item.channel.logoUrl ?: row.item.epgChannel?.iconUrl
                     }
                 }
 

@@ -238,6 +238,41 @@ internal fun WarmGridAhead(
 }
 
 /**
+ * The same window for a grid whose cell draws MORE than one image - a game card
+ * carries both teams' crests (round four F5).
+ *
+ * Everything else is the key walk above: [keys] is the grid's own content order,
+ * [urlsFor] answers the images one cell will draw, and a key the caller does not
+ * know (a section header) warms nothing.
+ */
+@Composable
+internal fun WarmGridAhead(
+    state: LazyGridState,
+    keys: List<String>,
+    urlsFor: (String) -> List<String>,
+    sizePx: IntSize,
+    ahead: Int = WARM_AHEAD_CELLS
+) {
+    val context = LocalContext.current
+    LaunchedEffect(state, keys, ahead) {
+        val latestUrlsFor = urlsFor
+        snapshotFlow {
+            (state.layoutInfo.visibleItemsInfo.lastOrNull()?.key as? String)
+        }
+            .distinctUntilChanged()
+            .collect { lastKey ->
+                if (lastKey == null) return@collect
+                val position = keys.indexOf(lastKey)
+                if (position < 0) return@collect
+                val urls = keys.drop(position + 1).take(ahead)
+                    .flatMap { latestUrlsFor(it) }
+                if (urls.isEmpty()) return@collect
+                ArtWarm.warmAll(context, urls, sizePx.width, sizePx.height)
+            }
+    }
+}
+
+/**
  * The landscape half of the same window (round four F5).
  *
  * In landscape mode a card's art is not a url it already holds: it is a resolve -

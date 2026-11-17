@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -60,11 +61,13 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -136,6 +139,7 @@ import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.touch.TouchChoiceChip
 import com.kennyb1201.kbstream.ui.components.touch.TouchLinkChip
+import com.kennyb1201.kbstream.ui.components.WarmRowAhead
 import com.kennyb1201.kbstream.ui.detail.DetailMediaRow
 import com.kennyb1201.kbstream.ui.detail.EpisodeOrderSection
 import com.kennyb1201.kbstream.ui.detail.SeasonPosterArt
@@ -2308,9 +2312,33 @@ fun DetailScreenMobile(
 
                 if (cast.isNotEmpty()) {
                     item(key = "cast") {
+                        // Round four F5: the cast row's next portraits, decoded
+                        // before the thumb reaches them. Hoisted out of `items` so
+                        // the warm and the row read the SAME deduped list - a
+                        // different list would warm cards that are not there - and
+                        // sized at the 64dp avatar AsyncImage actually draws, not
+                        // at the 84dp column that holds the caption too.
+                        val castRow = remember(cast) {
+                            cast.distinctBy { it.id to it.character.orEmpty() }.take(20)
+                        }
+                        val castRowState = rememberLazyListState()
+                        val castDensity = LocalDensity.current
+                        WarmRowAhead(
+                            state = castRowState,
+                            count = castRow.size,
+                            sizePx = with(castDensity) {
+                                val side = 64.dp.roundToPx()
+                                IntSize(side, side)
+                            }
+                        ) { index ->
+                            castRow.getOrNull(index)?.profilePath?.let { path ->
+                                TmdbRepository.PROFILE_BASE + path
+                            }
+                        }
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             MobileSectionTitle("Cast")
                             LazyRow(
+                                state = castRowState,
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(14.dp)
                             ) {
@@ -2325,9 +2353,9 @@ fun DetailScreenMobile(
                                     // identical credit rows (TMDB does repeat
                                     // one (id, character) pair) still shared a
                                     // key and threw from LazyRow even though
-                                    // two ROLES no longer did.
-                                    cast.distinctBy { it.id to it.character.orEmpty() }
-                                        .take(20),
+                                    // two ROLES no longer did. Built above so the
+                                    // warm reads the identical list.
+                                    castRow,
                                     key = { member ->
                                         "person${member.id}${member.character.orEmpty()}"
                                     },
@@ -2564,7 +2592,25 @@ fun DetailScreenMobile(
                                     )
                                 }
                             }
+                            // Round four F5 on the media strip: 240x135 is what a
+                            // landscape thumb is drawn at. A PORTRAIT card in the
+                            // same strip draws at 120x180 instead, so it is
+                            // skipped rather than warmed at the wrong size.
+                            val mediaRowState = rememberLazyListState()
+                            val mediaDensity = LocalDensity.current
+                            WarmRowAhead(
+                                state = mediaRowState,
+                                count = mediaCards.size,
+                                sizePx = with(mediaDensity) {
+                                    IntSize(240.dp.roundToPx(), 135.dp.roundToPx())
+                                }
+                            ) { index ->
+                                mediaCards.getOrNull(index)
+                                    ?.takeIf { !it.portrait }
+                                    ?.imageUrl
+                            }
                             LazyRow(
+                                state = mediaRowState,
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {

@@ -87,6 +87,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -122,6 +123,7 @@ import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.KB_EASE
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
+import com.kennyb1201.kbstream.ui.components.WarmGridAhead
 import com.kennyb1201.kbstream.ui.mobile.SportsHubScreenMobile
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
@@ -1722,6 +1724,39 @@ private fun LeagueBody(
     val tournamentsLead = !liveLeads && section.tournaments.isNotEmpty()
     val upcomingLeads = !liveLeads && !tournamentsLead && upcoming.isNotEmpty()
     val finalLeads = !liveLeads && !tournamentsLead && !upcomingLeads && final.isNotEmpty()
+
+    // Round four F5: the crests of the next cards, decoded before the D-pad
+    // reaches them. A game card draws TWO marks (away, home) at 40dp each, which
+    // is why this window takes a list of urls per cell rather than one. The keys
+    // are the grid's own order - each section's header is a key this map does not
+    // know, so a header as the last visible cell warms nothing and the next frame
+    // with a card at the edge takes over.
+    val crestUrls = buildMap {
+        (live + upcoming + final).forEach { game ->
+            put(
+                game.id,
+                listOfNotNull(
+                    game.away.logoUrl?.takeIf { it.isNotBlank() },
+                    game.home.logoUrl?.takeIf { it.isNotBlank() }
+                )
+            )
+        }
+    }
+    val crestDensity = LocalDensity.current
+    WarmGridAhead(
+        state = listState,
+        keys = buildList {
+            addAll(live.map { it.id })
+            addAll(section.tournaments.map { it.id })
+            addAll(upcoming.map { it.id })
+            addAll(final.map { it.id })
+        },
+        urlsFor = { id -> crestUrls[id].orEmpty() },
+        sizePx = with(crestDensity) {
+            val side = 40.dp.roundToPx()
+            IntSize(side, side)
+        }
+    )
 
     HubGrid(
         listState = listState,
