@@ -89,6 +89,7 @@ import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import kotlin.math.round
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -1551,23 +1552,25 @@ class HomeViewModel(
         val requestedId = item.id
         val requestedType = item.type
 
-        // Keep the PREVIOUS item's resolved art (backdrop + clearlogo)
-        // visible while the new item resolves. Nulling these here made the
-        // hero fall back to the raw addon backdrop/poster (a zoomed-in
-        // mess) plus a plain-text title for the 250ms dwell + network time
-        // on EVERY focus change — the "ugly backdrop flashes first"
-        // report. Only ART is held over: meta/detail (name, year, rating,
-        // synopsis) are cleared so the new item's title shows immediately
-        // and no wrong year/description ever appears under it. The
-        // resolution below publishes the new full set together.
-        // (The very first hero after Home opens has no previous art and
-        // resolves from cold — the rail-level prefetch warms that.)
-        _heroMeta.value = _heroMeta.value?.takeIf {
-            it.id == requestedId &&
-                it.type.equals(requestedType, ignoreCase = true)
-        }
-        _heroTmdbDetail.value = null
-        _heroTrailerKey.value = null
+        // NOTHING is cleared here any more (spec 2026-11-16, scrolling round
+        // three F1).
+        //
+        // This used to null `_heroMeta` / `_heroTmdbDetail` /
+        // `_heroTrailerKey` synchronously, before the 150 ms dwell - three
+        // StateFlow writes on every focus change that survived the host
+        // debounce, each recomposing the hero scope. A D-pad WALK (the way the
+        // screen is actually browsed) therefore paid a hero recomposition per
+        // step just for the clearing, and the clearing bought nothing visible:
+        // the hero's text tracks focus instantly from the already-known
+        // MetaPreview on the screen side (HomeScreen's hero title/meta line),
+        // so the only thing the nulls removed was the previous answer the
+        // resolve below is about to replace.
+        //
+        // The previous title's meta, detail, trailer key and ART now all stand
+        // until the new resolve publishes over them, which is the same
+        // hold-over the art already had and the reason it never flashed.
+        // (The very first hero after Home opens has no previous state and
+        // resolves from cold - the rail-level prefetch warms that.)
 
         heroResolveJob = viewModelScope.launch {
             try {
@@ -1585,6 +1588,9 @@ class HomeViewModel(
                 // cache while the viewer is still looking at this one. See
                 // [warmHeroLookahead].
                 warmHeroLookahead(item)
+                // The rail-size half: the tiles the walk will land on, warmed
+                // both ways and across the rails above and below (F3).
+                warmRailTiles(item)
 
                 coroutineScope {
                     val addonMetaDeferred = async {
@@ -1733,6 +1739,32 @@ class HomeViewModel(
                             _heroTmdbDetail.value = earlyDetail
                             _heroTrailerKey.value = heroTrailerKeyOf(earlyDetail)
                         }
+                        // F2 (spec 2026-11-16, scrolling round three): the hero's
+                        // TEXT is published HERE, from the TMDB leg, instead of
+                        // being held until the add-on answered.
+                        //
+                        // The add-on's meta is a network round trip to whatever
+                        // add-on owns the row, and it used to gate the composite
+                        // Meta: year, rating, synopsis and cast waited for it even
+                        // though this exact object has just supplied them. The
+                        // add-on leg below now REFINES this Meta in place when it
+                        // lands, so the hero's text never sits on placeholders
+                        // waiting on a remote catalog.
+                        _heroMeta.value = buildHeroMeta(
+                            item = item,
+                            requestedId = requestedId,
+                            requestedType = requestedType,
+                            addonMeta = null,
+                            tmdb = earlyDetail,
+                            // No artwork leg yet: the art tier publishes on its
+                            // own dwell-gated path, so this is only the Meta's
+                            // own fallback chain (the card's own backdrop today).
+                            backdrop = earlyDetail?.backdropPath
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let { TmdbRepository.BACKDROP_BASE + it }
+                                ?: item.background,
+                            logo = null
+                        )
                     }
 
                     val resolvedAddonMeta = addonMetaDeferred.await()
@@ -1805,91 +1837,15 @@ Log.d(
                             ?: resolvedAddonMeta?.poster?.takeIf { it.isNotBlank() }
                             ?: item.poster?.takeIf { it.isNotBlank() }
 
-                    val finalMeta = resolvedAddonMeta?.copy(
-    logo = resolvedLogo ?: resolvedAddonMeta.logo,
-    background = resolvedBackdrop ?: resolvedAddonMeta.background,
-    description =
-        resolvedAddonMeta.description
-    ?.trim()
-    ?.takeIf { it.isNotBlank() }
-            ?: resolvedTmdbDetail
-                ?.displayDescription()
-            ?: item.description,
-
-    // Year and score, from TMDB when the add-on sent neither. An add-on is
-    // authoritative about its own catalog entry, but plenty of them ship a
-    // preview with a name and artwork and nothing else - the pinned "Top
-    // Today" rails are the extreme case, and a catalog-only add-on resolves
-    // no meta at all (which is why the `?:` below already fills both from
-    // TMDB). Filling them here too means every reader of this Meta gets the
-    // same answer instead of each one re-deriving a fallback, and it costs
-    // nothing: resolvedTmdbDetail is resolved for this hero either way.
-    releaseInfo =
-        resolvedAddonMeta.releaseInfo
-    ?.trim()
-    ?.takeIf { it.isNotBlank() }
-            ?: resolvedTmdbDetail?.releaseYear(),
-    imdbRating =
-        resolvedAddonMeta.imdbRating
-    ?.trim()
-    ?.takeIf { it.isNotBlank() }
-            ?: resolvedTmdbDetail?.displayRating()
-) ?: resolvedTmdbDetail?.let { tmdb ->
-    Meta(
-        id = requestedId,
-        type = requestedType,
-
-        name = tmdb.name
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-            ?: tmdb.title
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-            ?: item.name,
-
-        poster = tmdb.posterPath
-            ?.takeIf { it.isNotBlank() }
-            ?.let(TmdbRepository.POSTER_BASE::plus)
-            ?: item.poster,
-
-        background = resolvedBackdrop,
-        logo = resolvedLogo,
-
-        description = tmdb.displayDescription(),
-        releaseInfo = tmdb.releaseYear(),
-        imdbRating = tmdb.displayRating(),
-        runtime = tmdb.displayRuntime(),
-        language = tmdb.displayLanguage(),
-        country = tmdb.displayCountry(),
-
-        genres = tmdb.genres
-            .map { it.name.trim() }
-            .filter { it.isNotEmpty() }
-            .takeIf { it.isNotEmpty() },
-
-        cast = tmdb.credits?.cast
-            ?.map { it.name.trim() }
-            ?.filter { it.isNotEmpty() }
-            ?.distinct()
-            ?.take(12)
-            ?.takeIf { it.isNotEmpty() },
-
-        director = tmdb.credits?.director()
-            ?.name
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-            ?.let(::listOf)
-    )
-} ?: Meta(
-    id = requestedId,
-    type = requestedType,
-    name = item.name,
-    poster = item.poster,
-    background = resolvedBackdrop ?: item.background,
-    logo = resolvedLogo,
-    description = item.description
-)
-
+                    val finalMeta = buildHeroMeta(
+                        item = item,
+                        requestedId = requestedId,
+                        requestedType = requestedType,
+                        addonMeta = resolvedAddonMeta,
+                        tmdb = resolvedTmdbDetail,
+                        backdrop = resolvedBackdrop,
+                        logo = resolvedLogo
+                    )
                     _heroMeta.value = finalMeta
                     // NOTE: finalMeta is null whenever resolvedAddonMeta is null (addon has
                     // no "meta" resource — true for catalog-only addons like Top Today).
@@ -1955,6 +1911,110 @@ Log.d(
             }
         }
     }
+
+    /**
+     * The hero's composite Meta, built from whatever legs have answered
+     * (spec 2026-11-16, scrolling round three F2).
+     *
+     * One spelling, called TWICE: once as soon as the TMDB leg answers - which
+     * behind a rail prefetch is a cache hit, and in any case is not the add-on
+     * round trip - and again when the add-on meta lands, refining the same
+     * fields in place. The hero's text therefore never sits on placeholders
+     * waiting for an add-on, which was the second half of the walk-step cost:
+     * the old code awaited the SLOWEST leg before publishing anything textual.
+     */
+    private fun buildHeroMeta(
+        item: MetaPreview,
+        requestedId: String,
+        requestedType: String,
+        addonMeta: Meta?,
+        tmdb: TmdbDetail?,
+        backdrop: String?,
+        logo: String?
+    ): Meta = addonMeta?.copy(
+    logo = logo ?: addonMeta.logo,
+    background = backdrop ?: addonMeta.background,
+    description =
+        addonMeta.description
+    ?.trim()
+    ?.takeIf { it.isNotBlank() }
+            ?: tmdb
+                ?.displayDescription()
+            ?: item.description,
+
+    // Year and score, from TMDB when the add-on sent neither. An add-on is
+    // authoritative about its own catalog entry, but plenty of them ship a
+    // preview with a name and artwork and nothing else - the pinned "Top
+    // Today" rails are the extreme case, and a catalog-only add-on resolves
+    // no meta at all (which is why the `?:` below already fills both from
+    // TMDB). Filling them here too means every reader of this Meta gets the
+    // same answer instead of each one re-deriving a fallback, and it costs
+    // nothing: tmdb is resolved for this hero either way.
+    releaseInfo =
+        addonMeta.releaseInfo
+    ?.trim()
+    ?.takeIf { it.isNotBlank() }
+            ?: tmdb?.releaseYear(),
+    imdbRating =
+        addonMeta.imdbRating
+    ?.trim()
+    ?.takeIf { it.isNotBlank() }
+            ?: tmdb?.displayRating()
+) ?: tmdb?.let { detail ->
+    Meta(
+        id = requestedId,
+        type = requestedType,
+
+        name = detail.name
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: detail.title
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+            ?: item.name,
+
+        poster = detail.posterPath
+            ?.takeIf { it.isNotBlank() }
+            ?.let(TmdbRepository.POSTER_BASE::plus)
+            ?: item.poster,
+
+        background = backdrop,
+        logo = logo,
+
+        description = detail.displayDescription(),
+        releaseInfo = detail.releaseYear(),
+        imdbRating = detail.displayRating(),
+        runtime = detail.displayRuntime(),
+        language = detail.displayLanguage(),
+        country = detail.displayCountry(),
+
+        genres = detail.genres
+            .map { it.name.trim() }
+            .filter { it.isNotEmpty() }
+            .takeIf { it.isNotEmpty() },
+
+        cast = detail.credits?.cast
+            ?.map { it.name.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.distinct()
+            ?.take(12)
+            ?.takeIf { it.isNotEmpty() },
+
+        director = detail.credits?.director()
+            ?.name
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let(::listOf)
+    )
+} ?: Meta(
+    id = requestedId,
+    type = requestedType,
+    name = item.name,
+    poster = item.poster,
+    background = backdrop ?: item.background,
+    logo = logo,
+    description = item.description
+)
 
     // ── The phone Home billboard ──────────────────────────────────────
     //
@@ -2574,6 +2634,14 @@ Log.d(
     // still warms a rail's worth of cards well ahead of focus.
     private val heroArtPrefetchSemaphore = Semaphore(permits = 2)
 
+    // The rail-tile warm's own in-flight set and permits (F3, round three).
+    // Three at a time: enough that a rail's near field is ready by the time the
+    // walk arrives, few enough that a held direction cannot starve the
+    // foreground decode the viewer is looking at.
+    private val railTileWarmInFlight =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+    private val railTileWarmSemaphore = Semaphore(permits = 3)
+
     // Upper bound on cards warmed per rails build. The previous 120 covered
     // more rails than a viewer reaches before the rest has resolved anyway,
     // while roughly doubling the background TMDB traffic. The focus path still
@@ -2777,6 +2845,140 @@ Log.d(
                     heroArtPrefetchInFlight.remove(key)
                 }
             }
+        }
+    }
+
+    /**
+     * Warms the RAIL-SIZE tile bitmaps of the cards around [item] (spec
+     * 2026-11-16, scrolling round three F3).
+     *
+     * The half of round two's F3 that was never built. [warmHeroLookahead] warms
+     * the next cards at HERO size, which is what the hero swaps to - but a rail
+     * card draws its own ~210x118dp tile, and that bitmap was decoded from disk
+     * on the frame it first appeared. On a box with 32MB of a 48MB cache in use,
+     * every walk step into fresh cards was a first-pass decode (the dig's
+     * `cardDiskDecodes=6635`), each behind a TMDB lookup.
+     *
+     * What this does:
+     *
+     *  - neighbour cards BOTH ways, so a walk back over ground already seen is
+     *    as warm as the walk forward;
+     *  - the head cards of the rail above and below, because a vertical move
+     *    lands on a card in a rail that has not been walked at all;
+     *  - in PARALLEL, not the sequential loop the hero warm runs, so six cards
+     *    cost one card's latency rather than six;
+     *  - at the card's own drawn size, from [HomeRailMetrics] and the display
+     *    density, so the entry written is the entry the card's AsyncImage reads
+     *    (a size mismatch would warm a second, useless entry).
+     *
+     * It reuses [homeLandscapeArt] for the landscape URL, which is the same
+     * memoised, semaphore-limited resolver the rail itself calls - so a warm
+     * also primes the metadata lookup the card would otherwise pay for.
+     *
+     * Not a child of the resolve job (like the hero warm): a walk step that
+     * cancels the resolve must not cancel the warm it already started.
+     */
+    private fun warmRailTiles(item: MetaPreview) {
+        val rails = _rails.value
+        if (rails.isEmpty()) return
+        val railIndex = rails.indexOfFirst { rail ->
+            rail.items.any { it.id == item.id && it.type.equals(item.type, ignoreCase = true) }
+        }
+        if (railIndex < 0) return
+        val rail = rails[railIndex]
+        val index = rail.items.indexOfFirst {
+            it.id == item.id && it.type.equals(item.type, ignoreCase = true)
+        }
+        if (index < 0) return
+
+        val neighbours = buildList {
+            if (index > 0) {
+                addAll(
+                    rail.items
+                        .subList(maxOf(0, index - RAIL_TILE_LOOKAHEAD_BACK), index)
+                        .asReversed()
+                )
+            }
+            addAll(rail.items.drop(index + 1).take(RAIL_TILE_LOOKAHEAD_FORWARD))
+            // The rails above and below: a vertical move's landing card.
+            rails.getOrNull(railIndex - 1)?.items
+                ?.take(RAIL_TILE_LOOKAHEAD_RAIL_HEAD)
+                ?.let { addAll(it) }
+            rails.getOrNull(railIndex + 1)?.items
+                ?.take(RAIL_TILE_LOOKAHEAD_RAIL_HEAD)
+                ?.let { addAll(it) }
+        }
+            .filter { it.id.isNotBlank() }
+            .distinctBy { "${it.type}:${it.id}" }
+        if (neighbours.isEmpty()) return
+
+        val application = getApplication<Application>()
+        val landscape = AppPreferences.homeLandscapeActive(application)
+        val density = application.resources.displayMetrics.density
+        val widthPx = (HomeRailMetrics.widthDp(landscape) * density).roundToInt()
+        val heightPx = (HomeRailMetrics.heightDp(landscape) * density).roundToInt()
+        if (widthPx <= 0 || heightPx <= 0) return
+
+        viewModelScope.launch {
+            neighbours.map { next ->
+                async {
+                    val key = "${next.type}:${next.id}"
+                    if (!railTileWarmInFlight.add(key)) return@async
+                    try {
+                        railTileWarmSemaphore.withPermit {
+                            warmRailTile(
+                                item = next,
+                                landscape = landscape,
+                                widthPx = widthPx,
+                                heightPx = heightPx
+                            )
+                        }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        // Best-effort: the card resolves it properly if this misses.
+                    } finally {
+                        railTileWarmInFlight.remove(key)
+                    }
+                }
+            }.awaitAll()
+        }
+    }
+
+    /**
+     * One rail tile, decoded into the memory cache at the size its card draws.
+     *
+     * Landscape rails draw TMDB's card artwork - through the same resolver the
+     * rail uses, so the warm and the card cannot pick different images - and
+     * poster rails draw the poster the row brought.
+     */
+    private suspend fun warmRailTile(
+        item: MetaPreview,
+        landscape: Boolean,
+        widthPx: Int,
+        heightPx: Int
+    ) {
+        val url = if (landscape) {
+            homeLandscapeArt(
+                LandscapeArtRequest(
+                    id = item.id,
+                    type = item.type,
+                    addonBackdrop = item.background
+                )
+            ).first ?: item.background ?: item.poster
+        } else {
+            item.poster
+        }
+        if (url.isNullOrBlank()) return
+
+        val application = getApplication<Application>()
+        runCatchingCancellable {
+            coil3.SingletonImageLoader.get(application).execute(
+                coil3.request.ImageRequest.Builder(application)
+                    .data(url)
+                    .size(widthPx, heightPx)
+                    .build()
+            )
         }
     }
 
@@ -13729,6 +13931,13 @@ private suspend fun calculateEpisodesRemaining(
 
         /** Cards after the focused one whose hero art the lookahead warms (F3). */
         private const val HERO_LOOKAHEAD_CARDS = 3
+
+        /** Rail tiles warmed each way along the focused card's own rail (F3). */
+        private const val RAIL_TILE_LOOKAHEAD_FORWARD = 4
+        private const val RAIL_TILE_LOOKAHEAD_BACK = 2
+
+        /** Cards warmed at the head of the rails above and below (F3). */
+        private const val RAIL_TILE_LOOKAHEAD_RAIL_HEAD = 2
 
         /**
          * The size the hero actually draws at - the same `Size(1280, 720)`

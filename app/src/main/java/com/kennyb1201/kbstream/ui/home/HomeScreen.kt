@@ -32,6 +32,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.layout.LazyLayoutCacheWindow
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -92,6 +93,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -231,10 +233,13 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
-private val HomePosterWidth = 124.dp
-private val HomePosterHeight = 180.dp
-private val HomeLandscapeWidth = 210.dp
-private val HomeLandscapeHeight = 118.dp
+// The card sizes live in [HomeRailMetrics] because the ViewModel's tile warm
+// (spec 2026-11-16, scrolling round three F3) decodes at exactly these sizes:
+// one spelling, so a warmed bitmap is the bitmap the card draws.
+private val HomePosterWidth = HomeRailMetrics.POSTER_WIDTH_DP.dp
+private val HomePosterHeight = HomeRailMetrics.POSTER_HEIGHT_DP.dp
+private val HomeLandscapeWidth = HomeRailMetrics.LANDSCAPE_WIDTH_DP.dp
+private val HomeLandscapeHeight = HomeRailMetrics.LANDSCAPE_HEIGHT_DP.dp
 private val HomeRailGap = 12.dp
 
 /**
@@ -1294,7 +1299,18 @@ private fun HeroBackdropArt(url: String?) {
             ImageRequest.Builder(context)
                 .data(url)
                 .size(Size(1280, 720))
-                .crossfade(true)
+                // F6 (spec 2026-11-16, scrolling round three): ONE buffer.
+                //
+                // Coil's crossfade blends the OUTGOING and INCOMING drawables,
+                // so both 1280x720 bitmaps (8 MB each, ARGB_8888) are held for
+                // the length of the fade, with a per-frame alpha draw on top -
+                // on every settled hero change, beside the resolve and the
+                // decode that change already pays. The outgoing is now dropped
+                // the moment the incoming is ready, which at rest is invisible:
+                // the near-field warm has already decoded this bitmap, so the
+                // swap is the same one-frame handover the rail tiles make (and
+                // why they never crossfade either).
+                .crossfade(false)
                 .build()
         },
         contentDescription = null,
@@ -3586,7 +3602,10 @@ private fun LibraryListHomeRail(
                     top = 10.dp,
                     bottom = 12.dp
                 ),
-                horizontalArrangement = Arrangement.spacedBy(0.dp)
+                horizontalArrangement = Arrangement.spacedBy(0.dp),
+                // F5: cards just off screen are composed while the rail is idle,
+                // so walking into them is a draw, not a build.
+                cacheWindow = HomeRailCacheWindow
             ) {
                 itemsIndexed(
                     items = rail.items,
@@ -3800,7 +3819,9 @@ private fun BuiltinTopPicksRail(
                     top = 10.dp,
                     bottom = 12.dp
                 ),
-                horizontalArrangement = Arrangement.spacedBy(0.dp)
+                horizontalArrangement = Arrangement.spacedBy(0.dp),
+                // F5: the same idle window the catalog rails keep.
+                cacheWindow = HomeRailCacheWindow
             ) {
                 itemsIndexed(
                     items = picks,
@@ -6950,21 +6971,13 @@ fun HomeScreen(
         // download (B1), and a card with no art yet keeps the previous gradient
         // (B3) because the drawing helper holds its last resolved tint.
         if (spotlightActive) {
-            val heroScrolledAway by remember {
-                derivedStateOf {
-                    railListState.layoutInfo.visibleItemsInfo
-                        .none { info -> info.key == SPOTLIGHT_HERO_ITEM_KEY }
-                }
-            }
-            ArtworkTintGradient(
-                tint = rememberArtworkTint(
-                    focusedItemState.value?.background ?: focusedItemState.value?.poster
-                ),
-                visible = heroScrolledAway,
-                // A top strip, not a full-screen wash (B4).
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(280.dp)
+            // F4 (spec 2026-11-16, scrolling round three): the focus read lives
+            // in this scoped composable, not in Home's body. Read here, every
+            // D-pad step recomposed the WHOLE screen - the rails, the top bar and
+            // the tray - to repaint one gradient.
+            SpotlightTopTint(
+                railListState = railListState,
+                focusedItemState = focusedItemState
             )
         }
         Column(
@@ -6975,16 +6988,12 @@ fun HomeScreen(
             // preview - so the meta resolve is driven directly here instead (the
             // expanded card renders it, see SpotlightPreviewHost).
             if (spotlightActive) {
-                val focused = focusedItemState.value
-                LaunchedEffect(focused?.id) {
-                    // The hero's own dwell, unchanged (HomeScreen.kt's
-                    // HERO_RESOLVE_DEBOUNCE_MS): a held D-pad collapses onto the
-                    // card the viewer settles on.
-                    if (focused != null) {
-                        delay(HERO_RESOLVE_DEBOUNCE_MS)
-                        viewModel.resolveHeroMeta(focused)
-                    }
-                }
+                // F4: the focus read is scoped here for the same reason the tint
+                // is - a body-level read recomposed the rails on every step.
+                SpotlightHeroFocusDriver(
+                    focusedItemState = focusedItemState,
+                    onResolve = { focused -> viewModel.resolveHeroMeta(focused) }
+                )
                 // The hero itself is NOT here any more (F1): it is the rails
                 // list's first item, so it scrolls out of view as the viewer goes
                 // down the rails instead of sitting fixed above them. What stays
@@ -7071,6 +7080,10 @@ fun HomeScreen(
                 ) {
                 LazyColumn(
                     state = railListState,
+                    // F5: the rails above and below are composed while the list
+                    // is idle, so a vertical move never pays a first composition
+                    // on the press.
+                    cacheWindow = HomeRailCacheWindow,
                     // Hold-Up from ANY rail reveals the top bar (see
                     // rememberHomeTopBarHoldUpHook): on the list rather than on
                     // a card, so every rail kind is covered by construction and
@@ -8353,9 +8366,10 @@ fun HomeScreen(
                 settledLogoUrl = heroLogoUrlState.value,
                 trailerKey = heroTrailerKeyState.value,
                 // The card's trailer resolves with the title's own ids, so the
-                // ladder's IMDb leg can fire on a YouTube death (F5).
-                imdbId = com.kennyb1201.kbstream.data.imdb.ImdbTrailerData
-                    .imdbIdOf(focusedItemState.value?.id),
+                // ladder's IMDb leg can fire on a YouTube death (F5). The focus
+                // itself is read inside the host (F4, round three): reading it
+                // here recomposed Home's body on every D-pad step.
+                focusedItemState = focusedItemState,
                 tmdbId = heroTmdbDetailState.value?.id,
                 trailerMode = spotlightTrailerPrefMode,
                 trailerMuted = spotlightTrailerMuted,
@@ -8386,6 +8400,83 @@ fun HomeScreen(
             )
         }
 
+    }
+}
+
+/**
+ * The rails' idle pre-composition window (spec 2026-11-16, scrolling round three
+ * F5).
+ *
+ * A D-pad press into a new row used to pay that row's FIRST composition on the
+ * frame the press landed - on top of the disk decode and the metadata lookup the
+ * card also pays. Compose's lazy layouts keep an out-of-viewport window of items
+ * prepared in advance; the default keeps nothing behind and only a narrow slice
+ * ahead, and it does not refill while the list is idle.
+ *
+ * Half a viewport each way is about one row / one screenful of cards, which is
+ * what a walk actually steps into, and `isNonScrollCachingEnabled` is what makes
+ * the window fill while the viewer is sitting still rather than only once a
+ * scroll has started.
+ */
+private object HomeRailCacheWindow : LazyLayoutCacheWindow {
+    override fun Density.calculateAheadWindow(viewport: Int): Int = viewport / 2
+    override fun Density.calculateBehindWindow(viewport: Int): Int = viewport / 2
+    override val isNonScrollCachingEnabled: Boolean = true
+}
+
+/**
+ * Spotlight's top-of-screen tint, scoped to its own focus read (spec 2026-11-16,
+ * scrolling round three F4).
+ *
+ * The gradient is tinted from the focused card's already-loaded art; reading
+ * that focus at Home's body level made every D-pad step recompose the whole
+ * screen - every rail, the top bar and the tray - to repaint a 280dp strip.
+ * Read in here, only this strip and its crossfade are invalidated.
+ */
+@Composable
+private fun SpotlightTopTint(
+    railListState: LazyListState,
+    focusedItemState: State<MetaPreview?>
+) {
+    // Only once the billboard has scrolled away (spec B2).
+    val heroScrolledAway by remember {
+        derivedStateOf {
+            railListState.layoutInfo.visibleItemsInfo
+                .none { info -> info.key == SPOTLIGHT_HERO_ITEM_KEY }
+        }
+    }
+    ArtworkTintGradient(
+        tint = rememberArtworkTint(
+            focusedItemState.value?.background ?: focusedItemState.value?.poster
+        ),
+        visible = heroScrolledAway,
+        // A top strip, not a full-screen wash (B4).
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(280.dp)
+    )
+}
+
+/**
+ * Drives Spotlight's hero META resolve for the focused card (spec 2026-11-16,
+ * scrolling round three F4).
+ *
+ * The dwell is unchanged - the host's 150 ms debounce plus this 150 ms - a held
+ * D-pad still collapses onto the card the viewer settles on. What changed is
+ * where the focus is read: in here, so a walk step no longer recomposes Home's
+ * body (and with it every rail) just to schedule the next resolve.
+ */
+@Composable
+private fun SpotlightHeroFocusDriver(
+    focusedItemState: State<MetaPreview?>,
+    onResolve: (MetaPreview) -> Unit
+) {
+    val focused = focusedItemState.value
+    LaunchedEffect(focused?.id) {
+        if (focused != null) {
+            delay(HERO_RESOLVE_DEBOUNCE_MS)
+            onResolve(focused)
+        }
     }
 }
 

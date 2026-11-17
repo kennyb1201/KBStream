@@ -12,6 +12,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
@@ -24,6 +25,7 @@ import android.os.SystemClock
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.imdb.ImdbTrailerData
 import com.kennyb1201.kbstream.data.reporting.SpotlightDiagTrace
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
@@ -348,7 +350,16 @@ internal fun SpotlightPreviewHost(
     expandDelayMs: Long,
     meta: Meta?,
     trailerKey: String?,
-    imdbId: String?,
+    /**
+     * The focused card, read IN HERE (spec 2026-11-16, scrolling round three
+     * F4).
+     *
+     * It arrives as state rather than as a resolved id so the focus read happens
+     * inside the panel host's scope: reading it in Home's body recomposed the
+     * whole screen on every D-pad step just to hand the panel an id it only uses
+     * when it opens.
+     */
+    focusedItemState: State<MetaPreview?>,
     tmdbId: Int?,
     trailerMode: BillboardTrailerMode,
     trailerMuted: Boolean,
@@ -409,6 +420,7 @@ internal fun SpotlightPreviewHost(
     onExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val imdbId = ImdbTrailerData.imdbIdOf(focusedItemState.value?.id)
     var expanded by remember { mutableStateOf<ExpandedPanel?>(null) }
     val snapshot = tracker.snapshot
     // The card the viewer is HELD on, as a NODE (spec 2026-11-12, F5).

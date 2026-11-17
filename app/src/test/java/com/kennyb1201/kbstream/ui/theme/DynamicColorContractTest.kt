@@ -271,24 +271,29 @@ class DynamicColorContractTest {
             "Spotlight only (B4: Modern has its own hero)",
             region.contains("if (spotlightActive)")
         )
+        // Since round three the strip is its own scoped composable, so the focus
+        // read no longer recomposes Home's body (F4) - the behaviour below is
+        // unchanged, the read just moved into it.
+        assertTrue(
+            "drawn UNDER the rails: the call is in the screen box above the Column",
+            region.contains("SpotlightTopTint(")
+        )
+        val strip = home
+            .substringAfter("private fun SpotlightTopTint(")
+            .substringBefore("private fun SpotlightHeroFocusDriver(")
         assertTrue(
             "tinted from the focused card's own art",
-            region.contains("focusedItemState.value?.background") &&
-                region.contains("focusedItemState.value?.poster")
-        )
-        assertTrue(
-            "drawn UNDER the rails: it is the first child of the screen box",
-            home.indexOf("ArtworkTintGradient(") <
-                home.indexOf("focusedItemState.value?.background")
+            strip.contains("focusedItemState.value?.background") &&
+                strip.contains("focusedItemState.value?.poster")
         )
         assertTrue(
             "it shows only when the hero item has left the viewport",
-            region.contains("SPOTLIGHT_HERO_ITEM_KEY") &&
-                region.contains("visible = heroScrolledAway")
+            strip.contains("SPOTLIGHT_HERO_ITEM_KEY") &&
+                strip.contains("visible = heroScrolledAway")
         )
         assertTrue(
             "and it is a strip, not a wash over the cards",
-            region.contains(".height(280.dp)")
+            strip.contains(".height(280.dp)")
         )
     }
 
