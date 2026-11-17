@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -36,6 +38,7 @@ import com.kennyb1201.kbstream.ui.components.KBQrCode
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
+import com.kennyb1201.kbstream.ui.simkl.SimklDisconnectCopy
 import com.kennyb1201.kbstream.ui.simkl.SimklParentAction
 import com.kennyb1201.kbstream.ui.simkl.SimklViewModel
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -70,6 +73,7 @@ import com.kennyb1201.kbstream.ui.theme.MobileTheme
  * may act. DISCONNECT still goes through its confirmation after the PIN. The TV
  * dialog's focus retry has no touch twin - the buttons are plain tap targets.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SimklConnectScreenMobile(
     modifier: Modifier = Modifier,
@@ -360,36 +364,44 @@ fun SimklConnectScreenMobile(
 
             if (showDisconnectConfirm) {
                 Dialog(onDismissRequest = { showDisconnectConfirm = false }) {
-                    KBDialogPanel(title = "Disconnect from Simkl?") {
+                    // The SHORT title (spec 2026-11-16, phone dialog F2): the
+                    // shared heading is deliberately one line with an ellipsis, so
+                    // "Disconnect from Simkl?" read as "DISCONNECT FROM S…" on a
+                    // narrow panel. Shortening the string fixes this dialog without
+                    // changing every other phone dialog's heading.
+                    KBDialogPanel(title = SimklDisconnectCopy.TITLE_PHONE) {
                         Text(
                             // The wipe this used to promise is gone (playback spec
                             // C4/D1): unlinking drops the account's tracker state
-                            // and leaves this device's history alone.
-                            text = "This unlinks your Simkl account on this device. " +
-                                "Your watch history, resume positions and Continue " +
-                                "Watching stay here. Simkl keeps this app in your " +
-                                "connected apps until you remove it at simkl.com " +
-                                "— the app cannot revoke its own access there.",
+                            // and leaves this device's history alone. The second
+                            // half of the sentence is version-specific now - V2
+                            // revokes its own grant, V1 never could (F3).
+                            text = SimklDisconnectCopy.body(uiState.isLegacySession),
                             color = KBTextLo,
                             style = MaterialTheme.typography.bodyMedium
                         )
-                        Row(
+                        // The buttons no longer split the panel in half (F1).
+                        // Each is sized by its own label, and a FlowRow puts them
+                        // side by side while both fit and on two lines when they do
+                        // not - which is the only answer that holds at every font
+                        // scale. Half a panel each was exactly the reported wrap:
+                        // ten uppercase characters do not fit in half of a phone
+                        // panel at a large scale, and "DISCONNECT" broke in two.
+                        //
+                        // CANCEL stays FIRST: the destructive choice must not sit
+                        // under the thumb's resting place.
+                        FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
                             modifier = Modifier.padding(top = 8.dp)
                         ) {
-                            // CANCEL first: unlinking is still the irreversible
-                            // half (the app cannot revoke its own grant), so the
-                            // safe choice must not sit under the thumb's
-                            // resting place.
                             KBButton(
                                 label = "CANCEL",
-                                modifier = Modifier.weight(1f),
                                 onClick = { showDisconnectConfirm = false }
                             )
                             KBButton(
                                 label = "DISCONNECT",
                                 danger = true,
-                                modifier = Modifier.weight(1f),
                                 onClick = {
                                     showDisconnectConfirm = false
                                     vm.disconnect()

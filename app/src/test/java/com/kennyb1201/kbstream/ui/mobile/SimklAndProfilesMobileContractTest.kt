@@ -45,6 +45,9 @@ class SimklAndProfilesMobileContractTest {
     private fun simklMobile(): String =
         source("com/kennyb1201/kbstream/ui/mobile/SimklConnectScreenMobile.kt")
 
+    private fun simklDisconnectCopy(): String =
+        source("com/kennyb1201/kbstream/ui/simkl/SimklDisconnectCopy.kt")
+
     private fun pickerScreen(): String =
         source("com/kennyb1201/kbstream/ui/profiles/ProfilePickerScreen.kt")
 
@@ -161,12 +164,20 @@ class SimklAndProfilesMobileContractTest {
             mobile.contains("showDisconnectConfirm = true") &&
                 mobile.contains("Dialog(onDismissRequest = { showDisconnectConfirm = false })")
         )
+        // Re-pointed by spec 2026-11-16 (phone dialog F3): the body moved into
+        // SimklDisconnectCopy and is now per session. What is pinned here is the
+        // C4/D1 half, which is identical in both variants.
         assertTrue(
-            "the dialog says what SURVIVES the unlink, because nothing local is " +
+            "the dialog states the body through the rule, not a paragraph of its own",
+            mobile.contains("text = SimklDisconnectCopy.body(uiState.isLegacySession)")
+        )
+        assertTrue(
+            "and the rule says what SURVIVES the unlink, because nothing local is " +
                 "wiped any more (playback spec C4/D1)",
-            mobile.contains("Your watch history, resume positions and Continue ") &&
-                mobile.contains("stay here") &&
-                mobile.contains("cannot revoke its own access")
+            // The source is flattened, so a literal split across two `+` pieces is
+            // read in halves: the keywords are what this pin is about.
+            simklDisconnectCopy().contains("watch history") &&
+                simklDisconnectCopy().contains("stay here")
         )
         assertFalse(
             "the wipe promise is gone, and no confirmation may name one",

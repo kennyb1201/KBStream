@@ -34,6 +34,7 @@ class SimklConnectOutcomeContractTest {
     private val state = main("com/kennyb1201/kbstream/ui/simkl/SimklUiState.kt")
     private val tvScreen = main("com/kennyb1201/kbstream/ui/simkl/SimklConnectScreen.kt")
     private val phoneScreen = main("com/kennyb1201/kbstream/ui/mobile/SimklConnectScreenMobile.kt")
+    private val disconnectCopy = main("com/kennyb1201/kbstream/ui/simkl/SimklDisconnectCopy.kt")
 
     @Test
     fun `a build with no client id says so instead of offering a code that must fail`() {
@@ -222,14 +223,33 @@ class SimklConnectOutcomeContractTest {
 
     @Test
     fun `the dialog names the grant this app cannot revoke`() {
+        // Re-pointed by spec 2026-11-16 (phone dialog F3): the sentence moved into
+        // SimklDisconnectCopy and became session-aware. V1 still cannot revoke and
+        // still points at simkl.com; V2 revokes its own grant, so it must NOT say
+        // otherwise. Trackers C3 is about telling the viewer where the grant is
+        // removed, and the V2 half of it is "the app does it".
+        assertTrue(
+            "the V1 sentence still names simkl.com and the missing revoke",
+            disconnectCopy.contains("simkl.com") &&
+                disconnectCopy.contains("cannot revoke") &&
+                disconnectCopy.contains("old Simkl sign-in")
+        )
+        assertTrue(
+            "the V2 sentence says the app ends its own access instead",
+            disconnectCopy.contains("ends its own access")
+        )
         listOf(
             "ui/simkl/SimklConnectScreen.kt" to tvScreen,
             "ui/mobile/SimklConnectScreenMobile.kt" to phoneScreen
         ).forEach { (path, screen) ->
             assertTrue(
-                "$path must say the app cannot revoke its own access, and where " +
-                    "the viewer does it instead (trackers C3)",
-                screen.contains("simkl.com") && screen.contains("revoke its own")
+                "$path must state the session-aware body rather than its own paragraph",
+                screen.contains("SimklDisconnectCopy.body(isLegacySession)") ||
+                    screen.contains("SimklDisconnectCopy.body(uiState.isLegacySession)")
+            )
+            assertFalse(
+                "$path must not keep a second copy of the old fixed sentence",
+                screen.contains("Simkl keeps this app in your connected apps")
             )
         }
     }

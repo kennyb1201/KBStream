@@ -376,7 +376,8 @@ fun SimklConnectScreen(
                 showDisconnectConfirm = false
                 vm.disconnect()
             },
-            onDismiss = { showDisconnectConfirm = false }
+            onDismiss = { showDisconnectConfirm = false },
+            isLegacySession = uiState.isLegacySession
         )
     }
 }
@@ -447,23 +448,25 @@ private fun SimklParentPinGate(
 @Composable
 private fun DisconnectConfirmDialog(
     onConfirm: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    // Which body sentence to state: a V2 session revokes its own grant, a V1
+    // one cannot (see SimklDisconnectCopy).
+    isLegacySession: Boolean
 ) {
     val cancelFocusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { landFocusOn(cancelFocusRequester) }
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        KBDialogPanel(title = "Disconnect from Simkl?") {
+        KBDialogPanel(title = SimklDisconnectCopy.TITLE_TV) {
             Text(
                 // No local-data consequence any more, because there is none:
                 // disconnect unlinks the account and drops its tracker state,
                 // and this device's history, resume rows, markers and Continue
-                // Watching stay (playback spec C4/D1). The copy used to promise
-                // a wipe it no longer performs.
-                text = "This unlinks your Simkl account on this device. Your watch " +
-                    "history, resume positions and Continue Watching stay here. " +
-                    "Simkl keeps this app in your connected apps until you remove " +
-                    "it at simkl.com — the app cannot revoke its own access there.",
+                // Watching stay (playback spec C4/D1). The sentence after that
+                // is version-specific: V2 revokes its own grant, V1 never could
+                // (spec 2026-11-16, phone dialog F3). This panel is wide enough
+                // for the naming title, so it keeps it.
+                text = SimklDisconnectCopy.body(isLegacySession),
                 color = KBTextLo,
                 style = MaterialTheme.typography.bodyMedium
             )
