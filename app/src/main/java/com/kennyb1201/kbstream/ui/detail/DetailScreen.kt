@@ -18,6 +18,7 @@ import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -209,6 +210,7 @@ import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.ui.components.StudioChip
 import com.kennyb1201.kbstream.ui.mobile.DetailScreenMobile
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -364,6 +366,19 @@ private const val SEASON_ROW_KEY = "seasonrow"
 
 /** The episode cards' list item: the second half of the episode section. */
 private const val EPISODES_ROW_KEY = "episodesrow"
+
+/**
+ * The rows that sit either side of the season poster row, by their list keys.
+ *
+ * Named here because they are not only anchors for the focus chain: each one is
+ * also a neighbour whose arrival asks the page to show the poster row whole (see
+ * [seasonRowRevealScroll]). Above it, in painted order, the ratings strip, the
+ * fact cards, the tag rail and the episode-order chips; below it, the episode
+ * cards.
+ */
+private const val RATINGS_ROW_KEY = "ratingsrow"
+private const val DETAIL_FACTS_ROW_KEY = "detailfacts"
+private const val EPISODE_ORDER_ROW_KEY = "episode-order"
 private const val KEYWORDS_ROW_KEY = "keywordsrow"
 private const val PEOPLE_ROW_KEY = "peoplerow"
 private const val NETWORK_ROW_KEY = "networkrow"
@@ -391,6 +406,26 @@ private const val RETURN_FOCUS_STEPS = 15
 
 /** Delay between those retries, long enough for a frame to be laid out. */
 private const val RETURN_FOCUS_DELAY_MS = 40L
+
+/**
+ * How many times a neighbour's arrival asks the poster row to be revealed.
+ *
+ * Two, because the focus landing is a scroll of its own and the framework's
+ * request and this one can cross: the first pass lands after the focused row has
+ * settled and does the work, and the second measures what the page looks like
+ * afterwards and fixes the residue if the two scrolls raced. A third pass has
+ * nothing left to add - the rule returns zero the moment both rows are whole.
+ */
+private const val SEASON_ROW_REVEAL_PASSES = 2
+
+/**
+ * How many frames a reveal pass waits for the list to stop scrolling.
+ *
+ * ~130ms at 60Hz: long past the focus landing's own animation, and short enough
+ * that a page the viewer is still scrolling by hand is left alone rather than
+ * measured mid-flight.
+ */
+private const val SEASON_ROW_REVEAL_SETTLE_FRAMES = 8
 
 /**
  * The wait before [retryChipColumn] asks a present-but-unready row again: the
@@ -454,6 +489,94 @@ private suspend fun LazyListState.revealRail(rowKey: String, hintIndex: Int): Bo
     }
 
     return false
+}
+
+/**
+ * The poster row's neighbour half (spec 2026-11-17, F3): whichever row beside
+ * the season posters the hand is on, the poster row is kept WHOLE.
+ *
+ * A focus landing is a minimal scroll - the framework shows the row that took
+ * the focus and nothing else - so the row next in the scroll direction stays
+ * with whatever sliver of the viewport was left over, and a poster row sliced
+ * through the middle is what that sliver looks like. The report was exactly
+ * that: whole when the posters are focused (and that must not regress), cut at
+ * the bottom edge from the row above, cut at the top edge from the row below.
+ *
+ * So each neighbour row asks, on arrival, for one scroll that leaves both rows
+ * whole; [seasonRowRevealScroll] is the arithmetic and returns zero when there
+ * is nothing to fix. Two things here keep it from being a scroll of its own the
+ * viewer has to sit through:
+ *
+ *  - each pass waits for the list to STOP scrolling before measuring, because
+ *    the focus landing of the row that just arrived may still be travelling -
+ *    measuring it mid-flight would land the poster row where the row was, not
+ *    where it ended up, and the two animations would fight over the viewport;
+ *  - passes are collapsed, so a D-pad walk across one row's cards (every card a
+ *    fresh arrival) is one reveal, not one per card.
+ *
+ * It only ever scrolls the OUTER list. The rows themselves are untouched, the
+ * focused row is untouched - its rect is one of the two the delta keeps whole -
+ * and a neighbour whose poster row is nowhere on screen asks for nothing, since
+ * that row is not in the measurables and nothing is being cut.
+ */
+private class SeasonRowReveal(
+    private val listState: LazyListState,
+    private val scope: CoroutineScope
+) {
+    private var job: Job? = null
+
+    /** [neighbourKey] is the list item key of the row that just took the focus. */
+    fun ask(neighbourKey: String) {
+        if (job?.isActive == true) return
+        job =
+            scope.launch {
+                repeat(SEASON_ROW_REVEAL_PASSES) {
+                    awaitFrame()
+                    var settled = 0
+                    while (
+                        listState.isScrollInProgress &&
+                        settled < SEASON_ROW_REVEAL_SETTLE_FRAMES
+                    ) {
+                        awaitFrame()
+                        settled++
+                    }
+                    val delta = deltaFor(neighbourKey)
+                    if (delta == 0) return@launch
+                    runCatching { listState.animateScrollBy(delta.toFloat()) }
+                }
+            }
+    }
+
+    private fun deltaFor(neighbourKey: String): Int {
+        val info = listState.layoutInfo
+        val season =
+            info.visibleItemsInfo.firstOrNull { it.key == SEASON_ROW_KEY } ?: return 0
+        val neighbour =
+            info.visibleItemsInfo.firstOrNull { it.key == neighbourKey } ?: return 0
+        return seasonRowRevealScroll(
+            seasonStart = season.offset,
+            seasonEnd = season.offset + season.size,
+            neighbourStart = neighbour.offset,
+            neighbourEnd = neighbour.offset + neighbour.size,
+            viewportStart = info.viewportStartOffset,
+            viewportEnd = info.viewportEndOffset
+        )
+    }
+}
+
+/**
+ * Makes the row this sits on a neighbour of the poster row for
+ * [SeasonRowReveal]: whenever the focus is somewhere inside it - a chip, a fact
+ * card, an episode card - the poster row is asked to show itself whole.
+ *
+ * `hasFocus`, not `isFocused`: the observer sits on the row's container and the
+ * focus is on a card inside it, so the aggregate is the question this asks.
+ */
+private fun Modifier.revealSeasonRowOnFocus(
+    reveal: SeasonRowReveal,
+    neighbourKey: String
+): Modifier = onFocusChanged { state ->
+    if (state.hasFocus) reveal.ask(neighbourKey)
 }
 
 private enum class EpisodeFocusEdge { START, END }
@@ -1133,6 +1256,14 @@ fun DetailScreen(
     val episodesRowState = rememberLazyListState()
     val seasonRowState = rememberLazyListState()
     val detailListState = rememberIdleLazyListState()
+    // F3 of the 2026-11-17 detail spec: the poster row is kept whole from either
+    // neighbour, so it can never be seen cut mid-poster at a viewport edge (see
+    // [SeasonRowReveal]). Hoisted here because the asking rows are LazyColumn
+    // items of their own and the answer is one scroll of this list.
+    val seasonRowReveal =
+        remember(detailListState, scope) {
+            SeasonRowReveal(detailListState, scope)
+        }
     // Every rail a drill-down off this page can be opened from, each with the
     // scroll state and the per-card requesters a return needs: the rail is put
     // back on screen, scrolled to the card that was pressed, and that card
@@ -6156,6 +6287,14 @@ fun DetailScreen(
                         // inside the REVIEWS section — under cast, network and
                         // production — so in practice they were never seen.
                         //
+                        // Spec 2026-11-17, F1/F2: the "RATINGS" header the
+                        // strip used to draw above them is gone, and the strip's
+                        // own padding with the fact row's are trimmed, so the
+                        // chips and the Release Date / Country cards hug the
+                        // overview instead of sitting a header's height below
+                        // it. The chips and the fact cards themselves are
+                        // untouched - same sources, same items, same order.
+                        //
                         // The row now needs EITHER source: MDBList's chips, or
                         // TMDB's own score as the TMDB chip. Requiring an
                         // MDBList figure meant a title with no tracker ratings
@@ -6166,28 +6305,40 @@ fun DetailScreen(
                                 ?.voteAverage
                                 ?.takeIf { it > 0.0 }
                         if (mdbListRatings?.hasAny == true || tmdbScore != null) {
-                            item(key = "ratingsrow", contentType = "section-row") {
+                            item(key = RATINGS_ROW_KEY, contentType = "section-row") {
                                 MdbListRatingsStrip(
                                     ratings = mdbListRatings,
-                                    tmdbFallback = tmdbScore
+                                    tmdbFallback = tmdbScore,
+                                    // A neighbour of the poster row (F3): the
+                                    // chips are focus stops, so arriving on one
+                                    // must leave the poster row whole below it.
+                                    modifier = Modifier
+                                        .revealSeasonRowOnFocus(
+                                            seasonRowReveal,
+                                            RATINGS_ROW_KEY
+                                        )
                                 )
                             }
                         }
 
                         if (detailFacts.isNotEmpty()) {
-                            item(key = "detailfacts", contentType = "section-row") {
+                            item(key = DETAIL_FACTS_ROW_KEY, contentType = "section-row") {
                                 LazyRow(
                                     contentPadding =
                                         PaddingValues(
                                             start = 24.dp,
                                             end = 24.dp,
-                                            top = 2.dp,
-                                            bottom = 6.dp
+                                            top = 0.dp,
+                                            bottom = 4.dp
                                         ),
                                     modifier = Modifier
-                                        .padding(bottom = 8.dp)
+                                        .padding(bottom = 4.dp)
                                         .focusGroup()
                                         .focusRestorer()
+                                        .revealSeasonRowOnFocus(
+                                            seasonRowReveal,
+                                            DETAIL_FACTS_ROW_KEY
+                                        )
                                 ) {
                                     items(
                                         detailFacts,
@@ -6206,7 +6357,7 @@ fun DetailScreen(
                         }
 
                         if (keywords.isNotEmpty()) {
-                            item(key = "keywordsrow", contentType = "section-row") {
+                            item(key = KEYWORDS_ROW_KEY, contentType = "section-row") {
                                 LazyRow(
                                     state = keywordsRowState,
                                     contentPadding =
@@ -6220,6 +6371,10 @@ fun DetailScreen(
                                         .padding(bottom = 10.dp)
                                         .focusGroup()
                                         .focusRestorer()
+                                        .revealSeasonRowOnFocus(
+                                            seasonRowReveal,
+                                            KEYWORDS_ROW_KEY
+                                        )
                                 ) {
                                     itemsIndexed(
                                         // m3: a repeated TMDB id in one payload
@@ -6306,7 +6461,7 @@ fun DetailScreen(
                             // are in. Draws nothing unless the show really
                             // has an alternate order.
                             if (episodeOrders.size > 1) {
-                                item(key = "episode-order", contentType = "section-row") {
+                                item(key = EPISODE_ORDER_ROW_KEY, contentType = "section-row") {
                                     EpisodeOrderSection(
                                         options = episodeOrders,
                                         selected = episodeOrder,
@@ -6314,7 +6469,15 @@ fun DetailScreen(
                                         onSelect = { type ->
                                             viewModel.selectEpisodeOrder(type)
                                         },
-                                        modifier = Modifier.padding(top = 10.dp)
+                                        // The nearest neighbour when the show
+                                        // has alternate orders, so its chips ask
+                                        // for the same reveal the fact cards do.
+                                        modifier = Modifier
+                                            .padding(top = 10.dp)
+                                            .revealSeasonRowOnFocus(
+                                                seasonRowReveal,
+                                                EPISODE_ORDER_ROW_KEY
+                                            )
                                     )
                                 }
                             }
@@ -6322,9 +6485,11 @@ fun DetailScreen(
                             // The season POSTERS (spec 2026-11-15, the poster
                             // season picker): the row that used to be chips under
                             // an "EPISODES" heading, now the seasons themselves -
-                            // poster, caption, tap to enter. The header is gone,
-                            // which is what makes the old clip bug moot: there is
-                            // no heading above the row to be cut against.
+                            // poster, caption, tap to enter. The row's own focus is
+                            // landed in full by the framework and stays that way;
+                            // the two neighbours ask for the same on arrival (spec
+                            // 2026-11-17, F3 - see [SeasonRowReveal]), because a
+                            // minimal landing leaves the next row cut at the edge.
                             item(key = SEASON_ROW_KEY, contentType = "section-row") {
                                 SeasonPosterRow(
                                     posterResolver = seasonPosterResolver,
@@ -6499,6 +6664,14 @@ fun DetailScreen(
                                                     )
                                                     .focusGroup()
                                                     .focusRestorer()
+                                                    // The row BELOW the poster row:
+                                                    // its cards ask for the reveal
+                                                    // the fact cards ask for above
+                                                    // (F3).
+                                                    .revealSeasonRowOnFocus(
+                                                        seasonRowReveal,
+                                                        EPISODES_ROW_KEY
+                                                    )
                                                     // DOWN is the page's vertical
                                                     // handoff, decided by the
                                                     // chain like every other row.

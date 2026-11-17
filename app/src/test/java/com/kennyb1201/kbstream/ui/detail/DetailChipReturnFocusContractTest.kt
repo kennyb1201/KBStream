@@ -40,12 +40,23 @@ class DetailChipReturnFocusContractTest {
         )
     }
 
-    /** The rail a record names is the rail its `LazyRow` is given the state of. */
+    /**
+     * The rail a record names is the rail its `LazyRow` is given the state of.
+     *
+     * Read inside the item's own block rather than as the line that follows its
+     * declaration: round four's F5 put a warm-pass block (WarmRowAhead) between
+     * the two on the cast and recommendation rails, which is a decoded image per
+     * card, not a second rail. What this has to know is unchanged - the same item
+     * composes the LazyRow and hands it that state.
+     */
     private fun railIsGivenItsState(row: String, state: String) {
+        val start = source.indexOf(row)
+        assertTrue("the rail's item is composed: $row", start >= 0)
+        val block = source.substring(start + row.length).substringBefore("item(key = ")
         assertTrue(
             "the rail holding the chip must compose with the state its restore scrolls: " +
                 "$row needs state = $state",
-            source.contains(row + " LazyRow( state = $state,")
+            block.contains("LazyRow( state = $state,")
         )
     }
 
@@ -77,7 +88,9 @@ class DetailChipReturnFocusContractTest {
     fun `every rail a chip belongs to is given the state its restore scrolls`() {
         railIsGivenItsState("if (tmdbGenres.isNotEmpty()) {", "genreRowState")
         railIsGivenItsState(
-            "item(key = \"keywordsrow\", contentType = \"section-row\") {",
+            // The tag rail's item key is a constant now (the poster row's reveal
+            // names its neighbours by key) - the same string as before.
+            "item(key = KEYWORDS_ROW_KEY, contentType = \"section-row\") {",
             "keywordsRowState"
         )
         railIsGivenItsState(

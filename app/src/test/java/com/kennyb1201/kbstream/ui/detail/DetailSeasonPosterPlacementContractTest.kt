@@ -51,7 +51,9 @@ class DetailSeasonPosterPlacementContractTest {
 
     @Test
     fun `the row is still its own item, between the order row and the cards`() {
-        val order = detail.indexOf("item(key = \"episode-order\"")
+        // The order row's key is the constant now (the poster row's reveal
+        // names its neighbours by key) - the same string as before.
+        val order = detail.indexOf("item(key = EPISODE_ORDER_ROW_KEY")
         val seasonRow = detail.indexOf("item(key = SEASON_ROW_KEY")
         val cards = detail.indexOf("episodesloading")
         assertTrue(
