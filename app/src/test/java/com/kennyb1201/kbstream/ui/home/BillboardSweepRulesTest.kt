@@ -60,11 +60,13 @@ class BillboardSweepRulesTest {
         val even = sweep(0)
         val odd = sweep(1)
 
-        assertEquals(1f, even.startScale, 0.0001f)
+        // Neither parity returns to 1.0 any more: the floor covers the pan
+        // (2026-11-17, F1 - the TV billboard's edge sliver).
+        assertEquals(BILLBOARD_KEN_BURNS_MIN_SCALE, even.startScale, 0.0001f)
         assertEquals(BILLBOARD_KEN_BURNS_MAX_SCALE, even.endScale, 0.0001f)
 
         assertEquals(BILLBOARD_KEN_BURNS_MAX_SCALE, odd.startScale, 0.0001f)
-        assertEquals(1f, odd.endScale, 0.0001f)
+        assertEquals(BILLBOARD_KEN_BURNS_MIN_SCALE, odd.endScale, 0.0001f)
     }
 
     @Test
@@ -104,10 +106,41 @@ class BillboardSweepRulesTest {
             val sweep = sweep(index)
             assertTrue(
                 "page $index scales to ${sweep.startScale}/${sweep.endScale}, over the cap",
-                sweep.startScale in 1f..BILLBOARD_KEN_BURNS_MAX_SCALE &&
-                    sweep.endScale in 1f..BILLBOARD_KEN_BURNS_MAX_SCALE
+                sweep.startScale in BILLBOARD_KEN_BURNS_MIN_SCALE..BILLBOARD_KEN_BURNS_MAX_SCALE &&
+                    sweep.endScale in BILLBOARD_KEN_BURNS_MIN_SCALE..BILLBOARD_KEN_BURNS_MAX_SCALE
             )
         }
+    }
+
+    @Test
+    fun `the floor covers the pan on a frame with no side overscan`() {
+        // The verified mechanism (2026-11-17): at scale s the art overscans
+        // (s - 1) / 2 per side, and the pan translates it by up to PAN of its
+        // width - so a floor of 1.0 left the frame uncovered on the TV, whose
+        // backdrop has no side overscan at all (width is the constraining
+        // dimension). Coverage needs the floor to be at least 1 + 2 * PAN.
+        assertTrue(
+            "the floor must be derived from the pan: " +
+                "${BILLBOARD_KEN_BURNS_MIN_SCALE} vs pan ${BILLBOARD_KEN_BURNS_PAN_FRACTION}",
+            BILLBOARD_KEN_BURNS_MIN_SCALE >= 1f + 2f * BILLBOARD_KEN_BURNS_PAN_FRACTION - 0.0001f
+        )
+        (0..9).forEach { index ->
+            val sweep = sweep(index)
+            val smallest = minOf(sweep.startScale, sweep.endScale)
+            assertTrue(
+                "page $index dips to $smallest, under the floor the pan needs",
+                smallest >= BILLBOARD_KEN_BURNS_MIN_SCALE - 0.0001f &&
+                    smallest >= 1f + 2f * BILLBOARD_KEN_BURNS_PAN_FRACTION - 0.0001f
+            )
+        }
+    }
+
+    @Test
+    fun `the floor stays under the ten percent cap, so the move still moves`() {
+        assertTrue(
+            "a floor at or over the cap would leave no sweep at all",
+            BILLBOARD_KEN_BURNS_MIN_SCALE < BILLBOARD_KEN_BURNS_MAX_SCALE
+        )
     }
 
     @Test

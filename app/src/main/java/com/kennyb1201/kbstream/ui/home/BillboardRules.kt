@@ -376,6 +376,26 @@ internal const val BILLBOARD_KEN_BURNS_MAX_SCALE = 1.10f
 internal const val BILLBOARD_KEN_BURNS_PAN_FRACTION = 0.02f
 
 /**
+ * The closest a sweep may come to 1:1 — and why it is not 1.0 (2026-11-17, F1).
+ *
+ * At scale `s` the image overscans `(s - 1) / 2` per side, and the pan moves it up
+ * to [BILLBOARD_KEN_BURNS_PAN_FRACTION] of its width. Coverage at EVERY point of
+ * the sweep therefore needs `(s - 1) / 2 >= PAN_FRACTION` at the SMALLEST scale,
+ * which is `s >= 1 + 2 * PAN_FRACTION`. A floor of 1.0 only covered the pan on a
+ * frame whose backdrop overflows on the SIDES (the phone's 16:10 frame over a 16:9
+ * art, ~11% each side); on the TV Spotlight frame (~3.3:1, full width, height
+ * overflowing instead) the width is the constraining dimension and that overscan
+ * is ZERO, so the translated image stopped covering the frame and the neighbouring
+ * pager page's art showed as a sliver at the edge - on every page, because every
+ * page sweeps.
+ *
+ * Derived rather than written as 1.04f, so the floor and the pan cannot drift
+ * apart: widening the pan must raise the floor with it.
+ */
+internal const val BILLBOARD_KEN_BURNS_MIN_SCALE =
+    1f + 2f * BILLBOARD_KEN_BURNS_PAN_FRACTION
+
+/**
  * How long the sweep runs - ALWAYS, whatever the cycle interval is (F1).
  *
  * It started as the "Manual only" duration, where there is no dwell to fill but
@@ -426,7 +446,10 @@ internal data class BillboardSweep(
  *
  * Direction alternates by page PARITY, per the spec: an even page zooms in
  * while panning one way, an odd page zooms out while panning the other, so two
- * consecutive pages never repeat the same move. The duration is the dwell
+ * consecutive pages never repeat the same move. Neither parity ever returns to
+ * 1.0: the floor is [BILLBOARD_KEN_BURNS_MIN_SCALE], which is what keeps the
+ * pan from translating the art off its own frame on a frame shape with no side
+ * overscan (2026-11-17, F1 - the TV billboard's edge sliver). The duration is the dwell
  * itself, so the move lands exactly as the page would advance; [cycleMs] of 0
  * ("Manual only") has no dwell, and uses [BILLBOARD_KEN_BURNS_MANUAL_MS].
  */
@@ -472,7 +495,7 @@ internal fun billboardSweep(index: Int, cycleMs: Long): BillboardSweep {
     val durationMs = if (cycleMs > 0L) cycleMs else BILLBOARD_KEN_BURNS_MANUAL_MS
     return if (index % 2 == 0) {
         BillboardSweep(
-            startScale = 1f,
+            startScale = BILLBOARD_KEN_BURNS_MIN_SCALE,
             endScale = BILLBOARD_KEN_BURNS_MAX_SCALE,
             startPanFraction = 0f,
             endPanFraction = -BILLBOARD_KEN_BURNS_PAN_FRACTION,
@@ -481,7 +504,7 @@ internal fun billboardSweep(index: Int, cycleMs: Long): BillboardSweep {
     } else {
         BillboardSweep(
             startScale = BILLBOARD_KEN_BURNS_MAX_SCALE,
-            endScale = 1f,
+            endScale = BILLBOARD_KEN_BURNS_MIN_SCALE,
             startPanFraction = 0f,
             endPanFraction = BILLBOARD_KEN_BURNS_PAN_FRACTION,
             durationMs = durationMs
