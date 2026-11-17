@@ -1123,7 +1123,16 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (fresh.isEmpty()) return false
         val updated = _sections.value.map { fresh[it.league.path] ?: it }
-        _sections.value = updated
+        // Dig four §2c (rank 9): a poll that changed nothing must not republish.
+        // The list was reassigned on every 30 s tick while a game was live, so
+        // every visible card recomposed whether or not a score had moved. The
+        // sections are data classes and the map keeps the previous instance for
+        // untouched leagues, so this compares structurally: a republish now
+        // means a real change, which is also what makes the recomposition
+        // honest when one does happen.
+        if (updated != _sections.value) {
+            _sections.value = updated
+        }
         resolveMatches(updated)
         refreshDetailSummary()
         // "Still worth polling" is live OR about to be: stopping on hasLive

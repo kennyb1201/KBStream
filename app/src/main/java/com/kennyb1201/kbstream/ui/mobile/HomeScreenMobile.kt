@@ -3003,6 +3003,13 @@ internal fun MobileBillboard(
         ) {
             HorizontalPager(
                 state = pagerState,
+                // Dig four §2e (rank 8): the pager kept the default window, so
+                // the NEXT page composed only when the cycle tick paged to it -
+                // a page composition plus a hero-size decode landing on the tick
+                // itself. One page either way keeps the neighbour composed and
+                // its art decoded (there are at most BILLBOARD_MAX_PAGES pages,
+                // and neighbours are dropped again as the cycle moves on).
+                beyondBoundsPageCount = 1,
                 modifier = Modifier.fillMaxWidth()
             ) { index ->
                 val page = pages[index]
