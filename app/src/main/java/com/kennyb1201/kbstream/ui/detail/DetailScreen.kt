@@ -2317,6 +2317,15 @@ fun DetailScreen(
         )
     }
 
+    // Warm the loaded season's episode stills (dig four §2a): Detail's only
+    // lookahead was the trailer's, so the episode row's 24 stills were each a
+    // first-sight disk decode. Fires when the listing lands, not per focus step.
+    LaunchedEffect(episodes) {
+        viewModel.warmEpisodeStills(
+            episodes.mapNotNull { episode -> episode.thumbnail }
+        )
+    }
+
     // The season-focus dwell (dig four §2a). Keyed on the REQUESTED season, so
     // each focus move restarts it and only the one the viewer stops on applies;
     // a tap, a chip or any other explicit selection wins because this re-checks

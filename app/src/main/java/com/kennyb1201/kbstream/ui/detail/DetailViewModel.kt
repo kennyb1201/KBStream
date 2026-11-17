@@ -76,8 +76,11 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.math.roundToInt
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /**
@@ -237,7 +240,79 @@ internal fun resumeMatchesCompletedEpisode(
  */
 private const val MLT_PICK_COUNT = 30
 
+/**
+ * The episode card's drawn size, in dp (dig four §2a).
+ *
+ * [DetailScreen] sizes an episode card 260dp wide, 170dp tall, with 10dp of end
+ * padding, so the still itself is 250x170. The warm decodes at exactly that size
+ * or it writes a second, useless cache entry beside the one the card reads.
+ */
+private const val EPISODE_STILL_WIDTH_DP = 250f
+private const val EPISODE_STILL_HEIGHT_DP = 170f
+
 class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
+
+    // ── The season's episode stills, warmed ahead of the row's scroll ────
+    //
+    // Dig four (2026-11-16, §2a): Detail had no lookahead at all. An episode's
+    // still is drawn by [PosterCard], whose request carries no explicit size, so
+    // each newly-visible episode is decoded from disk on the frame it appears -
+    // 24 of them for a 24-episode season. The stills are known as soon as the
+    // season's listing lands, so they can be decoded into the memory cache
+    // before the row is scrolled, in parallel and at the size the card draws
+    // (260dp wide less its 10dp end padding, 170dp tall), so the cache entry the
+    // warm writes is the one the card reads.
+    //
+    // Best-effort and bounded: three at a time, each URL once per pass, and a
+    // warm that hits the memory cache costs nothing (Coil answers from it).
+    private val episodeStillWarmInFlight =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+    private val episodeStillWarmSemaphore = Semaphore(permits = 3)
+
+    fun warmEpisodeStills(
+        urls: List<String>,
+        widthDp: Float = EPISODE_STILL_WIDTH_DP,
+        heightDp: Float = EPISODE_STILL_HEIGHT_DP
+    ) {
+        if (urls.isEmpty()) return
+        val density = app.resources.displayMetrics.density
+        val widthPx = (widthDp * density).roundToInt()
+        val heightPx = (heightDp * density).roundToInt()
+        if (widthPx <= 0 || heightPx <= 0) return
+
+        val fresh = urls
+            .asSequence()
+            .filter { it.isNotBlank() }
+            .distinct()
+            .filter { episodeStillWarmInFlight.add(it) }
+            .toList()
+        if (fresh.isEmpty()) return
+
+        viewModelScope.launch {
+            fresh.map { url ->
+                async {
+                    try {
+                        episodeStillWarmSemaphore.withPermit {
+                            runCatchingCancellable {
+                                coil3.SingletonImageLoader.get(app).execute(
+                                    coil3.request.ImageRequest.Builder(app)
+                                        .data(url)
+                                        .size(widthPx, heightPx)
+                                        .build()
+                                )
+                            }
+                        }
+                    } finally {
+                        // Released after the pass: a later season load (or the same
+                        // season after a trim) may warm it again, and by then the
+                        // answer is a memory hit.
+                        episodeStillWarmInFlight.remove(url)
+                    }
+                }
+            }.awaitAll()
+        }
+    }
+
     private val repository = AddonRepository.getInstance()
     private val addonManager = AddonManager.getInstance(app)
     internal val tmdbRepository = TmdbRepository.getInstance(app)

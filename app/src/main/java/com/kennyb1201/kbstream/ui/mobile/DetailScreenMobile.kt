@@ -340,6 +340,19 @@ fun DetailScreenMobile(
         val animeThemes by viewModel.animeThemes.collectAsStateWithLifecycle()
         LaunchedEffect(tmdbDetail?.id) { viewModel.loadAnimeThemes() }
         val episodes by viewModel.episodes.collectAsStateWithLifecycle()
+        // The same episode-still warm the TV page runs (dig four §2a): the phone
+        // scrolls this row with a finger, so the stills that arrive a flick early
+        // are the difference between tiles appearing and tiles decoding.
+        LaunchedEffect(episodes) {
+            viewModel.warmEpisodeStills(
+                episodes.mapNotNull { episode -> episode.thumbnail },
+                // The phone's still is 132x74dp, drawn by a plain AsyncImage with
+                // no explicit size - so the warm must use the same drawn size to
+                // write the entry that card reads.
+                widthDp = 132f,
+                heightDp = 74f
+            )
+        }
         val loadedSeason by viewModel.loadedSeason.collectAsStateWithLifecycle()
         val episodesLoading by viewModel.episodesLoading.collectAsStateWithLifecycle()
         // M3: the phone page never read this flow at all, so a season whose
