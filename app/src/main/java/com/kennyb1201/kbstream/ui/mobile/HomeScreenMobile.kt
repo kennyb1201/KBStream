@@ -92,7 +92,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
-import coil3.size.Size
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.runCatchingCancellable
@@ -2073,7 +2072,11 @@ private fun MobileHero(
             model = remember(backdropUrl, meta) {
                 ImageRequest.Builder(context)
                     .data(backdropUrl ?: meta.background ?: meta.poster)
-                    .size(Size(1280, 800))
+                    // Coil's own size type, spelled in full: this file's `Size`
+                    // is the geometry one, which the sweep's drawRect already
+                    // imports and which a second import of the same name cannot
+                    // share a file with.
+                    .size(coil3.size.Size(1280, 800))
                     .crossfade(true)
                     .build()
             },
