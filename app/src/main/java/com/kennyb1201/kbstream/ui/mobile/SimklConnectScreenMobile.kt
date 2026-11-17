@@ -15,6 +15,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,6 +36,7 @@ import com.kennyb1201.kbstream.ui.components.KBQrCode
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
+import com.kennyb1201.kbstream.ui.simkl.SimklParentAction
 import com.kennyb1201.kbstream.ui.simkl.SimklViewModel
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBRust
@@ -60,11 +62,13 @@ import com.kennyb1201.kbstream.ui.theme.MobileTheme
  *  - NOT CONNECTED: the verification URL, the code in the same big type, the
  *    status/error lines, and GENERATE CODE / BACK.
  *
- * Both safety rules are kept: a kids profile gets no DISCONNECT button at all
- * (unlinking clears the local watch corpus, which is a parent's action), and
- * DISCONNECT goes through a confirmation that names the wipe, not just the
- * unlink. The TV dialog's focus retry has no touch twin - the buttons are plain
- * tap targets.
+ * Both controls are drawn on a kids profile too, and both sit behind the parent
+ * PIN (spec 2026-11-16, kids-profile disconnect/reconnect F1-F3). This used to
+ * read "a kids profile gets no DISCONNECT button at all" on the grounds that
+ * unlinking destroyed local history - that stopped being true at playback spec
+ * C4/D1, and the restriction was never about the wipe anyway: it is about who
+ * may act. DISCONNECT still goes through its confirmation after the PIN. The TV
+ * dialog's focus retry has no touch twin - the buttons are plain tap targets.
  */
 @Composable
 fun SimklConnectScreenMobile(
@@ -74,11 +78,11 @@ fun SimklConnectScreenMobile(
 ) {
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     var showDisconnectConfirm by remember { mutableStateOf(false) }
-    // A kids profile never gets the account controls: linking or unlinking the
-    // household's tracker account is the parent's decision, and they have a
-    // profile of their own to do it from. (This used to be phrased as "the
-    // destructive button" because disconnect() also wiped local history - it
-    // no longer does, see SimklViewModel.disconnect.)
+    // A kids profile gets the account controls, but not without a parent: the
+    // ViewModel asks for the PIN before it starts a reconnect or a disconnect
+    // (F1/F2). (This used to be phrased as "the destructive button" because
+    // disconnect() also wiped local history - it no longer does, see
+    // SimklViewModel.disconnect.)
     val kidsProfile = ProfileManager.activeProfile
         .collectAsStateWithLifecycle().value
         ?.kidsMaxAge != null
@@ -134,6 +138,15 @@ fun SimklConnectScreenMobile(
                             message = "This build has no Simkl client id, so Simkl cannot " +
                                 "be connected. Set SIMKL_CLIENT_ID for the build and " +
                                 "reinstall."
+                        )
+                    } else if (uiState.requiresParentPin) {
+                        // Before the connected branch (F1/F2): a connected kids
+                        // profile is exactly where RECONNECT and DISCONNECT are,
+                        // so the gate has to be able to replace that branch.
+                        SimklParentPinGateMobile(
+                            vm = vm,
+                            onBack = onBack,
+                            isConnected = uiState.isConnected
                         )
                     } else if (uiState.isConnected) {
                         SimklStatusPanel(
@@ -203,26 +216,30 @@ fun SimklConnectScreenMobile(
                                 modifier = Modifier.fillMaxWidth(),
                                 onClick = vm::refreshSimklNow
                             )
-                            if (uiState.isLegacySession && !kidsProfile) {
+                            // Drawn on a kids profile too (F1): the ViewModel
+                            // is what asks for the parent PIN.
+                            if (uiState.isLegacySession) {
                                 KBButton(
                                     label = "RECONNECT",
                                     modifier = Modifier.fillMaxWidth(),
                                     onClick = vm::generateCode
                                 )
                             }
-                            if (!kidsProfile) {
-                                KBButton(
-                                    label = "DISCONNECT",
-                                    danger = true,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    onClick = { showDisconnectConfirm = true }
-                                )
-                            }
+                            // And DISCONNECT on a kids profile as well (F2): the
+                            // PIN comes first, the confirmation after it.
+                            KBButton(
+                                label = "DISCONNECT",
+                                danger = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = {
+                                    if (kidsProfile) {
+                                        vm.requestDisconnect()
+                                    } else {
+                                        showDisconnectConfirm = true
+                                    }
+                                }
+                            )
                         }
-                    } else if (uiState.requiresParentPin) {
-                        // The gate Trakt's phone page has always had (trackers
-                        // C1): a kids profile links no account without a parent.
-                        SimklParentPinGateMobile(vm = vm, onBack = onBack)
                     } else {
                         SimklStatusPanel(
                             title = "Device link required",
@@ -331,6 +348,16 @@ fun SimklConnectScreenMobile(
                 Spacer(modifier = Modifier.height(20.dp))
             }
 
+            // A PIN accepted for DISCONNECT does not disconnect by itself (F2):
+            // it hands the approval back here so the confirmation below runs
+            // first, exactly as it does for a non-kids profile.
+            LaunchedEffect(uiState.approvedParentAction) {
+                if (uiState.approvedParentAction == SimklParentAction.DISCONNECT) {
+                    showDisconnectConfirm = true
+                    vm.consumeParentApproval()
+                }
+            }
+
             if (showDisconnectConfirm) {
                 Dialog(onDismissRequest = { showDisconnectConfirm = false }) {
                     KBDialogPanel(title = "Disconnect from Simkl?") {
@@ -379,14 +406,20 @@ fun SimklConnectScreenMobile(
 @Composable
 private fun SimklParentPinGateMobile(
     vm: SimklViewModel,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    // CANCEL returns to the CONNECTED page when there is one (F3): the gate
+    // replaces that branch now, so leaving the screen is a bigger step than
+    // cancel asks for.
+    isConnected: Boolean
 ) {
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     var pin by remember { mutableStateOf("") }
 
     SimklStatusPanel(
         title = "Parent PIN required",
-        message = "Linking an account on a kids profile is a parent's action."
+        // "Linking or disconnecting": this gate covers both acts now (F2).
+        message = "Linking or disconnecting an account on a kids profile is " +
+            "a parent's action."
     )
     KBTextField(
         value = pin,
@@ -416,7 +449,7 @@ private fun SimklParentPinGateMobile(
             modifier = Modifier.fillMaxWidth(),
             onClick = {
                 vm.cancelParentPin()
-                onBack()
+                if (!isConnected) onBack()
             }
         )
     }

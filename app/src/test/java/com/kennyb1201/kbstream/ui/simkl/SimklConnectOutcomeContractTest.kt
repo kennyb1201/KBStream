@@ -150,7 +150,11 @@ class SimklConnectOutcomeContractTest {
             "generateCode must stop at the gate rather than launching the " +
                 "request itself: $generate",
             generate.contains("requiresParentPin = true") &&
-                generate.contains("A parent needs to set a parent PIN") &&
+                // The sentence moved into PARENT_PIN_MISSING when disconnect
+                // started using it too (spec 2026-11-16, F3): one error, one
+                // place a parent is sent to.
+                generate.contains("errorMessage = PARENT_PIN_MISSING") &&
+                viewModel.contains("A parent needs to set a parent PIN") &&
                 !generate.contains("viewModelScope.launch")
         )
         assertTrue(

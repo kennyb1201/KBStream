@@ -43,10 +43,26 @@ data class SimklUiState(
     val statusMessage: String? = null,
     val errorMessage: String? = null,
     /**
-     * A kids profile must clear the parent PIN before a code is generated - the
+     * A kids profile must clear the parent PIN before a tracker action runs - the
      * rule Trakt's page has always had (trackers C1).
      */
     val requiresParentPin: Boolean = false,
+    /**
+     * WHAT the PIN is being asked for (spec 2026-11-16, kids-profile
+     * disconnect/reconnect F1/F2).
+     *
+     * The gate was built for one act - linking - so its UNLOCK always started a
+     * code request. A kids profile now needs the same gate around DISCONNECT
+     * too, and that act must NOT start a code request when the PIN is accepted;
+     * it has to fall through to the confirmation the connected branch already
+     * draws. The action is what tells the two apart.
+     */
+    val parentPinAction: SimklParentAction = SimklParentAction.LINK,
+    /**
+     * Set the instant a PIN was accepted for [parentPinAction], and consumed by
+     * the screen that owns the dialog. Null the rest of the time.
+     */
+    val approvedParentAction: SimklParentAction? = null,
     /** The entered PIN was wrong; cleared on the next keystroke. */
     val pinError: Boolean = false,
     val isLoadingWatching: Boolean = false,
@@ -67,4 +83,17 @@ data class SimklUiState(
             deviceCode != null &&
             userCode != null &&
             (secondsRemaining ?: 0) > 0
+}
+
+/**
+ * The acts a kids profile needs a parent's PIN for (spec 2026-11-16, kids
+ * profile disconnect/reconnect).
+ *
+ * LINK covers both a first-time link and a RECONNECT: a reconnect IS a new
+ * device authorisation, so it runs exactly the flow a link does. DISCONNECT is
+ * the act that does not.
+ */
+enum class SimklParentAction {
+    LINK,
+    DISCONNECT,
 }

@@ -142,10 +142,19 @@ class SimklAndProfilesMobileContractTest {
     @Test
     fun `the Simkl disconnect keeps both safety rules`() {
         val mobile = simklMobile()
+        // Revised by spec 2026-11-16 (kids-profile reconnect/disconnect F1/F2):
+        // the button IS drawn on a kids profile now, and the parent PIN - not the
+        // absence of the control - is what makes it a parent's action. The old pin
+        // here asserted the opposite rule.
         assertTrue(
-            "a kids profile does not get the destructive button at all",
+            "a kids profile gets both controls, and the PIN comes first",
             mobile.contains("kidsMaxAge != null") &&
-                mobile.contains("if (!kidsProfile)")
+                mobile.contains("vm.requestDisconnect()") &&
+                mobile.contains("if (uiState.isLegacySession)")
+        )
+        assertFalse(
+            "the blanket kids-profile exclusion is gone",
+            mobile.contains("if (!kidsProfile)")
         )
         assertTrue(
             "the press opens a confirmation, never the disconnect itself",

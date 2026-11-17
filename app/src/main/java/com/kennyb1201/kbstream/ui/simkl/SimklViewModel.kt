@@ -146,10 +146,15 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
      * caller inherit it (Trakt's lives in its own ViewModel for the same
      * reason).
      *
-     * Unlinking stays asymmetric on purpose, and the asymmetry is the policy:
-     * Simkl's DISCONNECT is hidden on a kids profile because it destroys the
-     * local watch corpus, while Trakt's only drops the session and is put back
-     * by anyone who can pass this gate again.
+     * Unlinking needs the same gate, and for the same reason (spec 2026-11-16,
+     * kids-profile disconnect/reconnect F1/F2 - this paragraph used to say the
+     * opposite). The old note claimed Simkl's DISCONNECT was hidden on a kids
+     * profile "because it destroys the local watch corpus"; disconnect has not
+     * wiped local data since playback spec C4/D1. `clearAuth()` revokes the V2
+     * grant and drops the tracker session, and nothing else - so the restriction
+     * was never about a wipe, it is about WHO may act. A kids profile gets both
+     * controls, and both sit behind the parent PIN: RECONNECT is this same
+     * device authorisation, DISCONNECT is the session drop.
      */
     fun generateCode() {
         pollJob?.cancel()
@@ -174,13 +179,14 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                 _uiState.value = _uiState.value.copy(
                     requiresParentPin = false,
                     pinError = false,
-                    errorMessage = "A parent needs to set a parent PIN before Simkl can be " +
-                        "connected on a kids profile."
+                    errorMessage = PARENT_PIN_MISSING
                 )
                 return
             }
             _uiState.value = _uiState.value.copy(
                 requiresParentPin = true,
+                parentPinAction = SimklParentAction.LINK,
+                approvedParentAction = null,
                 pinError = false,
                 errorMessage = null
             )
@@ -190,18 +196,79 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
         beginCodeRequest()
     }
 
-    /** The parent PIN entry on a kids profile. */
+    /**
+     * The parent PIN entry on a kids profile.
+     *
+     * What happens after a correct PIN depends on WHAT was asked (see
+     * [SimklParentAction]): a link or a reconnect starts the device
+     * authorisation, a disconnect does not - it hands the screen the approval so
+     * the confirmation it already draws can run the existing `disconnect()`
+     * path. Nothing else about a correct PIN changes.
+     */
     fun submitParentPin(pin: String) {
         if (!guard.verifyParentPin(pin)) {
             _uiState.value = _uiState.value.copy(pinError = true)
             return
         }
-        _uiState.value = _uiState.value.copy(requiresParentPin = false, pinError = false)
-        beginCodeRequest()
+        when (_uiState.value.parentPinAction) {
+            SimklParentAction.DISCONNECT -> _uiState.value = _uiState.value.copy(
+                requiresParentPin = false,
+                pinError = false,
+                approvedParentAction = SimklParentAction.DISCONNECT
+            )
+
+            SimklParentAction.LINK -> {
+                _uiState.value = _uiState.value.copy(
+                    requiresParentPin = false,
+                    pinError = false
+                )
+                beginCodeRequest()
+            }
+        }
+    }
+
+    /**
+     * DISCONNECT on a kids profile (spec 2026-11-16, F2): the same PIN gate the
+     * link uses, then the screen's own confirmation and `disconnect()`.
+     *
+     * The missing-PIN sentence is [PARENT_PIN_MISSING], the one a link shows,
+     * on purpose: a parent who has not set a PIN yet is being sent to the same
+     * place for either act, and two near-identical sentences would only invite
+     * the guess that the two are fixed in different settings.
+     */
+    fun requestDisconnect() {
+        if (ProfileManager.activeProfile.value?.kidsMaxAge == null) return
+        if (!guard.hasParentPin()) {
+            _uiState.value = _uiState.value.copy(
+                requiresParentPin = false,
+                pinError = false,
+                errorMessage = PARENT_PIN_MISSING
+            )
+            return
+        }
+        _uiState.value = _uiState.value.copy(
+            requiresParentPin = true,
+            parentPinAction = SimklParentAction.DISCONNECT,
+            approvedParentAction = null,
+            pinError = false,
+            errorMessage = null
+        )
+    }
+
+    /** The screen has acted on (or dismissed) an accepted PIN. */
+    fun consumeParentApproval() {
+        if (_uiState.value.approvedParentAction != null) {
+            _uiState.value = _uiState.value.copy(approvedParentAction = null)
+        }
     }
 
     fun cancelParentPin() {
-        _uiState.value = _uiState.value.copy(requiresParentPin = false, pinError = false)
+        _uiState.value = _uiState.value.copy(
+            requiresParentPin = false,
+            pinError = false,
+            parentPinAction = SimklParentAction.LINK,
+            approvedParentAction = null
+        )
     }
 
     /** A keystroke in the PIN field retires the wrong-PIN line. */
@@ -675,5 +742,14 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
 
         /** What a code request reports in a build with no client id (trackers I2). */
         const val NOT_CONFIGURED = "This build has no Simkl client id, so Simkl cannot connect."
+
+        /**
+         * A kids profile acting before a parent PIN exists at all - shown for a
+         * link AND for a disconnect (spec 2026-11-16, F3). One sentence, one
+         * destination: the parent sets the PIN where they already set it.
+         */
+        const val PARENT_PIN_MISSING =
+            "A parent needs to set a parent PIN before Simkl can be connected " +
+                "on a kids profile."
     }
 }

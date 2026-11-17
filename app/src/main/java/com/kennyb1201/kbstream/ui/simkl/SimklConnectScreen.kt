@@ -84,9 +84,15 @@ fun SimklConnectScreen(
     // The pairing row is a focus stop of its own (it is not a button), so it
     // needs to say when it holds the D-pad: without a ring, focus would look lost.
     var pairingFocused by remember { mutableStateOf(false) }
-    // m10 (audit): unlinking wipes the local watch corpus, so a kids profile
-    // does not get the button at all - confirmation or not, that is a parent's
-    // action, and the parent has a profile of their own to do it from.
+    // A kids profile gets BOTH controls now, and both behind the parent PIN
+    // (spec 2026-11-16, kids-profile disconnect/reconnect F1-F3).
+    //
+    // The old note here claimed DISCONNECT destroyed local history, which is why
+    // a kids profile got no button at all. That stopped being true at playback
+    // spec C4/D1: `clearAuth()` revokes the V2 grant and drops the tracker
+    // session, and local watch data is not part of it. What is left is the rule
+    // that always mattered - this is a parent's action - and the app already has
+    // the apparatus for that: the same PIN gate the first-time link uses.
     val kidsProfile = com.kennyb1201.kbstream.data.sync.ProfileManager
         .activeProfile.collectAsStateWithLifecycle().value
         ?.kidsMaxAge != null
@@ -156,6 +162,14 @@ fun SimklConnectScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         KBButton(label = "BACK", onClick = onBack)
                     }
+                } else if (uiState.requiresParentPin) {
+                    // The gate comes BEFORE the connected branch (F1/F2): a kids
+                    // profile that is already connected is exactly where RECONNECT
+                    // and DISCONNECT live, so the gate has to be able to replace
+                    // that branch rather than only the linking one. It used to sit
+                    // after it, where it was unreachable from a connected kids
+                    // profile.
+                    SimklParentPinGate(vm = vm, onBack = onBack, isConnected = uiState.isConnected)
                 } else if (uiState.isConnected) {
                     SimklStatusPanel(
                         title = "Account connected",
@@ -200,7 +214,10 @@ fun SimklConnectScreen(
 
                         // Legacy only: the same device flow every new sign-in
                         // uses, one button away from where the state is named.
-                        if (uiState.isLegacySession && !kidsProfile) {
+                        // Drawn on a kids profile too (F1) - the ViewModel is
+                        // what asks for the parent PIN, so the button and the
+                        // gate cannot disagree.
+                        if (uiState.isLegacySession) {
                             KBButton(label = "RECONNECT", onClick = vm::generateCode)
                         }
 
@@ -215,20 +232,22 @@ fun SimklConnectScreen(
                         // it on simkl.com), so the confirmation is where that is
                         // said. Local watch data is NOT part of it any more
                         // (playback spec C4/D1: disconnect never wipes).
-                        if (!kidsProfile) {
-                            KBButton(
-                                label = "DISCONNECT",
-                                danger = true,
-                                onClick = { showDisconnectConfirm = true }
-                            )
-                        }
+                        // Drawn on a kids profile as well (F2). The PIN, when
+                        // that profile needs one, comes first and the
+                        // confirmation still comes after it - the Dialog is not
+                        // a substitute for the gate.
+                        KBButton(
+                            label = "DISCONNECT",
+                            danger = true,
+                            onClick = {
+                                if (kidsProfile) {
+                                    vm.requestDisconnect()
+                                } else {
+                                    showDisconnectConfirm = true
+                                }
+                            }
+                        )
                     }
-                } else if (uiState.requiresParentPin) {
-                    // The gate Trakt's page has always had (trackers C1): a kids
-                    // profile links no account without a parent. It sits here
-                    // rather than replacing the linking branch, so CANCEL is
-                    // followed by the ordinary not-connected page.
-                    SimklParentPinGate(vm = vm, onBack = onBack)
                 } else {
                     SimklStatusPanel(
                         title = "Device link required",
@@ -341,6 +360,16 @@ fun SimklConnectScreen(
         }
     }
 
+    // A PIN accepted for DISCONNECT does not disconnect by itself (F2): it hands
+    // the approval back here so the confirmation below runs first, exactly as it
+    // does for a non-kids profile.
+    LaunchedEffect(uiState.approvedParentAction) {
+        if (uiState.approvedParentAction == SimklParentAction.DISCONNECT) {
+            showDisconnectConfirm = true
+            vm.consumeParentApproval()
+        }
+    }
+
     if (showDisconnectConfirm) {
         DisconnectConfirmDialog(
             onConfirm = {
@@ -362,7 +391,11 @@ fun SimklConnectScreen(
 @Composable
 private fun SimklParentPinGate(
     vm: SimklViewModel,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    // CANCEL goes back to the CONNECTED page when there is one (F3): the gate
+    // replaces that branch now, so leaving the screen would be a bigger step
+    // than cancel asks for.
+    isConnected: Boolean
 ) {
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     var pin by remember { mutableStateOf("") }
@@ -371,7 +404,10 @@ private fun SimklParentPinGate(
 
     SimklStatusPanel(
         title = "Parent PIN required",
-        message = "Linking an account on a kids profile is a parent's action."
+        // "Changing" rather than "linking": this gate now covers disconnect too
+        // (F2), and the old sentence would be a lie in front of that button.
+        message = "Linking or disconnecting an account on a kids profile is " +
+            "a parent's action."
     )
     KBTextField(
         value = pin,
@@ -395,7 +431,7 @@ private fun SimklParentPinGate(
         )
         KBButton(label = "CANCEL", onClick = {
             vm.cancelParentPin()
-            onBack()
+            if (!isConnected) onBack()
         })
     }
 }
