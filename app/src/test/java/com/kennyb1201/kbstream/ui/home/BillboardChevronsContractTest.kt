@@ -175,7 +175,14 @@ class BillboardChevronsContractTest {
         assertTrue(
             "F5: the hero's own tap is still the art's, and the arrows are children " +
                 "of that box, not a replacement for it",
-            mobile.contains(".clickable(onClick = onClick)\n    ) {\n        AsyncImage(") &&
+            // The hero box opens the title; the arrows are drawn INSIDE it, after
+            // that tap. (The art's own first frame sits between them since the
+            // 2026-11-17 first-entry spec, so the check is the order, not the
+            // old three-line adjacency.)
+            heroOf(mobile).contains(".clickable(onClick = onClick)") &&
+                heroOf(mobile).contains("BillboardPageChevron(") &&
+                heroOf(mobile).indexOf(".clickable(onClick = onClick)") <
+                heroOf(mobile).indexOf("BillboardPageChevron(") &&
                 mobile.contains("contentDescription = if (forward) \"Next title\" else \"Previous title\"")
         )
         assertFalse(
@@ -185,6 +192,12 @@ class BillboardChevronsContractTest {
     }
 
     // ── helpers ───────────────────────────────────────────────────────────
+
+    /** [mobile]'s MobileHero body, up to the next top-level function. */
+    private fun heroOf(text: String): String = text.substring(
+        text.indexOf("private fun MobileHero("),
+        text.indexOf("private fun billboardArtSource(")
+    )
 
     private fun source(relative: String): String {
         val file = File(findSourceRoot(), relative)
