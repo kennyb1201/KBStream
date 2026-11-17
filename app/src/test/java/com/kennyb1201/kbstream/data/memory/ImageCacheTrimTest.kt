@@ -5,121 +5,72 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The graded memory trim (spec 2026-11-15, scrolling round two F4).
+ * The trim's target arithmetic (spec 2026-11-15 round two F4; ordering revised
+ * by dig four, 2026-11-16, §3c).
  *
- * The old response to RUNNING_CRITICAL was `clear()`: every decoded bitmap gone,
- * including the rail on screen, which then re-decoded as the viewer kept
- * scrolling. These cases pin what replaces it - half the cache, biggest first,
- * hero-size bitmaps before tiles - because the ordering IS the behavior: evict
- * the wrong half and the fix is a plain clear with extra steps.
+ * The ORDER is no longer computed here - Coil's cache is an LRU and
+ * `trimToSize` evicts eldest-first, so the old hero-first/biggest-first list is
+ * gone and the renderer's own order does the work. What remains testable
+ * without a Context, a loader or a bitmap is how much a trim gives back, and
+ * that is what these cases pin. The wiring - that the trim is `trimToSize` and
+ * nothing else - is pinned by [LruTrimWiringContractTest].
  */
 class ImageCacheTrimTest {
 
-    private fun entry(width: Int, height: Int, sizeBytes: Long) =
-        ImageCacheTrim.Entry(width = width, height = height, sizeBytes = sizeBytes)
-
     @Test
-    fun `hero-size bitmaps go before rail tiles`() {
-        val entries = listOf(
-            entry(342, 192, 200_000),       // 0 rail tile
-            entry(1280, 720, 3_700_000),    // 1 hero backdrop
-            entry(342, 192, 210_000),       // 2 rail tile
-            entry(1280, 720, 3_600_000)     // 3 hero backdrop
-        )
-
-        val evicted = ImageCacheTrim.evictIndices(entries, residentBytes = 7_710_000)
-
+    fun `a trim gives back half of what is resident`() {
         assertEquals(
-            "the two hero-size entries are the first to go, not the oldest tiles",
-            listOf(1, 3),
-            evicted.take(2)
+            "32 MB resident, 16 MB target - the same half the graded trim aimed for",
+            16_000_000L,
+            ImageCacheTrim.targetBytes(32_000_000L)
         )
     }
 
     @Test
-    fun `the biggest bitmap goes first inside a group`() {
-        val entries = listOf(
-            entry(342, 192, 100_000),
-            entry(342, 192, 900_000),
-            entry(342, 192, 500_000)
-        )
-
-        // 1MB of a 2MB cache: the 900k tile first, then the 500k one, and the
-        // 100k tile is still cheaper to keep than to decode again.
-        val evicted = ImageCacheTrim.evictIndices(entries, residentBytes = 2_000_000)
-
+    fun `the fraction is the knob`() {
         assertEquals(
-            "biggest first: the most reclaim per eviction",
-            listOf(1, 2),
-            evicted
+            "a quarter back, as a caller may ask for",
+            7_500_000L,
+            ImageCacheTrim.targetBytes(10_000_000L, targetFraction = 0.25)
+        )
+        assertEquals(
+            "giving everything back targets zero, which is a clear by another name",
+            0L,
+            ImageCacheTrim.targetBytes(10_000_000L, targetFraction = 1.0)
+        )
+        assertEquals(
+            "asking for nothing back leaves the target where it was",
+            10_000_000L,
+            ImageCacheTrim.targetBytes(10_000_000L, targetFraction = 0.0)
         )
     }
 
     @Test
-    fun `a trim frees half, not everything`() {
-        val entries = (1..10).map { entry(342, 192, 1_000_000) }
-
-        val evicted = ImageCacheTrim.evictIndices(entries, residentBytes = 10_000_000)
-
+    fun `nothing resident and nonsense fractions are safe`() {
         assertEquals(
-            "half the resident bytes is the target",
-            5,
-            evicted.size
+            "an empty cache has nothing to give back",
+            0L,
+            ImageCacheTrim.targetBytes(0L)
+        )
+        assertEquals(
+            "a negative resident cannot ask for a negative target",
+            0L,
+            ImageCacheTrim.targetBytes(-5L)
         )
         assertTrue(
-            "and it must never be all ten - that would be the clear this replaces",
-            evicted.size < entries.size
+            "an out-of-range fraction is clamped rather than trusted",
+            ImageCacheTrim.targetBytes(1_000L, targetFraction = 4.0) == 0L &&
+                ImageCacheTrim.targetBytes(1_000L, targetFraction = -2.0) == 1_000L
         )
     }
 
     @Test
-    fun `an empty or unknown cache evicts nothing`() {
+    fun `the default fraction is the half this build ships`() {
         assertEquals(
-            emptyList<Int>(),
-            ImageCacheTrim.evictIndices(emptyList(), residentBytes = 10)
-        )
-        assertEquals(
-            "a cache that reports no size has nothing to grade",
-            emptyList<Int>(),
-            ImageCacheTrim.evictIndices(listOf(entry(1280, 720, 0)), residentBytes = 0)
-        )
-        assertEquals(
-            "a zero target is a no-op, not a clear",
-            emptyList<Int>(),
-            ImageCacheTrim.evictIndices(
-                listOf(entry(1280, 720, 5)),
-                residentBytes = 5,
-                targetFraction = 0.0
-            )
-        )
-    }
-
-    @Test
-    fun `a bitmap with no reported size still counts as a candidate`() {
-        val entries = listOf(
-            entry(1280, 720, 0),
-            entry(342, 192, 1_000)
-        )
-
-        val evicted = ImageCacheTrim.evictIndices(entries, residentBytes = 1_000)
-
-        assertTrue(
-            "the hero-size entry with an unknown size is still evicted first",
-            evicted.first() == 0
-        )
-    }
-
-    @Test
-    fun `the target is a fraction of what is resident, not of the entries listed`() {
-        val entries = listOf(entry(342, 192, 100), entry(342, 192, 100))
-
-        val evicted = ImageCacheTrim.evictIndices(entries, residentBytes = 1_000)
-
-        assertEquals(
-            "500 bytes are targeted, and 200 available, so both go - the rule " +
-                "stops when it runs out of candidates, it does not fail",
-            2,
-            evicted.size
+            "the graded response the TCL's pastes were read against",
+            0.5,
+            ImageCacheTrim.TARGET_FRACTION,
+            0.0
         )
     }
 }

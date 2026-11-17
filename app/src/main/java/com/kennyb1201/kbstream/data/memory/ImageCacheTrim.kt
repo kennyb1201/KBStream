@@ -1,87 +1,53 @@
 package com.kennyb1201.kbstream.data.memory
 
 /**
- * Which decoded bitmaps a memory-pressure trim gives back (spec 2026-11-15,
- * scrolling round two F4).
+ * How much of the decoded-bitmap cache a memory-pressure trim gives back (spec
+ * 2026-11-15, scrolling round two F4; ordering revised by dig four, 2026-11-16,
+ * §3c).
  *
  * The old response was `clear()`: the whole memory cache, every bitmap, at
  * RUNNING_CRITICAL. On the field TV that fired once mid-session and the rail on
  * screen re-decoded as the viewer scrolled past cards that had been painted a
  * second earlier - the trim made the jank it was supposed to relieve.
  *
- * The graded trim gives back half, biggest first, and the size order is the
- * useful one here: a 1280x720 hero backdrop is ~3.7MB and a rail tile is a
- * fraction of that, so the hero-size entries are both the most to reclaim and
- * the cheapest to re-decode from Coil's disk cache (the hero re-fetches the art
- * it is already showing only when focus moves).
+ * Round two replaced it with a graded trim: half the cache, biggest bitmaps
+ * (the hero-size backdrops) first. Dig four showed that order works against the
+ * thing it was meant to protect - the hero-size group contains exactly the
+ * lookahead-warmed backdrops the hero resolve had just paid for, so a trim
+ * shortly after a warm deletes the three decodes F3 bought (`heroWarms` in the
+ * diagnostics report now makes that visible).
  *
- * Correction (dig four, 2026-11-16): Coil's `MemoryCache` IS a
- * least-recently-used cache - `RealStrongMemoryCache` wraps `coil3.util.LruCache`
- * (pinned Coil 3.6.3), whose `trimToSize` evicts eldest-first, and an evicted
- * entry is demoted into the weak cache rather than removed outright. So
- * `trimToSize` on its own already trims by age. This helper's explicit pass is
- * still how the graded order is chosen here, but it is not the only ordering
- * available: see `MemoryPressure.trimImageMemoryCache`, where `trimToSize` runs
- * last as a backstop. The known cost of this order (dig four §3d) is that the
- * hero-first group contains exactly the lookahead-warmed backdrops the hero
- * resolve just paid for.
+ * The trim is now LRU-ONLY: Coil's memory cache is an `LruCache` (pinned Coil
+ * 3.6.3, `RealStrongMemoryCache` wrapping `coil3.util.LruCache`), and
+ * `trimToSize` evicts the eldest - least recently used - entry first. That is
+ * the order that matches a forward rail walk: what gets dropped is what the
+ * viewer scrolled away from, while the just-warmed and just-drawn entries
+ * survive. An evicted entry is also demoted into Coil's weak cache rather than
+ * hard-removed, so a trim evictee can still hit without a disk decode if it has
+ * not been collected.
  *
- * Pure on purpose: the ordering is the whole behavior, and it is testable
+ * Only the fraction is left here, and it is pure so the arithmetic is testable
  * without a Context, an image loader or a bitmap.
  */
 object ImageCacheTrim {
 
-    /** Where "hero size" starts, matching the report's own classification. */
-    const val HERO_MIN_WIDTH = 960
-
-    /** How much of what is resident a graded trim frees, as a fraction. */
+    /**
+     * The share of what is resident that a trim gives back. Already a knob the
+     * caller may override; the graded caller passes nothing.
+     */
     const val TARGET_FRACTION = 0.5
 
-    /** One cached bitmap, as much as the trim needs to know about it. */
-    data class Entry(val width: Int, val height: Int, val sizeBytes: Long)
-
     /**
-     * The indices into [entries] to evict, in the order to evict them -
-     * hero-size entries first, each group biggest-first, stopping as soon as
-     * [targetFraction] of [residentBytes] has been accounted for.
+     * The size to trim TO, given what is resident - [residentBytes] less
+     * [targetFraction] of it.
      *
-     * A bitmap whose size the loader would not report (`sizeBytes <= 0`) still
-     * counts as a candidate at the end: it is still a bitmap, and the caller's
-     * `trimToSize` backstop covers the case where the bytes were not knowable.
-     *
-     * Nothing is evicted when the request is for nothing - an empty cache, a zero
-     * target, or a negative one - so a caller can hand this a fraction it computed
-     * from a device without special-casing.
+     * Zero when nothing is resident (nothing to trim), and clamped so a caller
+     * handing this a fraction computed from a device cannot ask for a negative
+     * or an over-100% target.
      */
-    fun evictIndices(
-        entries: List<Entry>,
-        residentBytes: Long,
-        targetFraction: Double = TARGET_FRACTION
-    ): List<Int> {
-        if (entries.isEmpty() || targetFraction <= 0.0) return emptyList()
-        val resident =
-            if (residentBytes > 0) residentBytes else entries.sumOf { it.sizeBytes.coerceAtLeast(0) }
-        if (resident <= 0) return emptyList()
-        val target = (resident * targetFraction).toLong().coerceAtLeast(1)
-
-        val hero = mutableListOf<Int>()
-        val rest = mutableListOf<Int>()
-        entries.forEachIndexed { index, entry ->
-            if (entry.width >= HERO_MIN_WIDTH) hero += index else rest += index
-        }
-        fun bySizeDescending(indices: List<Int>): List<Int> =
-            indices.sortedWith(
-                compareByDescending<Int> { entries[it].sizeBytes }
-                    .thenBy { it }
-            )
-
-        val out = mutableListOf<Int>()
-        var freed = 0L
-        (bySizeDescending(hero) + bySizeDescending(rest)).forEach { index ->
-            if (freed >= target) return@forEach
-            out += index
-            freed += entries[index].sizeBytes.coerceAtLeast(0)
-        }
-        return out
+    fun targetBytes(residentBytes: Long, targetFraction: Double = TARGET_FRACTION): Long {
+        if (residentBytes <= 0L) return 0L
+        val share = targetFraction.coerceIn(0.0, 1.0)
+        return (residentBytes * (1.0 - share)).toLong().coerceAtLeast(0L)
     }
 }

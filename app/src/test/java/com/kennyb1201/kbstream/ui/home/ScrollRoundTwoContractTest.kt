@@ -203,13 +203,16 @@ class ScrollRoundTwoContractTest {
             "images= stays the total, so an older paste still reads the same way",
             memory.contains("\"releases: images=\$images browsing=\$browsing\"")
         )
+        // Dig four §3c revised the ordering: the trim is now Coil's own LRU
+        // (see LruTrimWiringContractTest), so this pin names the shape that
+        // replaced the hero-first pass rather than the pass itself.
         assertTrue(
-            "the eviction order comes from the pure rule",
-            memory.contains("ImageCacheTrim.evictIndices(entries, resident)")
+            "the trim's size comes from the pure fraction rule",
+            memory.contains("ImageCacheTrim.targetBytes(resident)")
         )
         assertTrue(
-            "and there is a backstop for a loader that reports no entry sizes",
-            memory.contains("cache.trimToSize(half)")
+            "and the eviction order is the cache's own LRU, not a computed list",
+            memory.contains("cache.trimToSize(target)")
         )
     }
 

@@ -170,18 +170,25 @@ internal fun releaseImageMemoryCache(context: Context) {
 }
 
 /**
- * Gives back HALF the decoded-bitmap cache, biggest bitmaps first (spec
- * 2026-11-15, scrolling round two F4).
+ * Gives back half the decoded-bitmap cache, by Coil's own LRU order (spec
+ * 2026-11-15, round two F4; ordering revised by dig four, 2026-11-16, §3c).
  *
- * This is the RUNNING_CRITICAL response now. `clear()` is what made a pressure
- * event mid-scroll re-decode the rail the viewer was looking at, including cards
- * they had just scrolled past; a graded trim keeps those and drops the largest
- * entries - hero-size backdrops - which are the ones the hero re-decodes anyway
- * the next time focus moves.
+ * This is the RUNNING_CRITICAL response. `clear()` is what made a pressure event
+ * mid-scroll re-decode the rail the viewer was looking at, including cards they
+ * had just scrolled past.
  *
- * `trimToSize` is the backstop behind the chosen evictions: if the loader did not
- * report entry sizes (some decoders do not), the chosen list cannot reach the
- * target and the cache trims itself to the same half by its own order.
+ * There is deliberately NO explicit eviction pass in front of `trimToSize` any
+ * more. The round-two version walked every key, read each bitmap's size and
+ * removed the biggest first; dig four §3d showed that the hero-size group it
+ * targeted contains the backdrops the lookahead had just warmed, so a trim
+ * arriving after a warm threw away exactly the decodes the warm paid for. Coil's
+ * cache is an `LruCache`, so `trimToSize` evicts the least-recently-used entry
+ * first - the rails the viewer walked away from - and demotes each evictee into
+ * the weak cache instead of hard-removing it (see [ImageCacheTrim]).
+ *
+ * The walk over `cache.keys` is gone with it: reading every entry's bitmap just
+ * to decide an order that the cache already knows was the trim's own
+ * main-thread cost.
  */
 internal fun trimImageMemoryCache(context: Context) {
     runCatching {
@@ -190,23 +197,9 @@ internal fun trimImageMemoryCache(context: Context) {
         val resident = cache.size
         if (resident <= 0) return
 
-        // The Keys, not their strings: `remove` matches the whole key (key +
-        // extras), and a rebuilt Key with the same string would not match.
-        val keys = cache.keys.toList()
-        val entries = keys.map { key ->
-            val image = cache.get(key)?.image
-            ImageCacheTrim.Entry(
-                width = image?.width ?: 0,
-                height = image?.height ?: 0,
-                sizeBytes = image?.size ?: 0L
-            )
-        }
-        ImageCacheTrim.evictIndices(entries, resident).forEach { index ->
-            runCatching { cache.remove(keys[index]) }
-        }
-        val half = resident / 2
-        if (cache.size > half) {
-            runCatching { cache.trimToSize(half) }
+        val target = ImageCacheTrim.targetBytes(resident)
+        if (cache.size > target) {
+            runCatching { cache.trimToSize(target) }
         }
         MemoryPressure.noteImageCacheTrimmed()
     }
