@@ -2772,7 +2772,12 @@ for ((metaAddon, response, error) in probeResults) {
         // use, so stream addons and watch-history keys stay compatible.
         if (_isSyntheticDetail.value) {
             latestEpisodeSeasonRequest = season
-            _episodes.value = emptyList()
+            // NO blanking (round four F1). The row keeps the season that is on
+            // screen until this season's episodes are published - a walk across
+            // the season posters used to empty and refill the row on every
+            // single step, and the emptiness was the visible half of the cost.
+            // _episodesLoading still says a load is in flight, so the row can
+            // say so over the old cards instead of going blank.
             _episodeError.value = null
 
             viewModelScope.launch {
@@ -2849,7 +2854,14 @@ for ((metaAddon, response, error) in probeResults) {
         }
 
         latestEpisodeSeasonRequest = season
-        _episodes.value = emptyList()
+        // Same no-blank rule as the synthetic branch above (round four F1).
+        // The season listing is cached for 12h, so on a season the viewer has
+        // walked past before the answer is already there - but the row was
+        // emptied before the (cache-hit) read began, which is why a repeat
+        // focus still flashed the rail. The stale-season guard below still
+        // stops a slow answer for an abandoned season from publishing, and a
+        // FAILED load still clears the row: keeping the previous season's
+        // episodes under this season's label would be a lie.
         _episodeError.value = null
 
         viewModelScope.launch {

@@ -14,6 +14,7 @@ import coil3.SingletonImageLoader
 import coil3.disk.directory
 import coil3.svg.SvgDecoder
 import coil3.request.crossfade
+import com.kennyb1201.kbstream.data.memory.ImageCacheTrim
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
 import com.kennyb1201.kbstream.data.memory.trimImageMemoryCache
@@ -678,7 +679,11 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             if (level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {
                 releaseImageMemoryCache(this)
             } else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
-                trimImageMemoryCache(this)
+                // The smaller bite (round four F3c): this path runs with the
+                // rail on screen, so the art being given back is the art being
+                // looked at. The deeper reclaim belongs to the backgrounding
+                // clear above, which runs with nothing visible.
+                trimImageMemoryCache(this, ImageCacheTrim.SCROLL_FRACTION)
             }
             if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
                 MemoryPressure.releaseBrowsingCaches()

@@ -82,9 +82,7 @@ import com.kennyb1201.kbstream.data.iptv.IptvRepository
 import com.kennyb1201.kbstream.data.iptv.KidsLiveTvFilter
 import com.kennyb1201.kbstream.data.iptv.epgProgramChannelKey
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
-import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.PlayerMemoryBudget
-import com.kennyb1201.kbstream.data.memory.trimImageMemoryCache
 import com.kennyb1201.kbstream.data.reporting.PlaybackDeathMarker
 import com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace
 import com.kennyb1201.kbstream.data.reporting.Redaction
@@ -3794,23 +3792,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // started the next episode.
         com.kennyb1201.kbstream.data.sync.KidsTimeGuard.enforceLock(this)
 
-        // Playback is the memory peak of the whole app: media3's sample buffer
-        // and the codec's native allocations land on top of whatever browsing
-        // left resident. Free that headroom up front instead of hoping the
-        // system asks in time — decoded artwork and the EPG snapshot are both
-        // rebuildable, and the player loads whatever art it needs itself.
+        // NOTHING is freed here any more (round four F4, 2026-11-16).
         //
-        // HALF, not everything (dig four, 2026-11-16, §3f rank 7). A full clear
-        // here is a resume cost on every single playback: the return to Home
-        // re-decodes the hero and every card from disk even though the box was
-        // never under pressure. The graded LRU trim frees the same order of
-        // headroom for the player (half of a 64MB cap, biggest-first by age)
-        // while keeping the most recently used art, which is exactly the art the
-        // return draws.
-        runCatching {
-            trimImageMemoryCache(this)
-            MemoryPressure.releaseBrowsingCaches()
-        }
+        // This used to clear the bitmap cache and every browsing cache on every
+        // single playback, which made the return to Home re-decode the hero and
+        // the rails from disk on a box that had never been under pressure. A
+        // half trim was the first answer and still evicted half of the art the
+        // return draws; the real answer is that the player does not need the
+        // browse caches released to start. Playback IS the memory peak, so the
+        // pressure path is what guards it: a real OOM or a backgrounding still
+        // trims (see MainApplication's level split), and a player that needs
+        // headroom in a hurry gets it there rather than per launch.
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 

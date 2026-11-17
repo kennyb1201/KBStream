@@ -333,7 +333,17 @@ internal object ImdbTrailerResolver {
     private suspend fun resolveFromPage(imdbId: String): ImdbTrailerData.Video? {
         val context = AppContextHolder.appContext ?: return null
         return webViewGate.withPermit {
-            withContext(Dispatchers.Main.immediate) {
+            // Dispatchers.Main, NOT Main.immediate (round four F2d). A WebView
+            // is thread-affine: it has to be built and driven on the main
+            // thread, so the answer to "get it off the frame" cannot be another
+            // thread. What made it expensive was `immediate` - when the gate
+            // permit was granted to a coroutine already on main, this block ran
+            // INLINE inside that resumption, so a 1280x720 WebView's
+            // construction, measure and layout landed inside the frame that
+            // delivered the permit (a focus step, on Home). Posted instead of
+            // inline, the same work runs on its own message, after the frame
+            // that triggered it has been submitted.
+            withContext(Dispatchers.Main) {
                 val view = runCatching { buildView(context) }.getOrNull()
                     ?: return@withContext null
                 try {

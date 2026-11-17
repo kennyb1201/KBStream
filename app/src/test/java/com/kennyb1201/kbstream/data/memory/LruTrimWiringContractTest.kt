@@ -35,7 +35,7 @@ class LruTrimWiringContractTest {
         assertTrue(
             "one call, at the target the fraction rule computes: $body",
             body.contains("cache.trimToSize(target)") &&
-                body.contains("ImageCacheTrim.targetBytes(resident)")
+                body.contains("ImageCacheTrim.targetBytes(resident, fraction)")
         )
         assertFalse(
             "no explicit eviction pass: that is the ordering dig four §3d showed " +

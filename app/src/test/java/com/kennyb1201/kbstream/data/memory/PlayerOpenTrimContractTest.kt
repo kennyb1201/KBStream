@@ -2,23 +2,24 @@ package com.kennyb1201.kbstream.data.memory
 
 import java.io.File
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Opening a player trims the bitmap cache instead of clearing it (dig four,
- * 2026-11-16, §3f rank 7).
+ * Opening a player frees nothing (round four F4, 2026-11-16).
  *
- * Both engines ran a FULL `releaseImageMemoryCache` in `onCreate`, so every
- * playback - not just one taken under memory pressure - made the return to Home
- * re-decode the hero and the rails from disk. The player's own comment says why
- * it wanted the headroom: media3's sample buffer and the codec's native
- * allocations land on top of whatever browsing left resident.
+ * Both engines ran a FULL `releaseImageMemoryCache` + `releaseBrowsingCaches()`
+ * in `onCreate`, so every playback - not just one taken under memory pressure -
+ * made the return to Home re-decode the hero and the rails from disk. The
+ * player's own comment says why it wanted the headroom: media3's sample buffer
+ * and the codec's native allocations land on top of whatever browsing left
+ * resident.
  *
- * Half a 64MB cap's worth, evicted by Coil's LRU (eldest first), is the same
- * order of headroom and keeps the recently used art - exactly the art the
- * return draws. The browsing caches still go: they are cheap to rebuild and the
- * player loads what art it needs itself.
+ * A graded half trim was the first answer, and it still evicted half of the art
+ * the return draws - which is half a re-decode storm on the very screen the
+ * viewer comes back to. The player does not need the browse caches freed to
+ * start: playback is the app's memory peak, and the pressure path (which does
+ * trim, and clears on backgrounding) is what guards the peak. A hard stop on the
+ * spec: S5 reads "Home's art is still warm" after a playback round-trip.
  */
 class PlayerOpenTrimContractTest {
 
@@ -30,24 +31,26 @@ class PlayerOpenTrimContractTest {
             .substringBefore("setContentView(")
 
     @Test
-    fun `both engines trim rather than clear before playback`() {
+    fun `neither engine frees the browse caches on open`() {
         listOf("exo" to native, "mpv" to mpv).forEach { (name, source) ->
             val opening = onCreateOpening(source)
-            assertTrue(
-                "$name: the graded trim, so the return does not re-decode everything",
-                opening.contains("trimImageMemoryCache(this)")
+            assertFalse(
+                "$name: no bitmap trim on open - nothing is under pressure yet",
+                opening.contains("trimImageMemoryCache")
             )
             assertFalse(
-                "$name: a full clear on every playback is the resume cost this replaces",
-                opening.contains("releaseImageMemoryCache(this)")
+                "$name: no full clear either",
+                opening.contains("releaseImageMemoryCache")
             )
-            assertTrue(
-                "$name: the browsing release stays - cheap to rebuild, not on screen",
+            assertFalse(
+                "$name: and the browsing caches are not released for a playback",
                 opening.contains("MemoryPressure.releaseBrowsingCaches()")
             )
             assertFalse(
-                "$name: and the full-clear helper is not even imported any more",
-                source.contains("import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache")
+                "$name: none of the three helpers is even imported any more",
+                source.contains("import com.kennyb1201.kbstream.data.memory.trimImageMemoryCache") ||
+                    source.contains("import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache") ||
+                    source.contains("import com.kennyb1201.kbstream.data.memory.MemoryPressure")
             )
         }
     }

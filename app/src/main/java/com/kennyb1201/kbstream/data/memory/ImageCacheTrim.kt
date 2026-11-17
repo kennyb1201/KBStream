@@ -38,6 +38,19 @@ object ImageCacheTrim {
     const val TARGET_FRACTION = 0.5
 
     /**
+     * The share a MID-SCROLL trim gives back (round four F3c, 2026-11-16).
+     *
+     * Smaller than [TARGET_FRACTION] on purpose: this is the only trim that runs
+     * with the rail on screen, and on the boxes this is for it is delivered only
+     * by API 33 and older (`RUNNING_CRITICAL`; API 34+ never sends it - see
+     * MainApplication's level split). Every byte given back here is a card the
+     * viewer is looking at that has to decode again, so the scroll path takes
+     * the smaller bite and leaves the deeper reclaim to the backgrounding
+     * clear, which runs with nothing on screen.
+     */
+    const val SCROLL_FRACTION = 0.35
+
+    /**
      * The size to trim TO, given what is resident - [residentBytes] less
      * [targetFraction] of it.
      *

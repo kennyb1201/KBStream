@@ -60,8 +60,6 @@ import com.kennyb1201.kbstream.data.player.SourcePickMemory
 import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
-import com.kennyb1201.kbstream.data.memory.MemoryPressure
-import com.kennyb1201.kbstream.data.memory.trimImageMemoryCache
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
@@ -1108,15 +1106,12 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // freeing the browsing caches before it starts matters here at least as
         // much as it does on the ExoPlayer path, which has always done it (see
         // NativePlayerActivity.onCreate).
-        // Half the bitmap cache, not all of it (dig four, 2026-11-16, §3f rank
-        // 7): a full clear makes every return from playback re-decode the hero
-        // and the rails from disk. The graded LRU trim keeps the recently used
-        // art - the art that return draws - and still hands the player half a
-        // 64MB cap's worth of headroom. The browsing caches go as before.
-        runCatching {
-            trimImageMemoryCache(this)
-            MemoryPressure.releaseBrowsingCaches()
-        }
+        // Nothing is freed here any more (round four F4, 2026-11-16). Clearing
+        // the bitmap and browsing caches on every playback made the return to
+        // Home re-decode and re-read from disk; a half trim still evicted half
+        // of the art that return draws. libmpv's heap is a real consideration,
+        // which is why the pressure path trims and clears when the box is
+        // actually tight - but it is not tight just because a title started.
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_mpv_player)

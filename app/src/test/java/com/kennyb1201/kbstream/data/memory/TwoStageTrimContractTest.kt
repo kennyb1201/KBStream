@@ -43,7 +43,7 @@ class TwoStageTrimContractTest {
             "else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL)"
         )
         val clear = block.indexOf("releaseImageMemoryCache(this)")
-        val trim = block.indexOf("trimImageMemoryCache(this)")
+        val trim = block.indexOf("trimImageMemoryCache(this, ImageCacheTrim.SCROLL_FRACTION)")
         assertTrue(
             "the BACKGROUND test comes first and clears: $background/$clear",
             background in 0 until clear
@@ -55,6 +55,19 @@ class TwoStageTrimContractTest {
         assertTrue(
             "each call sits under its own guard, not both under one",
             background < critical && clear < trim
+        )
+    }
+
+    @Test
+    fun `the scroll path takes the smaller bite`() {
+        val block = trimBlock()
+        assertTrue(
+            "the mid-scroll trim asks for less than the default half (round four F3c)",
+            block.contains("trimImageMemoryCache(this, ImageCacheTrim.SCROLL_FRACTION)")
+        )
+        assertTrue(
+            "and the clear path is not fraction-gated: nothing is on screen",
+            block.contains("releaseImageMemoryCache(this)")
         )
     }
 

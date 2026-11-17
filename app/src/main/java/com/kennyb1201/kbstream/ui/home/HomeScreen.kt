@@ -3328,9 +3328,16 @@ private fun HomeHeroHost(
     // resolver coalesces overlapping prefetches for the same title so the hero
     // effect restarting cannot run the chain twice.
     val heroTrailerAutoplay = AppPreferences.getHeroTrailerAutoplay(context)
+    // ONE identity, not three keys (round four F2b). The hero publishes in
+    // stages - the nulling, then an early detail, then the final meta - and
+    // keying on the IMDb id AND the TMDB id separately restarted this effect
+    // once per stage, three restarts per settled stop. The address it needs is
+    // whichever id the hero actually has: an IMDb id when the add-on gave one,
+    // otherwise the TMDB id the mapping resolves. That single value settles
+    // once, and a stage that only fills in the OTHER id does not restart it.
+    val heroPrefetchKey = heroImdbId ?: heroTmdbDetail.value?.id
     LaunchedEffect(
-        heroImdbId,
-        heroTmdbDetail.value?.id,
+        heroPrefetchKey,
         heroTrailerAutoplay,
         trailerSuppressed
     ) {

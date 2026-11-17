@@ -47,6 +47,35 @@ class ImdbTrailerPrefetchCoalesceContractTest {
     }
 
     @Test
+    fun `the pre-warm is keyed on ONE settled identity, not on each publish`() {
+        val effect = home
+            .substringAfter("// ONE identity, not three keys (round four F2b).")
+            .substringBefore("LaunchedEffect(heroTrailerKey.value)")
+        assertTrue(
+            "the address is whichever id the hero has, as a single value: $effect",
+            effect.contains("val heroPrefetchKey = heroImdbId ?: heroTmdbDetail.value?.id") &&
+                effect.contains("LaunchedEffect(\n        heroPrefetchKey,")
+        )
+        assertTrue(
+            "so a publish that only fills in the OTHER id does not restart it",
+            !effect.contains("LaunchedEffect(\n        heroImdbId,\n        heroTmdbDetail.value?.id,")
+        )
+    }
+
+    @Test
+    fun `the title-page leg is posted, not run inline on the frame`() {
+        assertTrue(
+            "the WebView build is moved off Main.immediate (round four F2d)",
+            resolver.contains("// Dispatchers.Main, NOT Main.immediate (round four F2d).") &&
+                resolver.contains("withContext(Dispatchers.Main) {\n                val view = runCatching { buildView(context) }")
+        )
+        assertTrue(
+            "and it is still on Main, because a WebView is thread-affine",
+            !resolver.contains("withContext(Dispatchers.IO) {\n                val view = runCatching { buildView(context) }")
+        )
+    }
+
+    @Test
     fun `overlapping prefetches for one title run once`() {
         assertTrue(
             "an in-flight map keyed by the resolved IMDb id",

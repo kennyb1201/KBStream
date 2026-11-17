@@ -205,14 +205,17 @@ internal fun releaseImageMemoryCache(context: Context) {
  * to decide an order that the cache already knows was the trim's own
  * main-thread cost.
  */
-internal fun trimImageMemoryCache(context: Context) {
+internal fun trimImageMemoryCache(
+    context: Context,
+    fraction: Double = ImageCacheTrim.TARGET_FRACTION
+) {
     runCatching {
         val cache = SingletonImageLoader.get(context.applicationContext).memoryCache
             ?: return
         val resident = cache.size
         if (resident <= 0) return
 
-        val target = ImageCacheTrim.targetBytes(resident)
+        val target = ImageCacheTrim.targetBytes(resident, fraction)
         if (cache.size > target) {
             runCatching { cache.trimToSize(target) }
         }
