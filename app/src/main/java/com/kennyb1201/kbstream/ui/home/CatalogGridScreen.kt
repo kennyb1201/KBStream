@@ -33,7 +33,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -45,6 +47,7 @@ import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import androidx.compose.animation.core.tween
 import com.kennyb1201.kbstream.ui.components.IdleListCacheWindow
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
+import com.kennyb1201.kbstream.ui.components.WarmGridAhead
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KB_ART_FADE_MS
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
@@ -490,6 +493,20 @@ fun CatalogGridScreen(
             }
 
             else -> {
+                // The row past the one on screen, decoded before it is reached
+                // (round four F5). tileWidth/tileHeight are exactly what the
+                // card is drawn at in both shapes, so the warm and the card ask
+                // Coil for the same bitmap. `peek` never triggers a page load:
+                // a placeholder has no url and warms nothing.
+                val densityNow = LocalDensity.current
+                WarmGridAhead(
+                    state = gridState,
+                    count = lazyItems.itemCount,
+                    sizePx = with(densityNow) {
+                        IntSize(tileWidth.roundToPx(), tileHeight.roundToPx())
+                    }
+                ) { index -> lazyItems.peek(index)?.poster }
+
                 LazyVerticalGrid(
                     state = gridState,
                     // Dig four's global finding: no pre-composition outside Home.

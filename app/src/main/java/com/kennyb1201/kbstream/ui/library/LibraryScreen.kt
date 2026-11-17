@@ -47,6 +47,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
@@ -56,6 +57,7 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryHomeRailPin
 import com.kennyb1201.kbstream.data.library.LibraryHomeRails
 import com.kennyb1201.kbstream.data.library.LibraryItem
@@ -66,8 +68,8 @@ import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.library.controlAttribution
 import com.kennyb1201.kbstream.data.library.controlSummary
 import com.kennyb1201.kbstream.data.library.libraryHomeRailIdSpellings
-import com.kennyb1201.kbstream.data.library.libraryListRowKey
 import com.kennyb1201.kbstream.data.library.libraryHomeRailPinFor
+import com.kennyb1201.kbstream.data.library.libraryListRowKey
 import com.kennyb1201.kbstream.data.library.pinsNamingList
 import com.kennyb1201.kbstream.data.library.removeActionLabel
 import com.kennyb1201.kbstream.data.library.removeConfirmAction
@@ -75,17 +77,18 @@ import com.kennyb1201.kbstream.data.library.removeConfirmBody
 import com.kennyb1201.kbstream.data.library.removeConfirmTitle
 import com.kennyb1201.kbstream.data.library.renameUnavailableNote
 import com.kennyb1201.kbstream.data.library.sameListAs
+import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.simkl.simklItemUrl
 import com.kennyb1201.kbstream.ui.components.IdleListCacheWindow
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
-import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.KBTextField
+import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
+import com.kennyb1201.kbstream.ui.components.WarmGridAhead
 import com.kennyb1201.kbstream.ui.components.heroSourceElement
-import com.kennyb1201.kbstream.data.library.HiddenTitles
-import com.kennyb1201.kbstream.data.simkl.simklItemUrl
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_STEPS
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
@@ -1420,6 +1423,24 @@ private fun ItemGrid(
             attempts++
         }
         onReturnHandled(landed)
+    }
+
+    // The posters of the row past the one on screen, decoded before the viewer
+    // reaches them (round four F5). The size is not guessed: a poster is drawn
+    // at the Poster Size setting's own dp, and that is exactly the size the
+    // coming card will ask Coil for - a warm at any other size is a cache entry
+    // beside the one the card reads. Portrait only: in landscape the card draws
+    // resolved TMDB art, which the poster url cannot stand in for.
+    val densityNow = LocalDensity.current
+    val landscapeNow = AppPreferences.landscapePostersActive(LocalContext.current)
+    if (!landscapeNow) {
+        WarmGridAhead(
+            state = gridState,
+            count = items.size,
+            sizePx = with(densityNow) {
+                IntSize(posterSize.width.roundToPx(), posterSize.height.roundToPx())
+            }
+        ) { index -> items.getOrNull(index)?.posterUrl }
     }
 
     LazyVerticalGrid(
