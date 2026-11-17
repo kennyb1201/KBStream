@@ -92,7 +92,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
-import coil3.request.size
+import coil3.size.Size
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.runCatchingCancellable
@@ -2073,7 +2073,7 @@ private fun MobileHero(
             model = remember(backdropUrl, meta) {
                 ImageRequest.Builder(context)
                     .data(backdropUrl ?: meta.background ?: meta.poster)
-                    .size(1280, 800)
+                    .size(Size(1280, 800))
                     .crossfade(true)
                     .build()
             },

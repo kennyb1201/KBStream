@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.Density
  * six-hour span (see `ProgramRow`), so pre-composing a row there is the opposite
  * of cheap.
  */
+@OptIn(ExperimentalFoundationApi::class)
 object IdleListCacheWindow : LazyLayoutCacheWindow {
     override fun Density.calculateAheadWindow(viewport: Int): Int = viewport / 2
     override fun Density.calculateBehindWindow(viewport: Int): Int = viewport / 2
