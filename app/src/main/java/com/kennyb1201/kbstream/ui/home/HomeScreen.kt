@@ -213,7 +213,7 @@ import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusNone
 import com.kennyb1201.kbstream.ui.theme.KBPlum
 import com.kennyb1201.kbstream.ui.theme.KBRust
-import com.kennyb1201.kbstream.ui.theme.rememberArtworkTint
+import com.kennyb1201.kbstream.ui.theme.rememberArtworkTintState
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -8501,10 +8501,14 @@ private fun SpotlightTopTint(
                 .none { info -> info.key == SPOTLIGHT_HERO_ITEM_KEY }
         }
     }
+    val spotlightTint = rememberArtworkTintState(
+        focusedItemState.value?.background ?: focusedItemState.value?.poster
+    )
     ArtworkTintGradient(
-        tint = rememberArtworkTint(
-            focusedItemState.value?.background ?: focusedItemState.value?.poster
-        ),
+        tint = spotlightTint.tint,
+        // F3: release the previous card's colour once this card's art has landed
+        // and answered "no colour", instead of wearing it for the whole visit.
+        resolved = spotlightTint.resolved,
         visible = heroScrolledAway,
         // A top strip, not a full-screen wash (B4).
         modifier = Modifier

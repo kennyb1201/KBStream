@@ -559,6 +559,19 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                         request: coil3.request.ImageRequest,
                         result: coil3.request.SuccessResult
                     ) {
+                        // F1 of the 2026-11-17 dynamic-colour fix: the tint
+                        // samples the DISK cache, so a load that reached the
+                        // disk is the moment its answer became readable. The
+                        // listener is the app's only place that knows this, which
+                        // is why the arrival signal is fed from here rather than
+                        // polled for by every tinted surface. Memory hits are
+                        // skipped: the file was already there, and the sampler's
+                        // own window has covered that case.
+                        if (result.dataSource != coil3.decode.DataSource.MEMORY_CACHE) {
+                            com.kennyb1201.kbstream.ui.theme.ArtworkTintArrivals.noteLoaded(
+                                request.data as? String
+                            )
+                        }
                         ImageLoadTrace.noteImage(
                             source = when (result.dataSource) {
                                 coil3.decode.DataSource.MEMORY_CACHE ->

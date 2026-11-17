@@ -220,7 +220,7 @@ class DynamicColorContractTest {
         assertTrue(
             "the result is memoised so a second surface costs the first one's work",
             surfaceSource.contains("object ArtworkTintCache") &&
-                surfaceSource.contains("fun rememberArtworkTint(")
+                surfaceSource.contains("fun rememberArtworkTintState(")
         )
     }
 
@@ -252,7 +252,7 @@ class DynamicColorContractTest {
     fun `a card with no art yet keeps the previous gradient`() {
         assertTrue(
             "the previous tint is held rather than dropped",
-            surfaceSource.contains("val shown = tint ?: held")
+            surfaceSource.contains("val shown = tint ?: if (resolved) null else held")
         )
         assertTrue(
             "colours crossfade, so a focus move never snaps",
@@ -306,8 +306,8 @@ class DynamicColorContractTest {
     fun `the Detail tint comes from the title's own backdrop and waits for it`() {
         assertTrue(
             "the same extractor serves both surfaces (C2)",
-            detail.contains("rememberArtworkTint(backdropUrl)") &&
-                home.contains("rememberArtworkTint(")
+            detail.contains("rememberArtworkTintState(backdropUrl)") &&
+                home.contains("rememberArtworkTintState(")
         )
         assertTrue(
             "the wash bleeds UP from the header's bottom edge",
@@ -315,7 +315,7 @@ class DynamicColorContractTest {
         )
         assertTrue(
             "it is a background layer inside the header, so it scrolls away with it (C3)",
-            detail.indexOf("rememberArtworkTint(backdropUrl)") >
+            detail.indexOf("rememberArtworkTintState(backdropUrl)") >
                 detail.indexOf("private fun MobileDetailHeader(")
         )
         assertFalse(

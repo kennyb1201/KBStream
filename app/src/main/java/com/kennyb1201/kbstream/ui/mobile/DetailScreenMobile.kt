@@ -172,7 +172,7 @@ import com.kennyb1201.kbstream.ui.detail.isEpisodeUnavailable
 import com.kennyb1201.kbstream.ui.theme.ArtworkTintGradient
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
-import com.kennyb1201.kbstream.ui.theme.rememberArtworkTint
+import com.kennyb1201.kbstream.ui.theme.rememberArtworkTintState
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBShapePill
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -3194,8 +3194,12 @@ private fun MobileDetailHeader(
         // not landed yet draws no tint at all rather than a placeholder colour
         // (C5). It scrolls away with this item, which is what makes it fade out
         // with the header (C3).
+        val backdropTint = rememberArtworkTintState(backdropUrl)
         ArtworkTintGradient(
-            tint = rememberArtworkTint(backdropUrl),
+            tint = backdropTint.tint,
+            // An unanswered tint is the "hold nothing" case; an answered null is
+            // the artwork's own verdict (F3).
+            resolved = backdropTint.resolved,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()

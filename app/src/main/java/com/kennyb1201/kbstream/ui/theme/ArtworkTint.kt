@@ -25,7 +25,11 @@ import coil3.request.SuccessResult
 import coil3.request.allowHardware
 import coil3.toBitmap
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
@@ -96,6 +100,21 @@ internal object ArtworkTintCache {
         misses[url] = System.currentTimeMillis()
     }
 
+    /**
+     * Forgets a "nothing usable" answer, because it was a timing miss rather than
+     * an answer (F2, 2026-11-17).
+     *
+     * The miss TTL stays what it is - a throttle against re-decoding the same file
+     * every time a surface redraws - but it only describes art the sampler has
+     * actually seen. The moment that art lands (see [ArtworkTintArrivals]) the
+     * answer it was standing in for is void, so the next sample is allowed to
+     * happen now instead of up to 20 s later.
+     */
+    @Synchronized
+    fun invalidateMiss(url: String) {
+        misses.remove(url)
+    }
+
     @Synchronized
     fun clear() {
         hits.clear()
@@ -104,18 +123,46 @@ internal object ArtworkTintCache {
 }
 
 /**
- * A title's or card's tint, resolved from art already in the image cache.
+ * A tint and whether its question has been ANSWERED - the pair the gradient needs
+ * to tell "no colour yet" from "no colour at all" (F3, 2026-11-17).
  *
- * Null while nothing is known - the caller decides whether that means "draw
- * nothing" (Part C) or "keep the gradient you have" (Part B3).
+ * [resolved] is false while the only thing known is that the art had not landed
+ * when it was last looked for. It becomes true on a hit, and on a sample taken
+ * AFTER the art landed: that sample's null is the artwork's own answer (true grey
+ * / black / white), and a gradient holding a previous card's colour on top of it
+ * is showing the viewer a colour that belongs to something else.
+ */
+internal data class ArtworkTintState(
+    val tint: ArtworkTint?,
+    val resolved: Boolean
+)
+
+/**
+ * The tint for [url], and whether it is an answer.
+ *
+ * Two triggers, one answer:
+ *
+ *  - **the disk, now**: a short retry window covers the common case where the art
+ *    is on its way in when the screen opens (the original F2);
+ *  - **the art's arrival** (F1, 2026-11-17): the image loader reports every load
+ *    that reached the disk, so a backdrop that takes longer than the window is
+ *    sampled the moment it lands - on the same visit, on both surfaces - instead
+ *    of never. That was the whole defect: the trigger was the bug, not the
+ *    sampler, and the TV held the previous card's colour while the phone Detail
+ *    drew nothing at all.
+ *
+ * [ArtworkTintArrivals] carries the arrival; the miss it invalidates is the timing
+ * miss F2 says is not an answer.
  */
 @Composable
-internal fun rememberArtworkTint(url: String?): ArtworkTint? {
+internal fun rememberArtworkTintState(url: String?): ArtworkTintState {
     val context = LocalContext.current
     val key = url?.trim()?.takeIf { it.isNotBlank() }
     var tint by remember(key) {
         mutableStateOf(key?.let { ArtworkTintCache.get(it) })
     }
+    var resolved by remember(key) { mutableStateOf(tint != null) }
+
     LaunchedEffect(key) {
         if (key == null || tint != null) return@LaunchedEffect
         if (ArtworkTintCache.isRecentMiss(key)) return@LaunchedEffect
@@ -129,12 +176,74 @@ internal fun rememberArtworkTint(url: String?): ArtworkTint? {
             if (computed != null) {
                 ArtworkTintCache.put(key, computed)
                 tint = computed
+                resolved = true
                 return@LaunchedEffect
             }
         }
+        // Out of window. Whether that null is an answer depends on whether the art
+        // had already landed when the loop started: if it had, the file was there
+        // and the artwork simply has no usable colour; if it had not, this is a
+        // timing miss, the record below is only a throttle, and the arrival
+        // effect answers it properly.
+        if (ArtworkTintArrivalLedger.hasLanded(key)) resolved = true
         ArtworkTintCache.putMiss(key)
     }
-    return tint
+
+    LaunchedEffect(key) {
+        if (key == null) return@LaunchedEffect
+        ArtworkTintArrivals.landed
+            .filter { arrived -> arrived == key }
+            .collect {
+                if (ArtworkTintCache.get(key) != null) return@collect
+                val computed = withContext(Dispatchers.IO) { sampleFromCache(context, key) }
+                if (computed != null) {
+                    ArtworkTintCache.put(key, computed)
+                    tint = computed
+                } else {
+                    // The file is on disk and holds no usable colour: a real
+                    // answer (S4), not a timing miss.
+                    ArtworkTintCache.putMiss(key)
+                }
+                resolved = true
+            }
+    }
+
+    return ArtworkTintState(tint = tint, resolved = resolved)
+}
+
+/**
+ * The arrival signal the tint listens to, fed by the app's image loader.
+ *
+ * One event per load that REACHED THE DISK - not per memory hit: a memory hit
+ * means the file was already there, which the sampler's own window has covered.
+ * The tint samples the disk cache and nothing else (F5), so a disk arrival is
+ * precisely the moment its answer becomes readable.
+ *
+ * The sampler's own request goes through the same loader, so the ledger drops the
+ * probe's own success rather than letting the signal feed itself.
+ */
+internal object ArtworkTintArrivals {
+
+    private val _landed = MutableSharedFlow<String>(
+        // Last arrival replayed: a card composed after its art landed still gets
+        // its sample instantly. Drop-oldest, because a fling can outrun a sample.
+        replay = 1,
+        extraBufferCapacity = 32,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+
+    /** The URLs whose art has just landed; see [noteLoaded]. */
+    val landed: SharedFlow<String> = _landed
+
+    /** Called by the image loader on a success that reached the disk cache. */
+    fun noteLoaded(url: String?) {
+        val key = url?.trim()?.takeIf { it.isNotBlank() } ?: return
+        if (!ArtworkTintArrivalLedger.noteLanded(key)) return
+        // F2: whatever "nothing usable" was recorded for this art before it
+        // arrived is void - it described a file that is now here.
+        ArtworkTintCache.invalidateMiss(key)
+        _landed.tryEmit(key)
+    }
 }
 
 /**
@@ -164,9 +273,17 @@ internal fun sampleFromCache(context: Context, url: String): ArtworkTint? = runC
         .diskCachePolicy(CachePolicy.READ_ONLY)
         .networkCachePolicy(CachePolicy.DISABLED)
         .build()
-    val result = runBlocking { loader.execute(request) }
-    val bitmap: Bitmap = (result as? SuccessResult)?.image?.toBitmap() ?: return null
-    sampleTint(bitmap)
+    // The probe is marked for its whole life: its success reaches the same
+    // listener as every surface's, and counting it as an arrival would make the
+    // tint answer its own question forever (see ArtworkTintArrivalLedger).
+    ArtworkTintArrivalLedger.beginProbe(url)
+    try {
+        val result = runBlocking { loader.execute(request) }
+        val bitmap: Bitmap = (result as? SuccessResult)?.image?.toBitmap() ?: return null
+        sampleTint(bitmap)
+    } finally {
+        ArtworkTintArrivalLedger.endProbe(url)
+    }
 }.getOrNull()
 
 /** Samples a grid of pixels out of an already-decoded bitmap. */
@@ -201,6 +318,12 @@ internal fun ArtworkTintGradient(
     visible: Boolean = true,
     maxAlpha: Float = 1f,
     /**
+     * False while the tint is still unknown, true once it is an answer (see
+     * [ArtworkTintState]). A held colour is released when this is true and the
+     * tint is null - F3's "the hold is transient, not sticky".
+     */
+    resolved: Boolean = true,
+    /**
      * Draw the tint upside down: darkest at the BOTTOM edge and clear at the top.
      *
      * Parts B and C want opposite ends - Spotlight's strip fades DOWN out of the
@@ -211,7 +334,11 @@ internal fun ArtworkTintGradient(
 ) {
     var held by remember { mutableStateOf<ArtworkTint?>(null) }
     if (tint != null && tint != held) held = tint
-    val shown = tint ?: held
+    // F3: the hold is for an UNANSWERED card - no flash of black while a new
+    // card's art is still coming. Once the art has landed and the sample says it
+    // has no usable colour, that is the answer, and the strip must let the
+    // previous card's colour go rather than wear it for the life of the visit.
+    val shown = tint ?: if (resolved) null else held
 
     val base by animateColorAsState(
         targetValue = shown?.base ?: Color.Transparent,
