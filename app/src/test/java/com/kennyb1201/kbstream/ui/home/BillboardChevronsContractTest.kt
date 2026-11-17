@@ -41,8 +41,10 @@ class BillboardChevronsContractTest {
             step.contains("billboardWrapPage(pages.size, pagerState.currentPage, offset)")
         )
         assertTrue(
-            "and the step is the pager's own animation, like a segment press",
-            step.contains("scope.launch { pagerState.animateScrollToPage(target) }")
+            "and the step is the pager's own animation, like a segment press - followed " +
+                "by the rest-offset check (2026-11-17), which never replaces the animation",
+            step.contains("pagerState.animateScrollToPage(target)") &&
+                step.contains("settleRestOffset()")
         )
         assertTrue(
             "left steps back, right steps forward",

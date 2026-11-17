@@ -1,5 +1,7 @@
 package com.kennyb1201.kbstream.data.reporting
 
+import java.util.Locale
+
 /**
  * What the Home billboard last dealt, and what the Spotlight tracker last held.
  *
@@ -51,7 +53,7 @@ internal object SpotlightDiagTrace {
 
     /** Summary slots in print order, so two pastes of one state read alike. */
     private val BILLBOARD_ORDER =
-        listOf("gate", "render", "feed", "walk", "pages", "resolve", "clear")
+        listOf("gate", "render", "rest", "feed", "walk", "pages", "resolve", "clear")
     private val SPOTLIGHT_ORDER = listOf("tracker", "dwell", "panel")
 
     private val lock = Any()
@@ -74,6 +76,16 @@ internal object SpotlightDiagTrace {
     private var resolved = 0
     private var nulls = 0
     private var failure: String? = null
+
+    // ── The pager's rest offset (spec 2026-11-17, F4) ─────────────────────
+    //
+    // A strip of the next title's art at the right edge of a billboard that was
+    // not moving ("its there sitting still"). The strip is the pager resting
+    // off-centre, so the paste has to be able to say what the offset was - and
+    // whether anything ever had to put it back. A count rather than a boolean:
+    // one correction is a stray settle, a growing one is a pager being fought
+    // by something, and the number is the difference.
+    private var restCorrections = 0
 
     // ── The last trending-day walk (spec 2026-11-16, F2) ───────────────────
     //
@@ -255,6 +267,33 @@ internal object SpotlightDiagTrace {
         val trending =
             if (trendingDaySize == 0) "trendingDay=empty" else "trendingDay=size=$trendingDaySize"
         putBillboard("feed", "feed selected=$selected $trending merged=$merged")
+    }
+
+    /**
+     * The billboard pager's rest state (spec 2026-11-17, F4).
+     *
+     * [offset] is the pager's current-page offset fraction for [page] AT REST - never mid-drag or mid-animation, because those are not
+     * the state S1-S3 are about and they would fill the ring with noise.
+     *
+     * [corrected] says this call is the one that had to snap a non-zero rest
+     * offset back to zero, and [offset] is then the offset that was corrected -
+     * the field evidence for the bug. The summary slot always carries the LATEST
+     * rest state plus the running correction count, so a paste taken long after
+     * a correction still shows that one happened, and a transitions ring line
+     * records the correction itself with the page and the offset it started at.
+     */
+    fun billboardRest(page: Int, offset: Float, corrected: Boolean) {
+        val count = synchronized(lock) {
+            if (corrected) restCorrections++
+            restCorrections
+        }
+        putBillboard(
+            "rest",
+            "rest page=$page offset=${offsetText(offset)} corrections=$count"
+        )
+        if (corrected) {
+            note(BILLBOARD + "rest corrected page=$page from=${offsetText(offset)}")
+        }
     }
 
     /** A fresh deal: the tally restarts, and the deal itself is a transition. */
@@ -594,6 +633,7 @@ internal object SpotlightDiagTrace {
             renderArt = null
             renderSettled = 0
             renderPages = 0
+            restCorrections = 0
             dwellToken = 0
             dwellCard = null
             dwellCancel = null
@@ -656,6 +696,18 @@ internal object SpotlightDiagTrace {
     }
 
     private fun yesNo(value: Boolean): String = if (value) "yes" else "no"
+
+    /**
+     * A fraction of a page as the paste reads it: `0.00`, `-0.03`.
+     *
+     * Two decimals and a forced dot: the strip was about 0.03 of a frame, and a
+     * locale that wrote `0,03` would make the one number the report is about
+     * unsearchable. The sign matters - the field photo's strip was the NEXT page
+     * at the right edge (positive), but a negative offset shows the previous one
+     * at the left, and both are rest offsets now.
+     */
+    private fun offsetText(offset: Float): String =
+        String.format(Locale.US, "%.2f", offset)
 
     private const val KEY_LIMIT = 48
     private const val TITLE_LIMIT = 48

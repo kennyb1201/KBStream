@@ -220,7 +220,13 @@ class MobileBillboardContractTest {
             home.contains("snapshotFlow { pagerState.settledPage to pagerState.isScrollInProgress }")
         )
         assertTrue(home.contains("if (scrolling) return@collectLatest"))
-        assertTrue(home.contains("scope.launch { pagerState.animateScrollToPage(next) }"))
+        assertTrue(
+            "the advance is the animation, launched off the collector (shape unchanged by the " +
+                "2026-11-17 rest check, which now follows it)",
+            home.contains("scope.launch {") &&
+                home.contains("pagerState.animateScrollToPage(next)") &&
+                home.contains("settleRestOffset()")
+        )
         // Backgrounding is a lifecycle event, resumed on the way back.
         assertTrue(home.contains("LifecycleEventEffect(Lifecycle.Event.ON_PAUSE)"))
     }

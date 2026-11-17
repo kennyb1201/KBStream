@@ -235,6 +235,7 @@ import java.time.ZoneId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -2449,6 +2450,78 @@ internal fun MobileBillboard(
         initialPage = billboardStartPage,
         pageCount = { pages.size }
     )
+
+    // ── A page at rest fills the frame (spec 2026-11-17) ──────────────────
+    //
+    // Field, phone 0.9.363 on a Moto G 2025: a strip of the NEXT title's art at
+    // the right edge of the billboard, on a page "there sitting still". Not the
+    // sweep - dcb79b703 already covers both edges, and the phone's 16:9 art
+    // overscans 5.5% on top of the sweep's floor - but the PAGER resting
+    // off-centre, so the viewport sits at [0.03W, 1.03W] and the neighbour is
+    // inside the frame by that much at rest. The TV photos showed the same strip
+    // on the same code.
+    //
+    // The cause was NOT established from reading, and the spec is explicit about
+    // that: the state and the scope are remembered and stable, every programmatic
+    // move targets a page, and a cancelled or short-settling spring was checked
+    // and is not it. So this targets the OBSERVABLE rather than a guess - at rest
+    // the offset is zero, and if it ever isn't, it is put back.
+    //
+    // `requestScrollToPage`, not `scrollToPage`/`animateScrollToPage`: it snaps on
+    // the next remeasure WITHOUT opening a scroll session, so `isScrollInProgress`
+    // never flips (F2). That matters - the cycle effect's flow below is keyed on
+    // (settledPage, isScrollInProgress), so a scroll session here would emit
+    // (page, false) on both sides of the snap and re-arm the page timer from the
+    // correction. Verified by that flow being untouched below: only a page change
+    // or a real gesture reaches it.
+    //
+    // The observer cannot fight a gesture either: `isScrollInProgress` is true for
+    // a drag AND for an animation, so only a genuine rest is ever corrected, and
+    // F3's "never during" is the same line of code.
+    //
+    // `snapshotFlow` only emits when the pair CHANGES, so a correction that works
+    // (offset back to 0) cannot loop: the value it lands on is the one it already
+    // saw. A pager that could not be corrected re-emits only if the offset moves
+    // again, which is the next real event, not a spin.
+    LaunchedEffect(pagerState) {
+        snapshotFlow {
+            pagerState.currentPageOffsetFraction to pagerState.isScrollInProgress
+        }.collect { (_, scrolling) ->
+            if (scrolling) return@collect
+            val offset = pagerState.currentPageOffsetFraction
+            SpotlightDiagTrace.billboardRest(
+                page = pagerState.currentPage,
+                offset = offset,
+                corrected = false
+            )
+            if (!billboardRestOffCenter(offset)) return@collect
+            pagerState.requestScrollToPage(pagerState.currentPage)
+            SpotlightDiagTrace.billboardRest(
+                page = pagerState.currentPage,
+                offset = offset,
+                corrected = true
+            )
+        }
+    }
+
+    // The same correction as a call (F3): the observer above is the backstop for
+    // whatever produced the offset, this is the guarantee that every move this
+    // file makes - a cycle tick, a chevron step, a segment press - has been
+    // checked once its animation has finished. Never called while one is in
+    // flight: it is sequenced AFTER `animateScrollToPage` inside the same
+    // coroutine, which is exactly "after it completes, never during it".
+    val settleRestOffset: suspend () -> Unit = {
+        val offset = pagerState.currentPageOffsetFraction
+        if (billboardRestOffCenter(offset)) {
+            pagerState.requestScrollToPage(pagerState.currentPage)
+            SpotlightDiagTrace.billboardRest(
+                page = pagerState.currentPage,
+                offset = offset,
+                corrected = true
+            )
+        }
+    }
+
     val currentPage = pages.getOrNull(pagerState.currentPage)
 
     // What the render actually has in front of it (spec 2026-11-12, follow-up
@@ -3014,7 +3087,10 @@ internal fun MobileBillboard(
                 // Launched on the composition's scope rather than awaited here:
                 // the animation makes `isScrollInProgress` true, and awaiting it
                 // would let this collector cancel the very scroll it started.
-                scope.launch { pagerState.animateScrollToPage(next) }
+                scope.launch {
+                    pagerState.animateScrollToPage(next)
+                    settleRestOffset()
+                }
             }
     }
 
@@ -3126,7 +3202,12 @@ internal fun MobileBillboard(
     // page, the cycle effect's key changes and the hold re-arms from there.
     val stepPage: (Int) -> Unit = { offset ->
         val target = billboardWrapPage(pages.size, pagerState.currentPage, offset)
-        if (target != null) scope.launch { pagerState.animateScrollToPage(target) }
+        if (target != null) {
+            scope.launch {
+                pagerState.animateScrollToPage(target)
+                settleRestOffset()
+            }
+        }
     }
 
     // The pills, handed to the CURRENT page's hero and drawn on the art. One
@@ -3368,7 +3449,10 @@ internal fun MobileBillboard(
                                 // track is 3dp: a 3dp tap target is not one.
                                 .height(24.dp)
                                 .clickable {
-                                    scope.launch { pagerState.animateScrollToPage(index) }
+                                    scope.launch {
+                                        pagerState.animateScrollToPage(index)
+                                        settleRestOffset()
+                                    }
                                 }
                                 .semantics {
                                     contentDescription = page.meta.name

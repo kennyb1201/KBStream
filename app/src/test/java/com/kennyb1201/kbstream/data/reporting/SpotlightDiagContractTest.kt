@@ -451,6 +451,71 @@ class SpotlightDiagContractTest {
         }
     }
 
+    // ── F4 (rest-offset spec): the page at rest ──────────────────────────
+
+    @Test
+    fun `a rest line reads the offset in hundredths, with a dot`() {
+        SpotlightDiagTrace.billboardRest(page = 3, offset = 0f, corrected = false)
+
+        val line = SpotlightDiagTrace.summaries().first { it.contains("billboard: rest ") }
+        assertTrue(line, line.contains("page=3"))
+        assertTrue("S4 asks for exactly this shape", line.contains("offset=0.00"))
+        assertTrue("a paste can already see nothing has been corrected", line.contains("corrections=0"))
+        assertTrue(
+            "and a settled page is never ALSO a correction",
+            SpotlightDiagTrace.lines().none { it.contains("rest corrected") }
+        )
+    }
+
+    @Test
+    fun `a corrected rest keeps the offset it started at, and counts`() {
+        SpotlightDiagTrace.billboardRest(page = 7, offset = 0.0312f, corrected = true)
+
+        val line = SpotlightDiagTrace.summaries().first { it.contains("billboard: rest ") }
+        assertTrue("the summary shows the correction happened at all", line.contains("corrections=1"))
+        assertTrue("and the offset it was taken at", line.contains("offset=0.03"))
+
+        val transition = SpotlightDiagTrace.lines().last()
+        assertTrue(
+            "the ring keeps the event itself: page and the offset that was put back",
+            transition == "billboard: rest corrected page=7 from=0.03"
+        )
+
+        // The next settled frame overwrites the summary slot - the evidence has to
+        // survive it, or a paste taken a minute later would deny the correction.
+        SpotlightDiagTrace.billboardRest(page = 8, offset = 0f, corrected = false)
+        val after = SpotlightDiagTrace.summaries().first { it.contains("billboard: rest ") }
+        assertTrue(after, after.contains("page=8") && after.contains("corrections=1"))
+        assertTrue(
+            "the correction line is still in the ring",
+            SpotlightDiagTrace.lines().any { it.contains("rest corrected page=7 from=0.03") }
+        )
+    }
+
+    @Test
+    fun `a negative rest offset keeps its sign`() {
+        SpotlightDiagTrace.billboardRest(page = 1, offset = -0.02f, corrected = true)
+        val line = SpotlightDiagTrace.summaries().first { it.contains("billboard: rest ") }
+        assertTrue(
+            "a strip at the LEFT edge is the mirror of the reported one - the sign is the " +
+                "only thing that tells the reader which edge",
+            line.contains("offset=-0.02")
+        )
+    }
+
+    @Test
+    fun `the rest line sits after the render line, before the feed`() {
+        SpotlightDiagTrace.billboardFeed(listOf("trending_day"), trendingDaySize = 20, merged = 20)
+        SpotlightDiagTrace.billboardRest(page = 2, offset = 0f, corrected = false)
+        SpotlightDiagTrace.billboardDealt(pages = 20, pool = 20, epoch = 1)
+
+        val summaries = SpotlightDiagTrace.summaries()
+        val rest = summaries.indexOfFirst { it.contains("billboard: rest ") }
+        val feed = summaries.indexOfFirst { it.contains("billboard: feed ") }
+        assertTrue("both present", rest >= 0 && feed >= 0)
+        assertTrue("the frame's rest state reads with the frame, ahead of the pool", rest < feed)
+    }
+
     private fun source(relative: String): String {
         var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
         while (dir != null) {
