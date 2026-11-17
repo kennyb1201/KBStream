@@ -41,6 +41,7 @@ import com.kennyb1201.kbstream.ui.components.touch.KBTextField
 import com.kennyb1201.kbstream.ui.simkl.SimklDisconnectCopy
 import com.kennyb1201.kbstream.ui.simkl.SimklLinkOfferCopy
 import com.kennyb1201.kbstream.ui.simkl.SimklParentAction
+import com.kennyb1201.kbstream.ui.simkl.SimklParentPinCopy
 import com.kennyb1201.kbstream.ui.simkl.SimklViewModel
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBRust
