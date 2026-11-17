@@ -35,6 +35,7 @@ class SimklConnectOutcomeContractTest {
     private val tvScreen = main("com/kennyb1201/kbstream/ui/simkl/SimklConnectScreen.kt")
     private val phoneScreen = main("com/kennyb1201/kbstream/ui/mobile/SimklConnectScreenMobile.kt")
     private val disconnectCopy = main("com/kennyb1201/kbstream/ui/simkl/SimklDisconnectCopy.kt")
+    private val parentPinCopy = main("com/kennyb1201/kbstream/ui/simkl/SimklParentPinCopy.kt")
 
     @Test
     fun `a build with no client id says so instead of offering a code that must fail`() {
@@ -155,7 +156,11 @@ class SimklConnectOutcomeContractTest {
             // no-PIN case opens the CREATE prompt instead of a sentence.
             generate.contains("requireParentPin(SimklParentAction.LINK)") &&
                 viewModel.contains("parentPinCreate = !guard.hasParentPin()") &&
-                viewModel.contains("A parent needs to set a parent PIN") &&
+                // The sentence lives where both screens can read it (2026-11-17:
+                // the view model's companion is private, so a screen cannot), and
+                // the view model's constant is the same one, not a copy.
+                parentPinCopy.contains("A parent needs to set a parent PIN") &&
+                viewModel.contains("const val PARENT_PIN_MISSING = SimklParentPinCopy.MISSING") &&
                 !generate.contains("viewModelScope.launch")
         )
         assertTrue(

@@ -823,8 +823,6 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
          * link AND for a disconnect (spec 2026-11-16, F3). One sentence, one
          * destination: the parent sets the PIN where they already set it.
          */
-        const val PARENT_PIN_MISSING =
-            "A parent needs to set a parent PIN before Simkl can be connected " +
-                "on a kids profile."
+        const val PARENT_PIN_MISSING = SimklParentPinCopy.MISSING
     }
 }

@@ -495,7 +495,7 @@ private fun SimklParentPinCreateGate(
         title = "Set a parent PIN",
         // F3: the sentence survives as the prompt's REASON, never as the whole of
         // what the screen shows.
-        message = SimklViewModel.PARENT_PIN_MISSING
+        message = SimklParentPinCopy.MISSING
     )
     KBTextField(
         value = newPin,

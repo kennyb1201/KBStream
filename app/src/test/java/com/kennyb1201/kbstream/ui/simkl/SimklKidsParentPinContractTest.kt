@@ -203,7 +203,7 @@ class SimklKidsParentPinContractTest {
             )
             assertTrue(
                 "$name: the sentence is the prompt's reason, not the screen (F3)",
-                gate.contains("message = SimklViewModel.PARENT_PIN_MISSING")
+                gate.contains("message = SimklParentPinCopy.MISSING")
             )
             assertTrue(
                 "$name: a rejection is shown inline, in this screen's own error style",
