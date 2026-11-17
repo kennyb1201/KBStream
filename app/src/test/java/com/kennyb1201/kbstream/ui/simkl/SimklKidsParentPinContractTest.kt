@@ -96,18 +96,25 @@ class SimklKidsParentPinContractTest {
 
     @Test
     fun `an accepted PIN for DISCONNECT hands back, it does not disconnect`() {
-        val submit = vm.substringAfter("fun submitParentPin(pin: String) {")
+        // One implementation for both modes (F1, 2026-11-17): a verified PIN and a
+        // just-created one must leave the screen in the same state.
+        val runAction = vm.substringAfter("private fun runParentAction(action: SimklParentAction) {")
             .substringBefore("/**\n     * DISCONNECT on a kids profile")
         assertTrue(
-            "the action decides: $submit",
-            submit.contains("when (_uiState.value.parentPinAction)") &&
-                submit.contains("SimklParentAction.DISCONNECT ->") &&
-                submit.contains("approvedParentAction = SimklParentAction.DISCONNECT")
+            "the action decides: $runAction",
+            runAction.contains("SimklParentAction.DISCONNECT ->") &&
+                runAction.contains("approvedParentAction = SimklParentAction.DISCONNECT")
         )
         assertTrue(
             "and only the LINK path starts the code request",
-            submit.substringAfter("SimklParentAction.LINK ->").contains("beginCodeRequest()") &&
-                !submit.substringBefore("SimklParentAction.LINK ->").contains("beginCodeRequest()")
+            runAction.substringAfter("SimklParentAction.LINK ->").contains("beginCodeRequest()") &&
+                !runAction.substringBefore("SimklParentAction.LINK ->").contains("beginCodeRequest()")
+        )
+        assertTrue(
+            "the verify path reaches it through the same function the create path uses",
+            vm.substringAfter("fun submitParentPin(pin: String) {")
+                .substringBefore("fun submitParentPinCreation(")
+                .contains("runParentAction(_uiState.value.parentPinAction)")
         )
         listOf("tv" to tv, "phone" to phone).forEach { (name, source) ->
             assertTrue(
@@ -119,28 +126,132 @@ class SimklKidsParentPinContractTest {
         }
     }
 
+    // ── 2026-11-17: no PIN is a way to SET one, not a dead end ───────────
+
     @Test
-    fun `no parent PIN set is the existing error and nothing else`() {
+    fun `no parent PIN set opens the create prompt instead of a sentence`() {
         val request = vm.substringAfter("fun requestDisconnect() {")
             .substringBefore("/** The screen has acted on")
         assertTrue(
-            "the missing-PIN branch sets the sentence and returns: $request",
-            request.contains("if (!guard.hasParentPin())") &&
-                request.contains("errorMessage = PARENT_PIN_MISSING") &&
-                request.contains("requiresParentPin = false")
+            "a kids disconnect asks for the gate, for the DISCONNECT act: $request",
+            request.contains("requireParentPin(SimklParentAction.DISCONNECT)")
         )
         assertTrue(
             "for a kids profile only - a non-kids disconnect does not come through here",
             request.contains("if (ProfileManager.activeProfile.value?.kidsMaxAge == null) return")
         )
+        val helper = vm.substringAfter("private fun requireParentPin(action: SimklParentAction) {")
+            .substringBefore("fun submitParentPin(pin: String) {")
         assertTrue(
-            "and the gate is what the PIN-set path opens, for the DISCONNECT action",
-            request.contains("parentPinAction = SimklParentAction.DISCONNECT")
+            "one gate opener for both acts",
+            helper.contains("requiresParentPin = true") &&
+                helper.contains("parentPinAction = action")
         )
         assertTrue(
-            "the sentence is one constant, shared with the link path",
-            vm.contains("const val PARENT_PIN_MISSING") &&
-                vm.substringAfter("fun generateCode()").contains("errorMessage = PARENT_PIN_MISSING")
+            "and the MODE is whether this device holds a PIN (F1)",
+            helper.contains("parentPinCreate = !guard.hasParentPin()")
+        )
+        assertTrue(
+            "the link path uses the same opener",
+            vm.substringAfter("fun generateCode()").contains("requireParentPin(SimklParentAction.LINK)")
+        )
+        assertFalse(
+            "F3: the sentence is never the whole of what the screen shows again",
+            vm.contains("errorMessage = PARENT_PIN_MISSING")
+        )
+    }
+
+    @Test
+    fun `the create prompt writes the PIN through the shared prompt rules`() {
+        val create = vm.substringAfter("fun submitParentPinCreation(")
+            .substringBefore("private fun runParentAction(")
+        assertTrue(
+            "the same rules the profile editors use (F2)",
+            create.contains("parentPinPromptSpec(gated = true, credentialExists = guard.hasParentPin())") &&
+                create.contains("submitParentPinPrompt(")
+        )
+        assertTrue(
+            "the write is the device-local store, and its failure is honoured by the rule",
+            create.contains("writePin = { pin -> guard.setParentPin(pin) }")
+        )
+        assertTrue(
+            "a rejection is the inline message and nothing proceeds (F2)",
+            create.contains("is ParentPinSubmit.Rejected ->") &&
+                create.contains("parentPinMessage = result.message")
+        )
+        assertTrue(
+            "an accepted PIN runs the pressed act without asking again (F1)",
+            create.contains("is ParentPinSubmit.Accepted ->") &&
+                create.contains("runParentAction(_uiState.value.parentPinAction)")
+        )
+    }
+
+    @Test
+    fun `both surfaces draw the create prompt, and it states why it asks`() {
+        listOf("tv" to tv, "phone" to phone).forEach { (name, source) ->
+            assertTrue(
+                "$name: the gate has a create half",
+                source.contains("if (uiState.parentPinCreate) {") &&
+                    source.contains("SimklParentPinCreateGate")
+            )
+            val gate = source.substringAfter("if (uiState.parentPinCreate) {")
+            assertTrue(
+                "$name: new + confirm, and the button that creates it",
+                gate.contains("placeholder = \"New PIN\"") &&
+                    gate.contains("placeholder = \"Confirm PIN\"") &&
+                    gate.contains("vm.submitParentPinCreation(newPin, confirmPin)")
+            )
+            assertTrue(
+                "$name: the sentence is the prompt's reason, not the screen (F3)",
+                gate.contains("message = SimklViewModel.PARENT_PIN_MISSING")
+            )
+            assertTrue(
+                "$name: a rejection is shown inline, in this screen's own error style",
+                gate.contains("uiState.parentPinMessage?.let")
+            )
+        }
+    }
+
+    @Test
+    fun `the verify path a PIN-holding device sees is untouched`() {
+        // The gate is split in two now, so the S4 check has to read the VERIFY
+        // half itself rather than "the file mentions UNLOCK somewhere".
+        listOf(
+            "tv" to tv.substringAfter("private fun SimklParentPinGate(")
+                .substringBefore("private fun SimklParentPinCreateGate("),
+            "phone" to phone.substringAfter("private fun SimklParentPinGateMobile(")
+                .substringBefore("private fun SimklParentPinCreateGateMobile(")
+        ).forEach { (name, verify) ->
+            assertTrue("$name: the verify gate exists", verify.length > 200)
+            assertTrue(
+                "$name: the field + UNLOCK / CANCEL gate is still what a PIN-holding " +
+                    "device gets (S4)",
+                verify.contains("label = \"UNLOCK\"") &&
+                    verify.contains("label = \"CANCEL\"") &&
+                    verify.contains("KeyboardType.NumberPassword")
+            )
+            assertTrue(
+                "$name: and it still verifies through the ViewModel",
+                verify.contains("vm.submitParentPin(pin)")
+            )
+            assertFalse(
+                "$name: the verify half never writes a PIN",
+                verify.contains("submitParentPinCreation")
+            )
+        }
+    }
+
+    @Test
+    fun `the created PIN stays on this device`() {
+        assertTrue(
+            "F5: the write is KidsTimeGuard's device-local store",
+            vm.contains("guard.setParentPin(pin)")
+        )
+        assertFalse(
+            "and nothing about a created PIN enters a synced blob",
+            vm.substringAfter("fun submitParentPinCreation(")
+                .substringBefore("private fun runParentAction(")
+                .contains("sync")
         )
     }
 

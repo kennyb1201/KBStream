@@ -71,6 +71,23 @@ data class SimklUiState(
      */
     val parentPinAction: SimklParentAction = SimklParentAction.LINK,
     /**
+     * The gate is in CREATE mode: this device holds no parent PIN at all, so the
+     * gate offers to SET one (new + confirm) instead of verifying one that does
+     * not exist (2026-11-17, F1).
+     *
+     * The missing-PIN sentence used to be the whole of what such a profile saw:
+     * on the TV - which has no PIN - pressing RECONNECT or DISCONNECT showed "a
+     * parent needs to set a parent PIN" and nothing to press. No PIN on this
+     * device is a way to set one, not a dead end.
+     */
+    val parentPinCreate: Boolean = false,
+    /**
+     * The CREATE prompt's inline error - a short or mismatched PIN, or a write
+     * that failed. Shown in the prompt, which stays open: a rejected submission
+     * never closes as if it saved (F2).
+     */
+    val parentPinMessage: String? = null,
+    /**
      * Set the instant a PIN was accepted for [parentPinAction], and consumed by
      * the screen that owns the dialog. Null the rest of the time.
      */

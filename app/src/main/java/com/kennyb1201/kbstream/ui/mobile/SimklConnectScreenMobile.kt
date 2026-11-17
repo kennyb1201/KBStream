@@ -447,6 +447,13 @@ private fun SimklParentPinGateMobile(
     isConnected: Boolean
 ) {
     val uiState by vm.uiState.collectAsStateWithLifecycle()
+    // F1/F4 (2026-11-17): no parent PIN on this device opens the CREATE prompt
+    // rather than the sentence - on the phone too, which works when a PIN exists
+    // and had the same gap when it did not.
+    if (uiState.parentPinCreate) {
+        SimklParentPinCreateGateMobile(vm = vm, onBack = onBack, isConnected = isConnected)
+        return
+    }
     var pin by remember { mutableStateOf("") }
 
     SimklStatusPanel(
@@ -477,6 +484,73 @@ private fun SimklParentPinGateMobile(
             label = "UNLOCK",
             modifier = Modifier.fillMaxWidth(),
             onClick = { vm.submitParentPin(pin) }
+        )
+        KBButton(
+            label = "CANCEL",
+            modifier = Modifier.fillMaxWidth(),
+            onClick = {
+                vm.cancelParentPin()
+                if (!isConnected) onBack()
+            }
+        )
+    }
+}
+
+/**
+ * The CREATE half of the parent-PIN gate, phone (F1/F2/F4, 2026-11-17).
+ *
+ * Same rule as the TV's: a device with no PIN is offered one (new + confirm)
+ * through the shared prompt rules, and the act that opened the gate runs once it
+ * is written. The visuals are this screen's gate - the same panel, field and error
+ * line the VERIFY branch draws.
+ */
+@Composable
+private fun SimklParentPinCreateGateMobile(
+    vm: SimklViewModel,
+    onBack: () -> Unit,
+    isConnected: Boolean
+) {
+    val uiState by vm.uiState.collectAsStateWithLifecycle()
+    var newPin by remember { mutableStateOf("") }
+    var confirmPin by remember { mutableStateOf("") }
+
+    SimklStatusPanel(
+        title = "Set a parent PIN",
+        // F3: the sentence is the prompt's reason now, not the whole screen.
+        message = SimklViewModel.PARENT_PIN_MISSING
+    )
+    KBTextField(
+        value = newPin,
+        onValueChange = {
+            newPin = it.filter(Char::isDigit).take(4)
+            vm.clearPinError()
+        },
+        placeholder = "New PIN",
+        keyboardType = KeyboardType.NumberPassword,
+        visualTransformation = PasswordVisualTransformation()
+    )
+    KBTextField(
+        value = confirmPin,
+        onValueChange = {
+            confirmPin = it.filter(Char::isDigit).take(4)
+            vm.clearPinError()
+        },
+        placeholder = "Confirm PIN",
+        keyboardType = KeyboardType.NumberPassword,
+        visualTransformation = PasswordVisualTransformation()
+    )
+    uiState.parentPinMessage?.let { message ->
+        Text(
+            text = message,
+            color = KBRust,
+            style = MaterialTheme.typography.bodyMedium
+        )
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        KBButton(
+            label = "SET PIN",
+            modifier = Modifier.fillMaxWidth(),
+            onClick = { vm.submitParentPinCreation(newPin, confirmPin) }
         )
         KBButton(
             label = "CANCEL",

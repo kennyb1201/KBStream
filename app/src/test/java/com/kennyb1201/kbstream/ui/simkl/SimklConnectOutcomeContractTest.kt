@@ -150,11 +150,11 @@ class SimklConnectOutcomeContractTest {
         assertTrue(
             "generateCode must stop at the gate rather than launching the " +
                 "request itself: $generate",
-            generate.contains("requiresParentPin = true") &&
-                // The sentence moved into PARENT_PIN_MISSING when disconnect
-                // started using it too (spec 2026-11-16, F3): one error, one
-                // place a parent is sent to.
-                generate.contains("errorMessage = PARENT_PIN_MISSING") &&
+            // The gate is opened by one helper for both gated acts, and its MODE
+            // is whether this device holds a PIN (2026-11-17, F1) - so the
+            // no-PIN case opens the CREATE prompt instead of a sentence.
+            generate.contains("requireParentPin(SimklParentAction.LINK)") &&
+                viewModel.contains("parentPinCreate = !guard.hasParentPin()") &&
                 viewModel.contains("A parent needs to set a parent PIN") &&
                 !generate.contains("viewModelScope.launch")
         )

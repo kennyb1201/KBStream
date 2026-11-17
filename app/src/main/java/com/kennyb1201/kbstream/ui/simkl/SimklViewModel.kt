@@ -11,6 +11,9 @@ import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.sync.KidsTimeGuard
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
+import com.kennyb1201.kbstream.ui.profiles.ParentPinSubmit
+import com.kennyb1201.kbstream.ui.profiles.parentPinPromptSpec
+import com.kennyb1201.kbstream.ui.profiles.submitParentPin as submitParentPinPrompt
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -185,21 +188,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         if (ProfileManager.activeProfile.value?.kidsMaxAge != null) {
-            if (!guard.hasParentPin()) {
-                _uiState.value = _uiState.value.copy(
-                    requiresParentPin = false,
-                    pinError = false,
-                    errorMessage = PARENT_PIN_MISSING
-                )
-                return
-            }
-            _uiState.value = _uiState.value.copy(
-                requiresParentPin = true,
-                parentPinAction = SimklParentAction.LINK,
-                approvedParentAction = null,
-                pinError = false,
-                errorMessage = null
-            )
+            requireParentPin(SimklParentAction.LINK)
             return
         }
 
@@ -220,17 +209,73 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
             _uiState.value = _uiState.value.copy(pinError = true)
             return
         }
-        when (_uiState.value.parentPinAction) {
+        runParentAction(_uiState.value.parentPinAction)
+    }
+
+    /**
+     * The CREATE prompt's submit (F1/F2, 2026-11-17).
+     *
+     * A kids profile with no parent PIN on this device used to be told to go and
+     * set one and left there. It now sets it here, through the SAME rules the
+     * profile editors use ([parentPinPromptSpec] CREATE + [submitParentPin]), so a
+     * short PIN, a mismatch and a failed write behave exactly as they do there:
+     * shown inline, prompt stays open, nothing proceeds.
+     *
+     * An accepted PIN does not ask again in this session: the pressed act runs,
+     * which is the same [runParentAction] a verified PIN reaches - a reconnect
+     * starts the device flow, a disconnect hands back the approval the page's own
+     * confirmation draws.
+     */
+    fun submitParentPinCreation(newPin: String, confirmPin: String) {
+        val spec = parentPinPromptSpec(gated = true, credentialExists = guard.hasParentPin())
+        val result = submitParentPinPrompt(
+            spec = spec,
+            gateTarget = ProfileManager.activeProfile.value,
+            currentPin = "",
+            newPin = newPin,
+            confirmPin = confirmPin,
+            writePin = { pin -> guard.setParentPin(pin) }
+        )
+        when (result) {
+            is ParentPinSubmit.Accepted -> {
+                _uiState.value = _uiState.value.copy(
+                    parentPinCreate = false,
+                    parentPinMessage = null,
+                    pinError = false
+                )
+                runParentAction(_uiState.value.parentPinAction)
+            }
+
+            is ParentPinSubmit.Rejected -> {
+                _uiState.value = _uiState.value.copy(parentPinMessage = result.message)
+            }
+        }
+    }
+
+    /**
+     * Runs the gated act, for an accepted PIN from EITHER mode.
+     *
+     * One implementation on purpose (F1): a PIN that was verified and a PIN that
+     * was just created must leave the screen in exactly the same state, and only a
+     * LINK may start a code request - a DISCONNECT hands back the approval so the
+     * confirmation the page already draws can run.
+     */
+    private fun runParentAction(action: SimklParentAction) {
+        when (action) {
             SimklParentAction.DISCONNECT -> _uiState.value = _uiState.value.copy(
                 requiresParentPin = false,
                 pinError = false,
+                parentPinCreate = false,
+                parentPinMessage = null,
                 approvedParentAction = SimklParentAction.DISCONNECT
             )
 
             SimklParentAction.LINK -> {
                 _uiState.value = _uiState.value.copy(
                     requiresParentPin = false,
-                    pinError = false
+                    pinError = false,
+                    parentPinCreate = false,
+                    parentPinMessage = null
                 )
                 beginCodeRequest()
             }
@@ -248,18 +293,26 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun requestDisconnect() {
         if (ProfileManager.activeProfile.value?.kidsMaxAge == null) return
-        if (!guard.hasParentPin()) {
-            _uiState.value = _uiState.value.copy(
-                requiresParentPin = false,
-                pinError = false,
-                errorMessage = PARENT_PIN_MISSING
-            )
-            return
-        }
+        requireParentPin(SimklParentAction.DISCONNECT)
+    }
+
+    /**
+     * Opens the parent-PIN gate for [action] - the one path both gated acts take.
+     *
+     * The gate's MODE is a fact about this device, not about the pressed button:
+     * a device holding a PIN gets the field + UNLOCK (the path that works on the
+     * phone), and a device holding none gets the CREATE prompt, because there is
+     * nothing to verify (F1, 2026-11-17). Before this, the no-PIN case set a
+     * sentence and returned, so the TV - which has no PIN - had no way to get one
+     * from here at all.
+     */
+    private fun requireParentPin(action: SimklParentAction) {
         _uiState.value = _uiState.value.copy(
             requiresParentPin = true,
-            parentPinAction = SimklParentAction.DISCONNECT,
+            parentPinAction = action,
             approvedParentAction = null,
+            parentPinCreate = !guard.hasParentPin(),
+            parentPinMessage = null,
             pinError = false,
             errorMessage = null
         )
@@ -277,14 +330,19 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
             requiresParentPin = false,
             pinError = false,
             parentPinAction = SimklParentAction.LINK,
-            approvedParentAction = null
+            approvedParentAction = null,
+            parentPinCreate = false,
+            parentPinMessage = null
         )
     }
 
     /** A keystroke in the PIN field retires the wrong-PIN line. */
     fun clearPinError() {
-        if (_uiState.value.pinError) {
-            _uiState.value = _uiState.value.copy(pinError = false)
+        if (_uiState.value.pinError || _uiState.value.parentPinMessage != null) {
+            _uiState.value = _uiState.value.copy(
+                pinError = false,
+                parentPinMessage = null
+            )
         }
     }
 

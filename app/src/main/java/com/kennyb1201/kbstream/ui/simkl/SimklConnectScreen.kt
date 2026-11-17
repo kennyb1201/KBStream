@@ -417,6 +417,14 @@ private fun SimklParentPinGate(
     isConnected: Boolean
 ) {
     val uiState by vm.uiState.collectAsStateWithLifecycle()
+    // One gate, two modes, and the mode is a fact about the DEVICE (F1,
+    // 2026-11-17): the field below verifies a PIN this device holds, and the
+    // prompt on the right of this branch CREATES the one it does not. The TV had
+    // no PIN and used to get the sentence alone - nowhere to enter anything.
+    if (uiState.parentPinCreate) {
+        SimklParentPinCreateGate(vm = vm, onBack = onBack, isConnected = isConnected)
+        return
+    }
     var pin by remember { mutableStateOf("") }
     val pinField = remember { FocusRequester() }
     LaunchedEffect(Unit) { landFocusOn(pinField) }
@@ -447,6 +455,77 @@ private fun SimklParentPinGate(
         KBButton(
             label = "UNLOCK",
             onClick = { vm.submitParentPin(pin) }
+        )
+        KBButton(label = "CANCEL", onClick = {
+            vm.cancelParentPin()
+            if (!isConnected) onBack()
+        })
+    }
+}
+
+/**
+ * The CREATE half of the parent-PIN gate (F1/F2, 2026-11-17).
+ *
+ * A kids profile on a device with no parent PIN used to be told a parent needs to
+ * set one and left with nothing to press - which read as a dead end on the TV,
+ * the one surface that had no PIN. Here the PIN is SET, through the shared prompt
+ * rules ([com.kennyb1201.kbstream.ui.profiles.parentPinPromptSpec] CREATE and
+ * [com.kennyb1201.kbstream.ui.profiles.submitParentPin]): new + confirm, written,
+ * then the act that opened the gate runs without asking again.
+ *
+ * A rejected PIN - short, mismatched, or a write that failed - is shown inline and
+ * this prompt stays up, exactly as the profile editors' prompt does. The panel and
+ * field are this screen's own visuals (the same ones the VERIFY gate draws); only
+ * the rules are shared.
+ */
+@Composable
+private fun SimklParentPinCreateGate(
+    vm: SimklViewModel,
+    onBack: () -> Unit,
+    isConnected: Boolean
+) {
+    val uiState by vm.uiState.collectAsStateWithLifecycle()
+    var newPin by remember { mutableStateOf("") }
+    var confirmPin by remember { mutableStateOf("") }
+    val newPinField = remember { FocusRequester() }
+    val confirmPinField = remember { FocusRequester() }
+    LaunchedEffect(Unit) { landFocusOn(newPinField) }
+
+    SimklStatusPanel(
+        title = "Set a parent PIN",
+        // F3: the sentence survives as the prompt's REASON, never as the whole of
+        // what the screen shows.
+        message = SimklViewModel.PARENT_PIN_MISSING
+    )
+    KBTextField(
+        value = newPin,
+        onValueChange = {
+            newPin = it.filter(Char::isDigit).take(4)
+            vm.clearPinError()
+        },
+        placeholder = "New PIN",
+        focusRequester = newPinField,
+        keyboardType = KeyboardType.NumberPassword,
+        visualTransformation = PasswordVisualTransformation(),
+        keepFocusOnDone = true
+    )
+    KBTextField(
+        value = confirmPin,
+        onValueChange = {
+            confirmPin = it.filter(Char::isDigit).take(4)
+            vm.clearPinError()
+        },
+        placeholder = "Confirm PIN",
+        focusRequester = confirmPinField,
+        keyboardType = KeyboardType.NumberPassword,
+        visualTransformation = PasswordVisualTransformation(),
+        keepFocusOnDone = true
+    )
+    uiState.parentPinMessage?.let { message -> SimklErrorLine(message) }
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        KBButton(
+            label = "SET PIN",
+            onClick = { vm.submitParentPinCreation(newPin, confirmPin) }
         )
         KBButton(label = "CANCEL", onClick = {
             vm.cancelParentPin()
