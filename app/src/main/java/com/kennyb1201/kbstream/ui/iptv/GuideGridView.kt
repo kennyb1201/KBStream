@@ -266,7 +266,11 @@ internal fun GuideGridView(
             GridRowModel(
                 item = item,
                 channelKey = channelKey,
-                cells = rowCells(
+                // Memoised per channel (dig four §2b): a page answer only
+                // changes the channels it carried, so the rest reuse the cell
+                // lists they already have instead of being rebuilt, allocated
+                // and re-hashed for every channel on the lineup.
+                cells = GuideRowCellMemo.cells(
                     channelKey = channelKey,
                     programs = programsByChannel[item.channel.id].orEmpty(),
                     window = window,
