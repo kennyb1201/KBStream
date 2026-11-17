@@ -92,7 +92,10 @@ class YearInReviewWiringContractTest {
     @Test
     fun `a failed read offers a retry instead of an empty page`() {
         assertTrue(viewModel.contains("const val READ_FAILED"))
-        assertTrue(screen.contains("KBButton(label = \"RETRY\""))
+        // The control branches to the phone's touch twin on a phone and stays
+        // the TV button on television (spec 2026-11-16); the retry itself is the
+        // same call either way.
+        assertTrue(screen.contains("ReviewAction(label = \"RETRY\", onClick = { viewModel.load(state.year) })"))
     }
 
     // ── The entries ──────────────────────────────────────────────────────

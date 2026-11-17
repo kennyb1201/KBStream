@@ -41,6 +41,8 @@ import com.kennyb1201.kbstream.data.history.YearTitle
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
+import com.kennyb1201.kbstream.ui.components.touch.KBButton as TouchKBButton
+import com.kennyb1201.kbstream.ui.components.touch.TouchChoiceChip
 import com.kennyb1201.kbstream.ui.mobile.MobileBackButton
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
@@ -58,8 +60,17 @@ import java.time.format.DateTimeFormatter
  * One layout rather than the two-file pattern the Library and Stats pages use:
  * everything here is a short, read-only column of figures, and a second copy
  * would be a second place for the approximation wording to drift from the number
- * it qualifies. The only form-factor difference is padding - a D-pad scrolls the
- * same LazyColumn a finger does.
+ * it qualifies.
+ *
+ * What it is NOT is two identical experiences, and this comment used to claim it
+ * was ("the only form-factor difference is padding"). A D-pad scrolls the same
+ * LazyColumn a finger does, but a TV CONTROL is not a phone control: the shared
+ * [com.kennyb1201.kbstream.ui.components.KBButton] and the tv `Surface` chips are focus surfaces, activated by the
+ * remote's Select key. On a phone they were inert - the buttons did nothing while
+ * the page scrolled and system back worked, which is exactly the report this page
+ * answered (spec 2026-11-16). So the layout, the copy and every action stay
+ * shared, and each interactive element branches to its touch twin, the same way
+ * the header's arrow does.
  *
  * The year comes from the route when one was picked (Library / Settings), and
  * the screen's own picker then owns it. Both entry points exist by design: the
@@ -70,6 +81,26 @@ fun YearReviewScreen(
     onBack: () -> Unit,
     year: Int? = null,
     viewModel: YearReviewViewModel = viewModel()
+) {
+    // A phone composes under the phone's theme, like every other mobile surface.
+    // This page is shared, so it was the one screen reaching a phone with only
+    // the TELEVISION theme around it - which its material3 controls (the header
+    // arrow, and now the touch twins below) would have read the platform's
+    // default typography and colours from, not the brand's.
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        com.kennyb1201.kbstream.ui.theme.MobileTheme {
+            YearReviewContent(onBack = onBack, year = year, viewModel = viewModel)
+        }
+        return
+    }
+    YearReviewContent(onBack = onBack, year = year, viewModel = viewModel)
+}
+
+@Composable
+private fun YearReviewContent(
+    onBack: () -> Unit,
+    year: Int?,
+    viewModel: YearReviewViewModel
 ) {
     BackHandler(onBack = onBack)
 
@@ -153,7 +184,7 @@ fun YearReviewScreen(
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Spacer(modifier = Modifier.height(10.dp))
-                KBButton(label = "RETRY", onClick = { viewModel.load(state.year) })
+                ReviewAction(label = "RETRY", onClick = { viewModel.load(state.year) })
             }
 
             review == null -> {
@@ -293,7 +324,7 @@ private fun ReviewBody(
         }
 
         item(key = "share") {
-            KBButton(label = "SHARE THIS YEAR") { onShare() }
+            ReviewAction(label = "SHARE THIS YEAR", onClick = onShare)
         }
 
         item(key = "note") {
@@ -420,8 +451,54 @@ private fun EndpointLine(label: String, title: YearTitle) {
     )
 }
 
+/**
+ * The two controls a finger cannot use on this screen, and why (spec 2026-11-16,
+ * year in review buttons).
+ *
+ * This page is one layout for television and phone, and the two interactive
+ * elements it used were the TELEVISION ones: [KBButton] (a `components.KBCard`,
+ * i.e. a tv-material3 `Card(onClick)`) and a tv-material3 clickable `Surface`
+ * for the year chips. Those are FOCUS surfaces - their activation arrives as the
+ * remote's Select/Enter key, which is why the touch twin's own KDoc exists (see
+ * `ui/components/touch/TouchCard.kt`). A finger produces no key event, so on a
+ * phone the tap did nothing.
+ *
+ * That is exactly the reported asymmetry: the page scrolls (a drag is a pointer
+ * gesture, not a key) and system back works (a platform event into the screen's
+ * own `BackHandler`), while every on-screen control under the thumb was inert.
+ * The phone Home was never a counter-example - it imports
+ * `ui.components.touch.KBCard`, not this one.
+ *
+ * So each interactive element branches, the way the header arrow already does:
+ * television keeps the focusable control unchanged, the phone gets the
+ * touch-native twin of it. The layout, the copy and every action stay shared.
+ */
+@Composable
+private fun ReviewAction(
+    label: String,
+    onClick: () -> Unit
+) {
+    if (com.kennyb1201.kbstream.FormFactor.isTv) {
+        KBButton(label = label, onClick = onClick)
+    } else {
+        // Material 3 Button: a real tap target, ripple, 48dp minimum. Full
+        // width on a phone, where these sit at the head of the action they name.
+        TouchKBButton(label = label, modifier = Modifier.fillMaxWidth(), onClick = onClick)
+    }
+}
+
 @Composable
 private fun YearChip(year: Int, selected: Boolean, onClick: () -> Unit) {
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        // The touch twin: the same selected / unselected plate and label colours,
+        // on a chip that owns its tap.
+        TouchChoiceChip(
+            label = year.toString(),
+            selected = selected,
+            onClick = onClick
+        )
+        return
+    }
     Surface(
         onClick = onClick,
         shape = ClickableSurfaceDefaults.shape(shape = KBShapeCard),
