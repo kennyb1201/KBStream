@@ -331,8 +331,11 @@ private val HeroToFirstRailGap = 2.dp
 // Hero clearlogo box (ContentScale.Fit inside). Collection (KB folder)
 // manifests supply their own titleLogoUrl, which is frequently a wordmark
 // that reads small at the shared size — render it noticeably larger.
-private val HeroLogoWidth = 300.dp
-private val HeroLogoHeight = 82.dp
+// Internal since spec 2026-11-16 (B1): Spotlight's panel draws its wordmark in
+// the SAME fixed box the hero uses, so "the logo you saw on the card" and "the
+// logo in the panel it opens" are one size, one alignment and one fit rule.
+internal val HeroLogoWidth = 300.dp
+internal val HeroLogoHeight = 82.dp
 private val CollectionHeroLogoWidth = 400.dp
 private val CollectionHeroLogoHeight = 120.dp
 

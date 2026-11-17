@@ -109,10 +109,19 @@ class SpotlightLogoContractTest {
         val preview = source(PREVIEW)
         val box = preview.substringAfter("val titleText = meta?.name ?: snapshot.title.orEmpty()")
             .substringBefore("// Silence while the meta resolves")
+        // Spec 2026-11-16 (B1/B2) replaced "fills the title Text" with the hero's
+        // own FIXED box: the two-line Text slot made every wordmark tiny and
+        // centred. The invariant this pin exists for is unchanged - the box height
+        // is fixed, so a logo landing late moves nothing below it - and is now
+        // carried by the explicit height instead of by the Text's own lines.
         assertTrue(
-            "the logo is measured against the title Text, so the box keeps its " +
-                "height and nothing below it moves",
-            box.contains("Modifier.matchParentSize()")
+            "the logo draws in a fixed-height box, so nothing below it moves",
+            box.contains(".height(HeroLogoHeight)")
+        )
+        assertTrue(
+            "and the box is the hero's logo box, left-aligned with the meta line",
+            box.contains("contentAlignment = Alignment.BottomStart") &&
+                box.contains(".width(HeroLogoWidth)")
         )
         assertTrue(
             "the text is transparent once the art paints, never removed: removing " +

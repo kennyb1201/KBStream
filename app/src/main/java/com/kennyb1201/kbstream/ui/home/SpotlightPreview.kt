@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -438,40 +439,55 @@ internal fun SpotlightPreviewPanel(
                 )
             }
         }
-        // ── The title box: the wordmark over the title text (spec 2026-11-15) ──
+        // ── The title box: the wordmark over the title text ──
         //
-        // The title Text stays composed and keeps its exact place - it is what
-        // SIZES this box, so the logo can never push the meta line or the
-        // overview down (S4), and it is the fallback when the mark is missing or
-        // fails to load (S2/S5). It is only made invisible, and only once the
-        // logo has actually painted, so the wordmark never has a title bleeding
-        // through it and the panel never shows a blank title area.
+        // The wordmark gets its OWN fixed box (spec 2026-11-16, B1/B2), the same
+        // one the hero uses: the panel's width, [HeroLogoHeight] tall, aligned
+        // bottom-start. It used to fill a two-line `titleSmall` Text - a ~44dp
+        // slot - so a wordmark was fitted into two lines of small type and then
+        // centred in the panel's full width: tiny and floating in the middle,
+        // exactly the field photo. The fixed box is also what keeps the copy
+        // under it still when the art lands late (B3), because the box's height
+        // never depended on the logo to begin with.
+        //
+        // The title Text stays composed inside that box: it is the fallback when
+        // the mark is missing or fails (B3), and it is only made invisible - never
+        // removed - once the logo has actually PAINTED, so the wordmark never has
+        // a title bleeding through it and the panel never shows a blank title
+        // area.
         val titleText = meta?.name ?: snapshot.title.orEmpty()
         val settledLogo = logoUrl?.takeIf { it.isNotBlank() }
         var logoPainted by remember(settledLogo) { mutableStateOf(false) }
-        Box(modifier = Modifier.fillMaxWidth()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(HeroLogoHeight),
+            contentAlignment = Alignment.BottomStart
+        ) {
             Text(
                 text = titleText,
-                // Transparent, not absent: the text still occupies its lines, so
-                // the box height does not change when the logo lands.
+                // Transparent, not absent: the text still occupies its space, so
+                // nothing about this box changes when the logo lands.
                 color = if (logoPainted) Color.Transparent else KBTextHi,
                 style = androidx.tv.material3.MaterialTheme.typography.titleSmall,
-                // Two lines, because the panel is now wide enough to carry them: a
-                // long title wraps instead of ending in an ellipsis (F2).
                 maxLines = 2,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.align(Alignment.BottomStart)
             )
             if (settledLogo != null) {
-                // The hero's own drawer, filling the title's box: `matchParentSize`
-                // measures it against the Text above, so a tall or stacked mark
-                // letterboxes inside the two-line slot and a wide one fills it -
-                // fitted, never cropped.
+                // The hero's own drawer in the hero's own box, left-aligned with
+                // the meta line under it rather than centred in the panel: a
+                // wordmark keeps its `Fit` rule (never cropped, B3) and reads at
+                // the size it reads at on the hero (B1).
                 HeroClearLogo(
                     url = settledLogo,
                     name = titleText,
                     showPlaceholder = false,
                     onPainted = { logoPainted = it },
-                    modifier = Modifier.matchParentSize()
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .width(HeroLogoWidth)
+                        .fillMaxHeight()
                 )
             }
         }

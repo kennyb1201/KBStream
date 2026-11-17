@@ -92,7 +92,10 @@ class SpotlightDwellContractTest {
     fun `the panel holds the card the dwell armed on`() {
         assertTrue(
             "armed before the wait",
-            dwellEffect.contains("val armedOn = tracker.snapshot ?: return@LaunchedEffect") &&
+            // Still captured before the wait - now through the pause-on-blip
+            // branch (spec 2026-11-16, A2) instead of a bare `?: return`.
+            dwellEffect.contains("val armedOn = tracker.snapshot ?: run {") &&
+                dwellEffect.contains("val armedNode = tracker.focusedNode") &&
                 dwellEffect.contains("dwellRun.armed = true")
         )
         assertTrue(
@@ -124,34 +127,36 @@ class SpotlightDwellContractTest {
         // trace only names card / delay / menu changes - so a card rebuilt under
         // the viewer (a rail re-deal, a re-landed focus) restarted the two
         // seconds SILENTLY, every time, until the screen went quiet.
+        // Since spec 2026-11-16 (A1) the clock is a per-card map rather than a
+        // single slot: it still lives outside the effect, and it now also keeps
+        // the time across a MOVE TO ANOTHER CARD (see
+        // SpotlightExpandAndLogoContractTest for that half). The F1 property
+        // pinned here is unchanged: a re-created card resumes.
         assertTrue(
             "the clock is the CARD's, kept outside the effect",
-            host.contains("var dwellClockCard by remember { mutableStateOf<String?>(null) }") &&
-                host.contains("var dwellClockElapsedMs by remember { mutableStateOf(0L) }")
+            host.contains("val dwellClock = remember { SpotlightDwellClock() }")
         )
         assertTrue(
-            "only a different card starts a new clock",
-            dwellEffect.contains("if (dwellClockCard != cardNow) {")
+            "the time a replaced run held is banked, so a rebuild resumes",
+            dwellEffect.contains(
+                "val alreadyHeldMs = dwellClock.start(cardNow, SystemClock.uptimeMillis())"
+            )
         )
         assertTrue(
-            "and a restart of the same card counts the time the replaced run held it",
-            dwellEffect.contains("dwellClockElapsedMs += (nowMs - dwellClockRunStartMs)")
-        )
-        assertTrue(
-            "a deliberate close drops the held time, so the next hold waits it out again",
-            host.contains("fun resetDwellClock()") &&
-                dwellEffect.contains("resetDwellClock()")
+            "a deliberate close spends the wait, so the next hold waits it out again",
+            host.contains("fun SpotlightDwellClock.spend") ||
+                dwellEffect.contains("dwellClock.spend(cardNow)")
         )
         val back = host.substringAfter("BackHandler(enabled = expanded != null) {")
             .substringBefore("val panel =")
         assertTrue(
             "BACK is a deliberate close too",
-            back.contains("resetDwellClock()")
+            back.contains("dwellClock.spend(closedCard)")
         )
         assertTrue(
             "and the viewer's delay itself is unchanged - no longer wait, no shorter one",
             !host.contains("SPOTLIGHT_DWELL_CLOCK") &&
-                host.contains("delay((expandDelayMs - dwellClockElapsedMs)")
+                host.contains("delay((expandDelayMs - alreadyHeldMs)")
         )
     }
 
@@ -218,13 +223,13 @@ class SpotlightDwellContractTest {
         assertTrue(
             "and an open panel is ended by a menu, a disabled expand, another " +
                 "card, or the focus leaving the cards",
-            dwellEffect.contains("if (collapseGuard != \"cardChanged\") return@LaunchedEffect") &&
-                dwellEffect.contains("if (heldNode == null) return@LaunchedEffect")
+            dwellEffect.contains("if (collapseGuard == \"cardChanged\") {") &&
+                dwellEffect.contains("if (heldNode == null) {")
         )
         assertTrue(
             "the wait is the delay (less whatever this card had already held), after " +
                 "which the panel opens and nothing earlier",
-            dwellEffect.contains("delay((expandDelayMs - dwellClockElapsedMs).coerceAtLeast(0L))") &&
+            dwellEffect.contains("delay((expandDelayMs - alreadyHeldMs).coerceAtLeast(0L))") &&
                 dwellEffect.indexOf("delay((expandDelayMs") <
                 dwellEffect.indexOf("expanded = ExpandedPanel(armedOn, armedNode)")
         )

@@ -465,16 +465,13 @@ internal fun SpotlightPreviewHost(
     // new clock. What the spec forbids is untouched - the delay is still the
     // viewer's setting, the identity key still re-arms a real card change, and a
     // blur that lands back on the same card still does not end the panel.
-    var dwellClockCard by remember { mutableStateOf<String?>(null) }
-    var dwellClockElapsedMs by remember { mutableStateOf(0L) }
-    var dwellClockRunStartMs by remember { mutableStateOf(0L) }
-
-    /** Drops the held time: a deliberate close or a real card change starts over. */
-    fun resetDwellClock() {
-        dwellClockCard = null
-        dwellClockElapsedMs = 0L
-        dwellClockRunStartMs = 0L
-    }
+    //
+    // Since the 2026-11-16 field report (spec A1) the clock is PER CARD: it was a
+    // single slot wiped by any card change, so scrolling across a rail to read it
+    // threw away the second a card had already earned and the viewer had to come
+    // back and hold again from zero. Time now accumulates per card identity and
+    // only a panel opening (its wait is spent) or a deliberate close forgets it.
+    val dwellClock = remember { SpotlightDwellClock() }
 
     // The held card's snapshot IDENTITY is a key (spec 2026-11-13, F2).
     //
@@ -527,45 +524,60 @@ internal fun SpotlightPreviewHost(
             else -> null
         }
         if (collapseGuard != null) {
+            val closingCard = live?.snapshot?.cardIdentity()
             if (live != null) {
                 SpotlightDiagTrace.spotlightCollapsed(collapseGuard)
                 expanded = null
                 onExpandedChange(false)
             }
-            // A closed panel is not a held card any more: the next hold (even of
-            // the same title on another card) waits the full delay again.
-            resetDwellClock()
-            if (collapseGuard != "cardChanged") return@LaunchedEffect
+            if (collapseGuard == "cardChanged") {
+                // The viewer moved to ANOTHER card (spec A1/A3): this one's time
+                // is BANKED, not thrown away, so coming back resumes the wait.
+                // The panel closes - a card that lost it has to earn it again -
+                // but every card keeps what it already held.
+                dwellClock.pause(SystemClock.uptimeMillis())
+            } else {
+                // A closed panel is not a held card any more, and a menu, an
+                // expansion switched off or focus leaving the cards ends the
+                // whole dwell: the next hold waits the full delay again.
+                dwellClock.spend(closingCard)
+                return@LaunchedEffect
+            }
         }
         // Focus is nowhere: nothing to arm, and the guard above has already
-        // closed what was up.
-        if (heldNode == null) return@LaunchedEffect
+        // closed what was up. The time already held is banked first, so the same
+        // card taking focus back resumes it (A1).
+        if (heldNode == null) {
+            dwellClock.pause(SystemClock.uptimeMillis())
+            return@LaunchedEffect
+        }
         // The card must HOLD focus for the whole delay; a move cancels this run
         // and the next card starts its own clock. A null snapshot still means
         // "nothing to expand yet" - but the identity above is a key now, so the
         // dwell re-arms the moment the details land (F2) instead of dropping the
         // wait on the floor.
-        val armedOn = tracker.snapshot ?: return@LaunchedEffect
+        //
+        // A snapshot that blinks while the SAME card still holds focus is a PAUSE,
+        // not a cancel (spec A2): the time already held is banked and the wait
+        // picks it up when the details land, instead of the card losing the
+        // second it had earned to a resolve flicker.
+        val armedOn = tracker.snapshot ?: run {
+            dwellClock.pause(SystemClock.uptimeMillis())
+            return@LaunchedEffect
+        }
         val armedNode = tracker.focusedNode
         dwellRun.inputs = now
-        // The clock is the CARD's, and it survives a restart of this effect (F1).
+        // The clock is the CARD's, and it survives a restart of this effect (F1)
+        // and a move across the rail (A1). `start` banks whatever run it replaces
+        // first, so a re-created node for this card adds up rather than restarts.
         val cardNow = armedOn.cardIdentity()
-        val nowMs = SystemClock.uptimeMillis()
-        if (dwellClockCard != cardNow) {
-            dwellClockCard = cardNow
-            dwellClockElapsedMs = 0L
-        } else if (dwellClockRunStartMs > 0L) {
-            // The run being replaced held the card for this long before it was
-            // cancelled: it counts, or a re-created card could never reach 2 s.
-            dwellClockElapsedMs += (nowMs - dwellClockRunStartMs).coerceAtLeast(0L)
-        }
-        dwellClockRunStartMs = nowMs
+        val alreadyHeldMs = dwellClock.start(cardNow, SystemClock.uptimeMillis())
         dwellRun.armed = true
-        delay((expandDelayMs - dwellClockElapsedMs).coerceAtLeast(0L))
+        delay((expandDelayMs - alreadyHeldMs).coerceAtLeast(0L))
         dwellRun.armed = false
-        // The panel is up: the clock has done its job, so a later re-hold of
-        // this card (or a rebuild of it) starts the viewer's delay again.
-        resetDwellClock()
+        // The panel is up: this card's wait is spent, so a later re-hold of it
+        // starts the viewer's delay again (the other cards keep theirs).
+        dwellClock.spend(cardNow)
         // The snapshot captured when the dwell ARMED, not whatever the tracker
         // holds now (F3): the panel a held card earned must not be lost to a
         // live snapshot that flickered during the last frame of the wait.
@@ -591,11 +603,13 @@ internal fun SpotlightPreviewHost(
     // collapses the panel, and the screensaver only arms behind an idle viewer.
     // So this is the innermost of the three.
     BackHandler(enabled = expanded != null) {
+        // The viewer closed it: this card's wait is spent, it does not re-open
+        // from the clock the dismissed panel already spent. The other cards keep
+        // theirs (A1).
+        val closedCard = expanded?.snapshot?.cardIdentity()
         expanded = null
         onExpandedChange(false)
-        // The viewer closed it: the next hold waits the delay, it does not
-        // re-open from the clock the dismissed panel already spent.
-        resetDwellClock()
+        dwellClock.spend(closedCard)
         runCatching { tracker.cardRequester?.requestFocus() }
     }
     val panel = expanded?.snapshot ?: return

@@ -467,9 +467,9 @@ class SpotlightHomeContractTest {
         assertTrue(
             "and the expansion waits the chosen delay, not the debounce - less only " +
                 "the time this same card had already held before a rebuild restarted " +
-                "the effect (F1, 2026-11-13)",
+                "the effect (F1, 2026-11-13; per card since 2026-11-16 A1)",
             source(SPOTLIGHT_HOME).contains(
-                "delay((expandDelayMs - dwellClockElapsedMs).coerceAtLeast(0L))"
+                "delay((expandDelayMs - alreadyHeldMs).coerceAtLeast(0L))"
             )
         )
         assertFalse(
