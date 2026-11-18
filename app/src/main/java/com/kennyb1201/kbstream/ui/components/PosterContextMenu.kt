@@ -24,7 +24,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -35,6 +34,7 @@ import kotlinx.coroutines.launch
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -43,6 +43,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -631,17 +632,21 @@ object PlayFromBeginningSelection {
  * escaping into the rails behind the scrim:
  *
  *  1. The overlay is its own [focusGroup] - focus search performed from a
- *     focused menu row is bounded by the group, so directional presses
- *     cannot reach focusables under the scrim.
+ *     focused menu row is bounded by the group, so directional moves cannot
+ *     reach focusables under the scrim.
  *  2. Left/Right are swallowed outright (a vertical action list has no
  *     horizontal neighbors), so a stray press can never strand focus on an
  *     invisible item behind the menu - which previously forced users to
  *     press Back to recover.
- *  3. Up/Down are swallowed at the menu's vertical edges (first/last
- *     action). The focusGroup only bounds focus *search* - when the search
- *     finds no next row the key event still falls through to the screen
- *     behind the scrim, whose scrollables/focusables pick it up and steal
- *     focus. Consuming the edge press keeps focus clamped to the menu.
+ *  3. Up/Down are OWNED: every vertical press is consumed and moves focus
+ *     through this handler, whether or not there is a next row. The
+ *     focusGroup only bounds focus *search*; when that search finds nothing
+ *     the key event still falls through to the screen behind the scrim, and
+ *     its scrollables/focusables pick it up - which is what scrolled Home's
+ *     rails underneath an open menu (spec 2026-11-18, F1). Consuming
+ *     EVERY vertical press, and doing the move ourselves, leaves nothing
+ *     for the screen behind to receive and no dependence on which row
+ *     reports focus first.
  */
 @Composable
 fun PosterContextMenu(
@@ -687,6 +692,10 @@ fun PosterContextMenu(
     onBeforeHide: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
+
+    // The overlay's key handler moves focus itself (mechanism 3 in the header),
+    // bounded by the enclosing focusGroup.
+    val focusManager = LocalFocusManager.current
 
     // Every screen's poster menu shares this one channel, so the confirmation
     // for a destructive action lands in the same place app-wide.
@@ -747,14 +756,6 @@ fun PosterContextMenu(
     // True while the invisible overlay anchor holds focus (Phase 1 below).
     var overlayAnchorFocused by remember {
         mutableStateOf(false)
-    }
-
-    // Index of the action row that currently holds focus; -1 while the
-    // invisible anchor still holds it. Drives the Up/Down edge clamping in
-    // the overlay's key handler so a press at the first/last action can
-    // never escape into the screen behind the scrim.
-    var focusedActionIndex by remember {
-        mutableIntStateOf(-1)
     }
 
     // Every title poster menu offers "Play Manually" and "Play from
@@ -1082,19 +1083,33 @@ fun PosterContextMenu(
                         Key.DirectionLeft,
                         Key.DirectionRight -> true
 
-                        // Same for the vertical edges: once focus is on the
-                        // first/last action there is no next row, so swallow
-                        // Up/Down there too. The focusGroup above only bounds
-                        // focus *search* - when the search finds nothing the
-                        // key event still falls through to the screen behind
-                        // the scrim, and its scrollables/focusables steal
-                        // focus. Consuming the edge press keeps focus clamped
-                        // to the menu. (While the invisible anchor holds
-                        // focus, focusedActionIndex is -1, so Up is already
-                        // an edge press; Down is still free to reach row 0.)
-                        Key.DirectionUp -> focusedActionIndex <= 0
-                        Key.DirectionDown ->
-                            focusedActionIndex >= rows.lastIndex
+                        // Vertical presses are OWNED, not just clipped.
+                        //
+                        // This used to swallow Up/Down only at the edges,
+                        // judged by which row last reported focus - and that
+                        // judgement was stale whenever the next press arrived
+                        // before the focus callback did (the panel scrolls to
+                        // follow focus, so navigating to an off-screen row is
+                        // exactly when the callback lags). A stale index meant
+                        // the edge press was NOT consumed, the event fell
+                        // through to the screen behind the scrim, and Home's
+                        // rails scrolled while this menu scrolled too (spec
+                        // 2026-11-18, F1).
+                        //
+                        // So the move happens here instead: the focusGroup
+                        // bounds it to this menu, so it can go no further than
+                        // the first/last row, and the press is consumed either
+                        // way. Every vertical press therefore ends at this
+                        // handler, at any row, at any press speed, and nothing
+                        // depends on which row has reported focus.
+                        Key.DirectionUp -> {
+                            focusManager.moveFocus(FocusDirection.Up)
+                            true
+                        }
+                        Key.DirectionDown -> {
+                            focusManager.moveFocus(FocusDirection.Down)
+                            true
+                        }
 
                         Key.Back -> {
                             // Some TV platforms deliver BACK straight to the
@@ -1242,7 +1257,6 @@ fun PosterContextMenu(
                             if (index == 0) {
                                 firstActionFocused = true
                             }
-                            focusedActionIndex = index
                         },
                         onClick = {
                             if (action.label == "Play Manually") {
