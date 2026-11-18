@@ -131,9 +131,15 @@ class InstantSyncPropagationContractTest {
             "the IPTV snapshot must be computed for the same profile",
             payloads.contains("iptvSignature(context, profileId)")
         )
+        // Spec 2026-11-18 (taste drain F2) opened this branch: an adopted
+        // tracker session drains its ratings leg from the same place. The rule
+        // this pin is about is unchanged - the revision, which is what repaints,
+        // still moves only for a change to the profile on screen.
         assertTrue(
             "only a change to the profile on screen may repaint the UI",
-            payloads.contains("if (changed && live) _revision.value += 1")
+            payloads.contains("if (changed && live) {") &&
+                payloads.contains("_revision.value += 1") &&
+                payloads.contains("adoptedRatingsTracker(prefKey)")
         )
     }
 
