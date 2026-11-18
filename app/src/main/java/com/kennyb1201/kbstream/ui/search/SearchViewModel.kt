@@ -1363,9 +1363,10 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 Log.e("KBStream", "Search failed", e)
                 titlesPaging = TitlesPagingState()
-        // A new query (or a dead one) carries no identities: the add-on index is
-        // this search's own evidence and must start empty (Browse M2).
-        addonDedupIndex = TmdbDedupIndex()
+                // A new query (or a dead one) carries no identities: the add-on
+                // index is this search's own evidence and must start empty
+                // (Browse M2).
+                addonDedupIndex = TmdbDedupIndex()
                 publishTitlesSummary()
                 _results.value = emptyList()
                 _actorResults.value = emptyList()
