@@ -113,16 +113,28 @@ class KeyFieldMaskingContractTest {
     fun `paste, Done and blur still save the real key`() {
         // Unchanged by the masking work: three save paths per row, because a
         // remote user routinely navigates away instead of pressing Done.
-        listOf(
-            "AppPreferences.setMdbListApiKey(context, mdbListKeyInput)",
-            "AppPreferences.setOpensubtitlesApiKey(context, subsKeyInput)"
-        ).forEach { call ->
-            assertEquals(
-                "$call must keep its paste, Done and blur paths",
-                3,
-                Regex(Regex.escape(call)).findAll(settings).count()
-            )
-        }
+        assertEquals(
+            "the OpenSubtitles key keeps its three paths",
+            3,
+            Regex(Regex.escape("AppPreferences.setOpensubtitlesApiKey(context, subsKeyInput)"))
+                .findAll(settings)
+                .count()
+        )
+        // MDBList saves through ONE commit path now, like TorBox: the write has
+        // to re-open the ratings leg and drain it, so it lives in
+        // MdbListClient.saveApiKey rather than being repeated three times here
+        // (spec audit 2026-11-18, Data M1).
+        assertEquals(
+            "paste, Done and blur all still commit, through that one path",
+            3,
+            Regex(Regex.escape("MdbListClient.saveApiKey(context, mdbListKeyInput)"))
+                .findAll(settings)
+                .count()
+        )
+        assertFalse(
+            "and none of them writes the preference behind the leg's back",
+            settings.contains("AppPreferences.setMdbListApiKey(context, mdbListKeyInput)")
+        )
         // TorBox now saves through ONE commit path instead of three identical
         // calls (it has to arm the library round when the key changes), so the
         // three routes are pinned on that path and the write on its body.

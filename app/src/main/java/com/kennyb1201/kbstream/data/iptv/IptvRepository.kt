@@ -1741,7 +1741,17 @@ class IptvRepository(
         channel: IptvChannel,
         epgUrl: String,
         count: Int = 12,
-        windowDays: Int = 7
+        /**
+         * How far back to look, in ms. Defaults to what the EPG actually
+         * STORES, not to the provider's DVR depth (spec audit 2026-11-18, Live
+         * TV H1): this function used to ask for seven days while
+         * [EpgWindow.PAST_MS] keeps two hours, so on a multi-day-DVR provider
+         * the list was silently clipped to the last two shows. Deeper catch-up
+         * needs its own stored history - the grid's window is sized for the
+         * schedule, not for DVR depth - so the honest thing here is to look at
+         * exactly what exists.
+         */
+        windowMs: Long = EpgWindow.PAST_MS
     ): List<CatchupProgram> = withContext(Dispatchers.IO) {
         val template = channel.catchupSource
             ?: channel.catchup
@@ -1781,7 +1791,7 @@ class IptvRepository(
             // see epgProgramChannelKey.
             channelIds = listOf(epgProgramChannelKey(epgChannelId)),
             nowMillis = now,
-            windowStart = now - windowDays * 86_400_000L,
+            windowStart = now - windowMs,
             perChannelLimit = count
         )
 

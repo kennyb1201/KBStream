@@ -53,6 +53,7 @@ import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurface
+import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -99,9 +100,14 @@ fun OnboardingScreenMobile(
     onOpenAddons: () -> Unit,
     onOpenSimkl: () -> Unit,
     onOpenTrakt: () -> Unit,
+    onOpenBingeCat: () -> Unit,
     onOpenGuide: () -> Unit,
     onFinish: () -> Unit
 ) {
+    // The two hand-offs this page was missing (spec audit 2026-11-18,
+    // Onboarding L2) - see the TV page, which draws the same pair.
+    var showAnimeTrackers by remember { mutableStateOf(false) }
+
     MobileTheme {
         Box(
             modifier = Modifier
@@ -176,6 +182,18 @@ fun OnboardingScreenMobile(
                     icon = Icons.Filled.Sync,
                     onClick = onOpenTrakt
                 )
+                OnboardingSourceRowMobile(
+                    title = "Connect BingeCat",
+                    description = "Read and write your BingeCat history",
+                    icon = Icons.Filled.Sync,
+                    onClick = onOpenBingeCat
+                )
+                OnboardingSourceRowMobile(
+                    title = "Anime trackers",
+                    description = "MyAnimeList, AniList or Kitsu",
+                    icon = Icons.Filled.AccountCircle,
+                    onClick = { showAnimeTrackers = true }
+                )
 
                 Spacer(modifier = Modifier.height(2.dp))
 
@@ -213,6 +231,55 @@ fun OnboardingScreenMobile(
                     color = KBTextLo,
                     style = MaterialTheme.typography.bodySmall
                 )
+            }
+        }
+
+        // The anime trackers, in one dialog (spec audit 2026-11-18, Onboarding
+        // L2). Settings' own rows and connect dialogs, so the two surfaces and
+        // the first run can never disagree about what connecting means.
+        if (showAnimeTrackers) {
+            androidx.compose.ui.window.Dialog(
+                onDismissRequest = { showAnimeTrackers = false }
+            ) {
+                androidx.compose.material3.Surface(
+                    shape = KBShapeCard,
+                    color = KBSurfaceRaised,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        Text(
+                            text = "Anime trackers",
+                            color = KBTextHi,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Each needs its own account. Connected ones are " +
+                                "scrobbled from now on.",
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 4.dp, bottom = 10.dp)
+                        )
+                        com.kennyb1201.kbstream.ui.settings.AnimeTrackerRows(
+                            phone = true,
+                            row = { label, description, onClick ->
+                                OnboardingSourceRowMobile(
+                                    title = label,
+                                    description = description,
+                                    icon = Icons.Filled.AccountCircle,
+                                    onClick = onClick
+                                )
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        OnboardingSourceRowMobile(
+                            title = "Done",
+                            description = "Back to setup",
+                            icon = Icons.Filled.Check,
+                            onClick = { showAnimeTrackers = false }
+                        )
+                    }
+                }
             }
         }
     }

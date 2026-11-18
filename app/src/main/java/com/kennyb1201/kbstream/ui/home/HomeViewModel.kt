@@ -2107,6 +2107,14 @@ Log.d(
     private var billboardRequestedItems: List<MetaPreview>? = null
 
     /**
+     * Titles whose rail art is burned-in promo art, so the hero may only use
+     * TMDB's own (Home M2). Kept beside [billboardRequestedItems] for the same
+     * reason: a profile switch re-asks for the pool, and it must re-ask with the
+     * same rule.
+     */
+    private var billboardTmdbOnlyIds: Set<String> = emptySet()
+
+    /**
      * The profile key the PUBLISHED pool was filtered for - "<id>:<kidsMaxAge>",
      * the spelling [loadBillboardTrendingDay] uses for its cached feed.
      */
@@ -2164,12 +2172,31 @@ Log.d(
      * that carries the same feed is a no-op: art the viewer is already looking at
      * is never re-resolved just because a watched-status tick repainted Home.
      */
-    fun resolveBillboard(items: List<MetaPreview>) {
+    fun resolveBillboard(
+        items: List<MetaPreview>,
+        /**
+         * Titles whose own rail art must never reach the hero (spec audit
+         * 2026-11-18, Home M2).
+         *
+         * The pinned "Top ... Today" rows carry burned-in promo text and
+         * service badges in their backgrounds, which is why the rail side takes
+         * TMDB art or nothing (`tmdbOnly` in [warmLandscapeArt]). The billboard's
+         * fallback rungs did not know that rule, so a Top Today page fell through
+         * to the rail's badged art - briefly on every page before its resolve
+         * landed, and PERMANENTLY on any title TMDB has no backdrop for, because
+         * the first-frame hold keeps whatever the page first showed.
+         *
+         * The screens know which rails are pinned (they build the feed sources),
+         * so they name the titles; the hero decides the art.
+         */
+        tmdbOnlyIds: Set<String> = emptySet()
+    ) {
         // The pool the viewer's screens last asked for, kept so a PROFILE SWITCH
         // can ask for it again under the new ceiling (F2). The screens' effects
         // key on the feed's VALUE, and an equal rail list after a switch is no
         // change at all - so without this the new profile kept the old pool.
         billboardRequestedItems = items
+        billboardTmdbOnlyIds = tmdbOnlyIds
         SpotlightDiagTrace.billboardFeed(
             keys = AppPreferences.getHomeBillboardFeeds(getApplication()),
             trendingDaySize = _billboardTrendingDay.value.size,
@@ -2196,7 +2223,7 @@ Log.d(
             // so with the filter OFF the pool is the ceiling's, unchanged (F3).
             val available = applyDigitalAvailabilityFilter(pool)
             if (epoch != billboardResolveEpoch) return@launch
-            publishBillboardPool(available, forProfile)
+            publishBillboardPool(available, forProfile, tmdbOnlyIds)
         }
     }
 
@@ -2268,7 +2295,12 @@ Log.d(
      * a page dealt from the unfiltered feed is an adult title on a kids profile's
      * hero for as long as its art takes to resolve.
      */
-    private fun publishBillboardPool(items: List<MetaPreview>, forProfile: String) {
+    private fun publishBillboardPool(
+        items: List<MetaPreview>,
+        forProfile: String,
+        /** See [resolveBillboard]'s `tmdbOnlyIds` (Home M2). */
+        tmdbOnlyIds: Set<String> = emptySet()
+    ) {
         val feed = items
             .filter { it.id.isNotBlank() }
             .distinctBy { item -> billboardPageKey(item) }
@@ -2329,7 +2361,7 @@ Log.d(
             BillboardPage(
                 key = billboardPageKey(item),
                 preview = item,
-                meta = billboardPreviewMeta(item),
+                meta = billboardPreviewMeta(item, tmdbOnly = item.id in tmdbOnlyIds),
                 backdropUrl = null,
                 logoUrl = null,
                 trailerKey = null,
@@ -2361,7 +2393,9 @@ Log.d(
                         launch {
                             val key = billboardPageKey(item)
                             val resolved = billboardResolveSemaphore
-                                .withPermit { resolveBillboardPage(item) }
+                                .withPermit {
+                                    resolveBillboardPage(item, tmdbOnly = item.id in tmdbOnlyIds)
+                                }
                             if (resolved == null) {
                                 // The page that never settles - the one this
                                 // report exists for.
@@ -2525,13 +2559,17 @@ Log.d(
      * before its resolve shows the title text, exactly as the TV hero does
      * until TMDB's English mark answers.
      */
-    private fun billboardPreviewMeta(item: MetaPreview): Meta =
+    private fun billboardPreviewMeta(item: MetaPreview, tmdbOnly: Boolean = false): Meta =
         Meta(
             id = item.id,
             type = item.type,
             name = item.name,
             poster = item.poster,
-            background = item.background,
+            // A pinned Top Today item's background is the ROW's art, with the
+            // promo text and service badges burned into it (Home M2). The hero
+            // has to show nothing rather than that, until its own TMDB art
+            // lands - see [resolveBillboard]'s tmdbOnlyIds.
+            background = item.background.takeUnless { tmdbOnly },
             logo = null,
             description = item.description,
             releaseInfo = item.releaseInfo,
@@ -2549,7 +2587,11 @@ Log.d(
      * on its preview copy and poster - a billboard is never blocked by one title
      * that could not resolve.
      */
-    private suspend fun resolveBillboardPage(item: MetaPreview): BillboardPage? {
+    private suspend fun resolveBillboardPage(
+        item: MetaPreview,
+        /** TMDB art only: a pinned Top Today item's own art is badged (Home M2). */
+        tmdbOnly: Boolean = false
+    ): BillboardPage? {
         val key = billboardPageKey(item)
         val type = item.type
         val id = item.id.trim()
@@ -2601,8 +2643,12 @@ Log.d(
             ?: detail?.backdropPath
                 ?.takeIf { it.isNotBlank() }
                 ?.let { TmdbRepository.BACKDROP_BASE + it }
-            ?: addonMeta?.background?.takeIf { it.isNotBlank() }
-            ?: item.background?.takeIf { it.isNotBlank() }
+            // The two rungs below are the add-on's / the row's own art, and for
+            // a pinned Top Today item that art carries burned-in promo text and
+            // service badges - the one thing the hero must never draw (Home M2).
+            // "TMDB art or nothing" is the rail's own rule, applied to the page.
+            ?: addonMeta?.background?.takeIf { it.isNotBlank() && !tmdbOnly }
+            ?: item.background?.takeIf { it.isNotBlank() && !tmdbOnly }
             ?: detail?.alternatePosterPath()
                 ?.takeIf { it.isNotBlank() }
                 ?.let { tmdbImage(it, "w780") }
@@ -3281,7 +3327,9 @@ Log.d(
                     // even when the rail list itself came back the same shape -
                     // the screens' effects key on the feed's value, and an equal
                     // list is no change.
-                    billboardRequestedItems?.let { requested -> resolveBillboard(requested) }
+                    billboardRequestedItems?.let { requested ->
+                        resolveBillboard(requested, billboardTmdbOnlyIds)
+                    }
                     // And its DEFAULT feed, which is TMDB's trending pair: it is
                     // loaded once and cached for the ViewModel's life, and it is
                     // ceiling-filtered for whichever profile loaded it. Left in
@@ -6034,6 +6082,23 @@ Log.d(
             // Timed end-to-end: this is the "pull to refresh" the user waits
             // on, and the number the diagnostics perf block reports.
             val startedAt = android.os.SystemClock.elapsedRealtime()
+
+            // A parked taste queue gets its retry on every Home load (spec audit
+            // 2026-11-18, Data H1): Home is where a profile that has just
+            // switched lands, and where the app is most likely to have a network
+            // when a thumb was queued offline. Cheap when the queue is empty.
+            com.kennyb1201.kbstream.data.library.TasteRatingSubmission
+                .requestDrain(getApplication())
+
+            // And BingeCat's pending completions, on the same reasoning (spec
+            // audit 2026-11-18, Data M2): Home is where a profile that has just
+            // switched lands, and the replay must not wait for a player to
+            // finish another episode.
+            runCatching {
+                com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
+                    .getInstance(getApplication())
+                    .schedulePendingHistoryFlush()
+            }
 
             clearWatchedStateCaches()
 
@@ -10545,6 +10610,10 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
         cachedSeasonEpisodesBySeason?.toMutableMap()
             ?: mutableMapOf()
 
+    // Set when ANY season of this walk could not be fetched (see the null in
+    // batchResults). A walk with a hole in it is not evidence about the show.
+    var seasonWalkFailed = false
+
     if (cachedSeasonEpisodesBySeason == null) {
 
     // Small concurrent batches instead of a 50-season serial walk: for long
@@ -10555,7 +10624,15 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
         val batchEnd =
             minOf(season + UP_NEXT_SEASON_BATCH - 1, 50)
 
-        val batchResults: List<Pair<Int, List<ResolvedEpisode>>> =
+        // A SEASON THAT FAILED IS NOT A SEASON WITH NO EPISODES (spec audit
+        // 2026-11-18, Data H4). The catch used to fold a transient TMDB failure
+        // into `emptyList()`, which the walk then read as "the show has no more
+        // seasons" - and the map it built said "finished" for the whole TTL, so
+        // one blip at the wrong moment took the show out of Continue Watching
+        // and Upcoming for twelve hours. Null now means UNKNOWN: it breaks the
+        // walk (nothing beyond it can be judged either) and it keeps the walk
+        // out of the cache below.
+        val batchResults: List<Pair<Int, List<ResolvedEpisode>?>> =
             coroutineScope {
                 (season..batchEnd).map { s ->
                     async {
@@ -10569,7 +10646,7 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                                     )
                                 }
                             } catch (_: Exception) {
-                                emptyList()
+                                null
                             }
                             )
                     }
@@ -10578,6 +10655,10 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
 
         var anySeasonInBatch = false
         for ((s, episodes) in batchResults) {
+            if (episodes == null) {
+                seasonWalkFailed = true
+                break
+            }
             seasonEpisodesBySeason[s] = episodes
             if (episodes.isNotEmpty()) {
                 anySeasonInBatch = true
@@ -10600,7 +10681,7 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     // empty answer either - see seasonEpisodesAreAnAnswer.)
     val populatedSeasons =
         seasonEpisodesBySeason.filterValues { it.isNotEmpty() }
-    if (populatedSeasons.isNotEmpty()) {
+    if (populatedSeasons.isNotEmpty() && !seasonWalkFailed) {
         showSeasonEpisodesCache[tmdbId] =
             System.currentTimeMillis() to populatedSeasons
         pruneShowSeasonEpisodesCache()

@@ -92,8 +92,10 @@ class ParentPinWiringContractTest {
     fun `a lock with no credential at all is refused, and the prompt is offered`() {
         assertTrue(
             "the gate is about the locks that need a credential",
+            // Minutes since spec audit 2026-11-18 (Settings M3): the editor held
+            // whole hours, which truncated a 30- or 90-minute limit on save.
             editor.contains(
-                "val lockBeingSet = kidsModeOn && (kidsDailyLimitHours > 0 || kidsBedtimeOn)"
+                "val lockBeingSet = kidsModeOn && (kidsDailyLimitMinutes > 0 || kidsBedtimeOn)"
             )
         )
         assertTrue(

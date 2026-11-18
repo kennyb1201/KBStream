@@ -93,8 +93,10 @@ class TrackersSectionContractTest {
             card.contains("if (!kidsKeysHidden) KBSecretField(")
         )
         assertTrue(
+            // The write goes through MdbListClient.saveApiKey, which also re-opens
+            // the ratings leg and drains it (spec audit 2026-11-18, Data M1).
             "the save/verify wiring is unchanged",
-            card.contains("AppPreferences.setMdbListApiKey(context, mdbListKeyInput)") &&
+            card.contains("MdbListClient.saveApiKey(context, mdbListKeyInput)") &&
                 card.contains("MdbListClient.verifyKey(context)")
         )
         assertTrue(

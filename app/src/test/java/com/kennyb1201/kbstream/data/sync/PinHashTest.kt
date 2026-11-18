@@ -94,6 +94,43 @@ class PinHashTest {
         assertFalse("no hash is not an upgrade candidate", PinHash.needsUpgrade(null))
     }
 
+    @Test
+    fun `a hash made with fewer rounds verifies and is flagged for upgrade`() {
+        // Spec audit 2026-11-18, Settings L2: the stored round count is what lets
+        // ITERATIONS be raised without locking anyone out - and what makes that
+        // raise reach the hashes already on a device.
+        val cheap = cheapHashOf("1234")
+
+        assertTrue("a cheap but valid v2 hash still proves its PIN", PinHash.matches(cheap, "1234"))
+        assertFalse("and only for the right PIN", PinHash.matches(cheap, "4321"))
+        assertTrue(
+            "and the next build rehashes it at the current count",
+            PinHash.needsUpgrade(cheap)
+        )
+        assertFalse(
+            "while a hash this build made needs nothing",
+            PinHash.needsUpgrade(PinHash.create("1234"))
+        )
+    }
+
+    /**
+     * A v2 hash of [pin] at a deliberately low round count, built here because
+     * only the production format's own count is public.
+     */
+    private fun cheapHashOf(pin: String): String {
+        // The salt is hex in the stored value, so it is DERIVED from the bytes it
+        // spells - deriving from the hex characters instead was the mismatch that
+        // made this test hash something the parser never sees.
+        val salt = ByteArray(16) { it.toByte() }
+        val spec = javax.crypto.spec.PBEKeySpec(pin.toCharArray(), salt, 100, 256)
+        val digest = javax.crypto.SecretKeyFactory
+            .getInstance("PBKDF2WithHmacSHA256")
+            .generateSecret(spec)
+            .encoded
+            .joinToString("") { "%02x".format(it) }
+        return "v2\$100\$${salt.joinToString("") { "%02x".format(it) }}\$$digest"
+    }
+
     private fun sha256Hex(value: String): String =
         MessageDigest.getInstance("SHA-256")
             .digest(value.toByteArray(Charsets.UTF_8))

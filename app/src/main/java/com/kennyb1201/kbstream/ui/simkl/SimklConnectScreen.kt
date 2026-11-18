@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -65,6 +66,12 @@ fun SimklConnectScreen(
     onBack: () -> Unit,
     vm: SimklViewModel = viewModel()
 ) {
+    // Leaving ends the attempt (spec audit 2026-11-18, Onboarding M1): the
+    // ViewModel outlives this page, so without it the poll kept running - and a
+    // code approved after the viewer left still connected the profile.
+    DisposableEffect(Unit) {
+        onDispose { vm.stopPolling() }
+    }
     // The phone entry: the same ViewModel, device-code flow, counts and
     // disconnect gate, laid out for touch. One branch; the TV page below is
     // unchanged (see SimklConnectScreenMobile).

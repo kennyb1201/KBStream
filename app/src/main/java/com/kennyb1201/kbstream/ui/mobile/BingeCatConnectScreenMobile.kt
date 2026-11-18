@@ -18,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -77,6 +78,10 @@ fun BingeCatConnectScreenMobile(
     onBrowsePublicLists: () -> Unit = {},
     vm: BingeCatViewModel = viewModel()
 ) {
+    // Leaving ends the attempt (spec audit 2026-11-18, Onboarding M1).
+    DisposableEffect(Unit) {
+        onDispose { vm.stopPolling() }
+    }
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     // Re-mapping is deliberate: the picker only appears once CHANGE PROFILE asks
     // for it, and never replaces a working mapping silently.

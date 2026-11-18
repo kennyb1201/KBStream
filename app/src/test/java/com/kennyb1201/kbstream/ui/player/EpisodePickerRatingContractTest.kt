@@ -50,12 +50,14 @@ class EpisodePickerRatingContractTest {
         assertTrue(
             "the score is the card's format and the card's plate colour",
             chip.contains("\"%.1f\".format(rating)") &&
-                chip.contains("com.kennyb1201.kbstream.ui.components.KBImdbTint")
+                chip.contains("com.kennyb1201.kbstream.ui.components.TmdbTint")
         )
         assertTrue(
-            "with the cards' wording on the plate",
-            adapter.contains("internal const val RATING_PLATE_LABEL = \"IMDb\"") &&
-                card.contains("text = \"IMDb\"")
+            "with the cards' wording on the plate - TMDB, because the number is " +
+                "TMDB's episode vote average and not an IMDb score (spec audit " +
+                "2026-11-18, Detail H1)",
+            adapter.contains("internal const val RATING_PLATE_LABEL = \"TMDB\"") &&
+                card.contains("text = \"TMDB\"")
         )
         assertTrue(
             "and the card's own one-decimal format, so the two cannot disagree",

@@ -391,8 +391,13 @@ class TheSportsDbContractTest {
             viewModel.contains("theSportsDb.standings(theSportsDbKey(), tsdbLeague)")
         )
         assertTrue(
+            // Sports M2 (2026-11-18): the ESPN read is chosen by the day chip
+            // first, so the badge fill wraps whichever window answered - still
+            // ESPN's cards with only the missing crest filled.
             "an ESPN league's cards still come from ESPN, with only the missing badge filled",
-            viewModel.contains("theSportsDb.withBadges(theSportsDbKey(), espn.scoreboard(league.path))")
+            viewModel.contains("theSportsDb.withBadges(theSportsDbKey(), raw)") &&
+                viewModel.contains("espn.scoreboard(league.path)") &&
+                viewModel.contains("espn.scoreboardForDay(")
         )
         assertTrue(
             "the reads happen inside fetchSection, which is only called for ENABLED leagues",

@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.home
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
@@ -36,6 +37,19 @@ internal data class LibraryHomeRailUi(
 )
 
 /**
+ * What the pinned-rail loader produced: the rails Home draws, and the pins whose
+ * list could not be READ (spec audit 2026-11-18, Library L1).
+ *
+ * The two are separate because they are different messages: a rail with rows is
+ * a rail, and a list that did not answer is a line naming it. A genuinely empty
+ * list is in neither - it stays silent, as it always did.
+ */
+internal data class LibraryHomeRailsState(
+    val rails: List<LibraryHomeRailUi> = emptyList(),
+    val unreadable: List<String> = emptyList()
+)
+
+/**
  * The pinned Library lists, loaded off the main thread.
  *
  * Re-runs when the pinned set changes: [LibraryHomeRails.pins] is read on each
@@ -51,24 +65,67 @@ internal data class LibraryHomeRailUi(
  */
 @Composable
 internal fun rememberLibraryHomeRails(): State<List<LibraryHomeRailUi>> {
+    // `derivedStateOf`, not a hand-rolled State: a custom State object would
+    // read through without Compose tracking it, so Home would never recompose
+    // when the pins resolve.
+    val state = rememberLibraryHomeRailsState()
+    return remember(state) { derivedStateOf { state.value.rails } }
+}
+
+/**
+ * The pinned rails AND the pins that could not be read.
+ *
+ * One load, two answers: a second composable reading the pins separately would
+ * fetch every pinned list twice.
+ */
+@Composable
+internal fun rememberLibraryHomeRailsState(): State<LibraryHomeRailsState> {
     val context = LocalContext.current
     val pins = LibraryHomeRails.pins(context)
-    return produceState(initialValue = emptyList(), pins) {
+    return produceState(initialValue = LibraryHomeRailsState(), pins) {
         value = withContext(Dispatchers.IO) {
             val tmdb = TmdbRepository.getInstance(context)
-            pins.mapNotNull { pin ->
+            val rails = mutableListOf<LibraryHomeRailUi>()
+            val unreadable = mutableListOf<String>()
+            pins.forEach { pin ->
                 // The Kids Mode ceiling applies here for the same reason it
                 // applies to the Library's own remote rows: the list belongs to
                 // the ACCOUNT, so a kids profile on that account must not see a
                 // pinned list's adult titles on Home.
-                val items = tmdb.kidsFilterMetas(
-                    LibraryHomeRailItems.load(context, pin).mapNotNull { it.homeRailMeta() }
-                )
+                val rows = LibraryHomeRailItems.loadOrNull(context, pin)
+                if (rows == null) {
+                    // Could not read: name it rather than returning a Home with
+                    // one fewer row and no explanation (Library L1).
+                    unreadable += pin.name
+                    return@forEach
+                }
+                val items = tmdb.kidsFilterMetas(rows.mapNotNull { it.homeRailMeta() })
                 // A list that answered with nothing is not a rail: an empty
                 // heading is a promise Home cannot keep.
-                if (items.isEmpty()) null else LibraryHomeRailUi(pin, items)
+                if (items.isNotEmpty()) rails += LibraryHomeRailUi(pin, items)
             }
+            LibraryHomeRailsState(rails = rails, unreadable = unreadable)
         }
+    }
+}
+
+/**
+ * The line Home draws for pinned lists that could not be read (Library L1).
+ *
+ * One function for both surfaces, for the reason [libraryWatchlistEmptyText]
+ * exists: the TV's status card and the phone's line must not drift apart about
+ * the same failure. The pin is never dropped, so this is a "not now", not an
+ * "unpinned".
+ */
+internal fun libraryRailUnreadableLine(names: List<String>): String {
+    if (names.isEmpty()) return ""
+    val list = names.joinToString(", ")
+    return if (names.size == 1) {
+        "\"$list\" couldn't be loaded: the list did not answer, or it is too " +
+            "large to read in one pass. It is still pinned and returns on its own."
+    } else {
+        "$list couldn't be loaded: those lists did not answer, or are too large " +
+            "to read in one pass. They are still pinned and return on their own."
     }
 }
 

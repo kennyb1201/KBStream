@@ -1291,15 +1291,27 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         if (liveScoresJob != null) return
         LiveScoreFeed.attach(app)
         liveScoresJob = viewModelScope.launch {
-            // Re-matched on a NEW POLL and on a new channel list, not on every
-            // grid window the viewer scrolls through: the rows are evidence, not
-            // a trigger, so a pass reads whatever the grid has loaded at the time
-            // and a scroll cannot multiply the match work.
-            combine(LiveScoreFeed.games, visibleChannels) { games, channels ->
-                games to channels
-            }.collectLatest { (games, channels) ->
-                _liveScores.value = resolveLiveScores(games, _gridPrograms.value, channels)
-            }
+            // Re-matched on a NEW POLL, a new channel list, and a newly LOADED
+            // grid window (spec audit 2026-11-18, Live TV L1).
+            //
+            // The old rule was "a scroll cannot multiply the match work", and
+            // that intent is kept: the rows are still evidence, a pass still
+            // reads whatever the grid has loaded, and this third input is the
+            // program set's SHAPE (how many programs are loaded per channel),
+            // not the scroll position - it changes when a page of programs
+            // lands, which is a one-off per paging action. Leaving it out
+            // entirely meant a window loaded after the last 30s tick carried no
+            // scores for up to 30s even though the games were already in hand.
+            combine(
+                LiveScoreFeed.games,
+                visibleChannels,
+                _gridPrograms
+                    .map { programs -> programs.entries.sumOf { it.value.size } }
+                    .distinctUntilChanged()
+            ) { games, channels, _ -> games to channels }
+                .collectLatest { (games, channels) ->
+                    _liveScores.value = resolveLiveScores(games, _gridPrograms.value, channels)
+                }
         }
     }
 

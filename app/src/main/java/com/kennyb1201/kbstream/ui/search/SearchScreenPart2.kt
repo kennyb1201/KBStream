@@ -94,18 +94,49 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
  */
 private const val CHIP_RETURN_FOCUS_STEPS = 12
 
+/**
+ * The one line that names add-ons which never answered (spec audit 2026-11-18,
+ * Browse L1).
+ *
+ * Lives here, beside the rail title, because both screens draw it and a second
+ * copy would let the two disagree about wording or inset. Not an error panel:
+ * the rest of the search is fine, and running the search again is the retry.
+ */
+@Composable
+internal fun SearchAddonNotice(text: String, phone: Boolean) {
+    Text(
+        text = text,
+        color = KBTextLo,
+        style = MaterialTheme.typography.labelLarge,
+        modifier = Modifier.padding(
+            start = if (phone) 16.dp else 48.dp,
+            end = if (phone) 16.dp else 48.dp,
+            top = 4.dp,
+            bottom = 4.dp
+        )
+    )
+}
+
 internal fun searchRailTitle(
     addonName: String,
     railLabel: String,
     type: String?,
     showType: Boolean,
-    showAddon: Boolean
+    showAddon: Boolean,
+    /**
+     * Hits this rail's cap left out (spec audit 2026-11-18, Browse M5). The
+     * title says the number: an unannounced cap is a rail that looks complete
+     * when it is a slice, which is the complaint the Titles rail's own total
+     * line answered for the TMDB half.
+     */
+    hiddenByCap: Int = 0
 ): String {
     val parts = buildList {
         if (showAddon && addonName.isNotBlank()) {
             add(addonName)
         }
         add(railLabel)
+        if (hiddenByCap > 0) add("$hiddenByCap more not shown")
         if (showType && !type.isNullOrBlank()) {
             val cap = type.replaceFirstChar { it.uppercase() }
             // Skip when the rail label already conveys the type — regular

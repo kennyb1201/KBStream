@@ -217,7 +217,11 @@ class MobileBillboardContractTest {
         // launched on the composition's scope so the collector that started it
         // cannot cancel it (animateScrollToPage sets isScrollInProgress).
         assertTrue(
-            home.contains("snapshotFlow { pagerState.settledPage to pagerState.isScrollInProgress }")
+            // Spec audit 2026-11-18, Home L4: the page's own settle flag joined the
+            // pair, so the dwell restarts when the title actually resolves.
+            home.contains("val page = pagerState.settledPage") &&
+                home.contains("pagerState.isScrollInProgress,") &&
+                home.contains("pagesNow.value.getOrNull(page)?.settled == true")
         )
         assertTrue(home.contains("if (scrolling) return@collectLatest"))
         assertTrue(
@@ -397,7 +401,9 @@ class MobileBillboardContractTest {
 
         // The sweep is the image layer's transform only: no re-measure of the
         // pager, and the scrim/clearlogo/copy above it do not move.
-        assertTrue(home.contains("remember(index, cycleMs) { billboardSweep(index, cycleMs) }"))
+        // Home L2 (2026-11-18): the sweep carries no clock, so this site is
+        // keyed on the page index alone.
+        assertTrue(home.contains("remember(index) { billboardSweep(index) }"))
         assertTrue(home.contains("val sweep = backdropSweep ?: return@graphicsLayer"))
         assertTrue(home.contains("translationX = ("))
 

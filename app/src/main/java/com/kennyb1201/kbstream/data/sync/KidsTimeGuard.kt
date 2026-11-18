@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Application
 import android.content.Context
 import android.os.Bundle
+import com.kennyb1201.kbstream.data.security.PinVault
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.Lifecycle
@@ -62,6 +63,9 @@ object KidsTimeGuard {
 
     private const val TAG = "KidsTimeGuard"
     private const val PREFS = "kids_time_guard"
+
+    /** Usage is shared with the account this often, in seconds of viewing. */
+    private const val USAGE_PUBLISH_EVERY_SECONDS = 5 * 60
     private const val KEY_DAY = "day_"
     private const val KEY_MINUTES = "mins_"
     /** The counter as SECONDS (m4): the minutes key rounded every 30 s tick up. */
@@ -133,6 +137,13 @@ object KidsTimeGuard {
 
     @Volatile
     private var profileIdForCounter: String? = null
+
+    /** Which 5-minute bucket of usage was last published (Settings M1). */
+    @Volatile
+    private var lastPublishedBucket: Int = -1
+
+    @Volatile
+    private var lastPublishedProfileId: String? = null
 
     /** Set by MainActivity so the guard can persist without a Context leak. */
     @Volatile
@@ -321,11 +332,32 @@ object KidsTimeGuard {
 
     // ── the app-level parent PIN ────────────────────────────────────────
 
-    /** The stored parent-PIN hash, or null when no parent PIN has been set. */
-    private fun parentPinHash(): String? =
-        appContext?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            ?.getString(KEY_PARENT_PIN_HASH, null)
+    /**
+     * The stored parent-PIN hash, or null when no parent PIN has been set.
+     *
+     * Encrypted at rest now (spec audit 2026-11-18, Settings L2) - see
+     * [com.kennyb1201.kbstream.data.security.PinVault], including why a PIN may
+     * never be stranded. A hash written by a build before the vault is adopted
+     * on the first read: it is copied into the vault, VERIFIED, and only then
+     * erased from this file. A vault write that does not read back leaves the
+     * legacy value in place, so the PIN still works and the next read tries
+     * again.
+     */
+    private fun parentPinHash(): String? {
+        val context = appContext ?: return null
+        PinVault.parentHash(context)?.let { return it }
+        val legacy = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_PARENT_PIN_HASH, null)
             ?.takeIf { it.isNotBlank() }
+            ?: return null
+        if (PinVault.setParentHash(context, legacy)) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .remove(KEY_PARENT_PIN_HASH)
+                .apply()
+        }
+        return legacy
+    }
 
     /**
      * Whether a parent PIN exists on this device.
@@ -346,13 +378,19 @@ object KidsTimeGuard {
     fun setParentPin(pin: String?): Boolean {
         val clean = pin?.trim().orEmpty()
         if (clean.isNotEmpty() && !ProfileManager.isValidPin(clean)) return false
-        val prefs = appContext?.getSharedPreferences(PREFS, Context.MODE_PRIVATE) ?: return false
-        prefs.edit()
-            .putString(
-                KEY_PARENT_PIN_HASH,
-                clean.takeIf { it.isNotEmpty() }?.let { ProfileManager.hashPin(it) }
-            )
-            .apply()
+        val context = appContext ?: return false
+        val hash = clean.takeIf { it.isNotEmpty() }?.let { ProfileManager.hashPin(it) }
+        val legacy = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        // The vault is the store now (Settings L2). If it cannot be written the
+        // PIN is still SET rather than silently dropped - it goes to the old
+        // location, which the read path still honours - because "the parent set
+        // a PIN and nothing happened" is worse than a hash in a plain file.
+        if (PinVault.setParentHash(context, hash)) {
+            legacy.edit().remove(KEY_PARENT_PIN_HASH).apply()
+        } else {
+            Log.w(TAG, "parent PIN stored in the legacy file: the vault write failed")
+            legacy.edit().putString(KEY_PARENT_PIN_HASH, hash).apply()
+        }
         return true
     }
 
@@ -369,10 +407,23 @@ object KidsTimeGuard {
         // Same upgrade rule a profile PIN follows: the plain PIN exists only
         // here, so a legacy unsalted hash is rewritten on first success.
         if (ProfileManager.pinHashNeedsUpgrade(stored)) {
-            appContext?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                ?.edit()
-                ?.putString(KEY_PARENT_PIN_HASH, ProfileManager.hashPin(pin))
-                ?.apply()
+            val context = appContext
+            val upgraded = ProfileManager.hashPin(pin)
+            // Same rule as the set path: verified into the vault first, and the
+            // legacy copy is dropped only once that read back (Settings L2).
+            if (context != null) {
+                if (PinVault.setParentHash(context, upgraded)) {
+                    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                        .edit()
+                        .remove(KEY_PARENT_PIN_HASH)
+                        .apply()
+                } else {
+                    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                        .edit()
+                        .putString(KEY_PARENT_PIN_HASH, upgraded)
+                        .apply()
+                }
+            }
         }
         return true
     }
@@ -543,6 +594,95 @@ object KidsTimeGuard {
         }
     }
 
+    /**
+     * One profile's usage today, as the profile blob carries it.
+     *
+     * The day rides with the seconds because both are needed to read the
+     * number: a sibling's "5,400 seconds" means nothing without knowing which
+     * day it belongs to, and a stale day must not be mistaken for today's.
+     */
+    internal data class KidsDailyUsage(val day: String, val seconds: Int)
+
+    /**
+     * What this device knows about [profileId]'s usage today, for the profile
+     * blob (spec audit 2026-11-18, Settings M1).
+     *
+     * The daily budget USED to be a purely local fact: the counter lived in this
+     * device's own file, so \"Willow has watched 40 minutes\" was only true on the
+     * TV she watched on. She could hit her limit on the Onn and get a fresh full
+     * budget on the phone. The counter is now part of the profile and travels
+     * with it; this is the read half.
+     *
+     * Null when this device has no counter for that profile yet (never watched
+     * here today, or never on this device at all).
+     */
+    internal fun usageSnapshot(context: Context, profileId: String): KidsDailyUsage? {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val day = prefs.getString(KEY_DAY + profileId, null)?.takeIf { it.isNotBlank() }
+            ?: return null
+        // Seconds first, with the older minutes key as the migration source -
+        // the same rule [loadCounter] applies, so a device that has not run a
+        // tick since the seconds key landed still publishes a real number.
+        val seconds = prefs.getInt(KEY_SECONDS + profileId, -1).takeIf { it >= 0 }
+            ?: (prefs.getInt(KEY_MINUTES + profileId, 0) * 60)
+        return KidsDailyUsage(day, seconds.coerceAtLeast(0))
+    }
+
+    /**
+     * Takes a sibling device's usage for [profileId] when it is TODAY and more
+     * than this device has counted.
+     *
+     * MAX, never overwrite. Two devices both count and both publish, so the last
+     * write to arrive is not the truth - the larger number is, because usage
+     * only ever grows inside a day. An overwrite would let a devices's stale
+     * blob hand the profile its budget back. For the same reason a day that is
+     * not this device's today is ignored outright: the sibling's counter has
+     * already rolled over, and importing it would either reset today to 0 or
+     * import a whole other day's usage.
+     *
+     * The live counter is bumped too when the imported profile is the one being
+     * counted right now, so the limit applies on THIS device without waiting for
+     * the next tick to reload it.
+     */
+    internal fun applySharedUsage(
+        context: Context,
+        profileId: String,
+        day: String,
+        seconds: Int
+    ) {
+        if (profileId.isBlank() || day.isBlank() || seconds <= 0) return
+        val today = dayKeyNow()
+        if (day != today) return
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val localDay = prefs.getString(KEY_DAY + profileId, null)
+        val localSeconds = when (localDay) {
+            day -> prefs.getInt(KEY_SECONDS + profileId, -1).takeIf { it >= 0 }
+                ?: (prefs.getInt(KEY_MINUTES + profileId, 0) * 60)
+            else -> 0
+        }
+        if (seconds <= localSeconds) {
+            // This device is already level with or ahead of the sibling; the
+            // in-memory counter may still need the bump if it was reloaded from
+            // an older day.
+            bumpLiveCounter(profileId, day, seconds)
+            return
+        }
+        prefs.edit()
+            .putString(KEY_DAY + profileId, day)
+            .putInt(KEY_SECONDS + profileId, seconds)
+            .putInt(KEY_MINUTES + profileId, seconds / 60)
+            .apply()
+        bumpLiveCounter(profileId, day, seconds)
+    }
+
+    /** Raises the in-memory counter if [profileId] is the one being counted. */
+    private fun bumpLiveCounter(profileId: String, day: String, seconds: Int) {
+        if (profileIdForCounter != profileId || dayKey != day) return
+        if (seconds <= todaySeconds) return
+        todaySeconds = seconds
+        evaluate()
+    }
+
     private fun loadCounter(pid: String) {
         val prefs = prefs() ?: return
         val storedDay = prefs.getString(KEY_DAY + pid, null)
@@ -587,6 +727,34 @@ object KidsTimeGuard {
         // whole minute the old rounding charged it.
         todaySeconds += tickSeconds
         flush()
+        publishUsageIfDue(profile.id)
         evaluate()
+    }
+
+    /**
+     * Publishes today's usage to the account, every
+     * [USAGE_PUBLISH_EVERY_SECONDS] of viewing (Settings M1).
+     *
+     * The counter rides the profile blob, and that blob is only pushed on the
+     * account's own sync passes - sign-in, Sync now, a full resync, a profile
+     * edit. A child watching for an hour on a TV nobody edited a setting on
+     * would never have that hour leave the device, so the budget would still be
+     * per-device in practice. This is the trigger that makes the share real:
+     * five minutes of viewing, not every 30-second tick, so the sync outbox sees
+     * a handful of small writes an hour rather than 120.
+     */
+    private fun publishUsageIfDue(profileId: String) {
+        val context = appContext ?: return
+        val bucket = todaySeconds / USAGE_PUBLISH_EVERY_SECONDS
+        if (profileId == lastPublishedProfileId && bucket == lastPublishedBucket) return
+        lastPublishedProfileId = profileId
+        lastPublishedBucket = bucket
+        runCatching {
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                context,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_PROFILES,
+                ProfileManager.profilesSyncBlob(context)
+            )
+        }
     }
 }

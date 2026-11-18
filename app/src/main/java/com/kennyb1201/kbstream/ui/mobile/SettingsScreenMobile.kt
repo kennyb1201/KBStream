@@ -1114,7 +1114,7 @@ private fun IntegrationsPaneMobile(
                 "resume-from-pause, scrobbling, and your lists in the Library tab.",
             placeholder = "Paste key (e.g. 12345)",
             loadedValue = AppPreferences.getMdbListApiKey(context),
-            onSave = { key -> AppPreferences.setMdbListApiKey(context, key) },
+            onSave = { key -> MdbListClient.saveApiKey(context, key) },
             verify = { MdbListClient.verifyKey(context) },
             savedHint = "Connected as",
             savedDescription = "Key saved — ratings appear on the next title you open."

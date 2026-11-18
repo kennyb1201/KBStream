@@ -58,6 +58,12 @@ class EspnSportsRepository(
     private val summaries =
         java.util.concurrent.ConcurrentHashMap<String, Cached<EspnGameSummary>>()
     private val failed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Team reads that failed, keyed (league, team). Kept apart from [failed] so a
+     * team sheet's error never becomes a league tab's error - see [teamSchedule].
+     */
+    private val teamFailed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val tableFailed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val summaryFailed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
@@ -139,6 +145,91 @@ class EspnSportsRepository(
         return merged
     }
 
+    /**
+     * One CHOSEN day's slate for [leaguePath], as the hub's day chips ask for it
+     * (spec audit 2026-11-18, Sports M2).
+     *
+     * [day] is ESPN's own `BASIC_ISO_DATE` (see `SportsDayRules.dayParam`), and
+     * this is the plain `?dates=` window and NOTHING else: a viewer who asked for
+     * tomorrow wants tomorrow, not tomorrow merged with whatever is in play
+     * now - which is what [scoreboard] deliberately does for the live day, with
+     * its two carry-over windows.
+     *
+     * Cached per (league, day). A past day's slate never changes; a future one
+     * can (a flexed kickoff, a postponed game), so the TTL is minutes rather than
+     * the day. An EMPTY answer is cached too - a Monday with no games is the
+     * honest answer to "NFL tomorrow", not a failure to retry - while a read
+     * that actually failed keeps the previous list, exactly as [scoreboard]
+     * does.
+     *
+     * College football goes through [readWindow], so its FCS half is read for the
+     * same day through `groups=81`: an FCS game is on the day it is played.
+     */
+    suspend fun scoreboardForDay(leaguePath: String, day: String): List<SportsGame> {
+        val key = "$leaguePath@$day"
+        val cached = scoreboards[key]
+        val now = clock()
+        if (cached != null && now - cached.atMs < DAY_WINDOW_TTL_MS) return cached.value
+        val fetched = fetch(leaguePath, day)
+            ?.let { body -> parseScoreboardOrNull(body, leaguePath) }
+        if (fetched == null) {
+            // `failed` stays keyed by the LEAGUE: every caller that asks whether
+            // this league is in trouble reads `lastFetchFailed(path)`, and the
+            // day on screen is the only read that matters to them.
+            failed += leaguePath
+            return cached?.value.orEmpty()
+        }
+        failed -= leaguePath
+        val games = if (leaguePath == COLLEGE_FOOTBALL) {
+            EspnCacheRules.mergeSubdivision(fetched, fcsWindow(day).orEmpty())
+        } else {
+            fetched
+        }
+        scoreboards[key] = Cached(now, games)
+        return games
+    }
+
+    /**
+     * One TEAM's season schedule, or the last one read when the feed fails
+     * (spec audit 2026-11-18, Sports M2's second half).
+     *
+     * The schedule endpoint answers the whole season - results, the game in play
+     * now, and everything still to come - in the same `events` shape the
+     * scoreboard uses, which is why the one parser covers it: an ordinary
+     * fixture is `competitions[0]` with two `competitors`, exactly as it is on a
+     * slate.
+     *
+     * Deliberately OUTSIDE the hub's own state: a failure here is keyed by
+     * (league, team) in [teamFailed] rather than in [failed], because a team the
+     * feed is unhappy about must not paint "Couldn't reach ESPN" over the league
+     * tab that answered fine. The season is cached for minutes, not the idle
+     * quarter-hour: a game in play is in this list, and its score moves.
+     */
+    suspend fun teamSchedule(leaguePath: String, teamId: String): List<SportsGame> {
+        val team = teamId.trim()
+        if (team.isEmpty()) return emptyList()
+        val key = teamKey(leaguePath, team)
+        val cached = scoreboards[key]
+        val now = clock()
+        if (cached != null && now - cached.atMs < TEAM_SCHEDULE_TTL_MS) return cached.value
+        val body = httpGet(
+            SCOREBOARD_BASE + leaguePath + "/teams/" + team + "/schedule",
+            "team schedule $leaguePath $team"
+        )
+        val games = body?.let { parseScoreboardOrNull(it, leaguePath) }
+        if (games == null) {
+            teamFailed += key
+            return cached?.value.orEmpty()
+        }
+        teamFailed -= key
+        scoreboards[key] = Cached(now, games)
+        return games
+    }
+
+    /** Whether the last schedule read for this team failed (see [teamSchedule]). */
+    fun lastTeamScheduleFailed(leaguePath: String, teamId: String): Boolean =
+        teamKey(leaguePath, teamId.trim()) in teamFailed
+
     /** The tournament events (golf, F1) in [leaguePath]. */
     suspend fun tournamentEvents(leaguePath: String): List<TournamentEvent> {
         val cached = tournaments[leaguePath]
@@ -176,13 +267,35 @@ class EspnSportsRepository(
         // The STRICT parse: an unreadable body must not be cached as an empty
         // table for six hours (see [parseStandingsOrNull]).
         val fetched = fetchStandings(leaguePath)?.let(::parseStandingsOrNull)
+        // THE FCS TABLE IS ITS OWN VIEW (spec audit 2026-11-18, Sports M1/L2).
+        // The default college-football standings body is the FBS division,
+        // exactly as its scoreboard is - so Montana, Montana State and Idaho
+        // State were in the scoreboard (group 81 is merged there) and in no
+        // table at all. It is read even when the FBS body FAILED, because a
+        // failed first window used to end the function here and take the FCS
+        // half with it: one broken FBS request answered an empty tab instead of
+        // the half that did answer. A failed second body still leaves the FBS
+        // table alone.
+        val fcsTables = if (leaguePath == COLLEGE_FOOTBALL) {
+            fetchStandings(leaguePath, groups = FCS_GROUPS)
+                ?.let(::parseStandingsOrNull)
+                .orEmpty()
+        } else {
+            emptyList()
+        }
         if (fetched == null) {
             tableFailed += leaguePath
-            return cached?.value.orEmpty()
+            // Stale beats empty for the FBS half (the same rule the scoreboard
+            // uses); the FCS half is fresh when it answered.
+            val fallback = cached?.value.orEmpty() + fcsTables
+            return fallback.distinctBy { group -> group.name }
         }
         tableFailed -= leaguePath
-        tableCache[leaguePath] = Cached(now, fetched)
-        return fetched
+        // Merged after the FBS groups and deduped by name so a division both
+        // views publish is not drawn twice.
+        val table = (fetched + fcsTables).distinctBy { group -> group.name }
+        tableCache[leaguePath] = Cached(now, table)
+        return table
     }
 
     /**
@@ -239,8 +352,6 @@ class EspnSportsRepository(
     /** Whether the last standings attempt for [leaguePath] failed. See above. */
     fun lastStandingsFetchFailed(leaguePath: String): Boolean = leaguePath in tableFailed
 
-    private fun ttlMs(live: Boolean): Long = if (live) LIVE_TTL_MS else IDLE_TTL_MS
-
     /**
      * The TTL a games slate has earned - judged on what it is ABOUT to do as
      * well as what it is doing.
@@ -259,11 +370,36 @@ class EspnSportsRepository(
      * decides which of the two a given slate is worth.
      */
     private fun ttlMsForGames(games: List<SportsGame>, nowMs: Long): Long =
-        ttlMs(EspnCacheRules.gamesNeedLiveTtl(games, nowMs, IDLE_TTL_MS))
+        when {
+            EspnCacheRules.gamesNeedLiveTtl(games, nowMs, IDLE_TTL_MS) -> LIVE_TTL_MS
+            // A slate that has been PLAYED OUT is finished, not idle (spec audit
+            // 2026-11-18, Sports M4): it used to fall to the fifteen-minute idle
+            // TTL, so a tab whose games all ended last night was re-fetched four
+            // times an hour until the feed's day rolled over - four requests an
+            // hour for an answer that cannot change. Held until that rollover
+            // instead, capped for a device that slept through a date.
+            EspnCacheRules.gamesAreAllFinal(games) ->
+                EspnCacheRules.finishedSlateTtlMs(
+                    nowMs = nowMs,
+                    capMs = FINISHED_SLATE_MAX_TTL_MS,
+                    minMs = IDLE_TTL_MS
+                )
+            else -> IDLE_TTL_MS
+        }
 
     /** The tournament twin of [ttlMsForGames]. */
     private fun ttlMsForEvents(events: List<TournamentEvent>, nowMs: Long): Long =
-        ttlMs(EspnCacheRules.eventsNeedLiveTtl(events, nowMs, IDLE_TTL_MS))
+        when {
+            EspnCacheRules.eventsNeedLiveTtl(events, nowMs, IDLE_TTL_MS) -> LIVE_TTL_MS
+            // The same "finished is not idle" rule as [ttlMsForGames].
+            EspnCacheRules.eventsAreAllFinal(events) ->
+                EspnCacheRules.finishedSlateTtlMs(
+                    nowMs = nowMs,
+                    capMs = FINISHED_SLATE_MAX_TTL_MS,
+                    minMs = IDLE_TTL_MS
+                )
+            else -> IDLE_TTL_MS
+        }
 
     /**
      * The scoreboard body, for the default (Eastern "today") window or for one
@@ -317,9 +453,10 @@ class EspnSportsRepository(
         return EspnCacheRules.mergeSubdivision(main, fcsWindow(day).orEmpty())
     }
 
-    private suspend fun fetchStandings(leaguePath: String): String? =
+    private suspend fun fetchStandings(leaguePath: String, groups: String? = null): String? =
         httpGet(
-            STANDINGS_BASE + leaguePath + "/standings?region=us&lang=en&type=0",
+            STANDINGS_BASE + leaguePath + "/standings?region=us&lang=en&type=0" +
+                (groups?.let { "&groups=$it" } ?: ""),
             "standings $leaguePath"
         )
 
@@ -371,6 +508,36 @@ class EspnSportsRepository(
 
         /** Nothing in play: a schedule does not move for a quarter of an hour. */
         private const val IDLE_TTL_MS = 15L * 60_000L
+
+        /**
+         * How long a CHOSEN day's window is trusted (Sports M2).
+         *
+         * Neither the live nor the idle TTL: a past day cannot change at all, a
+         * future one can move (a flexed kickoff, a postponement), and the point
+         * of the chips is that tapping between three of them costs nothing. Five
+         * minutes keeps all three in memory across a normal visit.
+         */
+        private const val DAY_WINDOW_TTL_MS = 5L * 60_000L
+
+        /**
+         * How long a team's season is trusted (Sports M2's second half).
+         *
+         * The season's shape is stable, but a game in play is inside this list
+         * and its score moves, so it shares the chosen day's window rather than
+         * the idle quarter-hour.
+         */
+        private const val TEAM_SCHEDULE_TTL_MS = 5L * 60_000L
+
+        /** One cache/failure key for a team read: the league is half of it. */
+        private fun teamKey(leaguePath: String, teamId: String): String =
+            "team:$leaguePath:$teamId"
+
+        /**
+         * How long a fully-played slate is trusted, at most: the feed's day
+         * rollover is the real boundary, and this is the ceiling for a clock that
+         * never crossed one (Sports M4).
+         */
+        private const val FINISHED_SLATE_MAX_TTL_MS = 6L * 60L * 60_000L
 
         /** A table moves at most daily, so it is held for a quarter of a day. */
         private const val STANDINGS_TTL_MS = 6L * 60L * 60_000L
@@ -1099,6 +1266,32 @@ internal object EspnCacheRules {
             games.any {
                 it.state == GameState.UPCOMING && startsWithin(it.dateMs, nowMs, idleTtlMs)
             }
+
+    /**
+     * A slate that has been played out: at least one game, nothing live and
+     * nothing still to come (spec audit 2026-11-18, Sports M4). Deliberately
+     * requires a NON-empty list - an empty answer is a failure or a day with no
+     * games, and pinning either for hours would be the opposite of the point.
+     */
+    fun gamesAreAllFinal(games: List<SportsGame>): Boolean =
+        games.isNotEmpty() && games.all { it.state == GameState.FINAL }
+
+    /** The tournament twin of [gamesAreAllFinal]. */
+    fun eventsAreAllFinal(events: List<TournamentEvent>): Boolean =
+        events.isNotEmpty() && events.all { it.state == GameState.FINAL }
+
+    /**
+     * How long a finished slate stays trusted: until ESPN's own day rolls over,
+     * which is when the endpoint starts answering for a different set of games -
+     * clamped to [minMs]..[capMs] so a wildly wrong clock cannot pin it for a
+     * day or drop it to zero.
+     */
+    fun finishedSlateTtlMs(nowMs: Long, capMs: Long, minMs: Long): Long {
+        val zone = java.time.ZoneId.of("America/New_York")
+        val today = java.time.Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
+        val rollover = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        return (rollover - nowMs).coerceIn(minMs, capMs)
+    }
 
     /** The tournament twin of [gamesNeedLiveTtl]. */
     fun eventsNeedLiveTtl(

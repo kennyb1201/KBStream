@@ -6,6 +6,8 @@ import com.kennyb1201.kbstream.data.addon.AppContextHolder
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.library.TasteRatingSubmission
+import com.kennyb1201.kbstream.data.library.TasteRatingTracker
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
@@ -293,6 +295,20 @@ object MdbListClient {
 
     private const val REQUEST_PREFS = "mdblist_request_budget"
     private const val KEY_REQUEST_DAY = "day"
+
+    /** No profile resolved (a request before one is active). */
+    private const val DEVICE_SCOPE = "device"
+
+    /** Requests between publishes of the profile's spend. */
+    private const val BUDGET_PUBLISH_EVERY = 50
+
+    /** Sibling devices' published spend, per profile. */
+    private const val KEY_SHARED_DAY = "shared_day"
+    private const val KEY_SHARED_COUNT = "shared_count"
+
+    /** This device's own aggregate for the active profile. */
+    private const val KEY_PROFILE_DAY = "profile_day"
+    private const val KEY_PROFILE_COUNT = "profile_count"
     private const val KEY_REQUEST_COUNT = "count"
 
     /**
@@ -342,14 +358,115 @@ object MdbListClient {
 
     private val budgets = java.util.concurrent.ConcurrentHashMap<String, KeyBudget>()
 
-    /** The record for the request's own key; one bucket when the key is unset. */
+    /**
+     * The record for the request's own key, scoped to the ACTIVE PROFILE.
+     *
+     * The ledger used to be keyed by the key hash alone (spec audit 2026-11-18,
+     * Data M5). That is the same thing as "per profile" only while every profile
+     * has its own key: two profiles sharing a household key shared one counter
+     * AND one budget, and - the bigger half - the whole ledger lived in this
+     * device's prefs, so the same profile's allowance counted from zero on every
+     * other device. The budget belongs to the profile (its key, its allowance),
+     * so the bucket and its persisted keys are now prefixed with the profile id,
+     * and the profile blob carries the count so the devices share it (see
+     * [spendForActiveProfile] / [applySharedSpend]).
+     */
     private fun budgetFor(request: Request): Pair<String, KeyBudget> {
-        val tag = keyTag(request.url.queryParameter("apikey").orEmpty())
+        val tag = profileScopedTag(keyTag(request.url.queryParameter("apikey").orEmpty()))
         return tag to budgets.getOrPut(tag) { KeyBudget() }
     }
 
+    /** `profile|keyHash`, so one profile's spend can never be another's. */
+    private fun profileScopedTag(keyTag: String): String =
+        (activeProfileId() ?: DEVICE_SCOPE) + "|" + keyTag
+
+    private fun profileOfTag(tag: String): String = tag.substringBefore('|')
+
+    private fun activeProfileId(): String? = runCatching {
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
+            ?.let { com.kennyb1201.kbstream.data.sync.ProfileStorage.activeProfileId(it) }
+    }.getOrNull()
+
     private fun budgetPrefs(context: Context) =
         context.getSharedPreferences(REQUEST_PREFS, Context.MODE_PRIVATE)
+
+    /** The count a SIBLING device last published for [profileId], today only. */
+    private fun sharedSpend(context: Context, profileId: String, today: String): Int {
+        val prefs = budgetPrefs(context)
+        if (prefs.getString(sharedDayKey(profileId), "") != today) return 0
+        return prefs.getInt(sharedCountKey(profileId), 0).coerceAtLeast(0)
+    }
+
+    private fun sharedDayKey(profileId: String) = "$KEY_SHARED_DAY:$profileId"
+    private fun sharedCountKey(profileId: String) = "$KEY_SHARED_COUNT:$profileId"
+
+    /**
+     * Takes a sibling device's spend for [profileId] when it is today's and
+     * higher than what this device has recorded.
+     *
+     * MAX, for the same reason the kids counter uses MAX: spend only grows
+     * inside a UTC day, and an overwrite would let a device that has spent less
+     * hand the household its allowance back.
+     */
+    internal fun applySharedSpend(context: Context, profileId: String, day: String, count: Int) {
+        if (profileId.isBlank() || day.isBlank() || count <= 0) return
+        if (day != utcDay(System.currentTimeMillis())) return
+        val prefs = budgetPrefs(context)
+        val known = if (prefs.getString(sharedDayKey(profileId), "") == day) {
+            prefs.getInt(sharedCountKey(profileId), 0)
+        } else 0
+        if (count <= known) return
+        prefs.edit()
+            .putString(sharedDayKey(profileId), day)
+            .putInt(sharedCountKey(profileId), count)
+            .apply()
+        // If that profile is the one running, its live bucket picks it up now
+        // rather than at the next rollover.
+        budgets.values.forEach { budget ->
+            synchronized(budget) {
+                if (budget.day == day && budget.count.get() < count) budget.count.set(count)
+            }
+        }
+    }
+
+    /**
+     * What this device has spent today for the ACTIVE profile, for the profile
+     * blob (Data M5). Null when nothing has been spent here today.
+     */
+    internal fun spendForActiveProfile(context: Context): Pair<String, Int>? {
+        val profileId = activeProfileId() ?: return null
+        return runCatching {
+            val prefs = budgetPrefs(context)
+            val day = prefs.getString(profileDayKey(profileId), "")?.takeIf { it.isNotBlank() }
+                ?: return null
+            val own = prefs.getInt(profileCountKey(profileId), 0)
+            val shared = sharedSpend(context, profileId, day)
+            if (own <= 0 && shared <= 0) return null
+            day to maxOf(own, shared)
+        }.getOrNull()
+    }
+
+    private fun profileDayKey(profileId: String) = "$KEY_PROFILE_DAY:$profileId"
+    private fun profileCountKey(profileId: String) = "$KEY_PROFILE_COUNT:$profileId"
+
+    /**
+     * Sends this profile's spend with the account's next push (Data M5).
+     *
+     * The blob is built fresh here rather than at push time because the number
+     * has to be in the document the outbox already holds - the same reason the
+     * profiles blob is enqueued whole when a profile is edited. No-op when the
+     * account is not signed in ([SupabaseSync.enqueuePrefs] returns), so a
+     * local-only install pays nothing.
+     */
+    private fun publishSpend(context: Context) {
+        runCatching {
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                context,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_PROFILES,
+                com.kennyb1201.kbstream.data.sync.ProfileManager.profilesSyncBlob(context)
+            )
+        }
+    }
 
     private fun budgetDayKey(tag: String) = "$KEY_REQUEST_DAY:$tag"
     private fun budgetCountKey(tag: String) = "$KEY_REQUEST_COUNT:$tag"
@@ -381,8 +498,13 @@ object MdbListClient {
                 prefs.getInt(budgetCountKey(tag), 0)
             } else 0
         } else 0
+        // Start from the higher of this device's own count and what a sibling
+        // last published for this profile (Data M5): the allowance is the
+        // profile's, so a device that has been idle must not believe it has the
+        // whole 1000 while another has already spent 900 of it.
+        val shared = if (context != null) sharedSpend(context, profileOfTag(tag), today) else 0
         budget.day = today
-        budget.count.set(stored)
+        budget.count.set(maxOf(stored, shared))
         // A new UTC day is a new allowance: yesterday's reset no longer
         // applies.
         if (budget.limitedUntilMs < now) budget.limitedUntilMs = 0L
@@ -413,10 +535,22 @@ object MdbListClient {
             if (count <= BUDGET_PERSIST_EVERY || count % BUDGET_PERSIST_EVERY == 0) {
                 val context = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
                 context?.let {
+                    val profileId = profileOfTag(tag)
                     budgetPrefs(it).edit()
                         .putString(budgetDayKey(tag), budget.day)
                         .putInt(budgetCountKey(tag), count)
+                        // The profile's own aggregate, which is what the blob
+                        // publishes: one key per profile, so this is its total.
+                        .putString(profileDayKey(profileId), budget.day)
+                        .putInt(profileCountKey(profileId), count)
                         .apply()
+                    // And publish it, so the household's other devices stop
+                    // spending the same allowance blind (Data M5). Every 50
+                    // requests rather than every one: the blob is one JSON
+                    // document per account, and 50 is 5% of the daily ceiling.
+                    if (count > 0 && count % BUDGET_PUBLISH_EVERY == 0) {
+                        publishSpend(it)
+                    }
                 }
             }
         }
@@ -678,6 +812,41 @@ object MdbListClient {
     /** True when scrobbling/sync calls should be attempted. */
     fun isConfigured(context: Context): Boolean =
         apiKey(context).isNotBlank()
+
+    /**
+     * Stores a pasted key, and tells the ratings queue the leg is open again.
+     *
+     * Every settings surface writes the key through this one function (spec
+     * audit 2026-11-18, Data M1). The queue closes a leg whose key was refused
+     * and re-opens it when the grant changes, but nothing asked it to try again
+     * at that moment: a replacement key left the pending ratings waiting for the
+     * next app launch or Home load. MDBList has no connect flow, so "paste a new
+     * key" IS its reconnect, and it belongs here beside the write rather than at
+     * each of the field's four save paths.
+     */
+    fun saveApiKey(context: Context, key: String) {
+        AppPreferences.setMdbListApiKey(context, key)
+        TasteRatingSubmission.onTrackerConnected(context, TasteRatingTracker.MDBLIST)
+    }
+
+    /**
+     * How long this profile's key is PARKED for, in ms, or 0 when it may spend
+     * now (spec audit 2026-11-18, Data L2).
+     *
+     * The park itself lives in the budget interceptor and was private to it, so
+     * the ratings leg could not tell a 429-PARKED key from a healthy one: it
+     * answered PAUSED and nothing downstream could say how long for, which left
+     * the queue looking frozen. Reading it here is what lets the drain record the
+     * park (and wait it out) instead of guessing.
+     *
+     * A blank key is not parked - there is nothing to wait for.
+     */
+    fun localPauseMs(context: Context): Long {
+        val key = apiKey(context)
+        if (key.isBlank()) return 0L
+        val budget = budgets[keyTag(key)] ?: return 0L
+        return (budget.limitedUntilMs - System.currentTimeMillis()).coerceAtLeast(0L)
+    }
 
     /**
      * Whether this key's daily allowance is spent, asked BEFORE a write.

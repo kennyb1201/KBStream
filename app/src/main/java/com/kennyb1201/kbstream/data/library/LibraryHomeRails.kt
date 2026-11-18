@@ -5,6 +5,7 @@ import com.kennyb1201.kbstream.data.addon.AppContextHolder
 import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.reporting.LibraryRailArtTrace
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.reporting.libraryRailCarriedArtLine
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder
@@ -361,15 +362,33 @@ object LibraryHomeRails {
  * The Library pane's own loader (LibraryViewModel.fetchListItems) is private and
  * runs inside a ViewModel that also enriches and sorts for the grid; Home needs
  * one list's rows and nothing else, so it asks the same stores and services
- * directly. A failure is an empty row, never a crash: a dead service must not
- * take Home down with it, and the rail simply does not draw.
+ * directly. A failure never crashes Home: it is reported as null (see
+ * [loadOrNull]) so the rail can say it could not load instead of quietly not
+ * drawing.
  */
 object LibraryHomeRailItems {
 
-    suspend fun load(context: Context, pin: LibraryHomeRailPin): List<LibraryItem> {
+    suspend fun load(context: Context, pin: LibraryHomeRailPin): List<LibraryItem> =
+        loadOrNull(context, pin).orEmpty()
+
+    /**
+     * The rail's rows, or null when the list could not be READ (spec audit
+     * 2026-11-18, Library L1).
+     *
+     * [load] answers an empty list for both "nothing pinned here" and "the
+     * service did not answer", which is why a pinned rail whose BingeCat list is
+     * past its 1,000-row walk (or whose page failed) simply VANISHED from Home
+     * with nothing said - the reconnect notice only covers auth. Home now draws
+     * a line naming the list instead, and only a genuinely empty list stays
+     * silent.
+     */
+    suspend fun loadOrNull(context: Context, pin: LibraryHomeRailPin): List<LibraryItem>? {
         val source = runCatching { LibrarySource.valueOf(pin.source) }.getOrNull()
             ?: return emptyList()
-        val items = runCatching { loadFor(context, source, pin) }.getOrDefault(emptyList())
+        // A throw is "could not read" too, never a crash: a dead service must
+        // not take Home down with it. Cancellation still propagates.
+        val items = runCatchingCancellable { loadFor(context, source, pin) }
+            .getOrNull() ?: return null
         // What the viewer told the Library to forget stays forgotten here too:
         // the tombstone record is the Library's own answer about a title, and a
         // rail that skipped it would put back what a removal took out.
@@ -380,14 +399,16 @@ object LibraryHomeRailItems {
         context: Context,
         source: LibrarySource,
         pin: LibraryHomeRailPin
-    ): List<LibraryItem> = when (source) {
+    ): List<LibraryItem>? = when (source) {
         LibrarySource.LOCAL_LIST -> {
             val id = pin.id.removePrefix("id:").toIntOrNull() ?: return emptyList()
             LocalLibraryStore.listItems(context, id)
         }
 
         LibrarySource.BINGECAT_LIST -> {
-            val rows = BingeCatRepository.getInstance(context).listRows(pin.id).orEmpty()
+            // null is "could not read" (see listRows), so it stays null here.
+            val rows = BingeCatRepository.getInstance(context).listRows(pin.id)
+                ?: return null
             rows.map { row ->
                 LibraryItem(
                     source = source,

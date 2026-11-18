@@ -61,7 +61,13 @@ internal object SportsGameReminderRules {
     ): List<SportsGame> =
         games.asSequence()
             .filter { it.state == GameState.UPCOMING }
-            .filter { it.dateMs > nowMs && it.dateMs <= nowMs + LEAD_WINDOW_MS }
+            // CATCH-UP GRACE (spec audit 2026-11-18, Sports M3): the round runs
+            // on a 30-minute WorkManager interval with no flex guarantee, so a
+            // run that lands after kick-off used to find the game ineligible and
+            // never announce it at all. A game that started inside this grace is
+            // still "starting now" - which is what the body already says - and
+            // is announced instead of silently skipped.
+            .filter { it.dateMs > nowMs - STARTED_GRACE_MS && it.dateMs <= nowMs + LEAD_WINDOW_MS }
             // A followed team OR the viewer's own request for this game. The
             // window and the upcoming filter above are unchanged: a request is
             // "remind me when it starts", not "buzz me any time".
@@ -70,6 +76,13 @@ internal object SportsGameReminderRules {
             }
             .sortedBy { it.dateMs }
             .toList()
+
+    /**
+     * How long after kick-off a reminder may still fire (spec audit 2026-11-18,
+     * Sports M3). Short enough to be useful - the body reads "starting now" - and
+     * long enough to cover a late periodic run.
+     */
+    const val STARTED_GRACE_MS: Long = 5 * 60 * 1000L
 
     /** The notification's headline: "Yankees @ Red Sox". */
     fun reminderTitle(game: SportsGame): String =

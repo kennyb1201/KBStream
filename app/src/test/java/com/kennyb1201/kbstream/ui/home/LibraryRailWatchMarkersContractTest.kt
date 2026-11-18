@@ -131,12 +131,14 @@ class LibraryRailWatchMarkersContractTest {
             phone.flatten().contains(report)
         )
         assertTrue(
+            // Both screens read the loader's STATE (Library L1, 2026-11-18):
+            // the rails plus the pins that could not be read.
             "the loading stays in the one shared loader; a second copy is how " +
                 "the TV's rails and the phone's would drift",
-            tv.contains("rememberLibraryHomeRails()") &&
-                phone.contains("rememberLibraryHomeRails()") &&
-                !tv.contains("fun rememberLibraryHomeRails(") &&
-                !phone.contains("fun rememberLibraryHomeRails(")
+            tv.contains("rememberLibraryHomeRailsState()") &&
+                phone.contains("rememberLibraryHomeRailsState()") &&
+                !tv.contains("fun rememberLibraryHomeRailsState(") &&
+                !phone.contains("fun rememberLibraryHomeRailsState(")
         )
     }
 

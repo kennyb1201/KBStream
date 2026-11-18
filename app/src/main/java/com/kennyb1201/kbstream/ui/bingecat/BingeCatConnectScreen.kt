@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -72,6 +73,11 @@ fun BingeCatConnectScreen(
     onBrowsePublicLists: () -> Unit = {},
     vm: BingeCatViewModel = viewModel()
 ) {
+    // Leaving ends the attempt (spec audit 2026-11-18, Onboarding M1): the
+    // ViewModel's own doc claimed BACK cancelled the poll, and nothing did.
+    DisposableEffect(Unit) {
+        onDispose { vm.stopPolling() }
+    }
     // The phone entry: the same ViewModel, mapping step and disconnect, laid out
     // for touch. One branch; the TV page below is unchanged.
     if (!com.kennyb1201.kbstream.FormFactor.isTv) {

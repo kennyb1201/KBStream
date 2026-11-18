@@ -17,6 +17,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -82,6 +83,11 @@ fun SimklConnectScreenMobile(
     onBack: () -> Unit,
     vm: SimklViewModel = viewModel()
 ) {
+    // Leaving ends the attempt (spec audit 2026-11-18, Onboarding M1) - see
+    // SimklConnectScreen's twin.
+    DisposableEffect(Unit) {
+        onDispose { vm.stopPolling() }
+    }
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     var showDisconnectConfirm by remember { mutableStateOf(false) }
     // A kids profile gets the account controls, but not without a parent: the

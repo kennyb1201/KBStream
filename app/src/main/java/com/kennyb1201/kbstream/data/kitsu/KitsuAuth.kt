@@ -72,9 +72,19 @@ internal object KitsuAuth {
             return ConnectResult.Failed("Enter your Kitsu email and password")
         }
 
-        val token = exchange(
-            KitsuWriteRules.passwordForm(user, password, KitsuConfig.clientId)
-        ) ?: return ConnectResult.Failed("Kitsu did not accept that email and password")
+        val token = when (
+            val exchange = exchange(
+                KitsuWriteRules.passwordForm(user, password, KitsuConfig.clientId)
+            )
+        ) {
+            is KitsuExchange.Token -> exchange.token
+            // A connect that could not reach Kitsu is not a wrong password; say
+            // so instead of accusing the viewer of a typo (Onboarding M3).
+            KitsuExchange.Transient ->
+                return ConnectResult.Failed("Kitsu could not be reached - try again")
+            KitsuExchange.Denied ->
+                return ConnectResult.Failed("Kitsu did not accept that email and password")
+        }
 
         val store = KitsuTokenStore(context)
         store.save(token)
@@ -136,13 +146,26 @@ internal object KitsuAuth {
                 return@withLock null
             }
 
-            val refreshed = exchange(
-                KitsuWriteRules.refreshForm(refreshToken, KitsuConfig.clientId),
-                previousRefresh = refreshToken
-            )
-            if (refreshed == null) {
-                markNeedsReconnect(context, "refresh failed")
-                return@withLock null
+            // Only a REFUSAL closes the grant (spec audit 2026-11-18, Onboarding
+            // M3). This used to mark the profile NeedsReconnect on any null,
+            // including a timeout or a 5xx - a network blip that cost the viewer
+            // a full re-authorisation. An unanswered refresh answers null for this
+            // call and leaves the session for the next one.
+            val refreshed = when (
+                val exchange = exchange(
+                    KitsuWriteRules.refreshForm(refreshToken, KitsuConfig.clientId),
+                    previousRefresh = refreshToken
+                )
+            ) {
+                is KitsuExchange.Token -> exchange.token
+                KitsuExchange.Denied -> {
+                    markNeedsReconnect(context, "refresh refused")
+                    return@withLock null
+                }
+                KitsuExchange.Transient -> {
+                    Log.w(TAG, "Kitsu refresh unanswered; keeping the session for the next call")
+                    return@withLock null
+                }
             }
 
             KitsuTokenStore(context).save(
@@ -266,8 +289,22 @@ internal object KitsuAuth {
         Log.w(TAG, "Kitsu needs reconnect: $reason")
     }
 
-    /** One token-endpoint POST. Null on any failure: the caller decides what it means. */
-    private suspend fun exchange(form: String, previousRefresh: String? = null): KitsuToken? =
+    /**
+     * What a token-endpoint POST settled: a token, a refusal, or nothing at all
+     * (spec audit 2026-11-18, Onboarding M3 - same split the MAL client made).
+     */
+    private sealed interface KitsuExchange {
+        data class Token(val token: KitsuToken) : KitsuExchange
+
+        /** Kitsu said no: a 4xx, i.e. the grant itself. */
+        data object Denied : KitsuExchange
+
+        /** Nothing was decided: transport, timeout, 429, 5xx. */
+        data object Transient : KitsuExchange
+    }
+
+    /** One token-endpoint POST, classified by what the failure MEANT. */
+    private suspend fun exchange(form: String, previousRefresh: String? = null): KitsuExchange =
         withContext(Dispatchers.IO) {
             val request =
                 Request.Builder()
@@ -284,13 +321,19 @@ internal object KitsuAuth {
                         // The status only: Kitsu's error body can echo the
                         // request, and that request carries the password.
                         Log.w(TAG, "Kitsu token endpoint answered ${response.code}")
-                        return@use null
+                        return@use if (response.code in 400..499 && response.code != 429) {
+                            KitsuExchange.Denied
+                        } else {
+                            KitsuExchange.Transient
+                        }
                     }
                     parseToken(body, System.currentTimeMillis(), previousRefresh)
+                        ?.let { KitsuExchange.Token(it) }
+                        ?: KitsuExchange.Transient
                 }
             }.getOrElse { error ->
                 Log.w(TAG, "Kitsu token request failed: ${error.javaClass.simpleName}")
-                null
+                KitsuExchange.Transient
             }
         }
 

@@ -442,7 +442,10 @@ class SettingsScreenMobileContractTest {
     fun `the phone writes the same preference keys as the tv page`() {
         val mobile = mobileSettings()
         listOf(
-            "AppPreferences.setMdbListApiKey",
+            // The MDBList key commits through the client's own write, which also
+            // re-opens and drains the ratings leg (Data M1); the preference it
+            // writes is pinned there.
+            "MdbListClient.saveApiKey",
             "AppPreferences.setOmdbApiKey",
             "AppPreferences.setOpensubtitlesApiKey",
             "AppPreferences.setTorboxApiKey",

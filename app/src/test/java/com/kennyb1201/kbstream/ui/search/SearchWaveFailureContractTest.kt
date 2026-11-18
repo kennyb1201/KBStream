@@ -192,7 +192,52 @@ class SearchWaveFailureContractTest {
         )
     }
 
+    @Test
+    fun `an add-on that never answered says so instead of looking empty`() {
+        // Spec audit 2026-11-18, Browse L1: an add-on whose probes all timed out
+        // left no rails and no line, so "never answered" read as "no matches".
+        val vm = source(VIEW_MODEL)
+        assertTrue(
+            "the wave counts an add-on that produced nothing after a cut request",
+            vm.contains("if (produced == 0 && timedOut.get() > 0) silent.incrementAndGet()")
+        )
+        assertTrue(
+            "and publishes the notice only while it still owns the rails",
+            // Two silences share the line since Browse L3 (2026-11-18): a cut
+            // add-on, and a catalog the probe cap never asked.
+            vm.contains(
+                "if (generation == addonSearchGeneration && (silent.get() > 0 || dropped.get() > 0))"
+            ) &&
+                vm.contains("_addonNotice.value = addonSilenceNotice(silent.get(), dropped.get())")
+        )
+        assertTrue(
+            "a new wave starts with nothing to report",
+            vm.contains("_addonNotice.value = null")
+        )
+        // No matches is NOT a silence: the rule needs a cut request as well, so
+        // this can never fire on a catalog that simply had no hits.
+        assertTrue(
+            "an empty answer alone is not a failure",
+            !vm.contains("if (produced == 0) silent.incrementAndGet()")
+        )
+    }
+
+    @Test
+    fun `both screens draw the notice where a missing rail would have been`() {
+        val tv = source(TV_SEARCH)
+        val phone = source(PHONE_SEARCH)
+        listOf("TV" to tv, "phone" to phone).forEach { (which, src) ->
+            assertTrue("$which collects the notice", src.contains("viewModel.addonNotice"))
+            assertTrue(
+                "$which draws it outside the rails' own isNotEmpty gate",
+                src.contains("SearchAddonNotice(text = addonNotice.orEmpty()")
+            )
+        }
+    }
+
     private companion object {
+        const val TV_SEARCH = "com/kennyb1201/kbstream/ui/search/SearchScreen.kt"
+        const val PHONE_SEARCH = "com/kennyb1201/kbstream/ui/mobile/SearchScreenMobile.kt"
         const val REPOSITORY = "com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt"
         const val VIEW_MODEL = "com/kennyb1201/kbstream/ui/search/SearchViewModel.kt"
     }

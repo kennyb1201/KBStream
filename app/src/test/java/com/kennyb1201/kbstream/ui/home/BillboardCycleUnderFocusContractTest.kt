@@ -156,7 +156,10 @@ class BillboardCycleUnderFocusContractTest {
         val cycle = cycleEffect()
         assertTrue(
             "the delay starts from the settled page",
-            cycle.contains("snapshotFlow { pagerState.settledPage to pagerState.isScrollInProgress }")
+            // Spec audit 2026-11-18, Home L4: the page's settle flag is now part
+            // of the pair, so a resolve restarts the dwell.
+            cycle.contains("val page = pagerState.settledPage") &&
+                cycle.contains("pagerState.isScrollInProgress,")
         )
         assertTrue(
             "and a page change cancels and re-arms it",

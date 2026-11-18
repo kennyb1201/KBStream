@@ -164,8 +164,10 @@ class GuideGridFixedSpanContractTest {
     // ── T5: the cap follows the span ──────────────────────────────────────
 
     @Test
-    fun `24 programs per channel per window`() {
-        assertEquals(24, GuideGrid.programsPerWindow(GRID_SPAN_HOURS))
+    fun `the per-channel cap covers the shortest slot`() {
+        // Spec audit 2026-11-18, Live TV M2: 24 (four an hour) was exactly right
+        // for 15-minute slots and truncated every faster channel mid-window.
+        assertEquals(96, GuideGrid.programsPerWindow(GRID_SPAN_HOURS))
         assertEquals(
             "the read path's own default, unchanged",
             GuideGrid.PER_CHANNEL_LIMIT,

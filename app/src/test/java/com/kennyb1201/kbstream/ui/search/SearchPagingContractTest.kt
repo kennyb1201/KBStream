@@ -133,7 +133,9 @@ class SearchPagingContractTest {
         assertTrue(
             "a page that failed does not advance the pager, and the rail keeps " +
                 "what it has",
-            viewModel.contains("if (moviesPage == null && showsPage == null) {") &&
+            // Spec audit 2026-11-18, Browse H1/H2: the null page is answered by
+            // the shared page fetch, and a wave that TIMES OUT is null too.
+            viewModel.contains("if (moviesPage == null && showsPage == null) return null") &&
                 viewModel.contains("titlesPaging = titlesPaging.failed(TITLES_PAGE_UNAVAILABLE)")
         )
     }
@@ -183,6 +185,28 @@ class SearchPagingContractTest {
         assertTrue(
             "the phone's hero line makes the same statement, through the same helper",
             phoneScreen.contains("titleCountLabel(")
+        )
+    }
+
+    @Test
+    fun `a capped add-on rail says how much it left out`() {
+        // Spec audit 2026-11-18, Browse M5: the per-rail cap was invisible, so a
+        // rail of 40 read as everything that add-on had.
+        assertTrue(
+            "the group carries the count the cap dropped",
+            viewModel.contains("val hiddenByCap: Int = 0") &&
+                viewModel.contains("hiddenByCap = candidates.size - items.size") &&
+                viewModel.contains("hiddenByCap = candidates.size - addonItems.size")
+        )
+        assertTrue(
+            "and both screens hand it to the one title builder",
+            tvScreen.contains("hiddenByCap = group.hiddenByCap") &&
+                phoneScreen.contains("hiddenByCap = group.hiddenByCap")
+        )
+        assertTrue(
+            "whose title says the number",
+            hero.contains("hiddenByCap: Int = 0") &&
+                hero.contains("if (hiddenByCap > 0) add(\"\$hiddenByCap more not shown\")")
         )
     }
 

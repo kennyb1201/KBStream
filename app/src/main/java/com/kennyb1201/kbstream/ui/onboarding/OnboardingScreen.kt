@@ -139,9 +139,14 @@ fun OnboardingScreen(
     onOpenAddons: () -> Unit,
     onOpenSimkl: () -> Unit,
     onOpenTrakt: () -> Unit,
+    onOpenBingeCat: () -> Unit,
     onOpenGuide: () -> Unit,
     onFinish: () -> Unit
 ) {
+    // The anime trackers open a dialog of their own (spec audit 2026-11-18,
+    // Onboarding L2): MAL, AniList and Kitsu were connectable only from
+    // Settings, so a first run could not set any of them up.
+    var showAnimeTrackers by remember { mutableStateOf(false) }
     // Nothing claimed focus on entry, so the first D-pad press landed on the
     // email field - the first focusable - and its default openKeyboardOnFocus
     // threw the full-screen IME over the welcome copy. Setup now opens on the
@@ -252,6 +257,24 @@ fun OnboardingScreen(
                     icon = Icons.Filled.Sync,
                     onClick = onOpenTrakt
                 )
+                Spacer(modifier = Modifier.height(10.dp))
+                // The two hand-offs a first run was missing (spec audit
+                // 2026-11-18, Onboarding L2): BingeCat has a page of its own,
+                // and the three anime trackers share one dialog because they
+                // are the same kind of step with a different account.
+                OnboardingSourceRow(
+                    title = "Connect BingeCat",
+                    description = "Read and write your BingeCat history",
+                    icon = Icons.Filled.Sync,
+                    onClick = onOpenBingeCat
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                OnboardingSourceRow(
+                    title = "Anime trackers",
+                    description = "MyAnimeList, AniList or Kitsu",
+                    icon = Icons.Filled.AccountCircle,
+                    onClick = { showAnimeTrackers = true }
+                )
 
                 Spacer(modifier = Modifier.height(22.dp))
 
@@ -309,6 +332,60 @@ fun OnboardingScreen(
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 8.dp)
                 )
+            }
+        }
+
+        // The three anime trackers, in one dialog rather than three rows on the
+        // page (spec audit 2026-11-18, Onboarding L2). The rows and their
+        // connect dialogs are Settings' own composable, so a first-run connect
+        // can never drift from the one in Settings - the same code, the same
+        // flows, the same disconnect rules.
+        if (showAnimeTrackers) {
+            androidx.compose.ui.window.Dialog(
+                onDismissRequest = { showAnimeTrackers = false }
+            ) {
+                androidx.tv.material3.Surface(
+                    shape = KBShapeCard,
+                    colors = SurfaceDefaults.colors(
+                        containerColor = KBSurfaceRaised,
+                        contentColor = KBTextHi
+                    ),
+                    modifier = Modifier.width(540.dp)
+                ) {
+                    Column(modifier = Modifier.padding(22.dp)) {
+                        Text(
+                            text = "Anime trackers",
+                            color = KBTextHi,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Each needs its own account. Connected ones are " +
+                                "scrobbled from now on.",
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+                        )
+                        com.kennyb1201.kbstream.ui.settings.AnimeTrackerRows(
+                            phone = false,
+                            row = { label, description, onClick ->
+                                OnboardingSourceRow(
+                                    title = label,
+                                    description = description,
+                                    icon = Icons.Filled.AccountCircle,
+                                    onClick = onClick
+                                )
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OnboardingSourceRow(
+                            title = "Done",
+                            description = "Back to setup",
+                            icon = Icons.Filled.Check,
+                            onClick = { showAnimeTrackers = false }
+                        )
+                    }
+                }
             }
         }
     }

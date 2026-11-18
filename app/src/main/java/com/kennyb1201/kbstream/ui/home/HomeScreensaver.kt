@@ -196,7 +196,7 @@ internal fun HomeScreensaver(
             // slide, so the outgoing picture keeps ITS end pose while it
             // dissolves instead of jumping to the new cycle's move.
             val sweep = remember(shownCycle) {
-                billboardSweep(shownCycle, SCREENSAVER_DWELL_MS)
+                billboardSweep(shownCycle)
             }
             // The outgoing slide reads as FINISHED while it fades (see the layer
             // below). Composition-time values, not state: the progress itself is

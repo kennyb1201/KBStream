@@ -86,6 +86,24 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             // field capture has to be able to name (Fire OS hides debug logs).
             Log.w("APP_START", "YouTube PO token provider not installed", it)
         }
+        // A taste queue parked by an earlier session gets its retry here (spec
+        // audit 2026-11-18, Data H1): a grant adopted from account sync or a
+        // token refreshed in the background never goes through the connect
+        // screen, so nothing ever drained what the profile had queued. Off the
+        // launch path - the work is a background job.
+        runCatching {
+            com.kennyb1201.kbstream.data.library.TasteRatingSubmission
+                .requestDrain(applicationContext)
+        }
+        // The same door for BingeCat's completions (spec audit 2026-11-18, Data
+        // M2): a play that failed offline / during a 429 in the last session is
+        // replayed here instead of dying with that player. Silent when the queue
+        // is empty, when the profile is unmapped, or while the leg is parked.
+        runCatching {
+            com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
+                .getInstance(applicationContext)
+                .schedulePendingHistoryFlush()
+        }
         // Startup isolation: an exception thrown from Application.onCreate
         // kills the process before any Activity exists — on a TV that is a
         // black screen for ~2s, then the launcher. Each step is independent

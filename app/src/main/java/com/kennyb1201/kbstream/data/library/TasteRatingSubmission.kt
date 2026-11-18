@@ -79,6 +79,18 @@ object TasteRatingSubmission {
     /** One drain at a time, process-wide. */
     private val drainMutex = Mutex()
 
+    /**
+     * Set when a trigger arrived while a drain was running (Data H3), so that
+     * drain ends with one more pass over what it did not see.
+     */
+    private val drainAgain = AtomicBoolean(false)
+
+    /** When each leg last had a park recorded, so the blob is not rewritten (H2). */
+    private val pausedNotedAt = ConcurrentHashMap<TasteRatingTracker, Long>()
+
+    /** One park line per leg per minute is all the paste needs. */
+    private const val PAUSED_NOTE_INTERVAL_MS = 60_000L
+
     /** At most one deferred re-drain in flight. */
     private val followUpScheduled = AtomicBoolean(false)
 
@@ -152,6 +164,24 @@ object TasteRatingSubmission {
     }
 
     /**
+     * Ask for a drain because the app has WORK worth doing, not because a signal
+     * changed (spec audit 2026-11-18, Data H1).
+     *
+     * The queue used to be drained by exactly three triggers: a new signal, a
+     * tracker (re)connect through the connect screen, and a short follow-up. A
+     * grant that arrived any other way - Simkl adopted from account sync, a V2
+     * token refresh, an approval completed while the process was dead - never
+     * drained, so a parked queue could sit for days (the field's "Simkl still 43,
+     * no fresh attempt after TV connect"). This is the door those moments use:
+     * app start and the Home load, i.e. the two points where the app can see that
+     * the profile is up and the network is likely there.
+     */
+    fun requestDrain(context: Context) {
+        if (!anyEnabled()) return
+        drainSoon(context.applicationContext)
+    }
+
+    /**
      * A tracker finished connecting: its leg is open again and anything the
      * profile left pending is due.
      */
@@ -189,8 +219,30 @@ object TasteRatingSubmission {
     suspend fun drain(context: Context) {
         val app = context.applicationContext
         if (!anyEnabled()) return
-        if (!drainMutex.tryLock()) return
+        if (!drainMutex.tryLock()) {
+            // A drain is already running: ask it for ONE more pass when it ends
+            // instead of dropping this trigger (spec audit 2026-11-18, Data H3).
+            // `tryLock` used to return here, and the signal that prompted this
+            // call - a thumb press, a reconnect, a Home load - was thereby lost:
+            // the running pass had already read its entries, so a rating queued
+            // during it waited for whatever happened next, which on a TV can be
+            // nothing for hours. The flag is cleared at the top of each pass, so
+            // a burst of triggers across a long drain still costs one extra pass.
+            drainAgain.set(true)
+            return
+        }
         try {
+            do {
+                drainAgain.set(false)
+                drainOnce(app)
+            } while (drainAgain.get())
+        } finally {
+            drainMutex.unlock()
+        }
+    }
+
+    /** One full pass over the queue; the caller holds [drainMutex]. */
+    private suspend fun drainOnce(app: Context) = run {
             val profileAtStart = activeProfileId()
             for (entry in TasteRatingQueue.entries(app)) {
                 if (activeProfileId() != profileAtStart) return
@@ -234,12 +286,46 @@ object TasteRatingSubmission {
                 }
                 if (paused) {
                     val waitMs = remainingPauseMs(app, tracker)
+                    // A parked leg is a WRITE that did not happen, so it has to
+                    // leave a trace (spec audit 2026-11-18, Data H2): nothing
+                    // here used to record anything - no attempt, no failure -
+                    // so a 429 handled inside a leg left the queue looking
+                    // frozen, with COPY DIAGNOSTICS able to say "pending" and
+                    // never why nothing was moving.
+                    notePausedPark(app, tracker, now, waitMs)
                     if (waitMs in 1..FOLLOW_UP_MAX_WAIT_MS) scheduleFollowUp(app, waitMs)
                 }
             }
-        } finally {
-            drainMutex.unlock()
         }
+
+    /**
+     * Writes the "this leg is parked" line, at most once a minute per tracker.
+     *
+     * Throttled because the queue blob is one JSON file: a drain that sees a
+     * parked leg on every pass must not rewrite it each time, and the paste only
+     * needs the most recent park.
+     */
+    private fun notePausedPark(
+        app: Context,
+        tracker: TasteRatingTracker,
+        now: Long,
+        waitMs: Long
+    ) {
+        val last = pausedNotedAt[tracker] ?: 0L
+        if (now - last < PAUSED_NOTE_INTERVAL_MS) return
+        pausedNotedAt[tracker] = now
+        val waitText = when {
+            waitMs <= 0L -> "a back-off it did not quantify"
+            waitMs >= 60_000L -> "${waitMs / 60_000L} min"
+            else -> "${(waitMs / 1_000L).coerceAtLeast(1L)} s"
+        }
+        Log.w(TAG, "${tracker.label}: rating write parked for $waitText")
+        TasteRatingQueue.noteFailure(
+            app,
+            tracker,
+            now,
+            "${tracker.label} parked rating writes for $waitText (429) - retried on the next trigger"
+        )
     }
 
     /** One Trakt attempt. True when the leg asked to be tried again shortly. */
@@ -391,7 +477,11 @@ object TasteRatingSubmission {
                 "mdblist.com did not answer"
             )
         }
-        return false
+        // A parked key IS a pause, and saying so is what gets it recorded (Data
+        // H2's line) and waited out. Answering false here is what made an
+        // MDBList 429 invisible to the drain - the same silence the other legs
+        // were fixed for (spec audit 2026-11-18, Data L2).
+        return outcome == MdbListRatingOutcome.PAUSED
     }
 
     /**
@@ -558,9 +648,9 @@ object TasteRatingSubmission {
             TasteRatingTracker.TRAKT -> TraktRepository.getInstance(app).guard.blockedForMs()
             TasteRatingTracker.SIMKL -> simklRatingPauseMs()
             // MDBList's pause lives in the budget interceptor, which parks the
-            // key itself and answers 429 while parked: the leg has no window of
-            // its own for this drain to wait out.
-            TasteRatingTracker.MDBLIST -> 0L
+            // key itself and answers 429 while parked - so the window is read
+            // from it rather than assumed to be zero (Data L2).
+            TasteRatingTracker.MDBLIST -> MdbListClient.localPauseMs(app)
             // Kitsu's 429 parks the write itself (see KitsuWriteRules.parkMs):
             // the leg answers PAUSED with its own deadline, so there is nothing
             // for this drain to wait out up front either. The drain's own

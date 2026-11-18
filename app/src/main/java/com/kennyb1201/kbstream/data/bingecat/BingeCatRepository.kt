@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.bingecat
 
 import android.content.Context
 import android.util.Log
+import com.kennyb1201.kbstream.data.BackgroundWork
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder
@@ -168,6 +169,32 @@ sealed interface BingeCatJobPoll {
  *    429, a network fault or a rejected token; the caller cannot tell a stale
  *    list from a fresh one because both are the viewer's own list.
  */
+/**
+ * Why one history write ended, for the caller that has to decide what becomes
+ * of the play.
+ *
+ * [submitHistory] answers the Boolean the players need ("attempted and failed");
+ * [BingeCatRepository.flushPendingHistory] needs the difference this enum keeps,
+ * because the two non-landing answers that are NOT failures must keep their
+ * queue entry without spending an attempt on it: a replay of a play the server
+ * refuses for scope, or one that arrives while the mapping is gone, is worth
+ * trying again later - a replay that failed is not (spec audit 2026-11-18, Data
+ * M2).
+ */
+internal enum class BingeCatWriteOutcome {
+    /** The server took it. */
+    LANDED,
+
+    /** No request was made and none can be until something changes. */
+    NOTHING_ATTEMPTED,
+
+    /** 403 on a grant that still CLAIMS `history:write`: refused server-side. */
+    REFUSED_SCOPE,
+
+    /** A request was made (or tried) and did not land. */
+    FAILED
+}
+
 class BingeCatRepository private constructor(private val context: Context?) {
 
     private val TAG = "BINGECAT_REPO"
@@ -181,8 +208,18 @@ class BingeCatRepository private constructor(private val context: Context?) {
         /** Public-list discovery pages: the contract's own SearchLimit ceiling. */
         private const val PUBLIC_LIST_PAGE_SIZE = 50
 
-        /** A hard ceiling on any paged walk, so a bad header cannot spin. */
-        private const val MAX_PAGES = 10
+        /**
+         * A hard ceiling on any paged walk, so a bad header cannot spin.
+         *
+         * Fifty pages at [PAGE_SIZE] is 5,000 entries (spec audit 2026-11-18,
+         * Library L1). Ten was the old ceiling, i.e. 1,000 - and `listRows`
+         * answers null when the ceiling stops it, which every caller draws as
+         * `orEmpty()`: a large list therefore appeared EMPTY, not short. Raising
+         * the ceiling puts real-world lists (a long watchlist is hundreds, not
+         * thousands) fully inside the walk; what remains past 5,000 is still
+         * reported as unavailable rather than as an empty list.
+         */
+        private const val MAX_PAGES = 50
 
         /** Refresh this long before the token actually expires. */
         private const val EXPIRY_SKEW_MS = 60_000L
@@ -203,6 +240,13 @@ class BingeCatRepository private constructor(private val context: Context?) {
     private val moshi: Moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()
+
+    /**
+     * The durable queue behind [flushPendingHistory] (spec audit 2026-11-18,
+     * Data M2). Lazy: a profile that never writes a completion never pays for
+     * the file read.
+     */
+    internal val pendingHistory by lazy { BingeCatPendingHistory(context, moshi) }
 
     private val service: BingeCatApiService by lazy {
         val client = BaseHttpClient.get().newBuilder()
@@ -910,25 +954,40 @@ class BingeCatRepository private constructor(private val context: Context?) {
         add: Boolean,
         batch: BingeCatHistoryBatch,
         label: String
-    ): Boolean {
-        if (batch.isEmpty) return false
+    ): Boolean = submitHistoryOutcome(add, batch, label) != BingeCatWriteOutcome.FAILED
+
+    /**
+     * The same write, answering WHY (see [BingeCatWriteOutcome]).
+     *
+     * [fromReplay] is true only for [flushPendingHistory]: a replay must never
+     * re-queue what it just failed to deliver, because the entry it came from is
+     * still in the queue and its own attempt count is what bounds it.
+     */
+    private suspend fun submitHistoryOutcome(
+        add: Boolean,
+        batch: BingeCatHistoryBatch,
+        label: String,
+        fromReplay: Boolean = false
+    ): BingeCatWriteOutcome {
+        if (batch.isEmpty) return BingeCatWriteOutcome.FAILED
         val mapped = if (isReady()) mappedProfileId() else null
         if (mapped == null) {
             // Unmapped, disconnected or unconfigured: no request, no error.
-            return true
+            return BingeCatWriteOutcome.NOTHING_ATTEMPTED
         }
         if (!hasWriteScope()) {
             // A step-1 grant: the steady state until the viewer reconnects.
             BingeCatTrace.recordNeedsReapproval(true)
             Log.i(TAG, "write skipped: grant has no ${BingeCatConfig.WRITE_SCOPE} ($label)")
-            return true
+            return BingeCatWriteOutcome.NOTHING_ATTEMPTED
         }
         BingeCatTrace.recordNeedsReapproval(false)
         val parkedMs = bingeCatWriteParkMs()
         if (parkedMs > 0L) {
             BingeCatTrace.recordWriteFailure("429")
             Log.i(TAG, "write skipped: parked for ${parkedMs}ms after a 429 ($label)")
-            return false
+            if (!fromReplay) recordPendingCompletion(add, batch, label)
+            return BingeCatWriteOutcome.FAILED
         }
         BingeCatTrace.recordWriteAttempt()
         return try {
@@ -936,20 +995,23 @@ class BingeCatRepository private constructor(private val context: Context?) {
             if (token == null) {
                 BingeCatTrace.recordWriteFailure("no-token")
                 Log.e(TAG, "write skipped: no token ($label)")
-                return false
+                if (!fromReplay) recordPendingCompletion(add, batch, label)
+                return BingeCatWriteOutcome.FAILED
             }
             var response = send(batch, add, token, mapped)
             if (response == null) {
                 BingeCatTrace.recordWriteFailure("network")
                 Log.e(TAG, "write failed: network ($label)")
-                return false
+                if (!fromReplay) recordPendingCompletion(add, batch, label)
+                return BingeCatWriteOutcome.FAILED
             }
             if (response.code() == 401) {
                 val refreshed = ensureFreshToken(force = true)
                 if (refreshed != null) response = send(batch, add, refreshed, mapped)
                 if (response == null) {
                     BingeCatTrace.recordWriteFailure("network")
-                    return false
+                    if (!fromReplay) recordPendingCompletion(add, batch, label)
+                    return BingeCatWriteOutcome.FAILED
                 }
                 if (response.code() == 401) {
                     // The reads' rule, kept for writes: degrade to disconnected,
@@ -962,7 +1024,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
                     BingeCatTrace.recordSession(false)
                     BingeCatTrace.recordWriteFailure("401")
                     Log.e(TAG, "write failed: 401 after refresh, session dropped ($label)")
-                    return false
+                    return BingeCatWriteOutcome.FAILED
                 }
             }
             when {
@@ -972,7 +1034,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
                     cached = null
                     BingeCatTrace.recordWriteSuccess(writeResultLabel(response.body()))
                     Log.i(TAG, "write ok: $label ${writeResultLabel(response.body())}")
-                    true
+                    BingeCatWriteOutcome.LANDED
                 }
 
                 noteBingeCatWriteRateLimit(
@@ -981,7 +1043,10 @@ class BingeCatRepository private constructor(private val context: Context?) {
                 ) -> {
                     BingeCatTrace.recordWriteFailure("429")
                     Log.w(TAG, "write rate-limited: 429, leg parked ($label)")
-                    false
+                    // The play is NOT on BingeCat, and the leg is parked: this is
+                    // the queue's whole reason to exist (Data M2).
+                    if (!fromReplay) recordPendingCompletion(add, batch, label)
+                    BingeCatWriteOutcome.FAILED
                 }
 
                 response.code() == 403 -> {
@@ -990,14 +1055,22 @@ class BingeCatRepository private constructor(private val context: Context?) {
                     BingeCatTrace.recordNeedsReapproval(true)
                     BingeCatTrace.recordWriteFailure("403-scope")
                     Log.w(TAG, "write refused: 403 scope, needs re-approval ($label)")
-                    true
+                    // NOT a failure for the queue's purposes: the play is still
+                    // owed, and a reconnect is what will let it land.
+                    BingeCatWriteOutcome.REFUSED_SCOPE
                 }
 
                 else -> {
                     val body = runCatching { response.errorBody()?.string() }.getOrNull()
                     BingeCatTrace.recordWriteFailure("http:${response.code()}")
                     Log.e(TAG, "write failed: code=${response.code()} body=$body ($label)")
-                    false
+                    // A 5xx is BingeCat having a bad minute, which is exactly a
+                    // play worth keeping; a 4xx is this request being wrong, and
+                    // replaying it would only earn the same answer three times.
+                    if (!fromReplay && response.code() >= 500) {
+                        recordPendingCompletion(add, batch, label)
+                    }
+                    BingeCatWriteOutcome.FAILED
                 }
             }
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
@@ -1005,7 +1078,157 @@ class BingeCatRepository private constructor(private val context: Context?) {
         } catch (error: Exception) {
             BingeCatTrace.recordWriteFailure(error.javaClass.simpleName)
             Log.e(TAG, "write error ($label): ${error.message}", error)
-            false
+            if (!fromReplay) recordPendingCompletion(add, batch, label)
+            BingeCatWriteOutcome.FAILED
+        }
+    }
+
+    /**
+     * Queues a completion that did not land, for the next door to replay.
+     *
+     * COMPLETIONS ONLY - `add = false` (a remove) is deliberately never queued
+     * (spec audit 2026-11-18, Data M2). A remove replayed hours later could
+     * delete a play the viewer has made since on another device, so a lost
+     * remove leaves a stale badge while a late remove destroys data; the
+     * asymmetry is the safe one. [flushPendingHistory] is its only reader.
+     *
+     * Silent on every failure: the viewer already got the local write, and a
+     * queue that cannot be written must not fail the completion.
+     */
+    private suspend fun recordPendingCompletion(
+        add: Boolean,
+        batch: BingeCatHistoryBatch,
+        label: String
+    ) {
+        if (!add) return
+        val mapped = mappedProfileId() ?: return
+        val key = pendingKeyOf(batch) ?: return
+        runCatching { pendingHistory.enqueue(mapped, key, batch, label) }
+    }
+
+    /**
+     * The identity of the plays in one batch, or null when they cannot be named.
+     *
+     * Sorted and `+`-joined: one batch is one request, so its entries are one
+     * queue item, and the same play completed twice replaces its earlier entry
+     * instead of stacking a second one.
+     */
+    private fun pendingKeyOf(batch: BingeCatHistoryBatch): String? {
+        val keys = buildList {
+            batch.movies?.forEach {
+                add(
+                    BingeCatPendingHistoryRules.key(
+                        BingeCatPendingHistoryRules.Kind.MOVIE, it.ids.imdb, it.ids.tmdb, null, emptyList()
+                    )
+                )
+            }
+            batch.shows?.forEach {
+                add(
+                    BingeCatPendingHistoryRules.key(
+                        BingeCatPendingHistoryRules.Kind.SHOW, it.ids.imdb, it.ids.tmdb, null, emptyList()
+                    )
+                )
+            }
+            batch.seasons?.forEach {
+                add(
+                    BingeCatPendingHistoryRules.key(
+                        BingeCatPendingHistoryRules.Kind.SEASON, it.ids.imdb, it.ids.tmdb, it.season,
+                        emptyList()
+                    )
+                )
+            }
+            batch.episodes?.forEach {
+                add(
+                    BingeCatPendingHistoryRules.key(
+                        BingeCatPendingHistoryRules.Kind.EPISODES, it.ids.imdb, it.ids.tmdb, it.season,
+                        listOf(it.episode)
+                    )
+                )
+            }
+        }.sorted()
+        return keys.takeIf { it.isNotEmpty() }?.joinToString("+")
+    }
+
+    /**
+     * Replays the plays this profile is still owed, oldest first.
+     *
+     * The doors are the app's own busy moments - app start and every Home load
+     * (`schedulePendingHistoryFlush`), the same two the taste queue uses (Data
+     * H1) - because the queue must not need a network to be reached and must not
+     * poll: a play waits for the next moment the app is demonstrably alive.
+     *
+     * Every gate is re-checked first and each one means "nothing to do NOW"
+     * rather than an error: no session, no write scope (a step-1 grant), no
+     * mapping (a kids profile must never inherit these), or a live 429 park (the
+     * park is the server asking for silence, and a replay is exactly the storm
+     * it is asking us not to send).
+     *
+     * ONE FAILURE ENDS THE PASS: the rest stay queued for the next door rather
+     * than hammering a leg that just failed 40 times. A success drops its entry,
+     * a failure counts an attempt and drops the entry on the third
+     * ([BingeCatPendingHistoryRules.MAX_ATTEMPTS]), so nothing here can spin
+     * forever.
+     *
+     * Returns how many plays landed.
+     */
+    internal suspend fun flushPendingHistory(): Int {
+        if (!isReady()) return 0
+        val mapped = mappedProfileId() ?: return 0
+        if (!hasWriteScope()) return 0
+        if (bingeCatWriteParkMs() > 0L) return 0
+        val pending = runCatching { pendingHistory.usable(mapped) }.getOrDefault(emptyList())
+        if (pending.isEmpty()) return 0
+        var landed = 0
+        for (entry in pending) {
+            val batch = pendingHistory.decode(entry)
+            if (batch == null) {
+                // Not a failure to retry: the body no longer parses, so it can
+                // never be replayed. Dropped with `success = true` (a removal).
+                pendingHistory.settle(entry.key, success = true)
+                continue
+            }
+            when (
+                submitHistoryOutcome(
+                    add = true,
+                    batch = batch,
+                    label = "replay ${entry.label}",
+                    fromReplay = true
+                )
+            ) {
+                // The play is on BingeCat: the entry has done its job.
+                BingeCatWriteOutcome.LANDED -> {
+                    pendingHistory.settle(entry.key, success = true)
+                    landed++
+                }
+
+                // Tried and did not land: count the attempt, and let the rest
+                // wait for the next door rather than hammering a leg that just
+                // failed.
+                BingeCatWriteOutcome.FAILED -> {
+                    pendingHistory.settle(entry.key, success = false)
+                    break
+                }
+
+                // Nothing was asked of the server (no mapping, no scope) or it
+                // refused a grant that still claims the scope: the play is still
+                // owed, so it stays with its attempt count untouched.
+                BingeCatWriteOutcome.NOTHING_ATTEMPTED,
+                BingeCatWriteOutcome.REFUSED_SCOPE -> break
+            }
+        }
+        Log.i(TAG, "replayed $landed of ${pending.size} pending completion(s)")
+        return landed
+    }
+
+    /**
+     * The doors' entry point: app start and the Home load.
+     *
+     * Off the caller's path by design - a replay is a network write to a
+     * tracker, and no screen waits on it.
+     */
+    fun schedulePendingHistoryFlush() {
+        BackgroundWork.launch {
+            runCatchingCancellable { flushPendingHistory() }
         }
     }
 

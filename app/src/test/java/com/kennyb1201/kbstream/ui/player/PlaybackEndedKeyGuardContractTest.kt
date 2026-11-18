@@ -122,6 +122,9 @@ class PlaybackEndedKeyGuardContractTest {
             "setPlayWhenReady(true) must be refused once the session has ended",
             source.contains(
                 "override fun setPlayWhenReady(playWhenReady: Boolean) {\n" +
+                    // Spec audit 2026-11-18, Player H1: the same override now
+                    // guards a session-routed pause too, hence the first line.
+                    "if (!playWhenReady && spuriousPauseGuardActive()) return\n" +
                     "if (playWhenReady && playbackEndedHandled) return\n" +
                     "super.setPlayWhenReady(playWhenReady)\n}"
             )

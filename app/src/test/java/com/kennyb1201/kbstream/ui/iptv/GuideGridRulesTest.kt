@@ -547,8 +547,10 @@ class GuideGridRulesTest {
     }
 
     @Test
-    fun `the per-channel cap is 24 at the fixed span`() {
-        assertEquals(24, GuideGrid.programsPerWindow(GRID_SPAN_HOURS))
+    fun `the per-channel cap is 96 at the fixed span`() {
+        // Six-hour span at sixteen programs an hour (Live TV M2): the five-minute
+        // slot case, which 24 truncated by four hours.
+        assertEquals(96, GuideGrid.programsPerWindow(GRID_SPAN_HOURS))
         // The six-hour span is the read path's own default.
         assertEquals(GuideGrid.PER_CHANNEL_LIMIT, GuideGrid.programsPerWindow(GRID_SPAN_HOURS))
     }

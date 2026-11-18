@@ -171,6 +171,19 @@ data class LibraryUiState(
     val listLoading: Boolean = false,
 
     /**
+     * True when the OPEN list's last read did not answer (spec audit
+     * 2026-11-18, Library L1).
+     *
+     * `BingeCatRepository.listRows()` answers null for a list too large to walk
+     * and for any failed page, and Trakt/MDBList/anime reads collapse their
+     * exceptions the same way, so every one of those drew the finished-looking
+     * "This list is empty" - a 1,200-item BingeCat list looked like a list with
+     * nothing in it, and a pinned Home rail vanished without a word. Cleared by
+     * the next read that starts.
+     */
+    val listReadFailed: Boolean = false,
+
+    /**
      * The trackers whose last read FAILED, so the empty state can tell a
      * failure from an empty watchlist instead of saying "empty" about a fetch
      * that never answered.
@@ -1709,21 +1722,63 @@ class LibraryViewModel(
     }
 
     /**
-     * The rows of [list]: local lists from disk, a personal MDBList list from
-     * the tracker. Shared so a refresh can re-derive the open list on its own
-     * request version instead of blanking it.
+     * The rows of [list] as the active profile may see them (spec audit
+     * 2026-11-18, Library H1).
+     *
+     * This pane used to publish [fetchListItemsRaw] verbatim, so the kids ceiling
+     * held on ALL / WATCHLIST and on Home's pinned rails but not here: the same
+     * over-ceiling title was hidden in ALL and shown the moment its list was
+     * opened - on every source, local included. The filter sits at the one door
+     * both the refresh and the list-open path go through, so a future caller
+     * cannot reopen the hole.
      */
     private suspend fun fetchListItems(list: LibraryList): List<LibraryItem> {
+        // A read is starting, so the previous read's failure is not this read's
+        // answer: the flag is cleared here, at the one door both the list-open
+        // path and refresh go through (spec audit 2026-11-18, Library L1).
+        if (_uiState.value.listReadFailed) {
+            _uiState.value = _uiState.value.copy(listReadFailed = false)
+        }
+        return kidsFiltered(fetchListItemsRaw(list))
+    }
+
+    /**
+     * Record that the open list could not be read (Library L1).
+     *
+     * `BingeCatRepository.listRows()` returns null for a list too large to walk
+     * (the first 1,000 entries) and for any failed page, and both used to
+     * collapse into an empty list: a 1,200-item list and a temporarily
+     * unreachable service both drew exactly what a genuinely empty list draws,
+     * with nothing to tap. The pane now says which one it is.
+     */
+    private fun noteListReadFailed() {
+        if (!_uiState.value.listReadFailed) {
+            _uiState.value = _uiState.value.copy(listReadFailed = true)
+        }
+    }
+
+    /**
+     * [fetchListItems] before the ceiling: local lists from disk, a personal
+     * MDBList list from the tracker. Shared so a refresh can re-derive the open
+     * list on its own request version instead of blanking it.
+     */
+    private suspend fun fetchListItemsRaw(list: LibraryList): List<LibraryItem> {
         val appContext = getApplication<Application>()
         if (list.source.isLocalList) return LocalLibraryStore.listItems(appContext, list.id)
 
         if (list.source == LibrarySource.BINGECAT_LIST) {
             val remoteId = list.remoteId ?: return emptyList()
+            // null from listRows() is "could not read", never "no rows" (m24:
+            // a walk past MAX_PAGES or a failed page both answer null).
             val rows = runCatchingCancellable {
                 bingecatRepository.listRows(remoteId)
             }.onFailure {
                 Log.w(TAG, "BingeCat list items fetch failed: ${it.message}")
-            }.getOrNull().orEmpty()
+            }.getOrNull()
+            if (rows == null) {
+                noteListReadFailed()
+                return emptyList()
+            }
             return rows.mapNotNull { row ->
                 bingecatLibraryItem(
                     row = row,
@@ -1747,6 +1802,9 @@ class LibraryViewModel(
                 traktRepository.listItems(TraktListRef(user = owner, listId = remoteId))
             }.onFailure {
                 Log.w(TAG, "Trakt list items fetch failed: ${it.message}")
+                // Same rule as BingeCat's null: a failed read is not an empty
+                // list (Library L1).
+                noteListReadFailed()
             }.getOrDefault(emptyList())
             return entries.mapNotNull { entry ->
                 traktLibraryItem(
@@ -1769,6 +1827,7 @@ class LibraryViewModel(
                 AnimeLists.items(appContext, list.source, ref)
             }.onFailure {
                 Log.w(TAG, "Anime list items fetch failed: ${it.message}")
+                noteListReadFailed()
             }.getOrDefault(emptyList())
         }
 
@@ -1784,7 +1843,11 @@ class LibraryViewModel(
             MdbListClient.getListItems(appContext, list.id)
         }.onFailure {
             Log.w(TAG, "MDBList list items fetch failed: ${it.message}")
-        }.getOrNull().orEmpty()
+        }.getOrNull()
+        if (entries == null) {
+            noteListReadFailed()
+            return emptyList()
+        }
         return entries.map { entry ->
             LibraryItem(
                 source = LibrarySource.MDBLIST_LIST,
@@ -2266,10 +2329,18 @@ class LibraryViewModel(
         localListFlatCache = _uiState.value.lists
             .filter { it.source.isLocalList }
             .flatMap { LocalLibraryStore.listItems(appContext, it.id) }
-        canonicalAll = mergeAllSources(
+        val merged = mergeAllSources(
             listOf(canonicalLocal, canonicalWatchlist, localListFlatCache)
         )
-        pushDisplay()
+        // THE CEILING HOLDS HERE TOO (spec audit 2026-11-18, Library H1): this
+        // rebuild runs after every local add/remove and used to write the merged
+        // rows straight into ALL, so one removal was enough to re-expose
+        // over-ceiling titles until the next full refresh. Off the main thread
+        // because the filter reads certifications; the publish follows it.
+        viewModelScope.launch {
+            canonicalAll = kidsFiltered(merged)
+            pushDisplay()
+        }
     }
 
     /** ALL-view merge: de-duped across every source, input order kept. */

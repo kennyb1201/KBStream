@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
-import com.kennyb1201.kbstream.ui.components.KBImdbTint
+import com.kennyb1201.kbstream.ui.components.TmdbTint
 import com.kennyb1201.kbstream.ui.components.WatchedCheckBadge
 import com.kennyb1201.kbstream.ui.components.formatRuntimeMinutes
 import com.kennyb1201.kbstream.ui.components.posterBorderModifier
@@ -309,9 +309,18 @@ fun episodeRuntimeLabel(runtimeMinutes: Int?, progress: Float?): String? {
 }
 
 /**
- * The yellow IMDb chip and score the television's episode card shows. One
- * composable rather than a copy in each layout, so the phone cannot end up with
- * two ratings that look different for the same episode.
+ * The TMDB chip and score the television's episode card shows (spec audit
+ * 2026-11-18, Detail H1).
+ *
+ * It used to say IMDb in IMDb's yellow, which was wrong twice over: the value is
+ * TMDB's `vote_average` for the episode (TmdbRepository's ResolvedEpisode), not
+ * an IMDb score, and the codebase's own rule - see DetailViewModel's note that
+ * TMDB's vote_average "is not an IMDb score" - forbids rendering it as one.
+ * Title-level chips are genuine MDBList IMDb and stay yellow; an episode's number
+ * is TMDB's, so the plate says TMDB in TMDB's cyan.
+ *
+ * One composable rather than a copy in each layout, so the phone cannot end up
+ * with two ratings that look different for the same episode.
  */
 @Composable
 fun EpisodeRatingChip(rating: Double, modifier: Modifier = Modifier) {
@@ -322,10 +331,10 @@ fun EpisodeRatingChip(rating: Double, modifier: Modifier = Modifier) {
     ) {
         Surface(
             shape = KBShapeChip,
-            color = KBImdbTint
+            color = TmdbTint
         ) {
             Text(
-                text = "IMDb",
+                text = "TMDB",
                 color = Color.Black,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp)

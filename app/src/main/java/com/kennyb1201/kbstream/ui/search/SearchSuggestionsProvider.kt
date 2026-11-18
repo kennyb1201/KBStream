@@ -13,7 +13,9 @@ import android.util.Log
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -113,10 +115,26 @@ class SearchSuggestionsProvider : ContentProvider() {
                 withTimeoutOrNull(LOOKUP_TIMEOUT_MS) {
                     withContext(Dispatchers.IO) {
                         val tmdb = TmdbRepository.getInstance(context)
-                        val movies = runCatchingCancellable { tmdb.searchMovies(query) }
-                            .getOrDefault(emptyList())
-                        val shows = runCatchingCancellable { tmdb.searchTv(query) }
-                            .getOrDefault(emptyList())
+                        // BOTH LEGS AT ONCE (spec audit 2026-11-18, Browse L4).
+                        // Sequentially, the 2.5s budget paid the movie search
+                        // and then the TV search - each of them behind the
+                        // digital filter's per-item detail lookups - so one slow
+                        // TMDB call ate the whole deadline and the launcher got
+                        // no TV suggestions at all. Parallel, the budget is paid
+                        // once and a stalled leg only costs its own rows.
+                        //
+                        // `supervisorScope`, because a plain `async` failure
+                        // cancels its sibling: one dead movie search must cost
+                        // its own rows and nothing else - the awaited failure is
+                        // what keeps the pair from cancelling each other.
+                        val (movies, shows) = supervisorScope {
+                            val moviesDeferred = async { tmdb.searchMovies(query) }
+                            val showsDeferred = async { tmdb.searchTv(query) }
+                            runCatchingCancellable { moviesDeferred.await() }
+                                .getOrDefault(emptyList()) to
+                                runCatchingCancellable { showsDeferred.await() }
+                                    .getOrDefault(emptyList())
+                        }
                         // Kids Mode first: these rows are drawn by the SYSTEM, on
                         // the launcher, so nothing of this app's can vet them once
                         // they are returned - unlike every in-app search path,

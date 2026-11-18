@@ -3,6 +3,8 @@ package com.kennyb1201.kbstream.ui.player
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.res.ColorStateList
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -3044,6 +3046,23 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     // sources never emit STATE_ENDED, and these fields de-duplicate the
     // completion path across the real listener and the poller fallback.
     private var playbackEndedHandled = false
+
+    /**
+     * This screen's audio-focus request (Player M3) - ours, not ExoPlayer's.
+     *
+     * Held between onStart and onStop, so a gain can only arrive while the
+     * session is on screen.
+     */
+    private var audioFocusRequest: AudioFocusRequest? = null
+
+    /**
+     * True when a focus LOSS paused a session that was playing, so a GAIN knows
+     * it owes a resume. Cleared by any viewer play/pause press, so a gain can
+     * never undo a pause the viewer chose.
+     */
+    @Volatile
+    private var pausedByFocusLoss = false
+
     private var lastPolledPos = -1L
     private var posStallTicks = 0
 
@@ -4998,15 +5017,23 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // 2026-11-14, F1(a)): a press that lands on the strip itself - UP out of
         // the first row is the common one - draws no ring where it lands, so it
         // is forwarded to the loaded season's chip at once.
+        //
+        // UNCONDITIONALLY (spec audit 2026-11-18, Player M2): the forward used to
+        // be skipped in touch mode, and that was the one remaining gate of the
+        // shape the 2026-11-17 amendment removed from the chip style - a press
+        // landing on the strip while the window reported touch mode stayed on
+        // the RecyclerView, which draws no ring, and `focusSelected` never ran.
+        // The style no longer cares about input mode, so neither may the forward.
         pickerSeasons.setOnFocusChangeListener { _, hasFocus ->
-            if (hasFocus && !pickerSeasons.isInTouchMode) {
+            if (hasFocus) {
                 seasonStripAdapter?.focusSelected(pickerSeasons)
             }
         }
         // The mirror of it: DOWN out of the strip lands on the list's holder,
-        // which highlights nothing, so the first row takes the focus instead.
+        // which highlights nothing, so the first row takes the focus instead -
+        // on the same unconditional rule.
         pickerList.setOnFocusChangeListener { _, hasFocus ->
-            if (hasFocus && !pickerList.isInTouchMode) pickerList.post { parkPickerFocus() }
+            if (hasFocus) pickerList.post { parkPickerFocus() }
         }
         pickerSeasons.addOnChildAttachStateChangeListener(
             object : androidx.recyclerview.widget.RecyclerView.OnChildAttachStateChangeListener {
@@ -6881,7 +6908,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             ).build().apply {
                 val audioAttrs = AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build()
-                setAudioAttributes(audioAttrs, true)
+                // Audio focus is OURS, not ExoPlayer's (spec audit 2026-11-18,
+                // Player M3). ExoPlayer's own handler resumes after a TRANSIENT
+                // loss but deliberately not after a permanent one, so an
+                // interruption that takes focus away for good left this engine
+                // paused until the viewer pressed play - while MPV resumed on
+                // the same event. One owner, one policy, the MPV policy: see
+                // [requestAudioFocus] below.
+                setAudioAttributes(audioAttrs, false)
 
                 val audioUrl = currentAudioUrl
                 // The sidecar is built BEFORE the media source and travels on the
@@ -7205,11 +7239,6 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     super.play()
                 }
 
-                override fun setPlayWhenReady(playWhenReady: Boolean) {
-                    if (playWhenReady && playbackEndedHandled) return
-                    super.setPlayWhenReady(playWhenReady)
-                }
-
                 override fun seekToDefaultPosition() {
                     if (playbackEndedHandled) return
                     super.seekToDefaultPosition()
@@ -7218,6 +7247,35 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 override fun seekToDefaultPosition(mediaItemIndex: Int) {
                     if (playbackEndedHandled) return
                     super.seekToDefaultPosition(mediaItemIndex)
+                }
+
+                /**
+                 * THE SPURIOUS-PAUSE GUARD COVERS THIS ROUTE TOO (spec audit
+                 * 2026-11-18, Player H1).
+                 *
+                 * Fire OS emits MEDIA_PAUSE both as a key event and through the
+                 * MediaSession, and media3 forwards a session pause straight to
+                 * `player.pause()` / `setPlayWhenReady(false)` on THIS wrapper. So
+                 * both key arms could be perfectly guarded and a session-routed
+                 * event still parked the session: the wrapper had no pause
+                 * override at all, which is why the Fire Stick could pause after
+                 * a load on a build carrying the fix. MPV's session `onPause` has
+                 * carried the same guard since the fix's first half.
+                 *
+                 * Only the window is swallowed; after it a real transport pause
+                 * pauses exactly as before. `pause()` and
+                 * `setPlayWhenReady(false)` are both overridden because media3
+                 * reaches this player through either, depending on the command.
+                 */
+                override fun pause() {
+                    if (spuriousPauseGuardActive()) return
+                    super.pause()
+                }
+
+                override fun setPlayWhenReady(playWhenReady: Boolean) {
+                    if (!playWhenReady && spuriousPauseGuardActive()) return
+                    if (playWhenReady && playbackEndedHandled) return
+                    super.setPlayWhenReady(playWhenReady)
                 }
             }
             mediaSession =
@@ -11944,6 +12002,71 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
     }
 
+    // --- Audio focus -------------------------------------------------------
+    //
+    // The policy is MPV's, on purpose (spec audit 2026-11-18, Player M3): a loss
+    // that stopped a PLAYING session is remembered, and a gain resumes exactly
+    // that pause - and nothing else. ExoPlayer's built-in handling could not do
+    // this: it resumes after `AUDIOFOCUS_LOSS_TRANSIENT` and treats
+    // `AUDIOFOCUS_LOSS` as the end of the session, which is the asymmetry the
+    // audit found between the two engines.
+    //
+    // A duck is NOT ours to act on: the request is one of AUDIOFOCUS_GAIN, so a
+    // would-be-ducking loss arrives as a transient loss and pauses like any
+    // other interruption - the same thing MPV does. Nothing here ducks volume.
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.O)
+    private fun requestAudioFocus() {
+        val manager = getSystemService(AudioManager::class.java) ?: return
+        val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(
+                android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MOVIE)
+                    .build()
+            )
+            .setWillPauseWhenDucked(true)
+            .setOnAudioFocusChangeListener { change ->
+                when (change) {
+                    AudioManager.AUDIOFOCUS_LOSS,
+                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                        // playWhenReady, not isPlaying: a session that is
+                        // buffering is still a session the viewer started, and
+                        // its resume is owed. A session the VIEWER paused keeps
+                        // its pause through the interruption.
+                        val player = exoPlayer ?: return@setOnAudioFocusChangeListener
+                        if (player.playWhenReady) {
+                            pausedByFocusLoss = true
+                            player.pause()
+                        }
+                    }
+
+                    AudioManager.AUDIOFOCUS_GAIN -> {
+                        val player = exoPlayer ?: return@setOnAudioFocusChangeListener
+                        // Only our own pause, and only while this screen is the
+                        // one on display: the request is abandoned in onStop, so
+                        // a gain can only arrive while it is.
+                        if (pausedByFocusLoss && !playbackEndedHandled) {
+                            pausedByFocusLoss = false
+                            player.play()
+                        }
+                    }
+                }
+            }
+            .build()
+        audioFocusRequest = request
+        runCatching { manager.requestAudioFocus(request) }
+    }
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.O)
+    private fun abandonAudioFocus() {
+        val request = audioFocusRequest ?: return
+        runCatching {
+            getSystemService(AudioManager::class.java)?.abandonAudioFocusRequest(request)
+        }
+        audioFocusRequest = null
+    }
+
     private fun togglePlayPause() {
         exoPlayer?.let {
             // A finished session stays finished: a play press after the end
@@ -11955,6 +12078,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // saying what they want now: it wins, and the hold must not resume
             // the player behind it later.
             cancelLargeSeekHold()
+            // The viewer has an opinion again, so those are the terms: a focus
+            // gain must never undo a pause this press made (Player M3).
+            pausedByFocusLoss = false
             // playWhenReady, not isPlaying: they disagree while the player is
             // BUFFERING (playWhenReady=true, isPlaying=false). Reading isPlaying
             // there flipped playWhenReady from true to TRUE - a no-op - and took
@@ -16335,6 +16461,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
     override fun onStart() {
         super.onStart()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) requestAudioFocus()
         resumeAfterBackgroundReturn()
     }
 
@@ -16369,6 +16496,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
     override fun onStop() {
         super.onStop()
+        // Off screen, so the session stops asking for the speaker (Player M3):
+        // a gain that arrives while the app is in the background must not start
+        // audio behind it. The next onStart asks again.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) abandonAudioFocus()
+        pausedByFocusLoss = false
         // The session is off screen: stop sampling a position nothing moves.
         deathMarkerHandler.removeCallbacks(deathMarkerRunnable)
         // Second checkpoint: dying from here is the ordinary background reclaim

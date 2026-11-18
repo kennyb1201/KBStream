@@ -65,7 +65,11 @@ class SpuriousPauseAndFocusResumeContractTest {
         )
         assertTrue(
             "and so does MPV",
-            mpv.contains("spuriousPauseGuardUntilMs = SystemClock.elapsedRealtime() + SPURIOUS_PAUSE_GUARD_MS") &&
+            // Whitespace-collapsed: the arm sits inside `onPictureReady`'s guard
+            // now (Player M1) and wraps there (spec audit 2026-11-18).
+            mpv.replace(Regex("\\s+"), " ").contains(
+                "spuriousPauseGuardUntilMs = SystemClock.elapsedRealtime() + SPURIOUS_PAUSE_GUARD_MS"
+            ) &&
                 mpv.contains("SystemClock.elapsedRealtime() < spuriousPauseGuardUntilMs")
         )
     }
@@ -129,16 +133,28 @@ class SpuriousPauseAndFocusResumeContractTest {
         )
     }
 
-    // ── F1, MPV: the window opens with the file ────────────────────────────
+    // ── F1, MPV: the window opens with the first PICTURE of a file ─────────
 
     @Test
     fun `MPV opens the window once per file and both pause arms honour it`() {
         val fileLoaded = block(mpv, "private fun onFileLoaded(mediaTitle: String?) {")
         assertTrue(
-            "FILE_LOADED is once per file, so a reconfig or a track pick cannot reopen it",
-            fileLoaded.contains(
-                "spuriousPauseGuardUntilMs = SystemClock.elapsedRealtime() + SPURIOUS_PAUSE_GUARD_MS"
-            )
+            "a new file CLOSES the previous window",
+            fileLoaded.contains("spuriousPauseGuardUntilMs = 0L") &&
+                fileLoaded.contains("spuriousPauseGuardArmedForFile = false")
+        )
+        // Spec audit 2026-11-18, Player M1: arming at FILE_LOADED spent the
+        // window while a slow source was still buffering.
+        assertTrue(
+            "and the FIRST PICTURE opens it, once per file, as the main player does",
+            mpv.contains(
+                "if (!spuriousPauseGuardArmedForFile) {\n" +
+                    "                spuriousPauseGuardArmedForFile = true"
+            ) &&
+                mpv.contains(
+                    "spuriousPauseGuardUntilMs =\n" +
+                        "                    SystemClock.elapsedRealtime() + SPURIOUS_PAUSE_GUARD_MS"
+                )
         )
         val keyArm = mpv.slice("KeyEvent.KEYCODE_MEDIA_PAUSE -> {", "KeyEvent.KEYCODE_MEDIA_NEXT -> {")
         assertTrue(
@@ -216,6 +232,23 @@ class SpuriousPauseAndFocusResumeContractTest {
         )
     }
 
+    @Test
+    fun `Exo's MediaSession route carries the same guard`() {
+        // Spec audit 2026-11-18, Player H1: media3 routes an external pause
+        // straight to the player wrapper, so the two key arms could be guarded
+        // and a session pause still parked the session.
+        val wrapper = native.substringAfter("sessionPlayer = object : ForwardingPlayer(base)")
+            .substringBefore("mediaSession =")
+        assertTrue(
+            "a session pause is swallowed inside the window",
+            wrapper.contains("override fun pause() {\n                    if (spuriousPauseGuardActive()) return")
+        )
+        assertTrue(
+            "and so is a session setPlayWhenReady(false) - media3 reaches either",
+            wrapper.contains("if (!playWhenReady && spuriousPauseGuardActive()) return")
+        )
+    }
+
     // ── F3 / F4: what must not change ────────────────────────────────────
 
     @Test
@@ -242,14 +275,30 @@ class SpuriousPauseAndFocusResumeContractTest {
     }
 
     @Test
-    fun `Exo is untouched by F2, because media3 already handles focus`() {
+    fun `Exo owns focus now, so ONE listener may pause or resume around it`() {
+        // REVERSED (spec audit 2026-11-18, Player M3). This used to pin the
+        // opposite - "media3 already handles focus, so no listener of ours" -
+        // and it was right about media3 handling it and wrong about what that
+        // handling does: media3 resumes after a TRANSIENT loss and treats a
+        // permanent AUDIOFOCUS_LOSS as the end of the session, so an
+        // interruption that took focus away for good left Exo paused while MPV
+        // resumed. The activity owns focus on both engines now, which is the
+        // only way the two behave alike.
         assertTrue(
-            "the player owns focus itself",
-            native.contains("setAudioAttributes(audioAttrs, true)")
+            "Exo himself no longer manages focus",
+            native.contains("setAudioAttributes(audioAttrs, false)")
         )
         assertFalse(
-            "so no second listener of this app's own may pause or resume around it",
+            "and the hand-off it used to take is gone, or two policies would fight",
+            native.contains("setAudioAttributes(audioAttrs, true)")
+        )
+        assertTrue(
+            "the session's own listener is the one policy - see AudioFocusParityContractTest",
             native.contains("setOnAudioFocusChangeListener")
+        )
+        assertFalse(
+            "and F1/F2 are untouched by it: the guard is still the key/session path's",
+            block(native, "private fun requestAudioFocus()").contains("spuriousPauseGuard")
         )
     }
 

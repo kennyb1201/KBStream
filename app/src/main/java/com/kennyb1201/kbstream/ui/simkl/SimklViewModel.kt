@@ -41,6 +41,9 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
 
     private var pollJob: Job? = null
 
+    /** Automatic code renewals since the viewer last asked for one (H1). */
+    private var autoCodeRestarts = 0
+
     /** Drives the on-screen countdown for the code's own lifetime. */
     private var countdownJob: Job? = null
 
@@ -170,6 +173,8 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
      * device authorisation, DISCONNECT is the session drop.
      */
     fun generateCode() {
+        // A deliberate request resets the automatic-renewal budget.
+        autoCodeRestarts = 0
         pollJob?.cancel()
         codeJob?.cancel()
 
@@ -612,13 +617,38 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * The code died on its own: issue another, rather than leaving a dead one on
      * screen for the viewer to notice and fix by hand (F1).
+     *
+     * CAPPED (spec audit 2026-11-18, Onboarding H1). This used to restart without
+     * a limit, and the ViewModel is activity-scoped with no stop on exit, so
+     * backing out of the connect screen left the app requesting a fresh device
+     * code every ~15 minutes for as long as the activity lived - and a later
+     * approval then silently connected the profile. Two automatic renewals are
+     * plenty; past that the viewer is asked to press GENERATE CODE, which is a
+     * deliberate action on the screen that owns the flow.
      */
     private fun restartExpiredCode() {
+        if (autoCodeRestarts >= MAX_AUTO_CODE_RESTARTS) {
+            fail("That code expired. Tap GENERATE CODE to try again.")
+            return
+        }
+        autoCodeRestarts++
         _uiState.value = _uiState.value.copy(
             statusMessage = "That code expired — generating a new one…",
             errorMessage = null
         )
         beginCodeRequest()
+    }
+
+    /**
+     * Ends the in-flight authorisation attempt (spec audit 2026-11-18,
+     * Onboarding M1): the connect screen calls this as it leaves, so leaving the
+     * page stops the poll instead of waiting for a code to expire - and a code
+     * approved while the viewer is elsewhere can no longer connect the profile
+     * behind their back.
+     */
+    fun stopPolling() {
+        pollJob?.cancel()
+        pollJob = null
     }
 
     /** One shape for every way the poll can end without a token. */
@@ -798,6 +828,12 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
          * network that is down tells the viewer nothing (trackers C4).
          */
         const val MAX_CONSECUTIVE_FAILURES = 3
+
+        /**
+         * How many times an expired code may be renewed without the viewer asking
+         * (spec audit 2026-11-18, Onboarding H1).
+         */
+        const val MAX_AUTO_CODE_RESTARTS = 2
 
         /**
          * The one answer that means "Simkl replied and there is no token yet".

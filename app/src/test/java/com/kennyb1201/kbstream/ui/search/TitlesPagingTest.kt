@@ -166,6 +166,44 @@ class TitlesPagingTest {
     }
 
     @Test
+    fun `the de-dupe keys accumulate across pages`() {
+        // Spec audit 2026-11-18, Browse M2: the add-on rails were de-duped
+        // against page 1 only, so a title first found on page 2 showed twice.
+        val state = TitlesPagingState()
+            .absorb(page(1, hit(1), totalPages = 3).copy(dedupIds = setOf("movie:tmdb:1")))
+            .absorb(page(2, hit(2), totalPages = 3).copy(dedupIds = setOf("movie:tmdb:2")))
+
+        assertEquals(setOf("movie:tmdb:1", "movie:tmdb:2"), state.dedupIds)
+    }
+
+    @Test
+    fun `the shown total discounts what the rail was handed and dropped`() {
+        // Spec audit 2026-11-18, Browse M1: the hero line printed TMDB's raw sum,
+        // so a query whose hits the profile filter had thrown away still promised
+        // "of 148" while those hits could never appear.
+        val state = TitlesPagingState()
+            .absorb(
+                page(1, hit(1), hit(2), totalPages = 3, total = 148)
+                    .copy(profileDropped = 5)
+            )
+            // Page 2 repeats tmdb:2, so one more of the 148 never reaches the rail.
+            .absorb(page(2, hit(2), hit(3), totalPages = 3, total = 148))
+
+        assertEquals(148 - 5 - 1, state.shownTotal)
+    }
+
+    @Test
+    fun `the shown total never falls below the cards on the rail`() {
+        val state = TitlesPagingState().absorb(
+            page(1, hit(1), hit(2), totalPages = 1, total = 2)
+                // A builder reporting nonsense must not produce "showing 2 of 1".
+                .copy(profileDropped = 9)
+        )
+
+        assertEquals(2, state.shownTotal)
+    }
+
+    @Test
     fun `a partial answer never shrinks the total it already knows`() {
         // Page 2 where only one of the two waves answered reports only that
         // wave's count; the rail keeps the larger number it had.

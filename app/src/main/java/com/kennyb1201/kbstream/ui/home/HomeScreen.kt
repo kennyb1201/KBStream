@@ -5511,7 +5511,12 @@ fun HomeScreen(
     //
     // Read BEFORE the merge because the pins are rails of the merged column now:
     // the merge needs their keys to place them, and the drawing needs their rows.
-    val pinnedLibraryRails by rememberLibraryHomeRails()
+    // The state, not only the rails: a pinned list that could not be READ draws
+    // nothing, and used to do it silently (spec audit 2026-11-18, Library L1).
+    // The pins are kept either way, so the line names the list and the rail comes
+    // back on its own once the read answers.
+    val pinnedLibraryRailsState by rememberLibraryHomeRailsState()
+    val pinnedLibraryRails = pinnedLibraryRailsState.rails
 
     // ...and the marker pass has to see those rows too. The rails live outside
     // the ViewModel's own rails (the loader above is the screens'), so a title
@@ -7507,6 +7512,20 @@ fun HomeScreen(
                                         message = "BingeCat needs reconnecting: your pinned " +
                                             "BingeCat rails are kept but cannot load until you " +
                                             "sign in again (Settings > BingeCat).",
+                                        modifier = Modifier.padding(horizontal = 24.dp)
+                                    )
+                                }
+                            }
+
+                            // ...and a pinned list whose read failed or overflowed,
+                            // which is not an auth problem (Library L1) - it used
+                            // to just leave Home a row short.
+                            if (pinnedLibraryRailsState.unreadable.isNotEmpty()) {
+                                item(key = "library_rail_unreadable", contentType = "status") {
+                                    KBStatusMessage(
+                                        message = libraryRailUnreadableLine(
+                                            pinnedLibraryRailsState.unreadable
+                                        ),
                                         modifier = Modifier.padding(horizontal = 24.dp)
                                     )
                                 }

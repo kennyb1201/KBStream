@@ -110,6 +110,9 @@ fun SearchScreen(
     val collectionResults by viewModel.collectionResults.collectAsStateWithLifecycle()
     val keywordResults by viewModel.keywordResults.collectAsStateWithLifecycle()
     val addonResultGroupsRaw by viewModel.addonResultGroups.collectAsStateWithLifecycle()
+    // Add-ons that never answered (spec audit 2026-11-18, Browse L1): without
+    // this, their rails were simply absent and read as "no matches".
+    val addonNotice by viewModel.addonNotice.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
@@ -359,6 +362,16 @@ fun SearchScreen(
         collectionResults.size + keywordResults.size +
         addonResultGroupsRaw.sumOf { it.results.size }
 
+    // ...but the hero's OWN count line quotes what is on the screen (spec audit
+    // 2026-11-18, Browse L5). The addon term above is raw while the addon rails
+    // draw the hidden-filtered groups and `catalogCount` is the filtered list, so
+    // "213 matches" could sit above 180 cards after hiding titles. The raw total
+    // keeps its one job - deciding whether anything MATCHED (the empty card) -
+    // and the quoted count is the filtered one on every term.
+    val shownCount = results.size + actorResults.size + studioResults.size +
+        collectionResults.size + keywordResults.size +
+        addonResultGroups.sumOf { it.results.size }
+
     // Full-bleed screen: edge spacing lives in the LazyColumn's
     // contentPadding, not on the container, so the poster rails can draw
     // their focused borders + glow all the way to the screen edge without
@@ -388,7 +401,7 @@ fun SearchScreen(
                     query = query,
                     onQueryChanged = viewModel::onQueryChanged,
                     onSubmit = { viewModel.commitSearch() },
-                    totalCount = totalCount,
+                    totalCount = shownCount,
                     catalogCount = results.size,
                     titlesTotal = titlesTotal,
                     titleTypeFilter = titleTypeFilter,
@@ -880,6 +893,14 @@ fun SearchScreen(
                 }
             }
 
+            // Outside the rails' own `isNotEmpty` gate on purpose: the notice's
+            // whole job is to speak when there is nothing beside it.
+            if (!isLoading && query.isNotBlank() && addonNotice != null) {
+                item(key = "addons_notice") {
+                    SearchAddonNotice(text = addonNotice.orEmpty(), phone = false)
+                }
+            }
+
             if (!isLoading && query.isNotBlank() && addonResultGroups.isNotEmpty()) {
                 addonResultGroups.forEach { group ->
                     // Identity key, never the position (LS-P2-3): the add-on
@@ -923,7 +944,8 @@ fun SearchScreen(
                                 railLabel = group.railLabel,
                                 type = group.catalogType,
                                 showType = showRailType,
-                                showAddon = showRailAddon
+                                showAddon = showRailAddon,
+                                hiddenByCap = group.hiddenByCap
                             ),
                             state = addonRailState
                         ) {

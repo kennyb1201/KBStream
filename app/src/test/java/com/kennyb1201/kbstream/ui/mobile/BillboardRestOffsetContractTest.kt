@@ -42,7 +42,9 @@ class BillboardRestOffsetContractTest {
     /** The pager's own call, up to its first page body. */
     private fun pagerSetup(): String =
         mobile.substringAfter("            HorizontalPager(")
-            .substringBefore("                val sweep = remember(index, cycleMs)")
+            // Up to the sweep call site, whose key line changed with Home L2
+            // (the move no longer takes the dwell).
+            .substringBefore("val sweep = remember(index)")
 
     // ── F1 + F2: the observer ─────────────────────────────────────────────
 
@@ -82,11 +84,15 @@ class BillboardRestOffsetContractTest {
     }
 
     @Test
-    fun `the cycle effect still keys on the page and the scroll flag only`() {
+    fun `the cycle effect still keys on the page, the scroll flag and the page's own settle`() {
         val cycle = cycleEffect()
         assertTrue(
-            "S6: the timer's inputs are untouched - a correction cannot reach them",
-            cycle.contains("pagerState.settledPage to pagerState.isScrollInProgress")
+            "S6: no correction state reaches the timer - the page's settle flag is the only " +
+                "addition since (spec audit 2026-11-18, Home L4: the dwell must not burn " +
+                "while the page is still resolving)",
+            cycle.contains("val page = pagerState.settledPage") &&
+                cycle.contains("pagerState.isScrollInProgress,") &&
+                cycle.contains("pagesNow.value.getOrNull(page)?.settled == true")
         )
         assertFalse(
             "no correction state was threaded into the timer's key - the snap is a " +
@@ -155,8 +161,10 @@ class BillboardRestOffsetContractTest {
                 mobile.substringAfter("fun billboardSweep(").isEmpty()
         )
         assertTrue(
-            "the sweep call site is still the pure rule",
-            mobile.contains("val sweep = remember(index, cycleMs) { billboardSweep(index, cycleMs) }")
+            // Spec audit 2026-11-18, Home L2: the move carries no clock, so the
+            // call site no longer takes (or is keyed on) the dwell.
+            "the sweep call site is still the pure rule, now without a clock",
+            mobile.contains("val sweep = remember(index) { billboardSweep(index) }")
         )
         val pager = pagerSetup()
         assertTrue(

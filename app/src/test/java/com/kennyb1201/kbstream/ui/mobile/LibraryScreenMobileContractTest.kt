@@ -222,10 +222,15 @@ class LibraryScreenMobileContractTest {
                 wording.contains("fun summary(") &&
                 wording.contains("\"\$itemCount titles\"")
         )
+        // Spec audit 2026-11-18, Library H2: the gate is ownership, not locality.
+        // A list this account owns is deletable from the phone whichever service
+        // it lives on (the TV always allowed it); a SAVED community list is not -
+        // it leaves by UNLIKING, which is the next branch.
         assertTrue(
-            "only a list this device owns can be deleted",
-            mobile.contains("if (list.source.isLocalList) {") &&
-                mobile.contains("listPendingDelete = list")
+            "only a list this account owns can be deleted, and a saved one leaves by unliking",
+            mobile.contains("if (list.source.canManageList && !list.liked) {") &&
+                mobile.contains("listPendingDelete = list") &&
+                mobile.contains("if (list.liked) {")
         )
         assertTrue(
             "the press opens a confirmation, never the delete itself",

@@ -17,7 +17,9 @@ import com.kennyb1201.kbstream.data.notifications.SportsReminderStore
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.sports.EspnSportsRepository
+import com.kennyb1201.kbstream.data.sports.SportsGame
 import com.kennyb1201.kbstream.data.sports.SportsLeagues
+import com.kennyb1201.kbstream.data.sports.TheSportsDbClient
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -43,6 +45,30 @@ class SportsNotificationWorker(
     appContext: Context,
     params: WorkerParameters
 ) : CoroutineWorker(appContext, params) {
+
+    /**
+     * The followed TSDB leagues' upcoming fixtures (spec audit 2026-11-18, Sports
+     * H1). Parallel like the ESPN half, and each failure is an empty list: one
+     * league's endpoint being down must not cancel the rest of the round.
+     */
+    private suspend fun theSportsDbFixtures(
+        leagues: List<com.kennyb1201.kbstream.data.sports.SportsLeague>
+    ): List<SportsGame> {
+        if (leagues.isEmpty()) return emptyList()
+        val key = TheSportsDbClient.keyFor(applicationContext)
+        if (key.isBlank()) return emptyList()
+        val client = TheSportsDbClient.shared()
+        return coroutineScope {
+            leagues.mapNotNull { league ->
+                league.theSportsDbId?.takeIf { it.isNotBlank() }?.let { leagueId ->
+                    async {
+                        runCatchingCancellable { client.fixtures(key, leagueId) }
+                            .getOrDefault(emptyList())
+                    }
+                }
+            }.awaitAll()
+        }.flatten()
+    }
 
     override suspend fun doWork(): Result = try {
         run()
@@ -74,14 +100,19 @@ class SportsNotificationWorker(
         val requested = SportsReminderStore.loadRequested(prefs)
         if (!SportsGameReminderRules.shouldSchedule(favorites, requested.keys)) return
 
-        // ESPN leagues only: this round reads a SCOREBOARD, and a `tsdb:` league
-        // has no ESPN path and no live scores at all (spec 2026-11-13 §5) - asking
-        // ESPN for one is an HTTP 400, and asking TheSportsDB would be a poll of a
-        // fixtures endpoint nothing here can use.
-        val leagues = SportsLeagues.enabled(
+        // BOTH sources now (spec audit 2026-11-18, Sports H1). The old comment
+        // said a `tsdb:` league "has no live scores at all" and dropped it - true
+        // about SCORES, and irrelevant to a START REMINDER, which needs nothing
+        // but a kick-off time, and TheSportsDB's fixtures carry one. So a
+        // followed Serie A / Bundesliga / Ligue 1 / Liga MX team never got its
+        // "starts in 15 minutes" while an ESPN team did. The TSDB half reads the
+        // same fixtures endpoint the hub's league tabs read.
+        val enabled = SportsLeagues.enabled(
             AppPreferences.getSportsEnabledLeagues(applicationContext)
-        ).filterNot { it.isTheSportsDb }
-        if (leagues.isEmpty()) return
+        )
+        if (enabled.isEmpty()) return
+        val leagues = enabled.filterNot { it.isTheSportsDb }
+        val fixtureLeagues = enabled.filter { it.isTheSportsDb }
 
         // The shared repository, so a round that lands while the hub is open
         // reads the same cache the hub is reading.
@@ -97,7 +128,7 @@ class SportsNotificationWorker(
                         .getOrDefault(emptyList())
                 }
             }.awaitAll()
-        }.flatten()
+        }.flatten() + theSportsDbFixtures(fixtureLeagues)
         if (games.isEmpty()) return
 
         val now = System.currentTimeMillis()

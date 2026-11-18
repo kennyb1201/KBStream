@@ -96,6 +96,7 @@ import com.kennyb1201.kbstream.ui.search.browseCategoryNounPlural
 import com.kennyb1201.kbstream.ui.search.browseCountLabel
 import com.kennyb1201.kbstream.ui.search.filterBrowseEntries
 import com.kennyb1201.kbstream.ui.search.partialWatchedTile
+import com.kennyb1201.kbstream.ui.search.SearchAddonNotice
 import com.kennyb1201.kbstream.ui.search.searchRailTitle
 import com.kennyb1201.kbstream.ui.search.titleCountLabel
 import com.kennyb1201.kbstream.ui.search.titlesEmptyLabel
@@ -178,6 +179,8 @@ fun SearchScreenMobile(
         val collectionResults by viewModel.collectionResults.collectAsStateWithLifecycle()
         val keywordResults by viewModel.keywordResults.collectAsStateWithLifecycle()
         val addonResultGroupsRaw by viewModel.addonResultGroups.collectAsStateWithLifecycle()
+        // Add-ons that never answered (spec audit 2026-11-18, Browse L1).
+        val addonNotice by viewModel.addonNotice.collectAsStateWithLifecycle()
         val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
         val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
         val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
@@ -883,6 +886,13 @@ fun SearchScreenMobile(
                     }
                 }
 
+                // Speaks precisely when there are no rails beside it (Browse L1).
+                if (!isLoading && query.isNotBlank() && addonNotice != null) {
+                    item(key = "addons_notice") {
+                        SearchAddonNotice(text = addonNotice.orEmpty(), phone = true)
+                    }
+                }
+
                 if (!isLoading && query.isNotBlank() && addonResultGroups.isNotEmpty()) {
                     addonResultGroups.forEach { group ->
                         item(
@@ -898,7 +908,8 @@ fun SearchScreenMobile(
                                     railLabel = group.railLabel,
                                     type = group.catalogType,
                                     showType = showRailType,
-                                    showAddon = showRailAddon
+                                    showAddon = showRailAddon,
+                                    hiddenByCap = group.hiddenByCap
                                 )
                             ) {
                                 items(

@@ -26,9 +26,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.imdb.ImdbTrailerData
+import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.reporting.SpotlightDiagTrace
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
+import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.mobile.MobileBillboard
 import kotlinx.coroutines.delay
 
@@ -171,9 +173,22 @@ internal fun SpotlightHeroSection(
     // section is composed on every entry, which is where they are re-read - and
     // a profile switch disposes Home for the picker, so a new entry reads the
     // new profile's answer.
-    val billboardEnabled = remember { AppPreferences.getHomeBillboardEnabled(context) }
-    val billboardFeeds = remember { AppPreferences.getHomeBillboardFeeds(context) }
-    val billboardCycleMs = remember { AppPreferences.getHomeBillboardCycleMs(context) }
+    // ...and KEYED ON THE PROFILE (spec audit 2026-11-18, Home L1). The seeds
+    // stay per-entry - they are not keyed on the sync revision, and must not be,
+    // for the reason above - but they are per-PROFILE values, and these three
+    // reads were the only ones in the TV Home path that were not keyed on it.
+    // Correctness rested entirely on the picker round-trip disposing Home, so a
+    // future in-place profile switch would have left the hero on the previous
+    // profile's on/off, feeds and cycle while layout, dwell and trailer had
+    // already flipped - a split-profile hero. Every sibling read on this screen
+    // keys the same way (the layout at HomeScreen, the phone's hero at
+    // HomeScreenMobile, and the trending-day load just below).
+    val billboardEnabled =
+        remember(activeProfileId) { AppPreferences.getHomeBillboardEnabled(context) }
+    val billboardFeeds =
+        remember(activeProfileId) { AppPreferences.getHomeBillboardFeeds(context) }
+    val billboardCycleMs =
+        remember(activeProfileId) { AppPreferences.getHomeBillboardCycleMs(context) }
 
     // The feeds the TV can offer: the same keys the phone's picker stores, built
     // from this Home's own rails (see billboardFeedKey).
@@ -196,18 +211,49 @@ internal fun SpotlightHeroSection(
         if (billboardEnabled) viewModel.loadBillboardTrendingDay()
     }
 
-    val feed = remember(feedSources, billboardFeeds, trendingDay) {
-        billboardChosenFeed(
+    // THE HERO HONOURS HIDE TOO (spec audit 2026-11-18, Home M1). Every rail on
+    // this screen is filtered by the hidden-title list upstream, so a hidden
+    // title could not reach a card - but the billboard feed is built HERE, from
+    // either the chosen rail source or the default trending day, and neither
+    // passed through that filter. The phone's hero has always dropped hidden
+    // titles (HomeScreenMobile's billboardFeed), so the same title vanished on
+    // the phone and cycled in the TV's hero.
+    val hiddenTitleKeys = rememberHiddenTitleKeys()
+    val feed = remember(feedSources, billboardFeeds, trendingDay, hiddenTitleKeys) {
+        val chosen = billboardChosenFeed(
             keys = billboardFeeds,
             sources = feedSources,
             defaultFeed = trendingDay
         ) ?: trendingDay
+        chosen
+            .filterNot { item ->
+                HiddenTitles.hides(
+                    hiddenTitleKeys,
+                    item.type,
+                    item.name,
+                    item.yearOrNull,
+                    item.id
+                )
+            }
+            .take(BILLBOARD_MAX_PAGES)
+    }
+
+    // The pinned "Top ... Today" rows' own art has promo text and service badges
+    // burned into it, so their titles may only reach the hero with TMDB art - or
+    // none (spec audit 2026-11-18, Home M2). Same rule as the phone's hero.
+    val tmdbOnlyIds = remember(rails) {
+        rails
+            .filter { rail ->
+                rail.addonName == com.kennyb1201.kbstream.data.home.PinnedRailsSpec.ADDON_NAME
+            }
+            .flatMap { rail -> rail.items.map { item -> item.id } }
+            .toSet()
     }
 
     val pages by viewModel.billboardPages.collectAsStateWithLifecycle()
-    LaunchedEffect(billboardEnabled, feed) {
+    LaunchedEffect(billboardEnabled, feed, tmdbOnlyIds) {
         if (billboardEnabled) {
-            viewModel.resolveBillboard(feed)
+            viewModel.resolveBillboard(feed, tmdbOnlyIds)
         } else {
             viewModel.clearBillboard("billboard disabled")
         }

@@ -271,10 +271,17 @@ class SearchDeepDiveContractTest {
     fun `the search view model no longer filters add-on rows by name alone`() {
         val vm = viewModel()
         assertTrue(
-            "the dedup index is consulted on the consolidated add-on publish — " +
-                "the one place the TMDB name+year rule runs since the snapshots " +
-                "started publishing before the index lands",
-            vm.contains("dedupAddonGroups(groups, tmdbDedupDeferred.await())")
+            "the dedup index is consulted on every add-on publish - page 1's " +
+                "deferred for the first paint, and the page-1-plus-later-pages " +
+                "union after enrichment (spec audit 2026-11-18, Browse M2)",
+            vm.contains("dedupAddonGroups(") &&
+                vm.contains("tmdbDedupDeferred.await()") &&
+                vm.contains("ids = pageOneKeys.ids + addonDedupIndex.ids")
+        )
+        assertTrue(
+            "and a later page feeds the index too, then re-checks the rails",
+            vm.contains("private fun learnDedupKeys(") &&
+                vm.contains("learnDedupKeys(pageResult)")
         )
         assertFalse(
             "the old name-only comparison is the bug C5 reports",

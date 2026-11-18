@@ -147,8 +147,12 @@ fun ProfileEditScreenMobile(
     var kidsRequirePinToExit by remember(effectiveEditId) {
         mutableStateOf(editing?.kidsRequirePinToExit ?: false)
     }
-    var kidsDailyLimitHours by remember(effectiveEditId) {
-        mutableIntStateOf((editing?.kidsDailyLimitMinutes ?: 0) / 60)
+    //
+    // Minutes, not hours (spec audit 2026-11-18, Settings M3): the phone had the
+    // same truncating seed as the TV editor (`minutes / 60`), so editing a 30- or
+    // 90-minute limit and saving turned it into Off or 1h.
+    var kidsDailyLimitMinutes by remember(effectiveEditId) {
+        mutableIntStateOf(editing?.kidsDailyLimitMinutes ?: 0)
     }
     var kidsBedtime by remember(effectiveEditId) {
         val mins = editing?.kidsBedtimeMinutes ?: 0
@@ -336,7 +340,7 @@ fun ProfileEditScreenMobile(
                 hideAddons = kidsHideAddons,
                 lockLiveTv = kidsLockLiveTv,
                 requirePinToExit = kidsRequirePinToExit,
-                dailyLimitMinutes = kidsDailyLimitHours * 60,
+                dailyLimitMinutes = kidsDailyLimitMinutes,
                 bedtimeMinutes = if (kidsBedtimeOn) {
                     bedtimeMinutesFor(kidsBedtime, kidsBedtimeMinute)
                 } else 0
@@ -559,8 +563,13 @@ fun ProfileEditScreenMobile(
                         "3h" to 3,
                         "4h" to 4
                     ),
-                    selected = kidsDailyLimitHours,
-                    onSelect = { kidsDailyLimitHours = it }
+                    // A limit that is not a whole hour selects nothing, and
+                    // survives untouched until a chip is picked.
+                    selected = kidsDailyLimitMinutes
+                        .takeIf { it > 0 && it % 60 == 0 }
+                        ?.div(60)
+                        ?: -1,
+                    onSelect = { kidsDailyLimitMinutes = it * 60 }
                 )
                 KidsOption(
                     title = "Bedtime lock",
@@ -761,10 +770,15 @@ fun ProfileEditScreenMobile(
                 val anyPinField = newPinInput.isNotBlank() ||
                     confirmPinInput.isNotBlank() || currentPinInput.isNotBlank()
                 if (anyPinField && KidsGate.firstPinNeedsParentPin(editing)) {
-                    feedback.show(
-                        text = "Set a parent PIN first",
-                        isError = true
-                    )
+                    // Same dead end the TV editor had (spec audit 2026-11-18,
+                    // Settings L1): a refusal with nowhere to go. The refusal
+                    // stays, but it now raises the prompt's CREATE shape and
+                    // runs this save once the parent PIN is written.
+                    parentPinPromptGated = false
+                    parentPinPromptWhy = "Set a parent PIN to protect this profile"
+                    parentPinGateTarget = editing
+                    parentPinAfterVerify = saveProfile
+                    parentPinPrompt = true
                     return@KBButton
                 }
 
@@ -782,12 +796,12 @@ fun ProfileEditScreenMobile(
                                 kidsHideAddons != (editing?.kidsHideAddons ?: true) ||
                                 kidsLockLiveTv != (editing?.kidsLockLiveTv ?: true) ||
                                 kidsRequirePinToExit != (editing?.kidsRequirePinToExit ?: false) ||
-                                kidsDailyLimitHours * 60 != (editing?.kidsDailyLimitMinutes ?: 0) ||
+                                kidsDailyLimitMinutes != (editing?.kidsDailyLimitMinutes ?: 0) ||
                                 formBedtime != storedBedtime
                             )
                         )
                 val lockBeingSet = kidsModeOn &&
-                    (kidsDailyLimitHours > 0 || kidsBedtimeOn)
+                    (kidsDailyLimitMinutes > 0 || kidsBedtimeOn)
                 if (
                     KidsGate.saveNeedsPin(
                         kidsChanged = kidsChanged,

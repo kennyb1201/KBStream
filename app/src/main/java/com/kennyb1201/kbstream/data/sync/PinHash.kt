@@ -39,8 +39,15 @@ object PinHash {
      * a server-grade count: verification runs on a TV remote press, and this
      * guards a household gate, not a bank. 100k rounds still turns a 10,000-PIN
      * sweep from instant into minutes per profile per salt.
+     *
+     * Raised to the OWASP floor for PBKDF2-HMAC-SHA256 (spec audit 2026-11-18,
+     * Settings L2). The hashes live in ordinary SharedPreferences, so an offline
+     * copy is a 10,000-candidate sweep per salt; the round count is the only thing
+     * making that sweep cost time at all. Nothing is locked out by the raise: the
+     * count travels with each hash, existing ones verify as they were and are
+     * rehashed at this count the next time their PIN is entered ([needsUpgrade]).
      */
-    private const val ITERATIONS = 100_000
+    private const val ITERATIONS = 210_000
 
     private const val KEY_BITS = 256
     private const val SALT_BYTES = 16
@@ -77,8 +84,16 @@ object PinHash {
     }
 
     /** True when a stored PIN hash predates the salted format and should be rewritten. */
-    fun needsUpgrade(stored: String?): Boolean =
-        !stored.isNullOrBlank() && !stored.startsWith("$PREFIX$SEPARATOR")
+    fun needsUpgrade(stored: String?): Boolean {
+        if (stored.isNullOrBlank()) return false
+        // A legacy bare digest is the obvious case; a v2 hash made with fewer
+        // rounds than this build asks for is the other one (Settings L2). Without
+        // that second half, raising [ITERATIONS] would have changed nothing for
+        // every hash already on a device.
+        if (!stored.startsWith("$PREFIX$SEPARATOR")) return true
+        val iterations = stored.split(SEPARATOR).getOrNull(1)?.toIntOrNull() ?: return true
+        return iterations < ITERATIONS
+    }
 
     private fun derive(pin: String, salt: ByteArray, iterations: Int): ByteArray {
         val spec = PBEKeySpec(pin.toCharArray(), salt, iterations, KEY_BITS)

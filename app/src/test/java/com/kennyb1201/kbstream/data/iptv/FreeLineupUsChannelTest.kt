@@ -57,6 +57,22 @@ class FreeLineupUsChannelTest {
     }
 
     @Test
+    fun `a tail after the country is not read as the country`() {
+        // Spec audit 2026-11-18, Live TV L2: taking the last dotted segment
+        // blindly answered "west" for a US affiliate and dropped it as foreign -
+        // the one outcome the rule promises never to cause.
+        assertEquals("us", FreeLineup.countryOf("abc.us.west"))
+        assertEquals("us", FreeLineup.countryOf("abc.us.2"))
+        assertEquals("us", FreeLineup.countryOf("abc.us.hd"))
+        assertEquals("lb", FreeLineup.countryOf("LBCInternational.lb.east@SD"))
+        assertTrue("and the channel itself still loads", FreeLineup.isUsChannel(channel("abc.us.west")))
+        assertFalse(
+            "a foreign channel with the same kind of tail still goes",
+            FreeLineup.isUsChannel(channel("Channel.uk.west"))
+        )
+    }
+
+    @Test
     fun `an id with no country names none`() {
         assertNull(FreeLineup.countryOf(null))
         assertNull(FreeLineup.countryOf(""))

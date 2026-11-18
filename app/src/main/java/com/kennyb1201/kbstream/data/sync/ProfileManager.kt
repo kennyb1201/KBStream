@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.sync
 
 import android.content.Context
 import android.util.Log
+import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -385,9 +386,16 @@ object ProfileManager {
     }
 
     // ── Profile PIN (Who's Watching lock) ────────────────────────────
-    // Only the hash is stored/synced — the plain PIN never persists. The format
-    // is salted PBKDF2 (see [PinHash]); it used to be bare SHA-256, which made
-    // the synced profiles blob a plaintext-equivalent copy of every PIN.
+    // Only the HASH is stored, and the plain PIN never persists. The hash IS
+    // synced now (spec audit 2026-11-18, Settings M2): a PIN set on the Onn used
+    // to leave the same child's tile open on the phone and the Fire Stick,
+    // because the blob deliberately left `pinHash` out and the apply side kept
+    // this device's own - so every device had to be PINned separately, and
+    // nothing in Settings said so. The blob carries it and the merge takes it;
+    // a blob from an older build (which omits the field) still leaves this
+    // device's hash in place rather than erasing it. The format is salted
+    // PBKDF2 (see [PinHash]); it used to be bare SHA-256, which made the LOCAL
+    // profiles store a plaintext-equivalent copy of every PIN.
     //
     // `internal` rather than private: the app-level PARENT PIN (see
     // [KidsTimeGuard.hasParentPin]) is a second credential of the same kind, and
@@ -819,6 +827,11 @@ object ProfileManager {
         runCatching {
             com.kennyb1201.kbstream.data.security.SecureTokenStore.evictProfile(profileId)
         }
+        // And this profile's PIN hash, which is keyed by id inside one
+        // account-wide vault rather than living in a profile-scoped store.
+        runCatching {
+            com.kennyb1201.kbstream.data.security.PinVault.clearProfileHash(context, profileId)
+        }
         context.deleteDatabase(ProfileStorage.dbName(profileId, "kbstream_watch_history"))
         context.deleteDatabase(ProfileStorage.dbName(profileId, "iptv_epg.db"))
         // Remove any uploaded avatar files for this profile.
@@ -871,17 +884,38 @@ object ProfileManager {
         }
         servingUnreadableBlob = false
         _profilesUnreadable.value = false
-        return ProfileLoad(
-            parsed
-                // Kids ceilings written by older builds carry the legacy
-                // "age"-era ints; coerce once at the read source so every
-                // consumer (filtering, strictness checks, editor preselect)
-                // only ever sees current ordinals.
-                .map { p ->
-                    if (p.kidsMaxAge == null) p
-                    else p.copy(kidsMaxAge = KidsMode.normalize(p.kidsMaxAge))
+        // The PIN hash lives in the encrypted vault now (Settings L2), with the
+        // blob's own field as the pre-migration source: a hash still in the JSON
+        // is adopted into the vault and the blob is rewritten without it. The
+        // re-attach is unconditional, so the Profile callers see is unchanged.
+        var adopted = false
+        val reattached = parsed
+            // Kids ceilings written by older builds carry the legacy
+            // "age"-era ints; coerce once at the read source so every
+            // consumer (filtering, strictness checks, editor preselect)
+            // only ever sees current ordinals.
+            .map { p ->
+                val normalized =
+                    if (p.kidsMaxAge == null) p else p.copy(kidsMaxAge = KidsMode.normalize(p.kidsMaxAge))
+                val vaulted = com.kennyb1201.kbstream.data.security.PinVault
+                    .profileHash(context, normalized.id)
+                when {
+                    vaulted != null -> normalized.copy(pinHash = vaulted)
+                    normalized.pinHash.isNullOrBlank() -> normalized
+                    else -> {
+                        val stored = com.kennyb1201.kbstream.data.security.PinVault
+                            .setProfileHash(context, normalized.id, normalized.pinHash)
+                        if (stored) adopted = true
+                        normalized
+                    }
                 }
-        )
+            }
+        if (adopted) {
+            // Rewrite so the plaintext copy is gone. A failure here is not fatal:
+            // the vault now holds it and the read above proves which one wins.
+            runCatching { saveProfiles(context, reattached, cloudRepair = true) }
+        }
+        return ProfileLoad(reattached)
     }
 
     /**
@@ -929,9 +963,31 @@ object ProfileManager {
             )
             return false
         }
+        // The PIN hashes go to the encrypted vault, NOT into this document
+        // (spec audit 2026-11-18, Settings L2): `profiles_json` is an ordinary
+        // prefs file, and a salted hash of a 4-digit PIN in one is minutes of
+        // offline work from the PIN itself. The field is written as null here and
+        // re-attached by [readProfiles], so callers keep seeing it on the Profile
+        // they hold.
+        val stripped = profiles.map { profile ->
+            if (profile.pinHash.isNullOrBlank()) {
+                profile
+            } else {
+                val stored = com.kennyb1201.kbstream.data.security.PinVault
+                    .setProfileHash(context, profile.id, profile.pinHash)
+                if (!stored) {
+                    // A vault write that did not read back keeps the hash HERE
+                    // rather than dropping it: a PIN that vanishes locks its
+                    // owner out, a PIN in the legacy field is the lesser fault.
+                    Log.w(TAG, "profile PIN for ${profile.id} kept in the legacy blob")
+                    return@map profile
+                }
+                profile.copy(pinHash = null)
+            }
+        }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
-            .putString(KEY_PROFILES, json.encodeToString(kotlinx.serialization.builtins.ListSerializer(Profile.serializer()), profiles))
+            .putString(KEY_PROFILES, json.encodeToString(kotlinx.serialization.builtins.ListSerializer(Profile.serializer()), stripped))
             .apply()
         if (cloudRepair) {
             // The blob just became readable, and this session has to know it: a
@@ -968,6 +1024,37 @@ object ProfileManager {
                             put("kidsRequirePinToExit", p.kidsRequirePinToExit)
                             put("kidsDailyLimitMinutes", p.kidsDailyLimitMinutes)
                             put("kidsBedtimeMinutes", p.kidsBedtimeMinutes)
+                            // The PIN hash IS account state now (spec audit
+                            // 2026-11-18, Settings M2 - a reversed decision,
+                            // see the apply side for why the old one was
+                            // wrong for a household): a PIN set on the Onn
+                            // used to leave the same child's tile open on the
+                            // phone and the Fire Stick.
+                            p.pinHash?.takeIf { it.isNotBlank() }?.let { put("pinHash", it) }
+                            // And today's usage of the daily budget, so a child
+                            // cannot spend a fresh allowance on every device
+                            // (Settings M1). The counter only ever grows inside
+                            // a day, which is what makes the apply side's MAX
+                            // safe.
+                            if (p.kidsMaxAge != null) {
+                                KidsTimeGuard.usageSnapshot(context, p.id)?.let { usage ->
+                                    put("kidsUsedDay", usage.day)
+                                    put("kidsUsedSeconds", usage.seconds)
+                                }
+                            }
+                            // The MDBList ledger is the profile's allowance
+                            // against its own key (Data M5). Only the profile
+                            // this device is RUNNING has a live ledger, so only
+                            // its spend is published - the rest of the
+                            // household's totals are whatever those devices
+                            // published for themselves.
+                            if (p.id == _activeProfile.value?.id) {
+                                MdbListClient.spendForActiveProfile(context)
+                                    ?.let { (day, count) ->
+                                        put("mdblistSpendDay", day)
+                                        put("mdblistSpend", count)
+                                    }
+                            }
                             put("guest", p.guest)
                             put("createdAt", p.createdAt)
                         }
@@ -1109,9 +1196,31 @@ object ProfileManager {
                 kidsBedtimeMinutes =
                     (str("kidsBedtimeMinutes")?.toIntOrNull() ?: 0)
                         .coerceIn(0, 24 * 60 + 59),
+                // Absent from an older build's blob, which is why the merge
+                // below still carries a local hash across (Settings M2).
+                pinHash = str("pinHash")?.takeIf { it.isNotBlank() },
                 guest = bool("guest", default = false),
                 createdAt = lng("createdAt") ?: 0L
             )
+        }
+        // The usage each profile's blob carried, applied AFTER the merge so a
+        // pulled blob can never hand a child a fresh budget (Settings M1).
+        val usage = arr.mapNotNull { el ->
+            val obj = el as? kotlinx.serialization.json.JsonObject ?: return@mapNotNull null
+            fun str(k: String) = (obj[k] as? JsonPrimitive)?.content
+            val id = str("id") ?: return@mapNotNull null
+            val day = str("kidsUsedDay")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val seconds = str("kidsUsedSeconds")?.toIntOrNull() ?: return@mapNotNull null
+            Triple(id, day, seconds)
+        }
+        // The MDBList spend each profile's blob carried (Data M5).
+        val spend = arr.mapNotNull { el ->
+            val obj = el as? kotlinx.serialization.json.JsonObject ?: return@mapNotNull null
+            fun str(k: String) = (obj[k] as? JsonPrimitive)?.content
+            val id = str("id") ?: return@mapNotNull null
+            val day = str("mdblistSpendDay")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val count = str("mdblistSpend")?.toIntOrNull() ?: return@mapNotNull null
+            Triple(id, day, count)
         }
         val remoteDeleted = (payload["deletedProfiles"] as? JsonArray)
             ?.mapNotNull { (it as? JsonPrimitive)?.content }
@@ -1129,13 +1238,13 @@ object ProfileManager {
         val localById = local.associateBy { it.id }
         val byId = (local + list).associateBy { it.id }
         val merged = byId.values
-            // The sync blob deliberately carries NO pinHash - it is a device
-            // secret, not account state (see profilesSyncBlob) - so a remote
-            // entry for a profile this device holds arrives with the default
-            // null, and the merge below (remote wins per id) replaced the
-            // local hash with it. Every pull therefore erased every PIN on the
-            // very device that set one, and the kids profile silently became
-            // unlocked. Carry the local hash across by id instead.
+            // A blob from an OLDER build carries no pinHash (the field used to
+            // be left out on purpose, see profilesSyncBlob): a remote entry for a
+            // profile this device holds then arrives with null, and this merge
+            // (remote wins per id) would replace the local hash with it -
+            // erasing the PIN on the very device that set one. A present hash is
+            // account state now and wins; an absent one keeps what this device
+            // has.
             .map { remote ->
                 val localPin = localById[remote.id]?.pinHash
                 if (remote.pinHash == null && !localPin.isNullOrBlank()) {
@@ -1153,6 +1262,19 @@ object ProfileManager {
         // the repair that flag exists to allow - and it clears the flag.
         saveProfiles(context, merged, cloudRepair = true)
         _profiles.value = merged
+        // Today's usage, per profile, MAX-merged into this device's counters
+        // (Settings M1). Nothing here can lower a counter: a pull is a
+        // household sharing a limit, not a way to buy more time.
+        usage.forEach { (id, day, seconds) ->
+            if (id in deleted) return@forEach
+            runCatching { KidsTimeGuard.applySharedUsage(context, id, day, seconds) }
+        }
+        // And the MDBList spend, MAX-merged the same way (Data M5): a pull is
+        // the household agreeing on one ledger, not a way to buy quota back.
+        spend.forEach { (id, day, count) ->
+            if (id in deleted) return@forEach
+            runCatching { MdbListClient.applySharedSpend(context, id, day, count) }
+        }
 
         val activeBefore = _activeProfile.value?.id
         if (activeBefore != null && activeBefore in removed) {

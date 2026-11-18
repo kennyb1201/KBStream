@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -74,6 +75,11 @@ fun TraktConnectScreen(
     onBack: () -> Unit,
     vm: TraktViewModel = viewModel()
 ) {
+    // Leaving ends the attempt (spec audit 2026-11-18, Onboarding M1): stopPolling
+    // existed but nothing on the way out called it.
+    DisposableEffect(Unit) {
+        onDispose { vm.stopPolling() }
+    }
     // The phone entry: same ViewModel and flow, laid out for touch.
     if (!com.kennyb1201.kbstream.FormFactor.isTv) {
         TraktConnectScreenMobile(modifier = modifier, onBack = onBack, vm = vm)
@@ -158,6 +164,23 @@ fun TraktConnectScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         KBButton(label = "BACK", onClick = onBack)
                     }
+                } else if (uiState.isConnected && uiState.needsReconnect) {
+                    // The dead-grant state every other tracker has and Trakt did
+                    // not (spec audit 2026-11-18, Onboarding M2): a refused
+                    // session used to read as "Account connected" with silently
+                    // dead scrobbles, ratings and totals.
+                    TraktStatusPanel(
+                        title = "Trakt needs reconnecting",
+                        message = uiState.statusMessage
+                            ?: "This device's Trakt session was refused."
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        KBButton(label = "RECONNECT", onClick = vm::startConnect)
+                        KBButton(label = "DISCONNECT", danger = true) {
+                            showDisconnectConfirm = true
+                        }
+                        KBButton(label = "BACK", onClick = onBack)
+                    }
                 } else if (uiState.isConnected) {
                     TraktStatusPanel(
                         title = "Account connected",
@@ -188,6 +211,11 @@ fun TraktConnectScreen(
                     }
                 } else if (uiState.requiresParentPin) {
                     TraktParentPinGate(vm = vm, onBack = onBack)
+                } else if (uiState.parentPinCreate) {
+                    // No parent PIN on this device at all (spec audit 2026-11-18,
+                    // Onboarding M4): create it here instead of the dead-end
+                    // sentence that used to be the whole answer.
+                    TraktParentPinCreateGate(vm = vm, onBack = onBack)
                 } else {
                     TraktStatusPanel(
                         title = "Device link required",
@@ -297,6 +325,68 @@ fun TraktConnectScreen(
  * The same field the lock veil uses (digits only, four of them), because that is
  * the credential this app already asked parents to set.
  */
+/**
+ * The CREATE half of the parent-PIN gate (spec audit 2026-11-18, Onboarding M4).
+ *
+ * A kids profile on a device with no parent PIN was told a parent needs to set
+ * one, and the page offered only UNLOCK - a button that needs the credential it
+ * is asking for. The PIN is SET here through the same shared rules the profile
+ * editors and the Simkl gate use ([com.kennyb1201.kbstream.ui.profiles.parentPinPromptSpec]
+ * CREATE and [com.kennyb1201.kbstream.ui.profiles.submitParentPinPrompt]): new +
+ * confirm, written, then the device flow the gate was blocking starts without
+ * asking again. A rejected PIN is shown inline and this prompt stays up.
+ */
+@Composable
+private fun TraktParentPinCreateGate(
+    vm: TraktViewModel,
+    onBack: () -> Unit
+) {
+    val uiState by vm.uiState.collectAsStateWithLifecycle()
+    var newPin by remember { mutableStateOf("") }
+    var confirmPin by remember { mutableStateOf("") }
+    val newPinField = remember { FocusRequester() }
+    val confirmPinField = remember { FocusRequester() }
+    LaunchedEffect(Unit) { landFocusOn(newPinField) }
+
+    TraktStatusPanel(
+        title = "Set a parent PIN",
+        message = "Linking an account on a kids profile is a parent's action, and " +
+            "this device has no parent PIN yet."
+    )
+    KBTextField(
+        value = newPin,
+        onValueChange = {
+            newPin = it.filter(Char::isDigit).take(4)
+            vm.clearError()
+        },
+        placeholder = "New PIN",
+        focusRequester = newPinField,
+        keyboardType = KeyboardType.NumberPassword,
+        visualTransformation = PasswordVisualTransformation(),
+        keepFocusOnDone = true
+    )
+    KBTextField(
+        value = confirmPin,
+        onValueChange = {
+            confirmPin = it.filter(Char::isDigit).take(4)
+            vm.clearError()
+        },
+        placeholder = "Confirm PIN",
+        focusRequester = confirmPinField,
+        keyboardType = KeyboardType.NumberPassword,
+        visualTransformation = PasswordVisualTransformation(),
+        keepFocusOnDone = true
+    )
+    uiState.parentPinMessage?.let { TraktErrorLine(it) }
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        KBButton(
+            label = "SET PIN",
+            onClick = { vm.submitParentPinCreation(newPin, confirmPin) }
+        )
+        KBButton(label = "CANCEL", onClick = onBack)
+    }
+}
+
 @Composable
 private fun TraktParentPinGate(
     vm: TraktViewModel,

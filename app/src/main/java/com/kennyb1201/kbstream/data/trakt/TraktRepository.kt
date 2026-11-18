@@ -302,7 +302,19 @@ class TraktRepository private constructor(private val context: Context?) {
     // sockets; the headers interceptor and the timing trace are this service's own.
     private val okHttpClient by lazy {
         BaseHttpClient.derived {
-            addInterceptor(TraktHeadersInterceptor())
+            // The refusal observer is what gives Trakt the dead-grant state every
+            // other tracker already has (Onboarding M2): the interceptor sees the
+            // response for every call, which is the only place a 401 on a
+            // Bearer-authenticated read can be noticed without touching each of
+            // the 20-odd call sites. Best-effort: a store that will not open must
+            // not fail the request.
+            addInterceptor(
+                TraktHeadersInterceptor(
+                    onRefused = {
+                        runCatching { store.setNeedsReconnect(true) }
+                    }
+                )
+            )
             addInterceptor(NetworkTraceInterceptor())
         }
     }
@@ -464,8 +476,22 @@ class TraktRepository private constructor(private val context: Context?) {
         return true
     }
 
+    /**
+     * True when Trakt refused this profile's session and only a reconnect fixes
+     * it (spec audit 2026-11-18, Onboarding M2).
+     *
+     * Set by the headers interceptor on a 401/403 for a request that carried a
+     * Bearer, so it is the SERVER's verdict rather than an inference from a
+     * failed read (a timeout is not a refusal).
+     */
+    fun needsReconnect(): Boolean = runCatching { store.needsReconnect() }.getOrDefault(false)
+
     /** The access token for a request, refreshed first when it is due. */
     suspend fun validAccessToken(nowMs: Long = System.currentTimeMillis()): String? {
+        // A refused grant is not retried: every read would earn another 401, and
+        // the screen would keep drawing an account that Trakt has already
+        // dropped (M2).
+        if (needsReconnect()) return null
         val token = store.read() ?: return null
         if (TraktDeviceFlowRules.refreshDue(token.expiresAtEpochMillis, nowMs)) {
             refreshIfDue(nowMs)

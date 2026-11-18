@@ -107,7 +107,15 @@ data class AddonResultGroup(
     // exempt from the TMDB de-dupe — and because that de-dupe now runs on the
     // consolidated publish rather than while collecting, the exemption has to
     // travel with the group instead of living next to the catalog.
-    val searchStyle: Boolean = false
+    val searchStyle: Boolean = false,
+    //
+    // How many of this rail's hits the per-rail cap threw away before the rail
+    // was published (spec audit 2026-11-18, Browse M5). Zero means the cap cost
+    // nothing. The rail title says so, because a cap the viewer cannot see reads
+    // as "that is everything this add-on has" — the same silent truncation the
+    // Titles rail was fixed for. Counted at collect time, so a later de-dupe
+    // shrinking [results] cannot make the number a lie.
+    val hiddenByCap: Int = 0
 )
 
 /**
@@ -185,6 +193,35 @@ internal data class TmdbDedupIndex(
  * Extracted from [SearchViewModel.mergeTitles] so the merged order can be
  * pinned without the ViewModel (see [searchTitleOrder]).
  */
+/**
+ * The line that names add-ons which never answered (Browse L1).
+ *
+ * Not an error dialog and not a retry button: the rest of the search is fine and
+ * a new search is the retry. What it must not do is let a missing rail pass for
+ * an empty catalog.
+ */
+internal fun addonSilenceNotice(silentAddons: Int, droppedCatalogs: Int = 0): String {
+    val silence = if (silentAddons == 1) {
+        "1 add-on did not answer in time, so its rails are missing from this search."
+    } else if (silentAddons > 1) {
+        "$silentAddons add-ons did not answer in time, so their rails are missing " +
+            "from this search."
+    } else {
+        ""
+    }
+    // The probe cap is the other silence (spec audit 2026-11-18, Browse L3):
+    // catalogs past [SearchViewModel.MAX_ADDON_CATALOG_PROBES] are never asked,
+    // so their rails simply do not exist and nothing used to say so.
+    val trimmed = if (droppedCatalogs == 1) {
+        "1 more catalog was not searched."
+    } else if (droppedCatalogs > 1) {
+        "$droppedCatalogs more catalogs were not searched."
+    } else {
+        ""
+    }
+    return listOf(silence, trimmed).filter { it.isNotEmpty() }.joinToString(" ")
+}
+
 internal fun searchMatchScore(lowerQuery: String, name: String?): Int {
     val n = name?.trim()?.lowercase().orEmpty()
     if (n.isEmpty()) return 0
@@ -567,6 +604,16 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
      */
     private var resultsQuery: String? = null
 
+    /**
+     * Every de-dupe key the rail has learned so far this search (Browse M2).
+     *
+     * Grows with the paging, so an add-on row that repeats a title found on page
+     * 2 goes too - it used to be de-duped against page 1 only, and the same film
+     * showed once in the Titles rail and once in an add-on rail. Reset with the
+     * paging state, and seeded from a cached snapshot's own index on restore.
+     */
+    private var addonDedupIndex = TmdbDedupIndex()
+
     private val _addonResultGroups =
         MutableStateFlow<List<AddonResultGroup>>(
             emptyList()
@@ -574,6 +621,20 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
     val addonResultGroups: StateFlow<List<AddonResultGroup>> =
         _addonResultGroups.asStateFlow()
+
+    /**
+     * What the add-on wave could not deliver, or null when it delivered
+     * everything it was asked for (spec audit 2026-11-18, Browse L1).
+     *
+     * An add-on whose probes all timed out used to leave NOTHING on screen: no
+     * rails, no line, nothing to distinguish "this catalog has no matches" from
+     * "this catalog never answered". The screen now says so once, above the
+     * rails. Kept as its own flow rather than part of the rail list, because the
+     * notice has to show precisely when there are no rails to put it beside.
+     */
+    private val _addonNotice = MutableStateFlow<String?>(null)
+
+    val addonNotice: StateFlow<String?> = _addonNotice.asStateFlow()
 
     private var searchJob: Job? = null
 
@@ -903,6 +964,9 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         titlesGeneration++
         titlesPageJob?.cancel()
         titlesPaging = TitlesPagingState()
+        // A new query (or a dead one) carries no identities: the add-on index is
+        // this search's own evidence and must start empty (Browse M2).
+        addonDedupIndex = TmdbDedupIndex()
         titlesQuery = null
         _titlesLoadingMore.value = false
         // A new query starts on the whole rail, in the rail's own order: the
@@ -987,7 +1051,20 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                     what: String,
                     call: suspend () -> List<T>?
                 ): List<T> {
-                    val outcome = runCatchingCancellable { call() }
+                    // BOUNDED (spec audit 2026-11-18, Browse H1). The six waves
+                    // are awaited together, so before this one stalled TMDB
+                    // endpoint held the whole Titles rail for the HTTP client's
+                    // 30 s read timeout - far longer than a viewer waits, while
+                    // the other five had already answered. A timeout is a FAILED
+                    // wave, exactly like a dead call.
+                    val outcome = withTimeoutOrNull(TMDB_WAVE_TIMEOUT_MS) {
+                        runCatchingCancellable { call() }
+                    }
+                    if (outcome == null) {
+                        failedTmdbWaves.incrementAndGet()
+                        Log.w("KBStream", "$what timed out after ${TMDB_WAVE_TIMEOUT_MS}ms")
+                        return emptyList()
+                    }
                     val results = outcome.getOrNull()
                     if (outcome.isFailure || results == null) {
                         failedTmdbWaves.incrementAndGet()
@@ -1005,13 +1082,24 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 suspend fun tmdbTitlePage(
                     what: String,
                     call: suspend () -> TmdbTitlePage?
-                ): TmdbTitlePage? =
-                    runCatchingCancellable { call() }
-                        .onFailure { e ->
-                            failedTmdbWaves.incrementAndGet()
-                            Log.e("KBStream", "$what failed", e)
-                        }
-                        .getOrNull()
+                ): TmdbTitlePage? {
+                    // Same bound as [tmdbWave], and the same rule: a timeout is
+                    // a page that did not arrive (null), never an empty page, so
+                    // paging can ask for it again (Browse H1).
+                    val outcome = withTimeoutOrNull(TMDB_WAVE_TIMEOUT_MS) {
+                        runCatchingCancellable { call() }
+                    }
+                    if (outcome == null) {
+                        failedTmdbWaves.incrementAndGet()
+                        Log.w("KBStream", "$what timed out after ${TMDB_WAVE_TIMEOUT_MS}ms")
+                        return null
+                    }
+                    outcome.onFailure { e ->
+                        failedTmdbWaves.incrementAndGet()
+                        Log.e("KBStream", "$what failed", e)
+                    }
+                    return outcome.getOrNull()
+                }
 
                 // Each wave is timed on its own (spec 2026-11-15, search
                 // speedup F1): the merge awaits ALL of these, so the slowest
@@ -1125,14 +1213,45 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 // later page takes. Going through it here is what lets the
                 // rail keep its cards, its counters and its error in one
                 // object instead of page 1 and page N having separate rules.
+                // The profile filter's verdict is counted here rather than
+                // inside the pager: the pager cannot see the filter, and the
+                // hero line must stop promising hits this profile will never be
+                // shown (Browse M1).
+                val pageOne = titlesForProfile(mergedTitles)
+                val dedupForPageOne = dedupIndexFor(
+                    moviePage?.items.orEmpty(),
+                    tvPage?.items.orEmpty()
+                )
                 titlesPaging = TitlesPagingState().absorb(
                     TitlesPage(
                         number = 1,
-                        merged = titlesForProfile(mergedTitles),
+                        merged = pageOne,
                         totalPages = maxOf(moviePage?.totalPages ?: 0, tvPage?.totalPages ?: 0),
-                        total = (moviePage?.totalResults ?: 0) + (tvPage?.totalResults ?: 0)
+                        total = (moviePage?.totalResults ?: 0) + (tvPage?.totalResults ?: 0),
+                        profileDropped = mergedTitles.size - pageOne.size,
+                        dedupIds = dedupForPageOne.ids,
+                        dedupNameYears = dedupForPageOne.nameYears
                     )
                 )
+                learnDedupKeys(dedupForPageOne)
+                // A digitally-filtered page can come back EMPTY while TMDB still
+                // has pages behind it - page 1 of an upcoming film is all
+                // unreleased titles, which the filter drops - and the rail then
+                // showed "No matches found" with released hits one page away
+                // and no sentinel to scroll to (spec audit 2026-11-18, Browse
+                // H2). Ask the next few pages instead of dead-ending; the cap
+                // keeps a query whose whole result set is filtered from walking
+                // the service's 500-page ceiling.
+                var emptyPageFill = 0
+                while (titlesPaging.results.isEmpty() &&
+                    titlesPaging.hasMore &&
+                    emptyPageFill < EMPTY_PAGE_FILL_LIMIT
+                ) {
+                    emptyPageFill++
+                    val filled = fetchTitlesPage(normalized, titlesPaging.nextPage) ?: break
+                    titlesPaging = titlesPaging.absorb(filled)
+                    learnDedupKeys(filled)
+                }
                 titlesQuery = normalized
                 publishTitles()
                 // The titles leg closes at the publish, not at the last await:
@@ -1210,13 +1329,18 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                     normalized,
                     SearchSnapshot(
                         titles = titlesPaging.results,
-                        titlesTotal = titlesPaging.total,
+                        // Same number the hero line draws, so a repeat of the
+                        // search does not restore the overstated one (Browse M1).
+                        titlesTotal = titlesPaging.shownTotal,
                         titlesTotalPages = titlesPaging.totalPages,
                         actors = _actorResults.value,
                         studios = _studioResults.value,
                         collections = _collectionResults.value,
                         keywords = _keywordResults.value,
-                        tmdbDedup = tmdbDedupDeferred.await()
+                        // The accumulated index, not just page 1's: a repeat of
+                        // this search de-dupes against every page it has loaded
+                        // (Browse M2).
+                        tmdbDedup = addonDedupIndex
                     )
                 )
 
@@ -1239,6 +1363,9 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 Log.e("KBStream", "Search failed", e)
                 titlesPaging = TitlesPagingState()
+        // A new query (or a dead one) carries no identities: the add-on index is
+        // this search's own evidence and must start empty (Browse M2).
+        addonDedupIndex = TmdbDedupIndex()
                 publishTitlesSummary()
                 _results.value = emptyList()
                 _actorResults.value = emptyList()
@@ -1269,6 +1396,58 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * One page of the Titles rail: both media waves, in parallel, each bounded
+     * (spec audit 2026-11-18, Browse H1 / M4).
+     *
+     * Null means NEITHER wave answered, which the caller reports as a failed
+     * page (the cards already on the rail stay and the same page is asked for
+     * again). A wave that timed out is null for this purpose, never an empty
+     * page - the rail has to tell "nothing matched" from "that request never
+     * came back".
+     *
+     * Parallel because load-more used to await the movie page and then the TV
+     * page, so every scroll-to-end cost the SUM of two latencies rather than the
+     * slower one - up to a minute of tail spinner on two stalled reads.
+     */
+    private suspend fun fetchTitlesPage(query: String, page: Int): TitlesPage? {
+        val (moviesPage, showsPage) = coroutineScope {
+            val movies = async {
+                withTimeoutOrNull(TMDB_WAVE_TIMEOUT_MS) {
+                    runCatchingCancellable {
+                        tmdbRepository.searchMoviesPage(query, page)
+                    }.getOrNull()
+                }
+            }
+            val shows = async {
+                withTimeoutOrNull(TMDB_WAVE_TIMEOUT_MS) {
+                    runCatchingCancellable {
+                        tmdbRepository.searchTvPage(query, page)
+                    }.getOrNull()
+                }
+            }
+            movies.await() to shows.await()
+        }
+        if (moviesPage == null && showsPage == null) return null
+        val merged = mergeTitles(
+            query = query,
+            movies = moviesPage?.items.orEmpty(),
+            tv = showsPage?.items.orEmpty(),
+            taste = TasteSignals.snapshot(app)
+        )
+        val forProfile = titlesForProfile(merged)
+        val dedup = dedupIndexFor(moviesPage?.items.orEmpty(), showsPage?.items.orEmpty())
+        return TitlesPage(
+            number = page,
+            merged = forProfile,
+            totalPages = maxOf(moviesPage?.totalPages ?: 0, showsPage?.totalPages ?: 0),
+            total = (moviesPage?.totalResults ?: 0) + (showsPage?.totalResults ?: 0),
+            profileDropped = merged.size - forProfile.size,
+            dedupIds = dedup.ids,
+            dedupNameYears = dedup.nameYears
+        )
+    }
+
+    /**
      * Publish the rail the paging state describes - cards AND their counters.
      *
      * The published list is the merged, paged list put through the viewer's
@@ -1279,6 +1458,30 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     private fun publishTitles() {
         _results.value = visibleTitles()
         publishTitlesSummary()
+    }
+
+    /**
+     * Rolls a landed page's TMDB keys into the add-on index, then re-checks the
+     * add-on rails that are already on screen (spec audit 2026-11-18, Browse M2).
+     *
+     * The rails are de-duped again rather than rebuilt: gating and enrichment
+     * stay as they were, and a rail whose every row turns out to be a duplicate
+     * of a page-N hit simply goes, which is the same rule the first pass uses.
+     */
+    private fun learnDedupKeys(page: TitlesPage) =
+        learnDedupKeys(TmdbDedupIndex(ids = page.dedupIds, nameYears = page.dedupNameYears))
+
+    /** The same for an index built before the page object exists. */
+    private fun learnDedupKeys(learned: TmdbDedupIndex) {
+        if (learned.ids.isEmpty() && learned.nameYears.isEmpty()) return
+        addonDedupIndex = TmdbDedupIndex(
+            ids = addonDedupIndex.ids + learned.ids,
+            nameYears = addonDedupIndex.nameYears + learned.nameYears
+        )
+        val groups = _addonResultGroups.value
+        if (groups.isEmpty()) return
+        val trimmed = dedupAddonGroups(groups, addonDedupIndex)
+        if (trimmed != groups) _addonResultGroups.value = trimmed
     }
 
     /** [titlesPaging]'s results as the rail draws them: filtered, then sorted. */
@@ -1315,7 +1518,8 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
      */
     private fun publishTitlesSummary() {
         _titlesAvailable.value = titlesPaging.results.size
-        _titlesTotal.value = titlesPaging.total
+        // The honour-able total, not the raw TMDB sum (Browse M1).
+        _titlesTotal.value = titlesPaging.shownTotal
         _titlesHaveMore.value = titlesPaging.hasMore
         _titlesPageError.value = titlesPaging.error
     }
@@ -1348,41 +1552,21 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         titlesPageJob = viewModelScope.launch {
             val alreadyShown = titlesPaging.results.size
             try {
-                val moviesPage = runCatchingCancellable {
-                    tmdbRepository.searchMoviesPage(query, page)
-                }.getOrNull()
-                val showsPage = runCatchingCancellable {
-                    tmdbRepository.searchTvPage(query, page)
-                }.getOrNull()
+                // Both waves at once, each bounded (see [fetchTitlesPage]).
+                val pageResult = fetchTitlesPage(query, page)
 
                 // A superseded query (or a new page already landed) owns the
                 // rail now: dropping this page is the whole point of the token.
                 if (generation != titlesGeneration) return@launch
 
-                if (moviesPage == null && showsPage == null) {
+                if (pageResult == null) {
                     titlesPaging = titlesPaging.failed(TITLES_PAGE_UNAVAILABLE)
                     publishTitlesSummary()
                     return@launch
                 }
 
-                val merged = mergeTitles(
-                    query = query,
-                    movies = moviesPage?.items.orEmpty(),
-                    tv = showsPage?.items.orEmpty(),
-                    taste = TasteSignals.snapshot(app)
-                )
-                titlesPaging = titlesPaging.absorb(
-                    TitlesPage(
-                        number = page,
-                        merged = titlesForProfile(merged),
-                        totalPages = maxOf(
-                            moviesPage?.totalPages ?: 0,
-                            showsPage?.totalPages ?: 0
-                        ),
-                        total = (moviesPage?.totalResults ?: 0) +
-                            (showsPage?.totalResults ?: 0)
-                    )
-                )
+                titlesPaging = titlesPaging.absorb(pageResult)
+                learnDedupKeys(pageResult)
                 publishTitles()
 
                 // Only what this page added needs badges/marks resolved; the
@@ -1402,17 +1586,26 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
      * The Titles rail's own hits as a de-dup index: what an add-on row has to
      * match to be a duplicate of a title the viewer is already looking at.
      *
-     * Built from page 1's hits, exactly as it was before the rail could page.
-     * It is computed in the background because it is the single piece of the
-     * add-on wave that needs the TMDB answers; the add-on probes do not wait
-     * for it, and neither does a snapshot's publish path.
+     * Page 1's hits first, because that is what the first add-on publish needs;
+     * every later page extends it (spec audit 2026-11-18, Browse M2), so a title
+     * found on page 2 stops being shown twice in an add-on rail as well. It is
+     * computed in the background because it is the single piece of the add-on
+     * wave that needs the TMDB answers; the add-on probes do not wait for it,
+     * and neither does a snapshot's publish path.
      */
     private suspend fun tmdbDedupIndexFor(
         moviesDeferred: Deferred<TmdbTitlePage?>,
         tvDeferred: Deferred<TmdbTitlePage?>
+    ): TmdbDedupIndex = dedupIndexFor(
+        moviesDeferred.await()?.items.orEmpty(),
+        tvDeferred.await()?.items.orEmpty()
+    )
+
+    /** The de-dupe keys a set of TMDB hits contributes, split by kind. */
+    private fun dedupIndexFor(
+        movies: List<TmdbSearchTitleResult>,
+        tv: List<TmdbSearchTitleResult>
     ): TmdbDedupIndex {
-        val movies = moviesDeferred.await()?.items.orEmpty()
-        val tv = tvDeferred.await()?.items.orEmpty()
         return TmdbDedupIndex(
             ids = buildSet {
                 movies.forEach { result ->
@@ -1459,6 +1652,9 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 total = snapshot.titlesTotal
             )
         )
+        // The snapshot carries the identities its rail learned, so a repeat
+        // starts where the search left off instead of at page 1's set.
+        addonDedupIndex = snapshot.tmdbDedup
         titlesQuery = query
         publishTitles()
         _actorResults.value = snapshot.actors
@@ -1486,6 +1682,8 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         tmdbDedupDeferred: Deferred<TmdbDedupIndex>
     ) {
         invalidateAddonSearch()
+        // A new wave has not failed at anything yet (Browse L1).
+        _addonNotice.value = null
         val generation = addonSearchGeneration
         // Kids Mode no longer suppresses the add-on rails. They run on every
         // profile and are vetted per result against the ceiling before
@@ -1575,9 +1773,32 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             )
 
             try {
-                val enriched = enrichAddonGroups(publishedGroups)
+                // Bounded (Browse L2): a stalled enrichment leaves the published
+                // rails exactly as they are rather than never resolving.
+                val enriched = withTimeoutOrNull(ADDON_ENRICH_TIMEOUT_MS) {
+                    enrichAddonGroups(publishedGroups)
+                } ?: publishedGroups
                 if (generation == addonSearchGeneration && enriched != publishedGroups) {
-                    _addonResultGroups.value = enriched
+                    // DE-DUPE AGAIN, on the enriched rows (spec audit 2026-11-18,
+                    // Browse M3). The first pass runs before enrichment because
+                    // it is what the first paint needs, and an add-on row that
+                    // shipped without a year cannot be proven a duplicate of a
+                    // TMDB title at that point - the year IS the proof
+                    // (AddonPublish's own note). So a search showed the same
+                    // film twice, once in the Titles rail and once in an add-on
+                    // rail, and the second publish then made it permanent. The
+                    // index is already built and awaiting it again is free.
+                    // Page 1's keys plus every page that has landed since (Browse
+                    // M2): re-deduping against page 1 alone would put a row back
+                    // that a later page had just proven a duplicate.
+                    val pageOneKeys = tmdbDedupDeferred.await()
+                    _addonResultGroups.value = dedupAddonGroups(
+                        enriched,
+                        TmdbDedupIndex(
+                            ids = pageOneKeys.ids + addonDedupIndex.ids,
+                            nameYears = pageOneKeys.nameYears + addonDedupIndex.nameYears
+                        )
+                    )
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -1712,17 +1933,29 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         // only the `seen` set, which is local to the add-on and free; the
         // name+year de-dupe is applied once, on the consolidated republish.
         val slots = AtomicReferenceArray<List<AddonResultGroup>>(addons.size)
+        // Add-ons that answered nothing because their requests were cut (Browse
+        // L1). An add-on with no MATCHES is not one of these: only a probe that
+        // timed out, with zero rails to show for it, is a silence worth naming.
+        val silent = AtomicInteger(0)
+        // Catalogs the probe cap never asked (Browse L3). Counted, not ignored:
+        // a rail that was never probed is indistinguishable from one that found
+        // nothing, and the cap is small enough (12) that a catalog-heavy
+        // add-on's tail is dropped on every search.
+        val dropped = AtomicInteger(0)
 
         addons.mapIndexed { index, addon ->
             launch {
                 val startedAt = SystemClock.elapsedRealtime()
                 val timedOut = AtomicInteger(0)
+                var produced = 0
                 try {
                     collectAddonSearchGroup(
                         addon,
                         query,
-                        onTimeout = { timedOut.incrementAndGet() }
+                        onTimeout = { timedOut.incrementAndGet() },
+                        onDropped = { dropped.addAndGet(it) }
                     ) { group ->
+                        produced++
                         publishAddonSnapshot(index, group, slots, generation)
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -1740,16 +1973,21 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                             ms = SystemClock.elapsedRealtime() - startedAt,
                             timedOut = timedOut.get()
                         )
+                        if (produced == 0 && timedOut.get() > 0) silent.incrementAndGet()
                     }
                 }
             }
         }.joinAll()
 
-        return@coroutineScope coalesceAddonGroups(
+        val finished = coalesceAddonGroups(
             (0 until slots.length())
                 .mapNotNull { slots.get(it) }
                 .flatten()
         ).take(MAX_ADDON_GROUPS)
+        if (generation == addonSearchGeneration && (silent.get() > 0 || dropped.get() > 0)) {
+            _addonNotice.value = addonSilenceNotice(silent.get(), dropped.get())
+        }
+        return@coroutineScope finished
     }
 
     /**
@@ -1851,6 +2089,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         addon: InstalledAddon,
         query: String,
         onTimeout: () -> Unit,
+        onDropped: (Int) -> Unit = {},
         onGroup: suspend (AddonResultGroup) -> Unit
     ): List<AddonResultGroup> = coroutineScope {
         val groups = mutableListOf<AddonResultGroup>()
@@ -1896,7 +2135,17 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             }
         }
 
-        if (collected.isEmpty()) {
+        // The catalog probe runs when /search answered NOTHING - and always for
+        // the add-on's search-STYLE catalogs (spec audit 2026-11-18, Browse L3).
+        //
+        // The old rule was all-or-nothing: a non-empty `/search` answer returned
+        // early, so an add-on that serves both (AIOMetadata does) never rendered
+        // its distinct per-catalog rails - "AI Search", People, Collections -
+        // however well `/search` answered. Those catalogs are semantically
+        // different questions about the same query, so they are asked either
+        // way; the add-on's REGULAR catalogs are still only probed when
+        // `/search` came back empty, because they would just repeat it.
+        run {
             // Catalog-only addons (AIOMetadata, BingeCat, ...) implement
             // search through the catalog endpoint's `search=` extra — the
             // same endpoint the Discover rails use. AIOMetadata exposes
@@ -1911,10 +2160,20 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             // exempt from the cross-rail dedup below — overlapping
             // titles is expected there, and an emptied rail is exactly
             // the "my AI search rail disappeared" bug.
-            val searchableCatalogs = addon.catalogs
+            val candidates = addon.catalogs
                 .partition { it.isSearchStyleCatalog() }
-                .let { (searchStyle, regular) -> searchStyle + regular }
-                .take(MAX_ADDON_CATALOG_PROBES)
+                .let { (searchStyle, regular) ->
+                    // /search answered: only the search-style catalogs are
+                    // still worth asking (see the note above). Empty: every
+                    // catalog, search-style first.
+                    if (collected.isEmpty()) searchStyle + regular else searchStyle
+                }
+            val searchableCatalogs = candidates.take(MAX_ADDON_CATALOG_PROBES)
+            // Name the tail the cap just cut (Browse L3): a rail nobody asked
+            // for is not "no matches".
+            if (candidates.size > searchableCatalogs.size) {
+                onDropped(candidates.size - searchableCatalogs.size)
+            }
 
             if (searchableCatalogs.isNotEmpty()) {
                 // Probed in parallel, consumed in catalog order: `seen` is a
@@ -1963,7 +2222,11 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                     // hits are noise, not search matches, so the rail is
                     // dropped.
                     if (!searchStyle && catalogIgnoredQuery(baseUrl, catalog, hits)) continue
-                    val items = hits
+                    // Materialized BEFORE the cap so the rail can count what it
+                    // left out (Browse M5). The cap is a display limit, not a
+                    // search limit: the add-on offered these hits and the rail
+                    // simply cannot draw them all.
+                    val candidates = hits
                         .asSequence()
                         .distinctBy { "${it.type}:${it.id}" }
                         .filter { meta ->
@@ -1983,8 +2246,8 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                                 meta = meta
                             )
                         }
-                        .take(MAX_ADDON_CATALOG_RESULTS)
                         .toList()
+                    val items = candidates.take(MAX_ADDON_CATALOG_RESULTS)
                     if (items.isEmpty()) continue
                     emit(
                         AddonResultGroup(
@@ -1994,7 +2257,8 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                             catalogType = catalog.type,
                             // Carries the exemption to the consolidated
                             // publish, which is where the TMDB de-dupe now runs.
-                            searchStyle = searchStyle
+                            searchStyle = searchStyle,
+                            hiddenByCap = candidates.size - items.size
                         )
                     )
                 }
@@ -2003,7 +2267,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             return@coroutineScope groups
         }
 
-        val addonItems =
+        val candidates =
             collected
                 .distinctBy { "${it.type}:${it.id}" }
                 .map { meta ->
@@ -2018,7 +2282,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                         meta = meta
                     )
                 }
-                    .take(MAX_ADDON_RESULTS_PER_ADDON)
+        val addonItems = candidates.take(MAX_ADDON_RESULTS_PER_ADDON)
 
         if (addonItems.isEmpty()) return@coroutineScope emptyList<AddonResultGroup>()
 
@@ -2028,6 +2292,8 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 addonName = addon.displayName,
                 railLabel = "All",
                 results = addonItems,
+                // The cap is a display limit, and the title says so (Browse M5).
+                hiddenByCap = candidates.size - addonItems.size,
                 catalogType = null
             )
         )
@@ -2515,6 +2781,9 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         titlesGeneration++
         titlesPageJob?.cancel()
         titlesPaging = TitlesPagingState()
+        // A new query (or a dead one) carries no identities: the add-on index is
+        // this search's own evidence and must start empty (Browse M2).
+        addonDedupIndex = TmdbDedupIndex()
         titlesQuery = null
         _titlesLoadingMore.value = false
         _titleTypeFilter.value = TitleTypeFilter.ALL
@@ -2570,6 +2839,13 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     var browseReturnChip: Pair<String, Int>? = null
 
     private var catalogResolveStarted = false
+
+    /**
+     * Whether an incomplete resolve has already spent its one re-arm (Browse
+     * L6). Kept apart from [catalogResolveStarted] so a broken network can only
+     * cost one extra pass per session.
+     */
+    private var catalogResolveRearmed = false
 
     // Caps parallel TMDB name->id lookups in resolveCatalogEntries: the
     // keyword list (236 names when this was written, ~390 after the
@@ -2775,8 +3051,12 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         // standard-only resolve would leave those chips id-less and dead.
         // Union resolve serves both modes from one pass; the extra lookups are
         // semaphore-capped.
+        // The names are held so the pass can tell "resolved" from "was never
+        // asked successfully" at the end (Browse L6).
+        val keywordNames = browseUnionOrderFor("keywords")
+        val collectionNames = browseUnionOrderFor("collections")
         val keywordEntries = coroutineScope {
-            browseUnionOrderFor("keywords").map { name ->
+            keywordNames.map { name ->
                 async {
                     catalogResolveSemaphore.withPermit {
                         resolveWithRetry(name) { resolveKeywordName(name) }
@@ -2785,7 +3065,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             }.awaitAll().filterNotNull()
         }
         val collectionEntries = coroutineScope {
-            browseUnionOrderFor("collections").map { name ->
+            collectionNames.map { name ->
                 async {
                     catalogResolveSemaphore.withPermit {
                         resolveWithRetry(name) { resolveCollectionName(name) }
@@ -2813,6 +3093,32 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         _browseSubmenuLoading.value = false
         val (allKeywords, allCollections) = catalog.pairsForCache()
         saveBrowseCatalogCache(allKeywords, allCollections)
+
+        // A pass that dropped a name is NOT a finished pass (spec audit
+        // 2026-11-18, Browse L6). `catalogResolveStarted` is what makes this
+        // once-per-ViewModel, and a failed lookup is filtered out silently - so
+        // an offline or throttled first resolve left those chips missing for the
+        // rest of the session, with no retry and nothing on screen to tap. One
+        // re-arm is allowed (a second failure leaves it closed, so a dead TMDB
+        // cannot turn every Browse open into ~400 lookups), and the stale cache
+        // keeps the gaps on the targeted-repair path that already exists -
+        // [resolveMissingCatalogEntries] resolves exactly the names that are
+        // missing, and this is what lets it run in THIS session rather than the
+        // next launch.
+        val complete = keywordEntries.size == keywordNames.size &&
+            collectionEntries.size == collectionNames.size
+        if (!complete && !catalogResolveRearmed) {
+            catalogResolveRearmed = true
+            catalogResolveStarted = false
+            browseCacheFresh = false
+            Log.w(
+                TAG,
+                "browse catalog resolve incomplete " +
+                    "(${keywordEntries.size}/${keywordNames.size} keywords, " +
+                    "${collectionEntries.size}/${collectionNames.size} collections) " +
+                    "- retrying the gaps on the next Browse open"
+            )
+        }
     }
 
     /**
@@ -3161,6 +3467,9 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         titlesPageJob?.cancel()
         titlesPageJob = null
         titlesPaging = TitlesPagingState()
+        // A new query (or a dead one) carries no identities: the add-on index is
+        // this search's own evidence and must start empty (Browse M2).
+        addonDedupIndex = TmdbDedupIndex()
         titlesQuery = null
         _titlesLoadingMore.value = false
         _titleTypeFilter.value = TitleTypeFilter.ALL
@@ -3355,8 +3664,38 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
          */
         const val SEARCH_ADDON_REQUEST_TIMEOUT_MS = 8_000L
 
+        /**
+         * How long any single TMDB wave may take before it counts as failed
+         * (spec audit 2026-11-18, Browse H1).
+         *
+         * Shorter than the HTTP client's 30 s read timeout on purpose: the six
+         * waves are awaited together, so this is the longest a stalled endpoint
+         * can hold the Titles rail, not the longest one request may live.
+         */
+        const val TMDB_WAVE_TIMEOUT_MS = 12_000L
+
+        /**
+         * How many pages a filtered-to-empty page 1 may pull forward before the
+         * rail accepts "nothing matched" (spec audit 2026-11-18, Browse H2).
+         */
+        const val EMPTY_PAGE_FILL_LIMIT = 3
+
         /** Per-rail cap on TMDB enrichments for missing year/rating. */
         const val MAX_ENRICH_PER_GROUP = 20
+
+        /**
+         * How long the add-on enrichment pass may run before the raw rails stand
+         * (spec audit 2026-11-18, Browse L2).
+         *
+         * The pass is up to [MAX_ENRICH_PER_GROUP] sequential lookups per rail -
+         * and this many rails - with no timeout of its own, so a cold cache plus
+         * throttled TMDB could hold the second publish indefinitely. Nothing is
+         * lost when it expires: the raw rails were already published, and the
+         * only thing the pass adds is a year and a rating on a caption (plus
+         * the de-dupe it enables). 6s is well clear of a warm-cache pass, which
+         * is the common one.
+         */
+        const val ADDON_ENRICH_TIMEOUT_MS = 6_000L
 
         /** Per-rail cap for a catalog-only addon's per-catalog search rail. */
         const val MAX_ADDON_CATALOG_RESULTS = 20

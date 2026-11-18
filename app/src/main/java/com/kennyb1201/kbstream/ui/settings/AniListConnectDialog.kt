@@ -147,11 +147,22 @@ internal fun AniListConnectDialog(
                                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                // The phone MUST have KBStream on it (spec audit
+                                // 2026-11-18, Onboarding L3). The callback is
+                                // `kbstream://oauth/anilist`, so on a phone without
+                                // the app the browser fails at the last hop and the
+                                // TV said nothing about why - the MAL dialog already
+                                // names its requirement, this one did not.
                                 Text(
-                                    text = "1. Open this link on your phone (or scan the " +
-                                        "code) and approve KBStream:\n$authorizeUrl\n" +
-                                        "2. The connected session reaches this device " +
-                                        "through your profile.",
+                                    text = "1. On a phone WITH KBStream installed, open " +
+                                        "this link (or scan the code) and approve:\n" +
+                                        "$authorizeUrl\n" +
+                                        "2. That phone catches the approval and the " +
+                                        "connected session reaches this device through " +
+                                        "your profile.\n" +
+                                        "3. No KBStream on the phone? Approve there and " +
+                                        "paste the code AniList shows into the field " +
+                                        "below.",
                                     color = KBTextHi,
                                     style = MaterialTheme.typography.labelMedium,
                                     fontSize = 12.sp,

@@ -66,6 +66,17 @@ internal class TraktTokenStore(
          * connected) must never do it.
          */
         const val KEY_SIGNED_OUT = "signed_out"
+
+        /**
+         * Trakt refused this session (401/403) and no refresh can save it
+         * (spec audit 2026-11-18, Onboarding M2).
+         *
+         * The only tracker without one: BingeCat, MAL, Kitsu and AniList all
+         * surface a needs-reconnect state, while Trakt kept saying "Connected"
+         * over a dead grant - missing totals, silently dead scrobbles and
+         * ratings, no prompt. Cleared by a fresh connect ([save]).
+         */
+        const val KEY_NEEDS_RECONNECT = "needs_reconnect"
     }
 
     /** The file name this profile's session lives in. */
@@ -121,7 +132,18 @@ internal class TraktTokenStore(
             // A fresh session retires a lingering disconnect marker, so it
             // cannot be republished over the live token on the next push.
             ?.putBoolean(KEY_SIGNED_OUT, false)
+            // ...and a refusal marker (Onboarding M2): a granted session is by
+            // definition not a dead one.
+            ?.putBoolean(KEY_NEEDS_RECONNECT, false)
             ?.apply()
+    }
+
+    /** True when Trakt refused this session and only a reconnect can fix it. */
+    fun needsReconnect(): Boolean = prefs?.getBoolean(KEY_NEEDS_RECONNECT, false) == true
+
+    /** Records that the grant was refused (401/403) - see [KEY_NEEDS_RECONNECT]. */
+    fun setNeedsReconnect(needsReconnect: Boolean) {
+        prefs?.edit()?.putBoolean(KEY_NEEDS_RECONNECT, needsReconnect)?.apply()
     }
 
     /** True when the last thing this profile did was deliberately disconnect. */
@@ -144,6 +166,10 @@ internal class TraktTokenStore(
             .remove(KEY_REFRESH_TOKEN)
             .remove(KEY_EXPIRES_AT)
             .remove(KEY_ACCOUNT_SLUG)
+            // A refusal marker describes the session that has just been dropped;
+            // keeping it would greet the next connect attempt with "needs
+            // reconnecting" before it had even started (Onboarding M2).
+            .remove(KEY_NEEDS_RECONNECT)
             .putBoolean(KEY_SIGNED_OUT, true)
             .apply()
         return true

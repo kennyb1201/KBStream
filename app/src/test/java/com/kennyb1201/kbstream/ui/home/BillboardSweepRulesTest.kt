@@ -9,9 +9,16 @@ import org.junit.Test
  *
  * The screen only interpolates a 0..1 value through whatever [billboardSweep]
  * returns, so every decision the spec makes about the move - how far it zooms,
- * how far it pans, how long it takes, and that two consecutive pages never
- * repeat the same move - is decided here and can be checked without a
- * composition or a frame clock.
+ * how far it pans, and that two consecutive pages never repeat the same move -
+ * is decided here and can be checked without a composition or a frame clock.
+ *
+ * HOW LONG IT TAKES is not one of those decisions (spec audit 2026-11-18, Home
+ * L2). The sweep used to carry a `durationMs` set from the cycle interval, which
+ * nothing read: the renderer paces every sweep off the fixed
+ * [BILLBOARD_KEN_BURNS_MANUAL_MS], and a shorter cycle cuts the move short. The
+ * field is gone, so the three tests that pinned "the move lands as the page
+ * would advance" are gone with it - the pace is pinned where it lives, by
+ * [BillboardSweepPaceContractTest].
  *
  * [billboardSegmentFill] is here for the same reason: "completed segments stay
  * filled, upcoming ones stay dimmed, the current one fills over the dwell - and
@@ -19,39 +26,7 @@ import org.junit.Test
  */
 class BillboardSweepRulesTest {
 
-    private fun sweep(index: Int, cycleMs: Long = 6_000L) = billboardSweep(index, cycleMs)
-
-    // ── duration: the move lands as the page would advance ───────────────
-
-    @Test
-    fun `the sweep takes exactly the page's dwell`() {
-        listOf(3_000L, 6_000L, 10_000L, 15_000L).forEach { cycle ->
-            assertEquals(
-                "a ${cycle}ms page must finish its move in ${cycle}ms",
-                cycle,
-                sweep(0, cycle).durationMs
-            )
-            assertEquals(
-                "and so must an odd page, whose move is the reverse",
-                cycle,
-                sweep(1, cycle).durationMs
-            )
-        }
-    }
-
-    @Test
-    fun `manual only has no dwell, so it sweeps for a fixed ten seconds`() {
-        // 0 means "Manual only" (see BILLBOARD_CYCLE_OPTIONS_MS): the page never
-        // advances, so the move still has to go somewhere and stop.
-        assertEquals(10_000L, sweep(0, 0L).durationMs)
-        assertEquals(10_000L, sweep(1, 0L).durationMs)
-        assertEquals(BILLBOARD_KEN_BURNS_MANUAL_MS, sweep(4, 0L).durationMs)
-    }
-
-    @Test
-    fun `a negative hold is treated as manual rather than as a negative time`() {
-        assertEquals(BILLBOARD_KEN_BURNS_MANUAL_MS, sweep(0, -5L).durationMs)
-    }
+    private fun sweep(index: Int) = billboardSweep(index)
 
     // ── direction: parity alternates, and the move stays inside the caps ──
 

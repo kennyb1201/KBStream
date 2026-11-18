@@ -94,9 +94,14 @@ class TheSportsDbClient(
      * payload names a round (the free key's next-fixtures answer is often a single
      * event, and one card is not a fixtures tab).
      *
-     * Cached until the viewer's next local midnight: a fixture list does not move
-     * during a day, and the day boundary is what makes "tomorrow" appear without
-     * a poll.
+     * Cached until the viewer's next local midnight - EXCEPT while the list has
+     * something happening in it (spec audit 2026-11-18, Sports M4). A fixed
+     * midnight expiry meant a TSDB game in progress was frozen at the first read
+     * of the day: the hub's 30s live poll re-read this cache, got the same list,
+     * and the score never moved while the tick stayed armed all day. A live
+     * fixture now earns the poll's own cadence, one about to kick off a minute,
+     * and everything else keeps the midnight rollover that makes "tomorrow"
+     * appear without polling.
      */
     suspend fun fixtures(key: String, leagueId: String): List<SportsGame> {
         syncKey(key)
@@ -128,10 +133,26 @@ class TheSportsDbClient(
         }
         val merged = (next + roundGames).distinctBy { it.id }.sortedBy { it.dateMs }
         fixtures[cacheKey] = Cached(
-            expiresAtMs = theSportsDbNextDayStartMs(now, zone()),
+            expiresAtMs = now + fixturesTtlMs(merged, now, theSportsDbNextDayStartMs(now, zone())),
             value = merged
         )
         return merged
+    }
+
+    /**
+     * How long a fixtures list may be trusted: [FIXTURES_LIVE_TTL_MS] while a
+     * game is being played, a minute for one inside the kickoff window, and
+     * otherwise the viewer's next local midnight (never below the live cadence,
+     * so a read a second before midnight cannot pin the list for a second).
+     */
+    private fun fixturesTtlMs(games: List<SportsGame>, nowMs: Long, dayEndMs: Long): Long = when {
+        games.any { it.state == GameState.LIVE } -> FIXTURES_LIVE_TTL_MS
+        games.any {
+            it.state == GameState.UPCOMING &&
+                it.dateMs > nowMs &&
+                it.dateMs <= nowMs + FIXTURES_KICKOFF_WINDOW_MS
+        } -> FIXTURES_KICKOFF_TTL_MS
+        else -> (dayEndMs - nowMs).coerceAtLeast(FIXTURES_LIVE_TTL_MS)
     }
 
     /**
@@ -297,6 +318,19 @@ class TheSportsDbClient(
 
         /** The wait after a 429 when the endpoint sends no `Retry-After`. */
         internal const val RETRY_AFTER_MS = 60L * 1_000L
+
+        /**
+         * How long a fixture list holding a LIVE game is trusted: the hub's own
+         * 30s live tick (Sports M4). Without it the list was frozen at the first
+         * read of the day and the poll re-read the same cache.
+         */
+        internal const val FIXTURES_LIVE_TTL_MS = 30L * 1_000L
+
+        /** A fixture this close to kickoff gets the short TTL too. */
+        internal const val FIXTURES_KICKOFF_WINDOW_MS = 15L * 60_000L
+
+        /** ...at a minute, which is the kickoff-grace scale the reminders use. */
+        internal const val FIXTURES_KICKOFF_TTL_MS = 60L * 1_000L
 
         /**
          * The key every request uses: the viewer's own when they pasted one, the

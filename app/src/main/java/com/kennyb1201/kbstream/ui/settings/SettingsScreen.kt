@@ -79,6 +79,7 @@ import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.ui.home.HomeExpandDelay
 import com.kennyb1201.kbstream.ui.home.HomeLayout
 import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
@@ -1419,7 +1420,9 @@ fun SettingsScreen(
                         // clipboard; blur and Done both save.
                         val mdbListPaste: (String) -> Unit = { pasted ->
                             mdbListKeyInput = pasted.trim()
-                            AppPreferences.setMdbListApiKey(context, mdbListKeyInput)
+                            // Through the client's own write, which also re-opens
+                            // the ratings leg and drains it (Data M1).
+                            MdbListClient.saveApiKey(context, mdbListKeyInput)
                             mdbListKeySaved = mdbListKeyInput.isNotBlank()
                         }
                         Row(
@@ -1445,14 +1448,14 @@ fun SettingsScreen(
                                 modifier = Modifier.weight(1f),
                                 focusRequester = mdbListFocusRequester,
                                 onDone = {
-                                    AppPreferences.setMdbListApiKey(context, mdbListKeyInput)
+                                    MdbListClient.saveApiKey(context, mdbListKeyInput)
                                     mdbListKeySaved = mdbListKeyInput.isNotBlank()
                                 },
                                 onFocusChanged = { focusedNow ->
                                     // Save on focus loss too — remote users often
                                     // just navigate away after pasting.
                                     if (!focusedNow) {
-                                        AppPreferences.setMdbListApiKey(context, mdbListKeyInput)
+                                        MdbListClient.saveApiKey(context, mdbListKeyInput)
                                         mdbListKeySaved = mdbListKeyInput.isNotBlank()
                                     }
                                 }
@@ -1497,8 +1500,7 @@ fun SettingsScreen(
                                         verifying = true
                                         verifyState = null
                                         verifyScope.launch {
-                                            verifyState = com.kennyb1201.kbstream
-                                                .data.mdblist.MdbListClient.verifyKey(context)
+                                            verifyState = MdbListClient.verifyKey(context)
                                             verifying = false
                                         }
                                     },

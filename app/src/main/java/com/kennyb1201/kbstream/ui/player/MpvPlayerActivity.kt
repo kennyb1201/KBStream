@@ -911,6 +911,12 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      */
     private var spuriousPauseGuardUntilMs = 0L
 
+    /**
+     * Whether this file's spurious-pause window has been opened yet (spec audit
+     * 2026-11-18, Player M1). File-loaded closes it; the first PICTURE opens it.
+     */
+    private var spuriousPauseGuardArmedForFile = false
+
     /** Whether a MEDIA_PAUSE arriving right now is the spurious kind (F1). */
     private fun spuriousPauseGuardActive(): Boolean =
         spuriousPauseGuardUntilMs > 0L &&
@@ -1281,6 +1287,17 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         view.onProgress = { position, duration -> onProgress(position, duration) }
         view.onPausedChanged = { paused -> onPausedChanged(paused) }
         view.onPictureReady = {
+            // THE WINDOW OPENS WITH THE PICTURE, NOT THE FILE (spec audit
+            // 2026-11-18, Player M1). It used to be armed in onFileLoaded, so a
+            // slow open consumed it while buffering: a spurious pause landing 11 s
+            // after FILE_LOADED but 2 s after the first frame then parked the
+            // session with nothing to resume it - the main player has always
+            // armed at its first rendered frame (markFirstFrameRendered).
+            if (!spuriousPauseGuardArmedForFile) {
+                spuriousPauseGuardArmedForFile = true
+                spuriousPauseGuardUntilMs =
+                    SystemClock.elapsedRealtime() + SPURIOUS_PAUSE_GUARD_MS
+            }
             firstFrameRendered = true
             // First checkpoint for the death marker: a picture exists, so a
             // death from here is a running session (see PlaybackDeathMarker).
@@ -2073,15 +2090,21 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // 2026-11-14, F1(a)): a press that lands on the strip itself - UP out of
         // the first row is the common one - draws no ring where it lands, so it
         // is forwarded to the loaded season's chip at once.
+        //
+        // UNCONDITIONALLY, like the main player (spec audit 2026-11-18, Player
+        // M2): the touch-mode guard here was the surviving gate of the shape the
+        // chip style no longer has, so a strip focus in touch mode drew nothing
+        // and never forwarded to the selected chip.
         pickerSeasons?.setOnFocusChangeListener { view, hasFocus ->
-            if (hasFocus && !view.isInTouchMode && view is RecyclerView) {
+            if (hasFocus && view is RecyclerView) {
                 seasonStripAdapter?.focusSelected(view)
             }
         }
         // The mirror of it: DOWN out of the strip lands on the list's holder,
-        // which highlights nothing, so the first row takes the focus instead.
+        // which highlights nothing, so the first row takes the focus instead -
+        // on the same unconditional rule.
         pickerList?.setOnFocusChangeListener { _, hasFocus ->
-            if (hasFocus && pickerList?.isInTouchMode == false) pickerList?.post { parkPickerFocus() }
+            if (hasFocus) pickerList?.post { parkPickerFocus() }
         }
         pickerSeasons?.addOnChildAttachStateChangeListener(
             object : RecyclerView.OnChildAttachStateChangeListener {
@@ -6006,11 +6029,15 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
     private fun onFileLoaded(mediaTitle: String?) {
         fileLoaded = true
-        // F1: the spurious-pause window opens here, once per file. Fire OS emits
-        // MEDIA_PAUSE around HDMI-CEC and voice-remote activity after the first
-        // frame as well as during the load, and the old guard (the playhead had
-        // not moved) stopped covering them the moment the file played.
-        spuriousPauseGuardUntilMs = SystemClock.elapsedRealtime() + SPURIOUS_PAUSE_GUARD_MS
+        // F1: a new file CLOSES the previous file's spurious-pause window; the
+        // first PICTURE opens this one's (see onPictureReady - arming here ate
+        // the window while a slow source was still buffering, spec audit
+        // 2026-11-18, Player M1). Fire OS emits MEDIA_PAUSE around HDMI-CEC and
+        // voice-remote activity after the first frame as well as during the
+        // load, and the old guard (the playhead had not moved) stopped covering
+        // them the moment the file played.
+        spuriousPauseGuardUntilMs = 0L
+        spuriousPauseGuardArmedForFile = false
         // A file that opens and never produces a video frame is the third way a
         // source is dead here (audit S-F13): audio plays, the screen stays
         // black, and nothing errors, so nothing walked. Armed per file load and

@@ -151,7 +151,7 @@ import com.kennyb1201.kbstream.ui.components.WarmRowAhead
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
 import com.kennyb1201.kbstream.ui.components.KB_ALPHA_FADE_MS
 import com.kennyb1201.kbstream.ui.components.KBCard
-import com.kennyb1201.kbstream.ui.components.KBImdbTint
+import com.kennyb1201.kbstream.ui.components.TmdbTint
 import com.kennyb1201.kbstream.ui.components.KBProgressBar
 import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
@@ -389,6 +389,19 @@ private const val COLLECTION_ROW_KEY = "collectionrow"
 private const val MEDIA_STRIP_KEY = "mediastrip"
 private const val MEDIA_ROW_KEY = "mediarow"
 private const val RECS_ROW_KEY = "recsrow"
+
+/**
+ * How much of the episode card's width the bottom row's LEFT and RIGHT items may
+ * take: the runtime label and the airdate (spec audit 2026-11-18, Detail L1).
+ *
+ * The row is one fixed 260dp Box with three absolutely-aligned children - the
+ * runtime at CenterStart, the rating chip at Center, the airdate at CenterEnd -
+ * so any side item could grow under the centre one on a narrow trigger (a long
+ * "🕒 1h 12m left" plus a rating plus a date). A third each leaves the middle
+ * ~90dp, which is wider than the TMDB plate and its number, and both side texts
+ * ellipsise inside their share instead of colliding.
+ */
+private const val EPISODE_CARD_SIDE_FRACTION = 0.32f
 
 /**
  * The play press's own log tag.
@@ -5937,17 +5950,25 @@ fun DetailScreen(
                                     m.runtime
                                 ),
                                 m.language?.takeIf { it.isNotBlank() }?.uppercase(),
-                                // IMDb score. MDBList's figure wins over the
-                                // meta add-on's so this line can never
-                                // disagree with the IMDb chip in the RATINGS
-                                // strip a few rows below it (the strip is the
-                                // only place either value is sourced from).
-                                (
-                                    mdbListRatings?.imdb
-                                        ?.takeIf { it.isNotBlank() }
-                                        ?: m.imdbRating
-                                            ?.takeIf { it.isNotBlank() }
-                                    )?.let { "IMDb $it" },
+                                // IMDb score, and ONLY when the RATINGS strip
+                                // below cannot show it (spec audit 2026-11-18,
+                                // Detail M1). The strip draws an IMDb chip from
+                                // MDBList, and this line preferred that same
+                                // figure - so on any title with MDBList ratings
+                                // the page printed one number twice, three rows
+                                // apart, while the comment here claimed the
+                                // strip was its only source. Now: MDBList sends
+                                // an IMDb figure -> the chip is the one place it
+                                // appears; it does not -> the meta add-on's own
+                                // rating is printed here, where no chip exists to
+                                // duplicate it.
+                                m.imdbRating
+                                    ?.takeIf { rating ->
+                                        rating.isNotBlank() &&
+                                            mdbListRatings?.imdb
+                                                ?.isNotBlank() != true
+                                    }
+                                    ?.let { "IMDb $it" },
                                 // AniList's community score, labelled so the two
                                 // scores on this screen can never be confused
                                 // (F3). Absent when AniList has none.
@@ -5979,7 +6000,14 @@ fun DetailScreen(
                                 color = KBTextHi,
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
+                                // TWO lines, like the phone's (spec audit
+                                // 2026-11-18, Detail M2). This line is a long
+                                // `` • ``-joined run - certification, year,
+                                // status, runtime, language, and up to three
+                                // scores - and one line ellipsised the TAIL, so
+                                // the scores this page exists to show were the
+                                // first casualties on a narrow hero.
+                                maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.padding(
                                     top = 2.dp
@@ -9804,9 +9832,21 @@ private fun EpisodeCard(
                             color = KBTextLo,
                             style =
                                 MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.align(
-                                Alignment.CenterStart
-                            )
+                            maxLines = 1,
+                            overflow =
+                                TextOverflow.Ellipsis,
+                            // The three items on this row are absolutely
+                            // aligned in one fixed 260dp box, so nothing kept
+                            // a long "🕒 1h 12m left" from reaching the
+                            // centred rating (spec audit 2026-11-18, Detail
+                            // L1). Each side now owns at most a third of the
+                            // card and ellipsises inside it; the rating's slot
+                            // in the middle stays clear.
+                            modifier = Modifier
+                                .align(
+                                    Alignment.CenterStart
+                                )
+                                .fillMaxWidth(EPISODE_CARD_SIDE_FRACTION)
                         )
                     }
 
@@ -9835,12 +9875,15 @@ private fun EpisodeCard(
                             Surface(
                                 shape =
                                     KBShapeChip,
-                                // The brand's own yellow, from the shared const
-                                // the MDBList rating chips use (this was a
-                                // second literal of the same value).
+                                // TMDB's own cyan, from the shared const the
+                                // MDBList rating chips use: this number is TMDB's
+                                // episode vote_average, not an IMDb score (spec
+                                // audit 2026-11-18, Detail H1 - the plate said
+                                // IMDb in IMDb's yellow, which the app's own rule
+                                // in DetailViewModel forbids).
                                 colors =
                                     SurfaceDefaults.colors(
-                                        containerColor = KBImdbTint
+                                        containerColor = TmdbTint
                                     )
                             ) {
                                 Box(
@@ -9851,7 +9894,7 @@ private fun EpisodeCard(
                                         )
                                 ) {
                                     Text(
-                                        text = "IMDb",
+                                        text = "TMDB",
                                         color =
                                             Color.Black,
                                         style =
@@ -9886,9 +9929,15 @@ private fun EpisodeCard(
                                 maxLines = 1,
                                 overflow =
                                     TextOverflow.Ellipsis,
-                                modifier = Modifier.align(
-                                    Alignment.CenterEnd
-                                )
+                                textAlign = TextAlign.End,
+                                // The same third, for the same reason (Detail
+                                // L1): an airdate is short, but the guarantee
+                                // is what keeps the middle clear.
+                                modifier = Modifier
+                                    .align(
+                                        Alignment.CenterEnd
+                                    )
+                                    .fillMaxWidth(EPISODE_CARD_SIDE_FRACTION)
                             )
                         }
                 }

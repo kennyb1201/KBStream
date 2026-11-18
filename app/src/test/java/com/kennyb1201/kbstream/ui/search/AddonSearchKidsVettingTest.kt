@@ -239,9 +239,12 @@ class AddonSearchKidsVettingTest {
             viewModel.contains("preloadWatchedKeysFor(\n                publishedGroups")
         )
         assertTrue(
+            // Bounded since Browse L2 (2026-11-18): the same vetted list goes in,
+            // wrapped in the timeout so a stalled pass leaves the rails as
+            // published.
             "and neither must the enrichment, or a kids profile pays TMDB lookups " +
                 "for hits it will never show",
-            viewModel.contains("val enriched = enrichAddonGroups(publishedGroups)") &&
+            viewModel.contains("enrichAddonGroups(publishedGroups)") &&
                 viewModel.contains("enriched != publishedGroups")
         )
         assertFalse(

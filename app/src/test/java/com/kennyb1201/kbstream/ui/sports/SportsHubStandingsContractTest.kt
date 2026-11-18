@@ -129,7 +129,7 @@ class SportsHubStandingsContractTest {
     }
 
     @Test
-    fun `a row is a D-pad stop that follows the team it names`() {
+    fun `a row is a D-pad stop that opens the team and holds to follow it`() {
         val row = slice(hub, "private fun StandingsRow(", "private fun StandingsStat(")
         assertTrue(
             "it is a card so the D-pad can reach it",
@@ -137,14 +137,26 @@ class SportsHubStandingsContractTest {
         )
         assertTrue(
             "the empty action left a full focus stop (border + glow) that " +
-                "answered OK with nothing; OK now follows/unfollows the team",
-            row.contains("onClick = onToggleFollow,")
+                "answered OK with nothing; OK now opens the team's season, which is " +
+                "the hub's way in for a team with no game in the current window",
+            row.contains("onClick = onOpenSeason,")
+        )
+        assertTrue(
+            "and a HOLD follows it, the same split the game cards use - a table row " +
+                "that cannot be followed would regress the follow it gained",
+            row.contains("onLongClick = onToggleFollow,")
         )
         assertTrue(
             "and the row's follow state is read from the same favourite set the " +
                 "scoreboard uses, keyed by the same league-scoped rule",
             hub.contains("val followed = team.favoriteKey in favoriteKeys") &&
                 hub.contains("val team = standingsTeam(leaguePath, entry)")
+        )
+        assertTrue(
+            "the season is opened for the team the row NAMES, through the same " +
+                "standingsTeam the follow key comes from",
+            hub.contains("onOpenSeason = {") &&
+                hub.contains("onOpenTeam?.invoke(team)")
         )
     }
 

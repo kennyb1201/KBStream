@@ -81,6 +81,24 @@ data class LeagueSection(
 )
 
 /**
+ * One team's season, as the team sheet draws it (Sports M2's second half).
+ *
+ * [loading] and [failed] are separate from emptiness for the reason every other
+ * surface in the hub keeps them apart: an offseason team and an unreadable feed
+ * are different answers, and only one of them is worth a retry.
+ */
+data class TeamScheduleState(
+    val team: SportsTeam,
+    val games: List<SportsGame> = emptyList(),
+    val loading: Boolean = false,
+    val failed: Boolean = false,
+)
+// The split for drawing is NOT a property here on purpose: SportsTeamScheduleRules
+// is internal to this module, and a public state class exposing its Groups type
+// would make the rule's shape public API. The screens ask the rule directly -
+// same module, one call, and the decision stays where the tests pin it.
+
+/**
  * Which body the hub shows for the league that is selected: its schedule, or
  * its standings table.
  */
@@ -182,6 +200,35 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _sections = MutableStateFlow<List<LeagueSection>>(emptyList())
     val sections: StateFlow<List<LeagueSection>> = _sections.asStateFlow()
+
+    /**
+     * Which day the hub is showing: [SportsDayRules.YESTERDAY], TODAY or
+     * TOMORROW (spec audit 2026-11-18, Sports M2).
+     *
+     * The hub had no notion of a day at all - ESPN's default window was "today"
+     * and the two carry-over windows only served to keep TODAY correct for a
+     * west-coast evening - so "is the game tomorrow?" had no answer anywhere in
+     * the app. The state is an OFFSET rather than a date because the chips are
+     * three fixed days: tomorrow must still be tomorrow when the app is left
+     * open past midnight, which a stored `LocalDate` would silently turn into
+     * today.
+     */
+    private val _selectedDay = MutableStateFlow(SportsDayRules.TODAY)
+    val selectedDay: StateFlow<Int> = _selectedDay.asStateFlow()
+
+    /**
+     * The team sheet's season, or null when no team sheet is open (Sports M2's
+     * second half).
+     *
+     * A null state is the sheet being CLOSED, which is why it is not the same as
+     * an empty season: a closed sheet must not be redrawn by a late read, and the
+     * opening check below compares the team key rather than the state's presence.
+     */
+    private val _teamSchedule = MutableStateFlow<TeamScheduleState?>(null)
+    val teamSchedule: StateFlow<TeamScheduleState?> = _teamSchedule.asStateFlow()
+
+    /** The one read the open team sheet owns; a second open cancels the first. */
+    private var teamScheduleJob: Job? = null
 
     /**
      * The team keys the FAVORITES tab follows, as
@@ -710,6 +757,38 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * Shows [offset]'s slate, the day chips' press (spec audit 2026-11-18,
+     * Sports M2).
+     *
+     * The previous day's cards are DROPPED rather than kept while the new read
+     * is in flight: they would be the wrong day, under a chip that says so. The
+     * hub shows its loading state instead, which is the same state a first open
+     * shows, and the read itself is cached per day in the repository so coming
+     * back to a day already visited is instant.
+     *
+     * Standing down the live tick is part of the switch, not incidental: a past
+     * or future slate cannot have a game in play, so a tick left armed for it
+     * would re-read a frozen list every 30 seconds for a score that cannot move
+     * (see [syncLivePoll]).
+     */
+    fun setDay(offset: Int) {
+        val next = SportsDayRules.clamp(offset)
+        if (next == _selectedDay.value) return
+        _selectedDay.value = next
+        livePollJob?.cancel()
+        livePollJob = null
+        // Favorites is derived from the sections, so it empties with them.
+        _sections.value = emptyList()
+        _matches.value = emptyMap()
+        // The lineup-match skip is keyed on the slate; a new day means a new
+        // pass, or the cards would draw today's channel answers under tomorrow's
+        // games.
+        lastMatchKey = null
+        forgetHubScroll()
+        refresh()
+    }
+
+    /**
      * Stops the live tick while the hub is not the screen in front of the
      * viewer - the player route disposes the hub's composable while this
      * activity-scoped ViewModel (and its scope) stays alive, so [onCleared] is
@@ -917,6 +996,52 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         syncLivePoll()
     }
 
+    /**
+     * Opens [team]'s season: the read behind the team sheet (Sports M2's second
+     * half).
+     *
+     * The hub had no team-centric view at all - the Favorites tab is a copy of the
+     * current slate, so a followed team's next fixture existed nowhere in the app.
+     * The season is read once per open, from the same ESPN feed the cards come
+     * from, and it is NOT fed through the channel matcher: matching is the
+     * expensive half of a refresh (a full slate is 40-60s) and a season is a
+     * hundred cards the viewer is browsing, not a slate they are about to play.
+     * A game tapped in the sheet opens the ordinary game sheet, which resolves its
+     * channel from the map the hub already filled for the games on the slate.
+     */
+    fun openTeamSchedule(team: SportsTeam) {
+        val leaguePath = team.league?.trim().orEmpty()
+        val teamId = team.id?.trim().orEmpty()
+        if (leaguePath.isEmpty() || teamId.isEmpty()) return
+        teamScheduleJob?.cancel()
+        // The team as tapped, so the sheet has its colours, crest and name before
+        // the first byte of the season arrives.
+        _teamSchedule.value = TeamScheduleState(team = team, loading = true)
+        teamScheduleJob = viewModelScope.launch {
+            val games = runCatchingCancellable {
+                espn.teamSchedule(leaguePath, teamId)
+            }.getOrDefault(emptyList())
+            // A second team opened, or the sheet was closed, while this read was
+            // in flight: its answer belongs to a sheet that no longer exists.
+            if (_teamSchedule.value?.team?.favoriteKey != team.favoriteKey) return@launch
+            _teamSchedule.value = TeamScheduleState(
+                team = team,
+                games = games,
+                loading = false,
+                // An empty season is a real answer (the offseason); a FAILED read
+                // is the only thing the sheet draws as an error.
+                failed = games.isEmpty() && espn.lastTeamScheduleFailed(leaguePath, teamId),
+            )
+        }
+    }
+
+    /** Closes the team sheet, dropping its read so a late answer cannot reopen it. */
+    fun closeTeamSchedule() {
+        teamScheduleJob?.cancel()
+        teamScheduleJob = null
+        _teamSchedule.value = null
+    }
+
     fun setLeagueEnabled(path: String, enabled: Boolean) {
         AppPreferences.setSportsLeagueEnabled(getApplication(), path, enabled)
         _enabledLeagues.value = AppPreferences.getSportsEnabledLeagues(getApplication())
@@ -1059,6 +1184,10 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         livePollJob = null
         // Nothing polls while the hub is not the screen in front of the viewer.
         if (pollPaused) return
+        // ...and nothing polls a day that cannot have a game in play (Sports
+        // M2): only TODAY's slate moves, so a tick armed for yesterday or
+        // tomorrow would re-read a frozen list every 30 seconds.
+        if (!SportsDayRules.pollsLive(_selectedDay.value)) return
         // The tab the loop was armed for decides what keeps it alive, not the
         // whole section: Favorites is a view over the leagues, and a league with
         // somebody else's game still live has nothing for this tab (see
@@ -1191,10 +1320,16 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      */
     private suspend fun fetchSections(leagues: List<SportsLeague>): List<LeagueSection> =
         withContext(Dispatchers.IO) {
+            // The day is read ONCE for the whole pass (Sports M2): every league in
+            // one pass must answer for the same day, and a capture here is what
+            // makes a mid-pass chip press unable to mix two slates into one
+            // section list - the press empties the sections and starts its own
+            // pass anyway.
+            val day = _selectedDay.value
             leagues.map { league ->
                 async {
                     val previous = _sections.value.firstOrNull { it.league.path == league.path }
-                    fetchSection(league, previous)
+                    fetchSection(league, previous, day)
                 }
             }.awaitAll()
         }
@@ -1215,24 +1350,57 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      */
     private suspend fun fetchSection(
         league: SportsLeague,
-        previous: LeagueSection?
+        previous: LeagueSection?,
+        /** The day offset this pass is for; TODAY keeps every existing path. */
+        day: Int = SportsDayRules.TODAY,
     ): LeagueSection = when {
         league.isTheSportsDb -> {
             val leagueId = league.theSportsDbId.orEmpty()
-            val games = theSportsDb.fixtures(theSportsDbKey(), leagueId)
+            // TheSportsDB answers a whole ROUND, not a day, so another day is a
+            // filter over the fixtures already in hand rather than a second
+            // request with a date in it (Sports M2). TODAY is every fixture, as
+            // before - the round read is the round read.
+            val fixtures = theSportsDb.fixtures(theSportsDbKey(), leagueId)
+            val games = if (day == SportsDayRules.TODAY) {
+                fixtures
+            } else {
+                val now = System.currentTimeMillis()
+                fixtures.filter { game ->
+                    SportsDayRules.containsMs(day, now, game.dateMs)
+                }
+            }
             LeagueSection(
                 league = league,
                 games = games,
-                failed = games.isEmpty() && theSportsDb.lastFetchFailed(leagueId),
+                failed = fixtures.isEmpty() && theSportsDb.lastFetchFailed(leagueId),
             )
         }
         league.kind == SportsKind.HEAD_TO_HEAD -> {
-            val games = theSportsDb.withBadges(theSportsDbKey(), espn.scoreboard(league.path))
+            // ESPN asked for the day the viewer picked, not the feed's today
+            // (Sports M2). TODAY is the old call with its carry-over windows.
+            val raw = if (day == SportsDayRules.TODAY) {
+                espn.scoreboard(league.path)
+            } else {
+                espn.scoreboardForDay(
+                    league.path,
+                    SportsDayRules.dayParam(day, System.currentTimeMillis())
+                )
+            }
+            val games = theSportsDb.withBadges(theSportsDbKey(), raw)
             LeagueSection(
                 league = league,
                 games = games,
                 failed = games.isEmpty() && espn.lastFetchFailed(league.path),
             )
+        }
+        day != SportsDayRules.TODAY -> {
+            // A tournament is read by CLOCK, not by date: the reader picks which
+            // of a weekend's sessions the card is about from the current time,
+            // and there is no per-day window to ask for. Drawing today's
+            // sessions under TOMORROW would be a lie, so another day has none -
+            // the tab says so through the empty sentence the hub already shows,
+            // and switching back to TODAY brings them.
+            LeagueSection(league = league)
         }
         else -> {
             val events = espn.tournamentEvents(league.path)

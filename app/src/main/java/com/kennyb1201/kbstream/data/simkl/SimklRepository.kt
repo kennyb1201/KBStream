@@ -217,13 +217,14 @@ class SimklRepository(
      * the network fetch's own clock, or the disk blob's `updatedAt` when the
      * snapshot was parsed out of the 12h file.
      *
-     * Not [cachedAllShowItemsFetchedAt]: that is when this PROCESS got hold of
-     * the list, and reading it back off the disk resets it to "now". A blob
-     * written before a watched write and parsed out of the disk after a
-     * relaunch therefore looked brand new - which is exactly the reported miss,
-     * because the relaunch is what served the pre-finish tally. The caught-up
-     * leg measures this number against the last watched write (see
-     * [showLibraryStamp]).
+     * Not [cachedAllShowItemsFetchedAt]: that is the clock the in-memory
+     * freshness window runs on - `now` for a network fetch, and the blob's own
+     * `updatedAt` for a disk read, so a cold start's file cannot pass for fresh
+     * data (spec audit 2026-11-18, Data M4). A blob written before a watched
+     * write and parsed out of the disk after a relaunch used to look brand new
+     * on both clocks - which is exactly the reported miss, because the relaunch
+     * is what served the pre-finish tally. The caught-up leg measures THIS
+     * number against the last watched write (see [showLibraryStamp]).
      */
     @Volatile
     internal var cachedAllShowItemsBlobUpdatedAt =
@@ -1760,8 +1761,17 @@ class SimklRepository(
                         cachedAllShowItems =
                             parsed
 
+                        // The blob's OWN mint time, not this read's (spec audit
+                        // 2026-11-18, Data M4). Stamping it with `now` made an
+                        // eleven-hour-old library read as freshly fetched and
+                        // then held the in-memory window for another fifteen
+                        // minutes - so a cold start could badge episodes from
+                        // yesterday's tally and not revalidate until something
+                        // else forced a fetch. With the mint time here, the disk
+                        // blob still paints the first frame (its whole purpose)
+                        // and the very next read sees it as old and fetches.
                         cachedAllShowItemsFetchedAt =
-                            now
+                            diskCached.updatedAt
 
                         // The blob's OWN mint time, not this read's: see
                         // [cachedAllShowItemsBlobUpdatedAt].

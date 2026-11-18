@@ -233,8 +233,12 @@ class TasteRatingSubmissionContractTest {
                 src.contains("closeLeg(app, TasteRatingTracker.ANILIST)")
         )
         assertTrue(
-            "and MDBList has no pause of its own for the drain to wait out",
-            src.contains("TasteRatingTracker.MDBLIST -> 0L")
+            // Spec audit 2026-11-18, Data L2: the park used to be private to the
+            // budget interceptor, so an MDBList 429 read as a leg with nothing to
+            // wait for and the queue looked frozen.
+            "and MDBList's park is read from the interceptor that owns it",
+            src.contains("TasteRatingTracker.MDBLIST -> MdbListClient.localPauseMs(app)") &&
+                source(MDBLIST).contains("fun localPauseMs(context: Context): Long")
         )
         assertTrue(
             "and the wait is bounded: a long park is left to the next trigger",
@@ -313,6 +317,19 @@ class TasteRatingSubmissionContractTest {
             assertTrue("$path drops its own leg on disconnect",
                 src.contains("TasteRatingSubmission.onTrackerDisconnected("))
         }
+        // MDBList has no connect flow at all: replacing the pasted key IS its
+        // reconnect, so the key write is the third trigger (spec audit
+        // 2026-11-18, Data M1). Without it a leg closed by a refused key stayed
+        // closed, with the pending ratings waiting for the next app launch.
+        val mdbList = source(MDBLIST)
+        assertTrue(
+            "the key write re-opens the leg and drains it",
+            mdbList.contains("fun saveApiKey(context: Context, key: String)") &&
+                mdbList.contains(
+                    "TasteRatingSubmission.onTrackerConnected(context, TasteRatingTracker.MDBLIST)"
+                )
+        )
+
         // A carrier DOES exist since the taste-signals sync landed - and the
         // submission spec added none of its own: the signals blob travels
         // whole, and the queue that talks to the trackers never reaches the

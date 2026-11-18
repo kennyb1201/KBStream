@@ -44,7 +44,10 @@ class MalQrArrivalsContractTest {
         )
         assertTrue(
             "the URL stays as text for a viewer who would rather type it",
-            flat.contains("1. Open this link on your phone") &&
+            // Re-worded by the 2026-11-18 audit (Onboarding L3): the sentence
+            // now says the phone needs KBStream installed, which is the fact the
+            // callback hop depends on.
+            flat.contains("1. On a phone WITH KBStream installed") &&
                 flat.contains("\$authorizeUrl")
         )
         assertEquals(

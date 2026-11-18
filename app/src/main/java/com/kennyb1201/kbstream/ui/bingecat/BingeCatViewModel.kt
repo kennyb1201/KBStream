@@ -402,7 +402,15 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
      * CANCEL and BACK - nothing that asks for a new code. This is the single
      * owner of `isPolling`; no other exit path clears it on its own.
      */
-    private fun stopPolling() {
+    /**
+     * Ends the in-flight device-code poll. Public so the connect screens can call
+     * it as they leave (spec audit 2026-11-18, Onboarding M1): this object's own
+     * doc claimed polling was "cancelled on every exit: Back, a profile switch, a
+     * new code or a disconnect" while no BACK path called it, and the ViewModel
+     * is activity-scoped, so a code approved after the viewer left still
+     * connected the profile.
+     */
+    fun stopPolling() {
         pollJob?.cancel()
         pollJob = null
         if (_uiState.value.isPolling) {

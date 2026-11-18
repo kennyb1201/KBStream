@@ -123,8 +123,15 @@ internal object TasteRatingQueueRules {
      * title on the same tracker REPLACES the pending one IN PLACE, so a
      * like -> dislike flip while the like is still queued sends only the dislike,
      * a clear supersedes a pending submit, and no stale flip is ever sent after a
-     * newer one. The replacement is a fresh entry, so a superseded submit's
-     * attempt history does not carry over to the signal that replaced it.
+     * newer one.
+     *
+     * The new signal carries the FAILURE history forward (spec audit 2026-11-18,
+     * Data M6). It used to replace the entry with a clean one, so attempts and
+     * backoff reset: a title the tracker keeps refusing became immortal - re-thumb
+     * it four times and the five-attempt drop in [afterFailure] could never be
+     * reached, and the cap existed for exactly that entry. What a new signal
+     * proves is that the viewer changed their mind, not that the tracker started
+     * accepting this title; the wait and the count are about the latter.
      *
      * Titles are matched by a SHARED key rather than an equal key set: the same
      * title signalled from a TMDB rail and from an add-on rail carries different
@@ -136,7 +143,15 @@ internal object TasteRatingQueueRules {
     ): List<TasteRatingQueueEntry> {
         val index = pending.indexOfFirst { it.sameTargetAs(incoming) }
         if (index < 0) return pending + incoming
-        return pending.toMutableList().apply { this[index] = incoming }
+        val previous = pending[index]
+        return pending.toMutableList().apply {
+            // Only the ATTEMPT COUNT carries over: it is what keeps the
+            // five-attempt drop reachable. The backoff clock and the error do not,
+            // because the viewer has just asked for this write again - it is due
+            // now rather than behind a 12 h wait earned by the signal it replaced,
+            // and the old failure must not caption the new one.
+            this[index] = incoming.copy(attempts = previous.attempts)
+        }
     }
 
     /** True when the two key sets name the same title (any shared spelling). */

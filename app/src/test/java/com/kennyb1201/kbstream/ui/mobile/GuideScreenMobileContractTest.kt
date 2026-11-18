@@ -200,8 +200,14 @@ class GuideScreenMobileContractTest {
             "hidden groups must be restorable, and the set synced like the TV's",
             mobile.contains("MobileGroupsDialog(") &&
                 mobile.contains("putStringSet(\"hidden_groups\"") &&
-                mobile.contains("setHiddenGroups(") &&
-                mobile.contains("onShowAll = { setHiddenGroups(emptySet()) }")
+                mobile.contains("setHiddenGroups(")
+        )
+        assertTrue(
+            // Spec audit 2026-11-18, Live TV M3: SHOW ALL restores the hidden
+            // CHANNELS too, which is what the TV's same label does.
+            "SHOW ALL must clear hidden channels as well as hidden groups",
+            mobile.contains("setHiddenGroups(emptySet())") &&
+                mobile.contains("viewModel.unhideAllChannels()")
         )
 
         // EPG program search, not just channel names.

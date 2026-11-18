@@ -15,9 +15,11 @@ import org.junit.Test
  *  - **Coalescing.** A newer signal for the SAME title on the SAME tracker
  *    replaces the pending one in place, so a like -> dislike flip while the like
  *    is still queued sends only the dislike, a clear supersedes a pending submit,
- *    and no stale flip is ever sent after a newer one. The replacement is fresh,
- *    which is what keeps a superseded submit's attempt history from following the
- *    signal that replaced it.
+ *    and no stale flip is ever sent after a newer one. The replacement keeps the
+ *    ATTEMPT COUNT of the submit it supersedes (spec audit 2026-11-18, Data M6)
+ *    and nothing else: the count is what keeps the five-attempt drop reachable for
+ *    a title the tracker keeps refusing, while the wait and the error belong to
+ *    the signal, not to the title.
  *  - **Bounded retry.** 1 min / 5 min / 30 min / 2 h / 12 h between attempts, a
  *    cap of five, and then the entry is DROPPED rather than tried a sixth time.
  *    Nothing in this object counts a server-requested pause (a 429, a spent
@@ -118,7 +120,11 @@ class TasteRatingQueueRulesTest {
     }
 
     @Test
-    fun `a replacement inherits nothing from the submit it supersedes`() {
+    fun `a replacement keeps the attempt count and nothing else`() {
+        // Spec audit 2026-11-18, Data M6: a fresh entry per coalesce made a title
+        // the tracker keeps refusing immortal - re-thumb it and the five-attempt
+        // drop could never be reached, though that cap exists for exactly that
+        // entry. The COUNT therefore carries; the wait and the error do not.
         val tried = entry(attempts = 3, lastAttemptAt = 900_000L, lastError = "did not answer")
 
         val after = TasteRatingQueueRules.coalesce(
@@ -126,12 +132,27 @@ class TasteRatingQueueRulesTest {
             entry(rating = 2, signal = TasteSignals.DISLIKE)
         )
 
-        assertEquals(0, after.single().attempts)
+        assertEquals(3, after.single().attempts)
+        assertEquals(2, after.single().rating)
         assertEquals(0L, after.single().lastAttemptAt)
         assertNull("the old failure must not caption the new signal", after.single().lastError)
         assertTrue(
             "and it is due at once rather than waiting out the old entry's backoff",
             TasteRatingQueueRules.isDue(after.single(), 0L)
+        )
+    }
+
+    @Test
+    fun `a re-thumbed poison title still reaches the cap`() {
+        var pending = listOf(entry(attempts = TasteRatingQueueRules.MAX_ATTEMPTS - 1))
+        pending = TasteRatingQueueRules.coalesce(
+            pending,
+            entry(rating = 2, signal = TasteSignals.DISLIKE)
+        )
+
+        assertTrue(
+            "the next failure is the fifth, so the entry is dropped rather than retried forever",
+            TasteRatingQueueRules.isSpent(pending.single())
         )
     }
 

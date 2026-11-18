@@ -229,6 +229,32 @@ class UpcomingCaughtUpFreshnessContractTest {
         )
     }
 
+    // ── the cold-start blob and the in-memory window (Data M4) ──────────
+
+    @Test
+    fun `a disk blob is never stamped as freshly fetched`() {
+        // Spec audit 2026-11-18, Data M4: the disk read used to stamp the blob
+        // with `now`, so an eleven-hour-old library held the fifteen-minute
+        // in-memory window on top of its own age and a cold start could badge
+        // from yesterday's tally with nothing revalidating.
+        val raw = source(REPOSITORY)
+        val branchStart = raw.indexOf("// Disk fallback so a cold start")
+        assertTrue("the disk fallback is gone?", branchStart >= 0)
+        // Just the disk-blob branch: the network fetch below it legitimately
+        // stamps `now`.
+        val branchEnd = raw.indexOf("val response =", branchStart)
+        assertTrue("the fetch that follows it is gone?", branchEnd > branchStart)
+        val diskRead = flat(raw.substring(branchStart, branchEnd))
+        assertTrue(
+            "the disk blob's mint time is what the freshness window runs on",
+            diskRead.contains("cachedAllShowItemsFetchedAt = diskCached.updatedAt")
+        )
+        assertFalse(
+            "and never the moment it happened to be read",
+            diskRead.contains("cachedAllShowItemsFetchedAt = now")
+        )
+    }
+
     // ── source access ───────────────────────────────────────────────────
 
     private val repo by lazy { flat(source(REPOSITORY)) }

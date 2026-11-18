@@ -98,13 +98,21 @@ internal object MalAuth {
         val verifier = store.pendingVerifier()
             ?: return ConnectResult.Failed("no PKCE verifier for this connect")
 
-        val token = exchange(
-            malCodeExchangeForm(
-                clientId = MalConfig.clientId,
-                code = code,
-                verifier = verifier
+        val token = when (
+            val exchange = exchange(
+                malCodeExchangeForm(
+                    clientId = MalConfig.clientId,
+                    code = code,
+                    verifier = verifier
+                )
             )
-        ) ?: return ConnectResult.Failed("MAL did not issue a token")
+        ) {
+            is MalExchange.Token -> exchange.token
+            // The connect already reports its own failure; the marker is for a
+            // session that DIED, not for a connect that never landed.
+            MalExchange.Denied, MalExchange.Transient ->
+                return ConnectResult.Failed("MAL did not issue a token")
+        }
 
         store.save(token)
         store.clearPendingFlow()
@@ -152,10 +160,27 @@ internal object MalAuth {
                 return@withLock null
             }
 
-            val refreshed = exchange(malRefreshForm(MalConfig.clientId, refreshToken), refreshToken)
-            if (refreshed == null) {
-                markNeedsReconnect(context, "refresh failed")
-                return@withLock null
+            // A refresh that could not REACH MAL is not a dead grant (spec audit
+            // 2026-11-18, Onboarding M3): the old null check marked the profile
+            // NeedsReconnect on a timeout, a captive portal or a 5xx, which is a
+            // connection the viewer had to re-authorise by hand over a network
+            // blip. Only a refusal closes the grant; a transient failure answers
+            // null for this call and leaves the session alone for the next one.
+            val refreshed = when (
+                val exchange = exchange(
+                    malRefreshForm(MalConfig.clientId, refreshToken),
+                    refreshToken
+                )
+            ) {
+                is MalExchange.Token -> exchange.token
+                MalExchange.Denied -> {
+                    markNeedsReconnect(context, "refresh refused")
+                    return@withLock null
+                }
+                MalExchange.Transient -> {
+                    Log.w(TAG, "MAL refresh unanswered; keeping the session for the next call")
+                    return@withLock null
+                }
             }
 
             MalTokenStore(context).save(refreshed)
@@ -210,8 +235,25 @@ internal object MalAuth {
         Log.w(TAG, "MAL needs reconnect: $reason")
     }
 
-    /** One token-endpoint POST. Null on any failure: the caller decides what it means. */
-    private suspend fun exchange(form: String, previousRefresh: String? = null): MalToken? =
+    /**
+     * What a token-endpoint POST settled: a token, a refusal, or nothing at all.
+     *
+     * The three arms exist because a REFUSED grant and an unanswered request
+     * mean opposite things (spec audit 2026-11-18, Onboarding M3): one closes the
+     * session until a reconnect, the other must leave it exactly as it was.
+     */
+    private sealed interface MalExchange {
+        data class Token(val token: MalToken) : MalExchange
+
+        /** MAL said no: a 4xx (`invalid_grant`, `invalid_client`, 401). */
+        data object Denied : MalExchange
+
+        /** Nothing was decided: transport, timeout, 429, 5xx. */
+        data object Transient : MalExchange
+    }
+
+    /** One token-endpoint POST, classified by what the failure MEANT. */
+    private suspend fun exchange(form: String, previousRefresh: String? = null): MalExchange =
         withContext(Dispatchers.IO) {
             val request =
                 Request.Builder()
@@ -226,13 +268,22 @@ internal object MalAuth {
                     val body = response.body?.string().orEmpty()
                     if (!response.isSuccessful) {
                         Log.w(TAG, "MAL token endpoint answered ${response.code}")
-                        return@use null
+                        // 4xx is a decision about the GRANT (invalid_grant,
+                        // invalid_client, an expired code). 429 and 5xx are the
+                        // service asking for time, not refusing the session.
+                        return@use if (response.code in 400..499 && response.code != 429) {
+                            MalExchange.Denied
+                        } else {
+                            MalExchange.Transient
+                        }
                     }
                     malParseToken(body, System.currentTimeMillis(), previousRefresh)
+                        ?.let { MalExchange.Token(it) }
+                        ?: MalExchange.Transient
                 }
             }.getOrElse { error ->
                 Log.w(TAG, "MAL token request failed: ${error.javaClass.simpleName}")
-                null
+                MalExchange.Transient
             }
         }
 }

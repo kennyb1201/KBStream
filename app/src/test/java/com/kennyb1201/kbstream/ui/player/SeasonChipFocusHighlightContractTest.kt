@@ -118,6 +118,33 @@ class SeasonChipFocusHighlightContractTest {
     }
 
     @Test
+    fun `a press on the strip forwards to its chip whatever the input mode`() {
+        // Spec audit 2026-11-18, Player M2: the style stopped caring about touch
+        // mode (2026-11-17 amendment), but the FORWARD from the strip's own
+        // RecyclerView to the selected chip was still gated on it - so a press
+        // landing on the strip in touch mode stayed on a view that draws no ring
+        // and `focusSelected` never ran. That is the surviving shape of the
+        // field's "no visible indicator".
+        listOf("ui/player/MpvPlayerActivity.kt", "ui/player/NativePlayerActivity.kt").forEach { engine ->
+            val src = read(engine)
+                .lineSequence()
+                .filterNot { line ->
+                    val trimmed = line.trim()
+                    trimmed.startsWith("//") || trimmed.startsWith("*")
+                }
+                .joinToString("\n")
+            assertFalse(
+                "$engine must not gate its strip/list focus forward on touch mode",
+                src.contains("isInTouchMode")
+            )
+            assertTrue(
+                "$engine still forwards the strip's focus to the selected chip",
+                src.contains("focusSelected(")
+            )
+        }
+    }
+
+    @Test
     fun `both engines still draw the strip from one adapter`() {
         listOf("ui/player/MpvPlayerActivity.kt", "ui/player/NativePlayerActivity.kt").forEach { engine ->
             assertTrue(

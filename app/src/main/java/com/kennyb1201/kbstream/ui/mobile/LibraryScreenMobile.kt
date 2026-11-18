@@ -340,6 +340,11 @@ fun LibraryScreenMobile(
                 // first, so the phone drew "This list is empty" over a list
                 // whose rows were still arriving.
                 state.listLoading -> "Loading list…"
+                // Library L1, the TV sentence: a read that did not answer is
+                // not an empty list.
+                state.listReadFailed -> "This list couldn't be loaded — it did " +
+                    "not answer, or it is too large to read in one pass. " +
+                    "Reopen it to try again."
                 else -> "This list is empty. Long-press any poster app-wide " +
                     "and choose \"Add to list…\" to fill it."
             }
@@ -940,10 +945,16 @@ fun LibraryScreenMobile(
                                     listMenu = null
                                 }
                             }
-                            // Only a list this device owns can be deleted here; a
-                            // Trakt, MDBList or BingeCat list is deleted on its
-                            // service, from the Library's own list actions there.
-                            if (list.source.isLocalList) {
+                            // Every list this account OWNS can be deleted here
+                            // (spec audit 2026-11-18, Library H2): the gate used
+                            // to be isLocalList, so a Trakt / MDBList / BingeCat
+                            // list created on this very phone could only be
+                            // deleted on the TV or on the service's website,
+                            // while the TV has always offered it. Same gate the
+                            // RENAME button above uses, and the same one the TV
+                            // sheet uses for delete; a SAVED community list is
+                            // still not ours to delete - it leaves by UNLIKING.
+                            if (list.source.canManageList && !list.liked) {
                                 KBButton(
                                     label = "DELETE LIST",
                                     danger = true,
@@ -1074,10 +1085,13 @@ fun LibraryScreenMobile(
                                 modifier = Modifier.weight(1f)
                             ) {
                                 listPendingDelete = null
-                                if (list.liked) {
-                                    viewModel.deleteRemoteList(list)
-                                } else {
+                                // Local lists are this device's rows; every other
+                                // owned source is deleted at the service (the TV
+                                // sheet's own routing - see LibraryScreen).
+                                if (list.source.isLocalList) {
                                     viewModel.deleteLocalList(list.id)
+                                } else {
+                                    viewModel.deleteRemoteList(list)
                                 }
                             }
                         }

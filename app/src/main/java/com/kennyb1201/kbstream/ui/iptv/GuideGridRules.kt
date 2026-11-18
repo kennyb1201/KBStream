@@ -96,10 +96,17 @@ internal object GuideGrid {
     const val PAGE_HOURS = 3
 
     /**
-     * Programs per channel per hour of window (F3c): 4, so the fixed six-hour
-     * window asks for 24.
+     * Programs per channel per hour of window (F3c).
+     *
+     * SIXTEEN, not four (spec audit 2026-11-18, Live TV M2). The bound has to
+     * cover the SHORTEST realistic slot or the grid truncates mid-window and
+     * draws a false blank gap: at four an hour, the fixed six-hour window asked
+     * for 24 programs, which is exactly right for 15-minute slots and wrong for
+     * everything faster - a 10-minute music channel lost its last two hours, a
+     * 5-minute one its last four. Sixteen an hour is the 5-minute case with
+     * headroom, and it is still a bound: the DAO read cannot grow past it.
      */
-    const val PROGRAMS_PER_HOUR = 4
+    const val PROGRAMS_PER_HOUR = 16
 
     /**
      * The narrowest a cell may render. A 5-minute program is 40dp at
@@ -118,12 +125,13 @@ internal object GuideGrid {
     /**
      * Programs per channel per window read when the caller names no span.
      *
-     * A 6-hour window of 30-minute programs is 12; 24 leaves room for the
-     * short-form channels (news, music) whose schedules run 10-15 minutes
-     * without letting the read grow. The grids ask [programsPerWindow] instead,
-     * so the cap follows the span (F3c).
+     * A 6-hour window of 30-minute programs is 12; this is the same
+     * [PROGRAMS_PER_HOUR] ceiling the grids ask for (Live TV M2), so a call site
+     * that forgets the span does not fall back to the old 24 and truncate the
+     * short-slot channels the grids just stopped truncating. The grids ask
+     * [programsPerWindow] instead, so the cap follows the span (F3c).
      */
-    const val PER_CHANNEL_LIMIT = 24
+    const val PER_CHANNEL_LIMIT = GRID_SPAN_HOURS * PROGRAMS_PER_HOUR
 
     /**
      * Rows loaded ahead of the viewport. The list's own cap
@@ -321,6 +329,12 @@ internal data class GridCell(
  * window opens renders from the left edge, at the width of the part that is
  * actually on screen, and keeps its real start for the detail block and for
  * focus. A program entirely outside the window is dropped.
+ *
+ * An OVERLAPPING listing is clipped the same way, against the row's own cursor
+ * (Live TV M1): the drawn span starts where the previous cell ended, because
+ * the row is laid out by summing widths under an absolutely-positioned time
+ * axis - a cell starting behind the cursor shifted every later cell on the row
+ * away from its true time.
  */
 internal fun rowCells(
     channelKey: String,
@@ -330,8 +344,18 @@ internal fun rowCells(
     val out = ArrayList<GridCell>(programs.size + 2)
     var cursor = window.startUtcMillis
     programs.forEach { program ->
-        val start = program.startUtcMillis.coerceAtLeast(window.startUtcMillis)
+        val clipped = program.startUtcMillis.coerceAtLeast(window.startUtcMillis)
         val end = program.endUtcMillis.coerceAtMost(window.endUtcMillis)
+        if (end <= clipped) return@forEach
+        // A program that STARTS BEFORE THE PREVIOUS ONE ENDS is clamped to the
+        // cursor (spec audit 2026-11-18, Live TV M1). Cells are laid out
+        // sequentially by width in a fixed box while the hour marks and the
+        // now-line sit at absolute offsets, so an unclamped overlap emitted a
+        // cell whose left edge was behind the cursor - and everything after it
+        // on that row sat right of its true time for the rest of the window. The
+        // real start/end still key the cell (so a page change cannot swap focus
+        // ids around); only the drawn span is clamped.
+        val start = clipped.coerceAtLeast(cursor)
         if (end <= start) return@forEach
         if (start > cursor) {
             out += GridCell(

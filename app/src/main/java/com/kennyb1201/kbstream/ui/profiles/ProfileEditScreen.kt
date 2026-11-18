@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -201,9 +202,14 @@ fun ProfileEditScreen(
     var kidsRequirePinToExit by remember(effectiveEditId) {
         mutableStateOf(editing?.kidsRequirePinToExit ?: false)
     }
-    var kidsDailyLimitHours by remember(effectiveEditId) {
-        // Stored as minutes; edited in whole hours (0 = no limit).
-        mutableStateOf((editing?.kidsDailyLimitMinutes ?: 0) / 60)
+    //
+    // Stored and edited in MINUTES (spec audit 2026-11-18, Settings M3). This
+    // held whole hours, seeded as `minutes / 60`: a 30-minute limit set on the
+    // phone came in as 0 = Off, and a 90-minute one as 1h - so saving any other
+    // Kids setting quietly LOOSENED the limit, or removed it entirely. The chip
+    // row now writes minutes itself; the seed is the stored value untouched.
+    var kidsDailyLimitMinutes by remember(effectiveEditId) {
+        mutableIntStateOf(editing?.kidsDailyLimitMinutes ?: 0)
     }
     var kidsBedtime by remember(effectiveEditId) {
         // Chip domain (see bedtimeChipFor): 0 = Off, 1..11 = 1 PM..11 PM,
@@ -454,7 +460,7 @@ fun ProfileEditScreen(
                 hideAddons = kidsHideAddons,
                 lockLiveTv = kidsLockLiveTv,
                 requirePinToExit = kidsRequirePinToExit,
-                dailyLimitMinutes = kidsDailyLimitHours * 60,
+                dailyLimitMinutes = kidsDailyLimitMinutes,
                 bedtimeMinutes = if (kidsBedtimeOn) {
                     bedtimeMinutesFor(kidsBedtime, kidsBedtimeMinute)
                 } else 0
@@ -756,8 +762,15 @@ fun ProfileEditScreen(
                     "3h" to 3,
                     "4h" to 4
                 ),
-                selected = kidsDailyLimitHours,
-                onSelect = { kidsDailyLimitHours = it }
+                // A stored limit that is not a whole hour (30, 90 min) selects
+                // nothing, rather than highlighting a neighbouring chip that no
+                // longer describes it - and it is kept as-is until the viewer
+                // picks one.
+                selected = kidsDailyLimitMinutes
+                    .takeIf { it > 0 && it % 60 == 0 }
+                    ?.div(60)
+                    ?: -1,
+                onSelect = { kidsDailyLimitMinutes = it * 60 }
             )
             KidsOptionChipRow(
                 title = "Bedtime lock",
@@ -1044,10 +1057,20 @@ fun ProfileEditScreen(
                 val anyPinField = newPinInput.isNotBlank() ||
                     confirmPinInput.isNotBlank() || currentPinInput.isNotBlank()
                 if (anyPinField && KidsGate.firstPinNeedsParentPin(editing)) {
-                    feedback.show(
-                        text = "Set a parent PIN first",
-                        isError = true
-                    )
+                    // Create it HERE rather than telling the parent to go find the
+                    // Parent PIN row (spec audit 2026-11-18, Settings L1). This
+                    // was a dead end: SAVE refused with "Set a parent PIN first"
+                    // on a screen whose D-pad order gives no hint where that row
+                    // is, and nothing carried the typed PIN or the press over.
+                    // The refusal itself stays (a kid must not be able to write
+                    // a first PIN over a PIN-less profile), but it now raises the
+                    // prompt in its CREATE shape - no current PIN to answer, one
+                    // new PIN - and the save it was blocking runs on acceptance.
+                    parentPinPromptGated = false
+                    parentPinPromptWhy = "Set a parent PIN to protect this profile"
+                    parentPinGateTarget = editing
+                    parentPinAfterVerify = saveProfile
+                    parentPinPrompt = true
                     return@KBButton
                 }
                 // C2/C5: what this save would change. A kids profile's own
@@ -1069,12 +1092,12 @@ fun ProfileEditScreen(
                                 kidsHideAddons != (editing?.kidsHideAddons ?: true) ||
                                 kidsLockLiveTv != (editing?.kidsLockLiveTv ?: true) ||
                                 kidsRequirePinToExit != (editing?.kidsRequirePinToExit ?: false) ||
-                                kidsDailyLimitHours * 60 != (editing?.kidsDailyLimitMinutes ?: 0) ||
+                                kidsDailyLimitMinutes != (editing?.kidsDailyLimitMinutes ?: 0) ||
                                 formBedtime != storedBedtime
                             )
                         )
                 val lockBeingSet = kidsModeOn &&
-                    (kidsDailyLimitHours > 0 || kidsBedtimeOn)
+                    (kidsDailyLimitMinutes > 0 || kidsBedtimeOn)
                 if (
                     KidsGate.saveNeedsPin(
                         kidsChanged = kidsChanged,

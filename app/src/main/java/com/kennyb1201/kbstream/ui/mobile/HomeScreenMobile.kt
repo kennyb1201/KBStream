@@ -144,7 +144,8 @@ import com.kennyb1201.kbstream.ui.home.HeroLogoWidth
 import com.kennyb1201.kbstream.ui.home.LibraryHomeRailUi
 import com.kennyb1201.kbstream.ui.home.failedAddonsMessage
 import com.kennyb1201.kbstream.ui.home.rememberBingeCatReconnectNotice
-import com.kennyb1201.kbstream.ui.home.rememberLibraryHomeRails
+import com.kennyb1201.kbstream.ui.home.libraryRailUnreadableLine
+import com.kennyb1201.kbstream.ui.home.rememberLibraryHomeRailsState
 import com.kennyb1201.kbstream.ui.components.BrandMarkImage
 import com.kennyb1201.kbstream.ui.components.CarriedArt
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
@@ -525,7 +526,11 @@ fun HomeScreenMobile(
         // Read BEFORE the merge: a pin is an entry in the ONE Home order now
         // (see KBHomeSlots), so the merge needs its key to place it, and the
         // column below needs its rows to draw it.
-        val pinnedLibraryRails by rememberLibraryHomeRails()
+        // The state, not only the rails: a pinned list that could not be READ
+        // draws nothing, and used to do it silently (spec audit 2026-11-18,
+        // Library L1).
+        val pinnedLibraryRailsState by rememberLibraryHomeRailsState()
+        val pinnedLibraryRails = pinnedLibraryRailsState.rails
         // The marker pass must see these rows as well as the catalog rails: a
         // title that exists only on a pinned list was never preloaded, which is
         // why pinned Trakt / MDBList cards wore no eye or checkmark here while
@@ -684,10 +689,23 @@ fun HomeScreenMobile(
                 .take(BILLBOARD_MAX_PAGES)
         }
 
+        // The pinned "Top ... Today" rows' own art has promo text and service
+        // badges burned into it, so their titles may only reach the hero with
+        // TMDB art - or none (spec audit 2026-11-18, Home M2). The rail side has
+        // always said so; the hero's fallback rungs did not.
+        val billboardTmdbOnlyIds = remember(railsShown) {
+            railsShown
+                .filter { rail ->
+                    rail.addonName == com.kennyb1201.kbstream.data.home.PinnedRailsSpec.ADDON_NAME
+                }
+                .flatMap { rail -> rail.items.map { item -> item.id } }
+                .toSet()
+        }
+
         val billboardPages by viewModel.billboardPages.collectAsStateWithLifecycle()
-        LaunchedEffect(billboardEnabled, billboardFeed) {
+        LaunchedEffect(billboardEnabled, billboardFeed, billboardTmdbOnlyIds) {
             if (billboardEnabled) {
-                viewModel.resolveBillboard(billboardFeed)
+                viewModel.resolveBillboard(billboardFeed, billboardTmdbOnlyIds)
             } else {
                 viewModel.clearBillboard("billboard disabled")
             }
@@ -1308,6 +1326,23 @@ fun HomeScreenMobile(
                             text = "BingeCat needs reconnecting: your pinned BingeCat rails " +
                                 "are kept but cannot load until you sign in again " +
                                 "(Settings > BingeCat).",
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier
+                                .padding(horizontal = 16.dp)
+                                .fillMaxWidth()
+                        )
+                    }
+                }
+
+                // ...and a pinned list whose read failed or overflowed, which is
+                // not an auth problem (Library L1): the TV's sentence, shared.
+                if (pinnedLibraryRailsState.unreadable.isNotEmpty()) {
+                    item(key = "library_rail_unreadable", contentType = "status") {
+                        Text(
+                            text = libraryRailUnreadableLine(
+                                pinnedLibraryRailsState.unreadable
+                            ),
                             color = KBTextLo,
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier
@@ -3128,6 +3163,10 @@ internal fun MobileBillboard(
         !trailerSuppressed &&
         currentPage?.settled == true &&
         !currentPage?.trailerKey.isNullOrBlank()
+    // The LIVE page list, for the cycle's settle gate below: the effect is keyed
+    // on `pages.size`, so the list it captured at its last start is stale for a
+    // page that settled in place - exactly the case the gate exists for.
+    val pagesNow = rememberUpdatedState(pages)
     LaunchedEffect(
         pagerState,
         cycleMs,
@@ -3163,8 +3202,23 @@ internal fun MobileBillboard(
         // phone does not (F1) - it keeps cycling, and the press/focus answers live
         // in the pill row below.
         if (pillsHoldCycle) return@LaunchedEffect
-        snapshotFlow { pagerState.settledPage to pagerState.isScrollInProgress }
-            .collectLatest { (page, scrolling) ->
+        // The dwell STARTS when the page can be seen (spec audit 2026-11-18,
+        // Home L4). The flow used to carry only (page, scrolling), so the timer
+        // began at the page CHANGE: a page whose detail was still resolving got
+        // its dwell burned while the hero showed a placeholder, and the viewer
+        // saw the title for barely a second before it cycled away. Including the
+        // page's own `settled` re-emits `collectLatest` the moment the resolve
+        // lands, which restarts the delay - and a page that never settles still
+        // cycles on the old timer rather than stalling the hero.
+        snapshotFlow {
+            val page = pagerState.settledPage
+            Triple(
+                page,
+                pagerState.isScrollInProgress,
+                pagesNow.value.getOrNull(page)?.settled == true
+            )
+        }
+            .collectLatest { (page, scrolling, _) ->
                 if (scrolling) return@collectLatest
                 delay(cycleMs)
                 val next = (page + 1) % pages.size
@@ -3255,13 +3309,31 @@ internal fun MobileBillboard(
             // collectLatest cancels this tween when the pause arrives, and a
             // cancelled Animatable keeps the value it had reached - which is how
             // the hold survives without a snap and without a new clock.
-            val remainingMs = ((1f - sweepProgress.value) * BILLBOARD_KEN_BURNS_MANUAL_MS)
-                .toInt()
-                .coerceAtLeast(1)
-            sweepProgress.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(durationMillis = remainingMs, easing = LinearEasing)
-            )
+            //
+            // A LONE PAGE KEEPS DRIFTING (spec audit 2026-11-18, Home L3). With
+            // one page there is no page change to re-key this effect, so the
+            // tween used to finish at full zoom and the hero froze there for good
+            // - the permanent state of a kids profile thinned to a single title.
+            // Nothing cuts on a single page, so it eases back to the start and
+            // goes again; the multi-page hero gets the same motion for free, since
+            // every page begins from zero.
+            do {
+                val remainingMs = ((1f - sweepProgress.value) * BILLBOARD_KEN_BURNS_MANUAL_MS)
+                    .toInt()
+                    .coerceAtLeast(1)
+                sweepProgress.animateTo(
+                    targetValue = 1f,
+                    animationSpec = tween(durationMillis = remainingMs, easing = LinearEasing)
+                )
+                if (pagesNow.value.size > 1) break
+                sweepProgress.animateTo(
+                    targetValue = 0f,
+                    animationSpec = tween(
+                        durationMillis = BILLBOARD_KEN_BURNS_MANUAL_MS,
+                        easing = LinearEasing
+                    )
+                )
+            } while (!sweepPausedNow.value)
         }
     }
     // One entrance per page entry, replayed when a page is returned to.
@@ -3424,7 +3496,9 @@ internal fun MobileBillboard(
                 // computed UNCONDITIONALLY, because a remember inside an `if`
                 // would corrupt the slot table the moment animations are
                 // turned off or back on mid-page.
-                val sweep = remember(index, cycleMs) { billboardSweep(index, cycleMs) }
+                // Keyed on the index alone: the move no longer depends on the
+                // dwell (Home L2 - the pace is the renderer's fixed duration).
+                val sweep = remember(index) { billboardSweep(index) }
                 MobileHero(
                     meta = page.meta,
                     // The page's own art, or - when it has none at all - the art

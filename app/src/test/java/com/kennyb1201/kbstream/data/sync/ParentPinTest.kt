@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.kennyb1201.kbstream.data.security.PinVault
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -44,17 +45,31 @@ class ParentPinTest {
         // hands it one at launch), so the test plays that part.
         KidsTimeGuard.appContext = context
         prefs().edit().clear().commit()
+        PinVault.setParentHash(context, null)
     }
 
     @After
     fun tearDown() {
         prefs().edit().clear().commit()
+        PinVault.setParentHash(context, null)
     }
 
     private fun prefs() =
         context.getSharedPreferences("kids_time_guard", Context.MODE_PRIVATE)
 
-    private fun stored(key: String): String? = prefs().getString(key, null)
+    /**
+     * The hash as it is actually stored: the encrypted vault (Settings L2).
+     *
+     * Robolectric has no AndroidKeyStore, so [com.kennyb1201.kbstream.data.
+     * security.SecureTokenStore] answers its plain-store fallback here - the same
+     * store name, the same reads and writes, only without ciphertext. What this
+     * file can pin is the CONTRACT (this is where the hash lives, nothing else
+     * holds it, and a legacy copy is drained), not the encryption itself.
+     */
+    private fun vaulted(): String? = PinVault.parentHash(context)
+
+    /** The pre-vault location, which must be empty after every path here. */
+    private fun legacy(key: String): String? = prefs().getString(key, null)
 
     /** A profile with no PIN of its own - the case the parent PIN exists for. */
     private fun pinlessProfile() = ProfileManager.Profile(id = "kid", name = "Kid")
@@ -71,8 +86,12 @@ class ParentPinTest {
         assertTrue("and the PIN verifies", KidsTimeGuard.verifyParentPin("2468"))
         assertFalse("a different four digits do not", KidsTimeGuard.verifyParentPin("2469"))
 
-        val storedPin = stored("parent_pin_hash")
-        assertNotNull("something is persisted", storedPin)
+        val storedPin = vaulted()
+        assertNotNull("something is persisted, in the vault", storedPin)
+        assertNull(
+            "and NOT in the plain kids_time_guard file any more (Settings L2)",
+            legacy("parent_pin_hash")
+        )
         // Salted (audit B2), so two hashes of the same PIN are deliberately
         // different values: what has to match is the ALGORITHM, which is what
         // "the same credential a profile PIN produces" means now.
@@ -93,7 +112,7 @@ class ParentPinTest {
     @Test
     fun `a malformed parent PIN is refused and changes nothing`() {
         KidsTimeGuard.setParentPin("1357")
-        val before = stored("parent_pin_hash")
+        val before = vaulted()
 
         listOf("12", "12345", "12a4", "abcd", "123 ").forEach { bad ->
             assertFalse("\"$bad\" is not a 4-digit PIN", KidsTimeGuard.setParentPin(bad))
@@ -101,7 +120,7 @@ class ParentPinTest {
         assertEquals(
             "a refused input writes nothing at all",
             before,
-            stored("parent_pin_hash")
+            vaulted()
         )
         // Blank is the CLEAR value rather than a malformed one, exactly as it is
         // for a profile PIN (see ProfileManager.setPin) - which is why it is not
@@ -123,7 +142,30 @@ class ParentPinTest {
                 "the same shape ProfileManager.verifyPin has for a profile with no PIN",
             KidsTimeGuard.verifyParentPin("0000")
         )
-        assertNull(stored("parent_pin_hash"))
+        assertNull(vaulted())
+        assertNull(legacy("parent_pin_hash"))
+    }
+
+    @Test
+    fun `a parent PIN set before the vault is adopted, verified and its copy erased`() {
+        // A build before Settings L2 wrote this to the plain file. The read path
+        // has to keep honouring it - a parent must never be locked out by an
+        // upgrade - so it is drained into the vault on first use, and only once
+        // that read back is the plaintext copy dropped.
+        val hash = ProfileManager.hashPin("2468")
+        prefs().edit().putString("parent_pin_hash", hash).commit()
+
+        assertTrue("the old hash still answers", KidsTimeGuard.verifyParentPin("2468"))
+        assertTrue("hasParentPin reads it through the same path", KidsTimeGuard.hasParentPin())
+        assertEquals("and it now lives in the vault", hash, vaulted())
+        assertNull(
+            "with the plaintext copy gone - that is the point of the migration",
+            legacy("parent_pin_hash")
+        )
+        assertTrue(
+            "and it is still the same credential after the move",
+            KidsTimeGuard.verifyParentPin("2468")
+        )
     }
 
     @Test
@@ -133,7 +175,8 @@ class ParentPinTest {
 
         assertTrue(KidsTimeGuard.setParentPin(null))
         assertFalse("cleared", KidsTimeGuard.hasParentPin())
-        assertNull("and the hash goes with it", stored("parent_pin_hash"))
+        assertNull("and the hash goes with it", vaulted())
+        assertNull("from either store", legacy("parent_pin_hash"))
     }
 
     // ── what the veil accepts ──────────────────────────────────────────

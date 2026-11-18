@@ -88,8 +88,14 @@ class MalWiringContractTest {
             auth.contains("refreshMutex.withLock {")
         )
         assertTrue(
-            "a failed refresh marks the connection instead of looping",
-            auth.contains("markNeedsReconnect(context, \"refresh failed\")")
+            "a REFUSED refresh marks the connection instead of looping",
+            // Spec audit 2026-11-18, Onboarding M3: only a refusal (4xx) closes
+            // the grant now; an unanswered request leaves the session alone.
+            auth.contains("markNeedsReconnect(context, \"refresh refused\")")
+        )
+        assertTrue(
+            "and a refresh that could not reach MAL does not close it",
+            auth.contains("MAL refresh unanswered; keeping the session for the next call")
         )
         val st = source(TOKEN_STORE)
         assertTrue(st.contains("const val KEY_NEEDS_RECONNECT"))

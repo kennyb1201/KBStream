@@ -92,9 +92,12 @@ class SportsHubFavoritesContractTest {
             hubFlat.contains("val favoritesTab = selectedPath == SportsLeagues.FAVORITES.path")
         )
         assertTrue(
+            // Sports M2 (2026-11-18): the "nobody you follow is on" sentence is
+            // the day rule's now, so it can name a day other than today - the
+            // separation from "you have not picked anyone" is unchanged.
             "\"you have not picked anyone\" and \"nobody you follow is on\" are answered separately",
             hubFlat.contains("favoritesTab && favoriteKeys.isEmpty() -> KBStatusMessage(") &&
-                hubFlat.contains("message = \"None of your teams are playing right now.\"")
+                hubFlat.contains("SportsDayRules.emptyFavoritesMessage(selectedDay)")
         )
     }
 

@@ -133,9 +133,13 @@ internal fun theSportsDbGame(
     val startMs = theSportsDbStartMs(event) ?: return null
     val status = event.optString("strStatus").trim()
     val state = theSportsDbState(status)
-    val played = state == GameState.FINAL
-    val homeScore = if (played) event.optString("intHomeScore").trim().ifEmpty { null } else null
-    val awayScore = if (played) event.optString("intAwayScore").trim().ifEmpty { null } else null
+    // A LIVE event carries its running score too (spec audit 2026-11-18, Sports
+    // H2): the state parser already mapped the live words, but the scores were
+    // kept only for a FINAL one, so an in-progress Serie A card pulsed LIVE above
+    // a blank score row while every ESPN live card showed its score.
+    val hasScore = state == GameState.FINAL || state == GameState.LIVE
+    val homeScore = if (hasScore) event.optString("intHomeScore").trim().ifEmpty { null } else null
+    val awayScore = if (hasScore) event.optString("intAwayScore").trim().ifEmpty { null } else null
     val round = event.optString("intRound").trim()
     return SportsGame(
         id = id,
@@ -144,7 +148,7 @@ internal fun theSportsDbGame(
         name = event.optString("strEvent").trim().ifEmpty { "$awayName at $homeName" },
         dateMs = startMs,
         state = state,
-        statusDetail = theSportsDbStatusText(state, startMs, zone),
+        statusDetail = theSportsDbStatusText(state, startMs, zone, status),
         away = SportsTeam(
             id = event.optString("idAwayTeam").trim().ifEmpty { null },
             abbreviation = theSportsDbAbbreviation(awayName),
@@ -192,10 +196,14 @@ internal fun theSportsDbState(status: String): GameState = when (status.trim().u
 internal fun theSportsDbStatusText(
     state: GameState,
     startMs: Long,
-    zone: ZoneId = ZoneId.systemDefault()
+    zone: ZoneId = ZoneId.systemDefault(),
+    status: String? = null
 ): String = when (state) {
     GameState.FINAL -> "Final"
-    GameState.LIVE -> "LIVE"
+    // The event's own word when it has a useful one ("HT", "2H", "ET"), else
+    // the badge alone (spec audit 2026-11-18, Sports H2).
+    GameState.LIVE -> status?.trim()?.uppercase()
+        ?.takeIf { it.isNotEmpty() && it != "LIVE" } ?: "LIVE"
     GameState.UPCOMING ->
         DateTimeFormatter.ofPattern("h:mm a", Locale.US)
             .withZone(zone)

@@ -340,19 +340,22 @@ class PickerAdapter(
         /** The playing episode's own mark, beside the accent label. */
         internal const val NOW_PLAYING_LABEL = "NOW PLAYING"
 
-        /** The plate's wording, unchanged from the episode cards (spec 2026-11-12). */
-        internal const val RATING_PLATE_LABEL = "IMDb"
+        /**
+         * The plate's wording, unchanged from the episode cards (spec 2026-11-12)
+         * - and the cards say TMDB now (spec audit 2026-11-18, Detail H1): the
+         * value is TMDB's episode vote average, not an IMDb score.
+         */
+        internal const val RATING_PLATE_LABEL = "TMDB"
 
         /**
          * The View twin of Compose's EpisodeRatingChip (KBEpisodeTouch.kt:317).
          *
-         * Same yellow IMDb plate, same plate shape, same one-decimal score and
-         * the same colours - read from the SAME constants (KBImdbTint,
-         * KBShapeChip's 10dp, KBTextHi) rather than re-typed here, because the
-         * two surfaces showing one episode must not end up disagreeing about its
-         * number. The plate's wording is the cards' wording too: the value is
-         * TMDB's vote average and the plate says IMDb today, which is the
-         * existing card convention, not something this row invents.
+         * Same plate, same plate shape, same one-decimal score and the same
+         * colours - read from the SAME constants (TmdbTint, KBShapeChip's 10dp,
+         * KBTextHi) rather than re-typed here, because the two surfaces showing
+         * one episode must not end up disagreeing about its number. The plate's
+         * wording is the cards' wording too: the value is TMDB's vote average, so
+         * the plate says TMDB (spec audit 2026-11-18, Detail H1).
          *
          * Null draws nothing at all - an episode without a vote average leaves
          * the row exactly as it was, with no gap for a chip that is not there.
@@ -378,7 +381,7 @@ class PickerAdapter(
                 background = android.graphics.drawable.GradientDrawable().apply {
                     shape = android.graphics.drawable.GradientDrawable.RECTANGLE
                     cornerRadius = RATING_PLATE_CORNER_DP * density
-                    setColor(com.kennyb1201.kbstream.ui.components.KBImdbTint.toArgb())
+                    setColor(com.kennyb1201.kbstream.ui.components.TmdbTint.toArgb())
                 }
             }
             val score = TextView(context).apply {

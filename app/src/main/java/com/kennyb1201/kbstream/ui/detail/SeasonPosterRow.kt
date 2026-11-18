@@ -302,11 +302,24 @@ internal fun SeasonPosterArt(
                 // and a label with no cue at all is an invisible focus stop on a
                 // TV. A ring around the text is the smallest honest answer - it
                 // is not a poster frame and it is not a chip.
+                //
+                // THE SPACE IS RESERVED IN BOTH STATES (spec audit 2026-11-18,
+                // Detail L2). The ring used to arrive with its own 6dp/3dp of
+                // padding, so focusing a poster-less season widened the label and
+                // nudged every poster beside it - a focus cue that moves the row
+                // is a focus cue that reads as a layout glitch. A border draws
+                // inside its bounds, so padding always and colour on focus is the
+                // same cue with a still row (poster items scale via graphicsLayer
+                // and never move anything either).
                 .then(
-                    if (posterUrl == null && focused) {
+                    if (posterUrl == null) {
                         Modifier
-                            .border(2.dp, KBAccent, KBShapeSmall)
                             .padding(horizontal = 6.dp, vertical = 3.dp)
+                            .border(
+                                2.dp,
+                                if (focused) KBAccent else Color.Transparent,
+                                KBShapeSmall
+                            )
                     } else {
                         Modifier
                     }

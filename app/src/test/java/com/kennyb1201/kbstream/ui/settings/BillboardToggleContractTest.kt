@@ -68,8 +68,12 @@ class BillboardToggleContractTest {
             spotlight.contains("AppPreferences.getHomeBillboardEnabled(context)")
         )
         assertTrue(
-            "the read is a keyless remember, so a fresh Home entry re-reads it",
-            spotlight.contains("remember { AppPreferences.getHomeBillboardEnabled(context) }")
+            // Home L1 (2026-11-18): still seeded per entry (never keyed on the
+            // sync revision), now also keyed on the profile it belongs to.
+            "the read is a per-entry remember, so a fresh Home entry re-reads it",
+            spotlight.contains(
+                "remember(activeProfileId) { AppPreferences.getHomeBillboardEnabled(context) }"
+            )
         )
         assertTrue(
             "and the gate renders nothing while it is off - no hero, no spacer",

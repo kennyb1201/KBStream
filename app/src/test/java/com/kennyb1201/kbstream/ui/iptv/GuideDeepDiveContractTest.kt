@@ -237,6 +237,32 @@ class GuideDeepDiveContractTest {
     // ── I2: RELOAD is not LOAD under a second name ───────────────────────
 
     @Test
+    fun `a newly loaded grid window re-matches the live scores`() {
+        // Spec audit 2026-11-18, Live TV L1: the score join ran on a new poll or
+        // a channel-list change only, so a window paged in after the last 30s
+        // tick carried no scores until the next one - even though the games were
+        // already in hand.
+        val vm = source(VIEW_MODEL)
+        val join = vm.substringAfter("internal fun startLiveScores()")
+            .substringBefore("internal fun stopLiveScores()")
+        assertTrue(
+            "the loaded program set is an input to the join",
+            join.contains("combine(") &&
+                join.contains("_gridPrograms") &&
+                join.contains("distinctUntilChanged()")
+        )
+        assertTrue(
+            "reduced to the shape the match actually reads, so a scroll that adds " +
+                "no programs cannot re-run it",
+            join.contains("programs.entries.sumOf { it.value.size }")
+        )
+        assertTrue(
+            "and the pass still reads the CURRENT rows, not the ones it was keyed on",
+            join.contains("resolveLiveScores(games, _gridPrograms.value, channels)")
+        )
+    }
+
+    @Test
     fun `reload forces the guide refresh`() {
         val viewModel = source(VIEW_MODEL)
         val reload = viewModel.substringAfter("fun reload() {")

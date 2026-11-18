@@ -64,22 +64,24 @@ class MobileLibraryHomeRailContractTest {
         assertTrue(
             "the loader must be shared, not copied: the TV calls it and holds no " +
                 "private copy of its own",
-            tvHome.contains("rememberLibraryHomeRails()") &&
-                !tvHome.contains("private fun rememberLibraryHomeRails(")
+            tvHome.contains("rememberLibraryHomeRailsState()") &&
+                !tvHome.contains("private fun rememberLibraryHomeRails")
         )
         assertTrue(
-            "and the phone calls the same function",
-            mobileHome.contains("val pinnedLibraryRails by rememberLibraryHomeRails()")
+            // Both screens read the same state since Library L1 (2026-11-18):
+            // the rails AND the pins that could not be read, from one load.
+            "and the phone calls the same state",
+            mobileHome.contains("rememberLibraryHomeRailsState()")
         )
         // The rules travel with it, unchanged.
         assertTrue(
             "one load per pin, off the main thread",
             loader.contains("value = withContext(Dispatchers.IO)") &&
-                loader.contains("LibraryHomeRailItems.load(context, pin)")
+                loader.contains("LibraryHomeRailItems.loadOrNull(context, pin)")
         )
         assertTrue(
             "an empty answer is not a rail - never an empty heading",
-            loader.contains("if (items.isEmpty()) null else LibraryHomeRailUi(pin, items)")
+            loader.contains("if (items.isNotEmpty()) rails += LibraryHomeRailUi(pin, items)")
         )
         assertTrue(
             "the kids ceiling applies to a pinned list on both screens",
@@ -183,12 +185,12 @@ class MobileLibraryHomeRailContractTest {
             "the pins are read on each composition of Home, keyed on the pins " +
                 "themselves - not remembered against the Library screen",
             loader.contains("val pins = LibraryHomeRails.pins(context)") &&
-                loader.contains("produceState(initialValue = emptyList(), pins)")
+                loader.contains("produceState(initialValue = LibraryHomeRailsState(), pins)")
         )
         assertTrue(
             "Home reads the pins itself: the Library screen's homeRailRevision is " +
                 "remember-local there and never reaches this screen",
-            mobileHome.contains("rememberLibraryHomeRails()") &&
+            mobileHome.contains("rememberLibraryHomeRailsState()") &&
                 !mobileHome.contains("homeRailRevision += 1")
         )
         assertFalse(

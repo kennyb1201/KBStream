@@ -88,11 +88,14 @@ import com.kennyb1201.kbstream.ui.sports.GameDetailRow
 import com.kennyb1201.kbstream.ui.sports.LeagueSection
 import com.kennyb1201.kbstream.ui.sports.LeagueView
 import com.kennyb1201.kbstream.ui.sports.LineupStatus
+import com.kennyb1201.kbstream.ui.sports.SportsDayRules
 import com.kennyb1201.kbstream.ui.sports.SportsDetailRules
 import com.kennyb1201.kbstream.ui.sports.SportsFinalWindowRules
 import com.kennyb1201.kbstream.ui.sports.SportsGameOrder
 import com.kennyb1201.kbstream.ui.sports.SportsHubViewModel
 import com.kennyb1201.kbstream.ui.sports.SportsReopenRules
+import com.kennyb1201.kbstream.ui.sports.SportsTeamScheduleRules
+import com.kennyb1201.kbstream.ui.sports.TeamScheduleState
 import com.kennyb1201.kbstream.ui.sports.SportsSearchRules
 import com.kennyb1201.kbstream.ui.sports.SportsStandingsLayout
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -145,6 +148,8 @@ fun SportsHubScreenMobile(
     val leagueOrder by viewModel.leagueOrder.collectAsStateWithLifecycle()
     val sections by viewModel.sections.collectAsStateWithLifecycle()
     val selectedPath by viewModel.selectedLeaguePath.collectAsStateWithLifecycle()
+    // Which day the chips are on (Sports M2).
+    val selectedDay by viewModel.selectedDay.collectAsStateWithLifecycle()
     val matches by viewModel.matches.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val favoriteKeys by viewModel.favoriteTeamKeys.collectAsStateWithLifecycle()
@@ -159,6 +164,8 @@ fun SportsHubScreenMobile(
     val lineupStatus by viewModel.lineupStatus.collectAsStateWithLifecycle()
     val matchingDone by viewModel.matchingDone.collectAsStateWithLifecycle()
     val detailSummary by viewModel.detailSummary.collectAsStateWithLifecycle()
+    // The open team sheet's season (Sports M2's second half).
+    val teamSchedule by viewModel.teamSchedule.collectAsStateWithLifecycle()
     val lineupMissing = lineupStatus == LineupStatus.MISSING
 
     val leagues = remember(enabled, leagueOrder) { SportsLeagues.enabled(enabled, leagueOrder) }
@@ -293,6 +300,19 @@ fun SportsHubScreenMobile(
                     return@Column
                 }
 
+                // The day chips, above the league tabs (spec audit 2026-11-18,
+                // Sports M2): the phone was today-only in exactly the way the TV
+                // was, and the tabs scope them.
+                SportsDayRowMobile(
+                    selectedOffset = selectedDay,
+                    onSelect = { offset ->
+                        if (offset != selectedDay) viewModel.forgetHubScroll()
+                        viewModel.setDay(offset)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 LeagueTabsMobile(
                     leagues = tabs,
                     selectedPath = selectedPath,
@@ -405,6 +425,10 @@ fun SportsHubScreenMobile(
                         failed = standingsLeague.path in standingsFailed,
                         favoriteKeys = favoriteKeys,
                         onToggleTeam = { team, on -> viewModel.setTeamFavorite(team, on) },
+                        // The table names every team in the league, so it is the
+                        // phone's way into a team that has no game in the current
+                        // window (Sports M2's second half).
+                        onOpenTeam = { team -> viewModel.openTeamSchedule(team) },
                         onRetry = viewModel::retryStandings
                     )
                     return@Column
@@ -413,7 +437,12 @@ fun SportsHubScreenMobile(
                 when {
                     section == null -> SportsStatusMobile(
                         title = "Loading scores",
-                        message = "Fetching today's games…",
+                        // Sports M2: the wait names the day it is waiting for.
+                        message = if (selectedDay == SportsDayRules.TODAY) {
+                            "Fetching today's games…"
+                        } else {
+                            "Fetching ${SportsDayRules.label(selectedDay).lowercase()}'s games…"
+                        },
                         modifier = Modifier.fillMaxSize()
                     )
 
@@ -425,6 +454,21 @@ fun SportsHubScreenMobile(
                     )
 
                     favoritesTab -> when {
+                        // A day switch empties the sections, and this tab's
+                        // section is derived (non-null even when empty) - so the
+                        // wait gets its own branch, or it would announce "none
+                        // of your teams are playing tomorrow" while loading
+                        // (Sports M2).
+                        isLoading && section.games.isEmpty() -> SportsStatusMobile(
+                            title = "Loading scores",
+                            message = if (selectedDay == SportsDayRules.TODAY) {
+                                "Fetching today's games…"
+                            } else {
+                                "Fetching ${SportsDayRules.label(selectedDay).lowercase()}'s games…"
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+
                         section.games.isNotEmpty() -> LeagueBodyMobile(
                             section = section,
                             matches = matches,
@@ -447,9 +491,15 @@ fun SportsHubScreenMobile(
                             modifier = Modifier.fillMaxSize()
                         )
 
+                        // Sports M2: the sentence names the DAY when it is not
+                        // today, exactly as the TV pane's does.
                         else -> SportsStatusMobile(
-                            title = "Nothing on",
-                            message = "None of your teams are playing right now.",
+                            title = if (selectedDay == SportsDayRules.TODAY) {
+                                "Nothing on"
+                            } else {
+                                SportsDayRules.label(selectedDay)
+                            },
+                            message = SportsDayRules.emptyFavoritesMessage(selectedDay),
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -464,11 +514,19 @@ fun SportsHubScreenMobile(
                         modifier = Modifier.fillMaxSize()
                     )
 
+                    // Sports M2: the empty state belongs to the DAY the chips
+                    // are on, not to "right now".
                     section.games.isEmpty() && section.tournaments.isEmpty() ->
                         SportsStatusMobile(
-                            title = "Nothing on",
-                            message = "No ${section.league.label} games on the schedule " +
-                                "right now.",
+                            title = if (selectedDay == SportsDayRules.TODAY) {
+                                "Nothing on"
+                            } else {
+                                SportsDayRules.label(selectedDay)
+                            },
+                            message = SportsDayRules.emptyMessage(
+                                selectedDay,
+                                section.league.label
+                            ),
                             modifier = Modifier.fillMaxSize()
                         )
 
@@ -535,11 +593,27 @@ fun SportsHubScreenMobile(
                 onManualPick = { chosen -> viewModel.rememberChannel(game, chosen.id) },
                 reminderRequested = game.id in gameReminderRequests,
                 onToggleReminder = { viewModel.toggleGameReminder(game) },
+                // Either side's season, one tap away (Sports M2's second half).
+                onTeamSchedule = { team -> viewModel.openTeamSchedule(team) },
                 onPlay = { feeds ->
                     detailGame = null
                     onPlayChannels(game.id, null, feeds)
                 },
                 onClose = { detailGame = null }
+            )
+        }
+
+        teamSchedule?.let { state ->
+            TeamScheduleSheetMobile(
+                state = state,
+                favorite = state.team.favoriteKey in favoriteKeys,
+                onToggleFavorite = { on -> viewModel.setTeamFavorite(state.team, on) },
+                onOpenGame = { game ->
+                    // One sheet at a time, the same contract the TV hub has.
+                    viewModel.closeTeamSchedule()
+                    detailGame = game
+                },
+                onClose = { viewModel.closeTeamSchedule() }
             )
         }
 
@@ -599,6 +673,46 @@ private fun SportsHeaderMobile(
             KBButton(label = "LEAGUES", onClick = onLeaguesClick)
         }
         Spacer(modifier = Modifier.height(12.dp))
+    }
+}
+
+/**
+ * The phone's day chips: YESTERDAY · TODAY · TOMORROW (spec audit 2026-11-18,
+ * Sports M2).
+ *
+ * The same three days and the same order as the television's row, in the phone's
+ * own chip language, because a viewer who learns the order on one surface must
+ * not have to relearn it on the other.
+ */
+@Composable
+private fun SportsDayRowMobile(
+    selectedOffset: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        items(SportsDayRules.offsets, key = { offset -> "day-$offset" }) { offset ->
+            val selected = offset == selectedOffset
+            KBCard(onClick = { onSelect(offset) }, shape = KBShapePill) {
+                Text(
+                    text = SportsDayRules.label(offset).uppercase(),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (selected) KBVoid else KBTextHi,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .background(
+                            if (selected) KBAccent else KBSurfaceRaised,
+                            KBShapePill
+                        )
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                )
+            }
+        }
     }
 }
 
@@ -1472,6 +1586,8 @@ private fun StandingsBodyMobile(
     failed: Boolean,
     favoriteKeys: Set<String>,
     onToggleTeam: (SportsTeam, Boolean) -> Unit,
+    /** Open one team's season - the way in for a team not in the window. */
+    onOpenTeam: (SportsTeam) -> Unit = {},
     onRetry: () -> Unit
 ) {
     when {
@@ -1557,6 +1673,7 @@ private fun StandingsBodyMobile(
                                     ties = league.hasTies,
                                     columns = league.pointsColumns,
                                     followed = followed,
+                                    onOpenSeason = { onOpenTeam(team) },
                                     onToggleFollow = { onToggleTeam(team, !followed) }
                                 )
                             }
@@ -1635,10 +1752,17 @@ private fun StandingRowMobile(
     /** A points table's columns, in order - see [SportsLeague.pointsColumns]. */
     columns: List<PointsColumn> = SportsLeague.DEFAULT_POINTS_COLUMNS,
     followed: Boolean,
-    onToggleFollow: () -> Unit
+    onToggleFollow: () -> Unit,
+    /**
+     * Open this team's season. The tap, because tapping a row is "open it" on a
+     * touch screen - the follow stays on a hold, the same split the game cards
+     * have.
+     */
+    onOpenSeason: () -> Unit = onToggleFollow
 ) {
     KBCard(
-        onClick = onToggleFollow,
+        onClick = onOpenSeason,
+        onLongClick = onToggleFollow,
         shape = KBShapeCard,
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -1787,6 +1911,8 @@ private fun GameDetailSheetMobile(
     /** Whether this game has its own reminder armed (audit: sports F3). */
     reminderRequested: Boolean = false,
     onToggleReminder: () -> Unit = {},
+    /** Either side's season (Sports M2's second half). */
+    onTeamSchedule: (SportsTeam) -> Unit = {},
     onPlay: (List<IptvChannel>) -> Unit,
     onClose: () -> Unit
 ) {
@@ -1800,6 +1926,25 @@ private fun GameDetailSheetMobile(
             modifier = Modifier.fillMaxHeight(0.92f)
         ) {
             DetailHeaderMobile(game = game)
+
+            // Each side's season, one tap away (Sports M2's second half). A side
+            // with no ESPN id (a person, keyed by name) has no season endpoint
+            // to ask, so it offers no button at all.
+            val schedulable = listOf(game.away, game.home)
+                .filter { SportsTeamScheduleRules.canOpen(it) }
+            if (schedulable.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    schedulable.forEach { team ->
+                        KBButton(
+                            // ALL CAPS, like every other button on this header.
+                            label = (team.shortName?.takeIf { it.isNotBlank() }
+                                ?: team.abbreviation.takeIf { it.isNotBlank() }
+                                ?: team.displayName).uppercase() + " SEASON",
+                            onClick = { onTeamSchedule(team) }
+                        )
+                    }
+                }
+            }
 
             // The per-game reminder: the hub's switch is about followed teams,
             // so a one-off game had no control at all (audit: sports F3).
@@ -2284,6 +2429,144 @@ private fun FavoriteTeamsDialogMobile(
             )
 
             KBButton(label = "DONE", onClick = onClose)
+        }
+    }
+}
+
+/**
+ * One team's season (spec audit 2026-11-18, Sports M2's second half).
+ *
+ * The phone's copy of the TV sheet, and the same view: the whole season, split
+ * into what is on now, what is next and what has been played. Reached from a
+ * game's sheet, where either side offers it - the hub had no team-centric view at
+ * all before this, so a followed team's next fixture existed only if it happened
+ * to be in the current window.
+ *
+ * FOLLOWING is the header's chip, because this is the one screen where a team is
+ * the subject: following is also the reminder opt-in, so the same call the cards
+ * use re-arms the schedule.
+ */
+@Composable
+private fun TeamScheduleSheetMobile(
+    state: TeamScheduleState,
+    favorite: Boolean,
+    onToggleFavorite: (Boolean) -> Unit,
+    onOpenGame: (SportsGame) -> Unit,
+    onClose: () -> Unit
+) {
+    val groups = SportsTeamScheduleRules.groups(state.games)
+    Dialog(onDismissRequest = onClose) {
+        KBDialogPanel(
+            title = state.team.displayName.uppercase(),
+            subtitle = listOfNotNull(
+                state.team.league?.let { path -> SportsLeagues.byPath(path)?.label },
+                when {
+                    state.loading -> null
+                    groups.isEmpty -> null
+                    else -> "${groups.total} games"
+                }
+            ).joinToString(" • "),
+            modifier = Modifier.fillMaxHeight(0.92f)
+        ) {
+            KBButton(
+                label = if (favorite) "FOLLOWING" else "FOLLOW",
+                onClick = { onToggleFavorite(!favorite) }
+            )
+
+            when {
+                state.loading -> SportsStatusMobile(
+                    title = "Loading the season",
+                    message = "Fetching ${state.team.displayName}'s schedule…",
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                state.failed -> SportsStatusMobile(
+                    title = "Couldn't reach ESPN",
+                    message = "This team's season didn't load. Close the sheet and open the team again to retry.",
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                groups.isEmpty -> SportsStatusMobile(
+                    title = "No games yet",
+                    message = SportsTeamScheduleRules.emptyLine(groups).orEmpty(),
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                else -> LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    teamScheduleGroupMobile("LIVE", groups.live, onOpenGame)
+                    teamScheduleGroupMobile("UPCOMING", groups.upcoming, onOpenGame)
+                    teamScheduleGroupMobile("RESULTS", groups.final, onOpenGame)
+                }
+            }
+
+            KBButton(label = "CLOSE", onClick = onClose)
+        }
+    }
+}
+
+/** One heading and its rows, in the order a season is read. */
+private fun LazyListScope.teamScheduleGroupMobile(
+    title: String,
+    games: List<SportsGame>,
+    onOpenGame: (SportsGame) -> Unit
+) {
+    if (games.isEmpty()) return
+    item(key = "team-schedule-$title") {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelSmall,
+            color = KBTextLo,
+            modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)
+        )
+    }
+    itemsIndexed(games, key = { _, game -> "${title}-${game.id}" }) { _, game ->
+        TeamScheduleRowMobile(game = game, onClick = { onOpenGame(game) })
+    }
+}
+
+/** One fixture in a season: when, who, and what happened. */
+@Composable
+private fun TeamScheduleRowMobile(game: SportsGame, onClick: () -> Unit) {
+    KBCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(KBSurfaceRaised, KBShapeChip)
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = SportsTeamScheduleRules.matchupLine(game),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = KBTextHi,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    // The same words the cards use, and the score in the hub's
+                    // own shape, so a season row and a card never disagree.
+                    text = if (game.state == GameState.UPCOMING) {
+                        SportsDetailRules.statusLine(game)
+                    } else {
+                        "${SportsDetailRules.statusLine(game)} • ${SportsDetailRules.scoreLine(game)}"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (game.state == GameState.LIVE) KBDanger else KBTextLo
+                )
+            }
+            Text(
+                text = SportsTeamScheduleRules.dateLine(game),
+                style = MaterialTheme.typography.labelSmall,
+                color = KBTextLo
+            )
         }
     }
 }

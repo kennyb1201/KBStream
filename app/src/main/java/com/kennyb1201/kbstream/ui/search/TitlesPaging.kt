@@ -23,7 +23,21 @@ internal data class TitlesPage(
     val number: Int,
     val merged: List<SearchTitleResult>,
     val totalPages: Int,
-    val total: Int
+    val total: Int,
+    /**
+     * How many of this page's hits the PROFILE filter dropped before they
+     * reached [merged] (spec audit 2026-11-18, Browse M1). The pager cannot see
+     * that filter, so the builder reports it.
+     */
+    val profileDropped: Int = 0,
+    /**
+     * This page's contribution to the add-on de-dupe index (spec audit
+     * 2026-11-18, Browse M2): the `type:id` and `type:name:year` keys the TMDB
+     * hits on it can prove against an add-on row. Strings rather than the index
+     * type so the pager stays free of the VM's own model.
+     */
+    val dedupIds: Set<String> = emptySet(),
+    val dedupNameYears: Set<String> = emptySet()
 )
 
 /**
@@ -44,7 +58,24 @@ internal data class TitlesPagingState(
     val loadedPage: Int = 0,
     val totalPages: Int = 0,
     val total: Int = 0,
-    val error: String? = null
+    val error: String? = null,
+    /**
+     * The de-dupe keys every page folded in so far, so the rail's own identity
+     * grows with the paging instead of stopping at page 1 (Browse M2).
+     */
+    val dedupIds: Set<String> = emptySet(),
+    val dedupNameYears: Set<String> = emptySet(),
+    /**
+     * How many of [total] this rail can never show: hits a page landed that the
+     * profile filter dropped, plus repeats skipped by [absorb]'s dedupe.
+     *
+     * The hero line used to print the raw TMDB sum, so a query whose hits the
+     * kids ceiling had already thrown away still promised "Showing 24 of 148"
+     * (spec audit 2026-11-18, Browse M1). Every drop is observed as it happens,
+     * so subtracting them can only ever close the gap; no page is asked for just
+     * to count.
+     */
+    val hidden: Int = 0
 ) {
     /**
      * Whether there is another page worth asking for. False both when TMDB says
@@ -56,6 +87,13 @@ internal data class TitlesPagingState(
 
     /** The page a load-more asks for: the next one that has not answered yet. */
     val nextPage: Int get() = loadedPage + 1
+
+    /**
+     * [total] as the rail can honour it - see [hidden]. Floored at the number of
+     * cards actually on the rail, so the line can never say "showing 24 of 20"
+     * even when a page's own total under-reports.
+     */
+    val shownTotal: Int get() = maxOf(results.size, total - hidden)
 
     /**
      * Fold [page] in: append its hits that are not already on the rail, then
@@ -79,7 +117,13 @@ internal data class TitlesPagingState(
             loadedPage = page.number,
             totalPages = maxOf(totalPages, page.totalPages),
             total = maxOf(total, page.total),
-            error = null
+            error = null,
+            // Every hit the pager was handed but did not put on the rail is a
+            // hit [shownTotal] must not promise: the profile-filtered ones from
+            // the builder, and the repeats this dedupe just skipped.
+            hidden = hidden + (page.merged.size - fresh.size) + page.profileDropped,
+            dedupIds = dedupIds + page.dedupIds,
+            dedupNameYears = dedupNameYears + page.dedupNameYears
         )
     }
 

@@ -15,6 +15,9 @@ import com.kennyb1201.kbstream.data.trakt.TraktDisconnectOutcome
 import com.kennyb1201.kbstream.data.trakt.TraktFlowEvidence
 import com.kennyb1201.kbstream.data.trakt.TraktPollTrace
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
+import com.kennyb1201.kbstream.ui.profiles.ParentPinSubmit
+import com.kennyb1201.kbstream.ui.profiles.parentPinPromptSpec
+import com.kennyb1201.kbstream.ui.profiles.submitParentPinPrompt
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -54,8 +57,16 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
         TraktUiState(
             isConfigured = repository.isConfigured(),
             isConnected = repository.hasToken(),
+            // A session Trakt already refused reads as needing a reconnect from
+            // the first frame, not as "Connected" with silent dead scrobbles
+            // (spec audit 2026-11-18, Onboarding M2).
+            needsReconnect = repository.needsReconnect(),
             accountSlug = repository.accountSlug(),
-            statusMessage = if (repository.hasToken()) "Connected to Trakt." else null
+            statusMessage = when {
+                repository.needsReconnect() -> TRAKT_NEEDS_RECONNECT_MESSAGE
+                repository.hasToken() -> "Connected to Trakt."
+                else -> null
+            }
         )
     )
     val uiState: StateFlow<TraktUiState> = _uiState.asStateFlow()
@@ -122,16 +133,29 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun refreshConnectionState() {
         val connected = repository.hasToken()
-        if (connected == _uiState.value.isConnected) return
+        val needsReconnect = repository.needsReconnect()
+        if (
+            connected == _uiState.value.isConnected &&
+            needsReconnect == _uiState.value.needsReconnect
+        ) {
+            return
+        }
         stopPolling()
         countsJob?.cancel()
         _uiState.value = TraktUiState(
             isConfigured = repository.isConfigured(),
             isConnected = connected,
+            needsReconnect = needsReconnect,
             accountSlug = if (connected) repository.accountSlug() else null,
-            statusMessage = if (connected) "Connected to Trakt." else null
+            statusMessage = when {
+                needsReconnect -> TRAKT_NEEDS_RECONNECT_MESSAGE
+                connected -> "Connected to Trakt."
+                else -> null
+            }
         )
-        if (connected) refreshAccount()
+        // A refused grant has nothing to read: the totals would only earn
+        // another 401.
+        if (connected && !needsReconnect) refreshAccount()
     }
 
     /**
@@ -173,10 +197,17 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
         val isKids = profile?.kidsMaxAge != null
         if (isKids) {
             if (!guard.hasParentPin()) {
+                // CREATE it here instead of telling the parent to go and find the
+                // setting (spec audit 2026-11-18, Onboarding M4). This was a dead
+                // end on a fresh device: the sentence named the missing credential
+                // and the page offered only UNLOCK, which needs a PIN that does
+                // not exist. Simkl lost the same shape on 2026-11-17; this is the
+                // same prompt, through the same shared rules.
                 _uiState.value = _uiState.value.copy(
                     requiresParentPin = false,
-                    errorMessage = "A parent needs to set a parent PIN before Trakt can be " +
-                        "connected on a kids profile."
+                    parentPinCreate = true,
+                    parentPinMessage = null,
+                    errorMessage = null
                 )
                 return
             }
@@ -188,6 +219,41 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         beginDeviceFlow()
+    }
+
+    /**
+     * The CREATE prompt's submit, for a kids profile on a device with no parent
+     * PIN (spec audit 2026-11-18, Onboarding M4).
+     *
+     * Shares the rules with the profile editors and the Simkl gate
+     * ([parentPinPromptSpec] CREATE + [submitParentPinPrompt]), so a short PIN, a
+     * mismatch and a failed write behave there, here and on both surfaces
+     * identically. An accepted PIN starts the device flow it was blocking.
+     */
+    fun submitParentPinCreation(newPin: String, confirmPin: String) {
+        val spec = parentPinPromptSpec(gated = true, credentialExists = guard.hasParentPin())
+        val result = submitParentPinPrompt(
+            spec = spec,
+            gateTarget = ProfileManager.activeProfile.value,
+            currentPin = "",
+            newPin = newPin,
+            confirmPin = confirmPin,
+            writePin = { pin -> guard.setParentPin(pin) }
+        )
+        when (result) {
+            is ParentPinSubmit.Accepted -> {
+                _uiState.value = _uiState.value.copy(
+                    parentPinCreate = false,
+                    parentPinMessage = null,
+                    pinError = false
+                )
+                beginDeviceFlow()
+            }
+
+            is ParentPinSubmit.Rejected -> {
+                _uiState.value = _uiState.value.copy(parentPinMessage = result.message)
+            }
+        }
     }
 
     /** The parent PIN entry on a kids profile. */
@@ -428,8 +494,11 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
                 _uiState.value = TraktUiState(
                     isConfigured = repository.isConfigured(),
                     // Still connected, because it still is: the store would not
-                    // take the clear, so the session is exactly where it was.
+                    // take the clear, so the session is exactly where it was -
+                    // including a refusal marker, which is why it is re-read
+                    // rather than assumed false (Onboarding M2).
                     isConnected = true,
+                    needsReconnect = repository.needsReconnect(),
                     accountSlug = runCatching { repository.accountSlug() }.getOrNull(),
                     errorMessage = "Could not sign out on this device — Trakt is " +
                         "still connected here. Try again."
@@ -499,7 +568,14 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearError() {
-        _uiState.value = _uiState.value.copy(errorMessage = null)
+        // The CREATE prompt's own inline refusal is cleared on the next keystroke
+        // too (spec audit 2026-11-18, Onboarding M4): it belongs to the value
+        // that produced it, exactly as the verify gate's `pinError` does.
+        _uiState.value = _uiState.value.copy(
+            errorMessage = null,
+            pinError = false,
+            parentPinMessage = null
+        )
     }
 
     fun stopPolling() {
@@ -520,5 +596,13 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
     private companion object {
         /** Three failed polls in a row end the attempt rather than loop. */
         const val MAX_CONSECUTIVE_FAILURES = 3
+
+        /**
+         * What a refused session says (Onboarding M2). Words the two facts that
+         * matter: the link is dead server-side, and nothing local was lost.
+         */
+        const val TRAKT_NEEDS_RECONNECT_MESSAGE =
+            "Trakt needs reconnecting: this device's session was refused, so nothing " +
+                "can be read or tracked. Your history, lists and watch data are kept."
     }
 }

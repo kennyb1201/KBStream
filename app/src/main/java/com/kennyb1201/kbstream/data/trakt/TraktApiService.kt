@@ -387,16 +387,38 @@ interface TraktApiService {
  */
 internal class TraktHeadersInterceptor(
     private val clientId: String = TraktConfig.clientId,
-    private val apiVersion: String = TraktConfig.API_VERSION
+    private val apiVersion: String = TraktConfig.API_VERSION,
+    /**
+     * Called when a request that CARRIED a Bearer came back 401: the grant is
+     * dead, and only a reconnect fixes it (spec audit 2026-11-18, Onboarding
+     * M2). Null in tests and for any caller that does not want the observation.
+     */
+    private val onRefused: (() -> Unit)? = null
 ) : Interceptor {
 
     override fun intercept(chain: Interceptor.Chain): OkHttpResponse {
-        val request = chain.request().newBuilder()
+        val original = chain.request()
+        val request = original.newBuilder()
             .header("trakt-api-key", clientId)
             .header("trakt-api-version", apiVersion)
             .header("Content-Type", "application/json")
             .header("User-Agent", TraktConfig.USER_AGENT)
             .build()
-        return chain.proceed(request)
+        val response = chain.proceed(request)
+        if (
+            onRefused != null &&
+            // 401 only. Trakt answers 403 for a permission the account lacks
+            // (a VIP-only endpoint, a suspended app), and prompting a reconnect
+            // for that would be advice that cannot help; a revoked or rotated
+            // grant answers 401.
+            response.code == 401 &&
+            // Only an AUTHENTICATED request can report on the grant: the same
+            // status on an unauthenticated call is a client-id problem, and
+            // marking the session dead for that would be wrong.
+            !original.header("Authorization").isNullOrBlank()
+        ) {
+            onRefused.invoke()
+        }
+        return response
     }
 }

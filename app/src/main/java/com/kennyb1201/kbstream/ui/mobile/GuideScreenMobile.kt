@@ -1174,7 +1174,16 @@ fun GuideScreenMobile(
                         else hiddenGroups + group
                     )
                 },
-                onShowAll = { setHiddenGroups(emptySet()) },
+                // SHOW ALL means ALL (spec audit 2026-11-18, Live TV M3). The
+                // phone's version cleared hidden GROUPS and left hidden
+                // CHANNELS hidden - the same label the TV gives to a button that
+                // clears both (GuideScreen's onUnhideAll). A viewer who had
+                // hidden a group and a channel tapped this, saw the groups come
+                // back, and had no cue that one channel was still missing.
+                onShowAll = {
+                    setHiddenGroups(emptySet())
+                    viewModel.unhideAllChannels()
+                },
                 onDismiss = { showGroups = false }
             )
         }

@@ -14,6 +14,37 @@ import org.junit.Test
 class LibraryP2ContractTest {
 
     @Test
+    fun `a list that could not be read says so instead of looking empty`() {
+        // Spec audit 2026-11-18, Library L1: BingeCat's listRows() answers null
+        // for a list past its 1,000-row walk AND for a failed page, and every
+        // remote read collapsed its exception too - so all of those drew the
+        // finished-looking "This list is empty".
+        val vm = source(LIBRARY_VM)
+        assertTrue(
+            "BingeCat's null is a failed read, not an empty list",
+            vm.contains("if (rows == null) {") && vm.contains("noteListReadFailed()")
+        )
+        assertTrue(
+            "and the flag is cleared by the next read that starts",
+            vm.contains("if (_uiState.value.listReadFailed) {") &&
+                vm.contains("_uiState.value.copy(listReadFailed = false)")
+        )
+        assertTrue(
+            "the state carries it",
+            vm.contains("val listReadFailed: Boolean = false")
+        )
+        listOf(LIBRARY_SCREEN, MOBILE_LIBRARY_SCREEN).forEach { screen ->
+            val text = source(screen)
+            assertTrue(
+                "$screen draws the sentence before the empty one",
+                text.contains("state.listReadFailed ->") &&
+                    text.indexOf("state.listReadFailed ->") <
+                    text.indexOf("This list is empty.")
+            )
+        }
+    }
+
+    @Test
     fun `a sort chip is a two-state control, first tap ascending then descending`() {
         // Reported: each sort chip was a one-shot selector - tapping DATE,
         // TITLE, RATING or ADDED picked the field and tapping it again did
@@ -254,6 +285,8 @@ class LibraryP2ContractTest {
     private companion object {
         const val LIBRARY_VM = "com/kennyb1201/kbstream/ui/library/LibraryViewModel.kt"
         const val LIBRARY_SCREEN = "com/kennyb1201/kbstream/ui/library/LibraryScreen.kt"
+        const val MOBILE_LIBRARY_SCREEN =
+            "com/kennyb1201/kbstream/ui/mobile/LibraryScreenMobile.kt"
         const val HIDDEN = "com/kennyb1201/kbstream/data/library/HiddenTitles.kt"
         const val MDBLIST = "com/kennyb1201/kbstream/data/mdblist/MdbListClient.kt"
         const val MODELS = "com/kennyb1201/kbstream/data/library/LibraryModels.kt"

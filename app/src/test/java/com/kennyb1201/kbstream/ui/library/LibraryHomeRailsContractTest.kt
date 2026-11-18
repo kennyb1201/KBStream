@@ -55,6 +55,8 @@ class LibraryHomeRailsContractTest {
     // only the file they are read from is.
     private val railLoader =
         source("com/kennyb1201/kbstream/ui/home/LibraryHomeRailLoader.kt")
+    private val mobileHome =
+        source("com/kennyb1201/kbstream/ui/mobile/HomeScreenMobile.kt")
     private val payload =
         source("com/kennyb1201/kbstream/data/sync/SyncPrefsPayload.kt")
     private val sync = source("com/kennyb1201/kbstream/data/sync/SupabaseSync.kt")
@@ -105,14 +107,16 @@ class LibraryHomeRailsContractTest {
             ) && !squash(home).contains("libraryHomeRailItems()")
         )
         assertTrue(
+            // Library L1 (2026-11-18): the state carries the rails AND the pins
+            // that could not be read, so the failure can be named.
             "they are loaded once per pinned set, off the main thread",
-            squash(railLoader).contains("produceState(initialValue = emptyList(), pins)") &&
+            squash(railLoader).contains("produceState(initialValue = LibraryHomeRailsState(), pins)") &&
                 squash(railLoader).contains("withContext(Dispatchers.IO)")
         )
         assertTrue(
             "an empty list draws nothing rather than an empty heading",
             squash(railLoader).contains(
-                "if (items.isEmpty()) null else LibraryHomeRailUi(pin, items)"
+                "if (items.isNotEmpty()) rails += LibraryHomeRailUi(pin, items)"
             )
         )
         assertTrue(
@@ -121,9 +125,11 @@ class LibraryHomeRailsContractTest {
             squash(railLoader).contains("tmdb.kidsFilterMetas(")
         )
         assertTrue(
+            // Library L1: the TV reads the same STATE the phone does (rails +
+            // unreadable pins), never a copy of the loader.
             "the TV column asks the shared loader - not a copy of its own",
-            squash(home).contains("val pinnedLibraryRails by rememberLibraryHomeRails()") &&
-                !squash(home).contains("private fun rememberLibraryHomeRails()")
+            squash(home).contains("val pinnedLibraryRailsState by rememberLibraryHomeRailsState()") &&
+                !squash(home).contains("private fun rememberLibraryHomeRails")
         )
         assertTrue(
             "and the rail header is the pin's name plus its type suffix, computed " +
@@ -208,9 +214,38 @@ class LibraryHomeRailsContractTest {
             )
         )
         assertTrue(
+            // Library L1: a failure still never crashes Home, and it is now
+            // REPORTED (null) rather than collapsed into an empty rail that
+            // vanishes - the pin is named on Home instead. Cancellation still
+            // propagates.
             "a service that fails costs the rail, never Home",
-            squash(store).contains("runCatching { loadFor(context, source, pin) }.getOrDefault(emptyList())")
+            squash(store).contains(
+                "runCatchingCancellable { loadFor(context, source, pin) }"
+            ) && squash(store).contains(".getOrNull() ?: return null")
         )
+    }
+
+    @Test
+    fun `a pinned list that could not be read is named on both Home screens`() {
+        // Library L1 (2026-11-18): the rail used to just vanish - a BingeCat list
+        // past its 1,000-row walk, or any failed page, read exactly like a list
+        // the viewer had unpinned.
+        assertTrue(
+            "the state carries the unreadable pins beside the rails",
+            squash(railLoader).contains("val unreadable: List<String> = emptyList()") &&
+                squash(railLoader).contains("unreadable += pin.name")
+        )
+        assertTrue(
+            "one sentence for both surfaces",
+            squash(railLoader).contains("internal fun libraryRailUnreadableLine(names: List<String>)")
+        )
+        listOf(home, mobileHome).forEach { screen ->
+            assertTrue(
+                "$screen draws it, keyed so it cannot fight the reconnect notice",
+                squash(screen).contains("pinnedLibraryRailsState.unreadable.isNotEmpty()") &&
+                    squash(screen).contains("library_rail_unreadable")
+            )
+        }
     }
 
     @Test

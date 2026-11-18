@@ -66,7 +66,9 @@ class BingeCatConnectCancelAndQrContractTest {
 
     @Test
     fun `stopping the poll clears the flag, so CANCEL unwedges the screen`() {
-        val stop = squash(bodyOf(vm, "private fun stopPolling() {"))
+        // Public since the connect screens call it on their way out (spec audit
+        // 2026-11-18, Onboarding M1).
+        val stop = squash(bodyOf(vm, "fun stopPolling() {"))
         assertTrue("the job must be cancelled: $stop", stop.contains("pollJob?.cancel()"))
         assertTrue("and released: $stop", stop.contains("pollJob = null"))
         assertTrue(

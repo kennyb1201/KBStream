@@ -164,9 +164,10 @@ object FreeLineup {
      * does not carry one.
      *
      * iptv-org spells a channel's id as `<name>.<country>@<feed>`
-     * (`ABC.us@WFTV`, `TNTInternational.ru@SD`), so the country is the segment
-     * after the LAST dot of the part before the `@` - the feed half is a
-     * callsign, `SD`/`HD` or a regional marker and is never a country.
+     * (`ABC.us@WFTV`, `TNTInternational.ru@SD`), so the country is the
+     * two-letter segment of the part before the `@` - the feed half is a
+     * callsign, `SD`/`HD` or a regional marker and is never a country, and a
+     * regional tail can follow the country inside that part (`abc.us.west`).
      *
      * Null is "unknown", not "not US": an id with no dot, an empty tail, or no
      * id at all says nothing about where a channel is from.
@@ -174,11 +175,29 @@ object FreeLineup {
     fun countryOf(tvgId: String?): String? {
         val id = tvgId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         val withoutFeed = id.substringBefore('@')
-        return withoutFeed.substringAfterLast('.', "")
-            .trim()
-            .takeIf { it.isNotEmpty() }
+        // The country is a TWO-LETTER segment and it is not always the last one:
+        // a regional tail after it (`abc.us.west`, `abc.us.2`) used to answer
+        // "west" and drop a US channel as positively foreign - the one outcome
+        // this rule promises never to cause (spec audit 2026-11-18, Live TV
+        // L2). Walk back to the nearest two-letter segment, and treat a
+        // quality/size token as a tail rather than a country.
+        return withoutFeed.split('.')
+            .asReversed()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .firstOrNull { segment ->
+                segment.length == 2 &&
+                    segment.all { it in 'a'..'z' || it in 'A'..'Z' } &&
+                    segment.lowercase(Locale.US) !in NON_COUNTRY_SEGMENTS
+            }
             ?.lowercase(Locale.US)
     }
+
+    /**
+     * Two-letter segments that name a quality or a band, never a country:
+     * `Channel.us.hd` is a US channel, not a channel from "HD".
+     */
+    private val NON_COUNTRY_SEGMENTS = setOf("hd", "sd", "fhd", "uhd")
 
     /**
      * Whether one parsed entry belongs in the built-in lineup - "just US

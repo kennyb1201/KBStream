@@ -126,9 +126,12 @@ class ProfileEditScreenMobileContractTest {
     fun `the mobile editor keeps every parent-PIN gate`() {
         val mobile = editorMobile()
         assertTrue(
-            "M6: a first PIN on a PIN-less profile is refused",
+            "M6: a first PIN on a PIN-less profile is refused - and the refusal raises the " +
+                "prompt that creates the parent PIN, instead of dead-ending (spec audit " +
+                "2026-11-18, Settings L1)",
             mobile.contains("KidsGate.firstPinNeedsParentPin(editing)") &&
-                mobile.contains("\"Set a parent PIN first\"")
+                mobile.contains("parentPinAfterVerify = saveProfile") &&
+                mobile.contains("parentPinPrompt = true")
         )
         assertTrue(
             "C2/C5: a kids change, PIN change or creation beside a kids profile " +

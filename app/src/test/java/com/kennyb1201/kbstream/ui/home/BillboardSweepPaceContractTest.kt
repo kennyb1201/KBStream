@@ -149,6 +149,23 @@ class BillboardSweepPaceContractTest {
         )
     }
 
+    @Test
+    fun `a lone page keeps drifting instead of freezing at full zoom`() {
+        // Spec audit 2026-11-18, Home L3: with one page there is no page change
+        // to re-key the sweep, so the tween finished at 1.10x and stayed there -
+        // the permanent hero of a kids profile thinned to one title.
+        val effect = sweepEffect()
+        assertTrue(
+            "the sweep eases back to the start when there is nowhere to advance to",
+            effect.contains("if (pagesNow.value.size > 1) break") &&
+                effect.contains("targetValue = 0f")
+        )
+        assertTrue(
+            "and it keeps going until the hero is paused",
+            effect.contains("} while (!sweepPausedNow.value)")
+        )
+    }
+
     // ── F3: nothing else writes the sweep ──────────────────────────────────
 
     @Test

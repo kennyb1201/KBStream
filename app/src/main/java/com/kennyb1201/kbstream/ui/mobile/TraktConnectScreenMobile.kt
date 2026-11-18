@@ -13,6 +13,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -65,6 +66,10 @@ fun TraktConnectScreenMobile(
     onBack: () -> Unit,
     vm: TraktViewModel = viewModel()
 ) {
+    // Leaving ends the attempt (spec audit 2026-11-18, Onboarding M1).
+    DisposableEffect(Unit) {
+        onDispose { vm.stopPolling() }
+    }
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     var showDisconnectConfirm by remember { mutableStateOf(false) }
 
@@ -130,6 +135,30 @@ fun TraktConnectScreenMobile(
                             )
                         }
 
+                        // Dead grant (spec audit 2026-11-18, Onboarding M2):
+                        // before this, a refused session read as "Account
+                        // connected" over silently dead scrobbles and totals.
+                        uiState.isConnected && uiState.needsReconnect -> {
+                            TraktStatusPanel(
+                                title = "Trakt needs reconnecting",
+                                message = uiState.statusMessage
+                                    ?: "This device's Trakt session was refused."
+                            )
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                KBButton(
+                                    label = "RECONNECT",
+                                    modifier = Modifier.fillMaxWidth(),
+                                    onClick = vm::startConnect
+                                )
+                                KBButton(
+                                    label = "DISCONNECT",
+                                    danger = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    onClick = { showDisconnectConfirm = true }
+                                )
+                            }
+                        }
+
                         uiState.isConnected -> {
                             TraktStatusPanel(
                                 title = "Account connected",
@@ -168,6 +197,14 @@ fun TraktConnectScreenMobile(
 
                         uiState.requiresParentPin -> {
                             TraktParentPinGateMobile(vm = vm, onBack = onBack)
+                        }
+
+                        // No parent PIN on the device at all (spec audit
+                        // 2026-11-18, Onboarding M4): set it here, then the flow
+                        // runs - instead of the sentence that used to be the end
+                        // of the road.
+                        uiState.parentPinCreate -> {
+                            TraktParentPinCreateGateMobile(vm = vm, onBack = onBack)
                         }
 
                         else -> {
@@ -285,6 +322,55 @@ fun TraktConnectScreenMobile(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun TraktParentPinCreateGateMobile(
+    vm: TraktViewModel,
+    onBack: () -> Unit
+) {
+    val uiState by vm.uiState.collectAsStateWithLifecycle()
+    var newPin by remember { mutableStateOf("") }
+    var confirmPin by remember { mutableStateOf("") }
+
+    TraktStatusPanel(
+        title = "Set a parent PIN",
+        message = "Linking an account on a kids profile is a parent's action, and " +
+            "this device has no parent PIN yet."
+    )
+    KBTextField(
+        value = newPin,
+        onValueChange = {
+            newPin = it.filter(Char::isDigit).take(4)
+            vm.clearError()
+        },
+        placeholder = "New PIN",
+        keyboardType = KeyboardType.NumberPassword,
+        visualTransformation = PasswordVisualTransformation()
+    )
+    KBTextField(
+        value = confirmPin,
+        onValueChange = {
+            confirmPin = it.filter(Char::isDigit).take(4)
+            vm.clearError()
+        },
+        placeholder = "Confirm PIN",
+        keyboardType = KeyboardType.NumberPassword,
+        visualTransformation = PasswordVisualTransformation()
+    )
+    uiState.parentPinMessage?.let { TraktErrorLine(it) }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        KBButton(
+            label = "SET PIN",
+            modifier = Modifier.fillMaxWidth(),
+            onClick = { vm.submitParentPinCreation(newPin, confirmPin) }
+        )
+        KBButton(
+            label = "CANCEL",
+            modifier = Modifier.fillMaxWidth(),
+            onClick = onBack
+        )
     }
 }
 

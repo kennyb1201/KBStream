@@ -1835,6 +1835,12 @@ private fun ListsPane(
                 // F2: BEFORE the empty sentence, or a switch reads as "this
                 // list is empty" while its rows are still arriving.
                 listLoading -> "Loading list…"
+                // Library L1: a read that did not answer is not an empty list
+                // (BingeCat's >1,000-row walk and any failed page both answer
+                // nothing, and used to draw the sentence below).
+                state.listReadFailed -> "This list couldn't be loaded — it did " +
+                    "not answer, or it is too large to read in one pass. " +
+                    "Reopen it to try again."
                 else -> "This list is empty. Long-press any poster app-wide " +
                     "and choose \"Add to list…\" to fill it."
             },

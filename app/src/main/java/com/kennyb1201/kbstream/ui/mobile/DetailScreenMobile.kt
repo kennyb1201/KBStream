@@ -182,6 +182,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.MobileTheme
 import java.time.LocalDate
+import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -2160,10 +2161,30 @@ fun DetailScreenMobile(
                                 contentType = { "season" }
                             ) { summary ->
                                 val seasonNumber = summary.seasonNumber
-                                // The season's own name when it has one, else its
-                                // number - the label the chip carried.
-                                val seasonLabel = summary.name
-                                    ?: "Season $seasonNumber"
+                                // Announced-but-unreleased seasons (spec audit
+                                // 2026-11-18, Detail M3): the TV page dims them
+                                // and explains the premiere date; the phone drew
+                                // them as ordinary seasons and answered a tap
+                                // with "No episodes found for this season."
+                                val seasonPremiere = summary.airDate
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?.let { raw ->
+                                        runCatching { LocalDate.parse(raw) }.getOrNull()
+                                    }
+                                val seasonUnreleased =
+                                    seasonPremiere?.isAfter(today) == true
+                                // ...and the caption follows the TV page's own
+                                // rules (Detail L3): SPECIALS for season 0, an
+                                // own name uppercased, an unreleased season
+                                // naming its year.
+                                val ownName = summary.name?.takeIf { it.isNotBlank() }
+                                val seasonLabel = when {
+                                    seasonNumber == 0 -> "SPECIALS"
+                                    ownName != null -> ownName.uppercase(Locale.US)
+                                    seasonUnreleased ->
+                                        "SEASON $seasonNumber \u00b7 ${seasonPremiere?.year}"
+                                    else -> "SEASON $seasonNumber"
+                                }
                                 // Resolved lazily as the item composes, so a
                                 // 13-season show asks for the posters it draws
                                 // and the rest as they scroll in.
@@ -2194,7 +2215,9 @@ fun DetailScreenMobile(
                                         caption = seasonLabel,
                                         posterWidth = 72.dp,
                                         selected = seasonNumber == currentSeason,
-                                        available = true,
+                                        // Dimmed while it is still to come, exactly
+                                        // as the TV row draws it (Detail M3).
+                                        available = !seasonUnreleased,
                                         // A touch surface has no focus state:
                                         // the tap is the press, as it was for
                                         // the chip.
@@ -2224,6 +2247,16 @@ fun DetailScreenMobile(
                         }
                     }
 
+                    // The selected season's premiere date, when TMDB says it is
+                    // still to come (Detail M3): the branch below explains it
+                    // instead of claiming the season has no episodes.
+                    val selectedSeasonPremiere = seasons
+                        .firstOrNull { it.seasonNumber == currentSeason }
+                        ?.airDate
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { raw -> runCatching { LocalDate.parse(raw) }.getOrNull() }
+                        ?.takeIf { it.isAfter(today) }
+
                     // M3 (release-readiness audit, 2026-11-10): the TV page's
                     // three episode statuses, which this page never rendered.
                     // A failed season load painted NOTHING under the
@@ -2245,6 +2278,24 @@ fun DetailScreenMobile(
                                 }
                             )
                         }
+                        // The TV page intercepts an unreleased season BEFORE
+                        // the list and names its date (Detail M3); the phone
+                        // said "no episodes found", which reads as a broken
+                        // season rather than one that has not started.
+                        selectedSeasonPremiere != null ->
+                            item(key = "seasonunavailable") {
+                                MobileStatus(
+                                    title = "Season $currentSeason airs soon",
+                                    message = "Premieres " +
+                                        selectedSeasonPremiere.format(
+                                            java.time.format.DateTimeFormatter.ofPattern(
+                                                "MMM d, yyyy",
+                                                Locale.US
+                                            )
+                                        ) +
+                                        ". Episodes will appear here once they're released."
+                                )
+                            }
                         episodes.isEmpty() -> item(key = "episodesempty") {
                             MobileStatus(message = "No episodes found for this season.")
                         }

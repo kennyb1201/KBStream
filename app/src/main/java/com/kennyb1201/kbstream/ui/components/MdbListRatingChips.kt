@@ -51,7 +51,16 @@ internal data class RatingChipSource(
 // literals of the same value in two files (see DetailScreen).
 internal val KBImdbTint = Color(0xFFF5C518)
 private val RottenTomatoesTint = Color(0xFFFA320A)
-private val TmdbTint = Color(0xFF01B4E4)
+
+/**
+ * TMDB's own cyan, shared like [KBImdbTint] above.
+ *
+ * The episode rating plate paints it (spec audit 2026-11-18, Detail H1): the
+ * number on an episode card is TMDB's `vote_average`, not an IMDb score, so the
+ * plate has to say TMDB - in TMDB's colour, the same way the title-level IMDb
+ * chip is yellow because it IS IMDb.
+ */
+internal val TmdbTint = Color(0xFF01B4E4)
 private val MetacriticTint = Color(0xFFFFCC34)
 private val TraktTint = Color(0xFFED1C24)
 private val LetterboxdTint = Color(0xFF00E054)

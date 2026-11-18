@@ -430,29 +430,17 @@ internal data class BillboardSweep(
     /** Horizontal offset at the start, as a fraction of the image's width. */
     val startPanFraction: Float,
     /** ...and at the end. */
-    val endPanFraction: Float,
-    /**
-     * The page's dwell - how long the title stays up - which is NOT the sweep's
-     * pace any more (F1, 2026-11-13). The renderer sweeps over the fixed
-     * [BILLBOARD_KEN_BURNS_MANUAL_MS] whatever the cycle is; this stays as the
-     * dwell the page was dealt with, so a shorter cycle cuts the sweep short
-     * rather than making it faster.
-     */
-    val durationMs: Long
+    val endPanFraction: Float
 )
+// NOTE: this used to carry `durationMs = cycleMs`, documented as "the dwell".
+// Nothing ever read it (spec audit 2026-11-18, Home L2): the renderer paces
+// every sweep off the fixed BILLBOARD_KEN_BURNS_MANUAL_MS, and a shorter cycle
+// CUTS the move short rather than speeding it up (F1, 2026-11-13). Leaving the
+// field in place was the risk - a reader fixing "the sweep is too fast" would
+// have found a dwell sitting in the sweep and reached for the cycle interval,
+// which is the one knob that does not change the pace. The dwell lives where it
+// is actually used: the cycle effect's own timer.
 
-/**
- * The sweep for the page at [index], over the billboard's current dwell.
- *
- * Direction alternates by page PARITY, per the spec: an even page zooms in
- * while panning one way, an odd page zooms out while panning the other, so two
- * consecutive pages never repeat the same move. Neither parity ever returns to
- * 1.0: the floor is [BILLBOARD_KEN_BURNS_MIN_SCALE], which is what keeps the
- * pan from translating the art off its own frame on a frame shape with no side
- * overscan (2026-11-17, F1 - the TV billboard's edge sliver). The duration is the dwell
- * itself, so the move lands exactly as the page would advance; [cycleMs] of 0
- * ("Manual only") has no dwell, and uses [BILLBOARD_KEN_BURNS_MANUAL_MS].
- */
 /**
  * The art URL a page can actually draw, in the order the hero tries them.
  *
@@ -491,26 +479,37 @@ internal fun billboardHeroArt(pages: List<BillboardPage>, index: Int): String? {
     return null
 }
 
-internal fun billboardSweep(index: Int, cycleMs: Long): BillboardSweep {
-    val durationMs = if (cycleMs > 0L) cycleMs else BILLBOARD_KEN_BURNS_MANUAL_MS
-    return if (index % 2 == 0) {
+/**
+ * The sweep for the page at [index], over the billboard's current dwell.
+ *
+ * Direction alternates by page PARITY, per the spec: an even page zooms in
+ * while panning one way, an odd page zooms out while panning the other, so two
+ * consecutive pages never repeat the same move. Neither parity ever returns to
+ * 1.0: the floor is [BILLBOARD_KEN_BURNS_MIN_SCALE], which is what keeps the
+ * pan from translating the art off its own frame on a frame shape with no side
+ * overscan (2026-11-17, F1 - the TV billboard's edge sliver).
+ *
+ * The sweep carries NO CLOCK (spec audit 2026-11-18, Home L2). Its pace is the
+ * fixed [BILLBOARD_KEN_BURNS_MANUAL_MS] inside the renderer, so the dwell is not
+ * a parameter here at all - a shorter cycle cuts the move short instead of
+ * speeding it up (F1, 2026-11-13).
+ */
+internal fun billboardSweep(index: Int): BillboardSweep =
+    if (index % 2 == 0) {
         BillboardSweep(
             startScale = BILLBOARD_KEN_BURNS_MIN_SCALE,
             endScale = BILLBOARD_KEN_BURNS_MAX_SCALE,
             startPanFraction = 0f,
-            endPanFraction = -BILLBOARD_KEN_BURNS_PAN_FRACTION,
-            durationMs = durationMs
+            endPanFraction = -BILLBOARD_KEN_BURNS_PAN_FRACTION
         )
     } else {
         BillboardSweep(
             startScale = BILLBOARD_KEN_BURNS_MAX_SCALE,
             endScale = BILLBOARD_KEN_BURNS_MIN_SCALE,
             startPanFraction = 0f,
-            endPanFraction = BILLBOARD_KEN_BURNS_PAN_FRACTION,
-            durationMs = durationMs
+            endPanFraction = BILLBOARD_KEN_BURNS_PAN_FRACTION
         )
     }
-}
 
 /**
  * How full one progress segment is: 0..1.

@@ -2692,6 +2692,11 @@ fun AppRoot(
                 // m8: the tracker the first run never offered, beside the one it
                 // did - the same page Settings → Trackers opens.
                 onOpenTrakt = { screen = Screen.Trakt(returnTo = Screen.Home) },
+                // The two connectors a first run never offered (spec audit
+                // 2026-11-18, Onboarding L2). BingeCat has its own page, exactly
+                // as Settings opens it; the anime trackers are one dialog on the
+                // page itself.
+                onOpenBingeCat = { screen = Screen.BingeCat(returnTo = Screen.Home) },
                 onOpenGuide = { screen = Screen.Guide },
                 onFinish = finishOnboarding
             )
@@ -2705,6 +2710,7 @@ fun AppRoot(
             onOpenAddons = { screen = Screen.Addons(returnTo = Screen.Home) },
             onOpenSimkl = { screen = Screen.Simkl(returnTo = Screen.Home) },
             onOpenTrakt = { screen = Screen.Trakt(returnTo = Screen.Home) },
+            onOpenBingeCat = { screen = Screen.BingeCat(returnTo = Screen.Home) },
             onOpenGuide = { screen = Screen.Guide },
             onFinish = finishOnboarding
         )
