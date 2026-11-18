@@ -35,11 +35,24 @@ class LibraryP2ContractTest {
         )
         listOf(LIBRARY_SCREEN, MOBILE_LIBRARY_SCREEN).forEach { screen ->
             val text = source(screen)
+            // The TV pane's value arrives as a PARAMETER now (its `when` has no
+            // ViewModel state in scope, which is what made the first attempt a
+            // compile error), so the branch reads `listReadFailed ->` there and
+            // `state.listReadFailed ->` on the phone. Either spelling, same
+            // requirement: present, and before the empty sentence.
+            val marker = if (text.contains("state.listReadFailed ->")) {
+                "state.listReadFailed ->"
+            } else {
+                "listReadFailed ->"
+            }
             assertTrue(
                 "$screen draws the sentence before the empty one",
-                text.contains("state.listReadFailed ->") &&
-                    text.indexOf("state.listReadFailed ->") <
-                    text.indexOf("This list is empty.")
+                text.contains(marker) &&
+                    text.indexOf(marker) < text.indexOf("This list is empty.")
+            )
+            assertTrue(
+                "$screen gets the flag from the ViewModel's state, under one name",
+                text.contains("listReadFailed")
             )
         }
     }

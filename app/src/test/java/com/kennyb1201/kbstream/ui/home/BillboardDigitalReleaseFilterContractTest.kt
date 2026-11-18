@@ -34,8 +34,11 @@ class BillboardDigitalReleaseFilterContractTest {
             "the digital filter runs on the CEILING-PASSED pool, and the dealer " +
                 "is handed its result - not the raw feed and not the ceiling's own pool",
             resolve.contains("val available = applyDigitalAvailabilityFilter(pool)") &&
-                resolve.contains("publishBillboardPool(available, forProfile)") &&
-                !resolve.contains("publishBillboardPool(pool, forProfile)")
+                // The dealer also takes the titles whose rail art must never
+                // reach the hero (Home M2); the FILTERED pool is still what it
+                // is handed.
+                resolve.contains("publishBillboardPool(available, forProfile, tmdbOnlyIds)") &&
+                !resolve.contains("publishBillboardPool(pool, forProfile")
         )
         assertTrue(
             "and it runs after the ceiling pass, before the deal",
@@ -169,7 +172,11 @@ class BillboardDigitalReleaseFilterContractTest {
     /** [HomeViewModel.resolveBillboard]'s body, up to the ceiling helper. */
     private fun resolve(): String =
         source(HOME_VM)
-            .substringAfter("fun resolveBillboard(items: List<MetaPreview>)")
+            // Anchored on the NAME, not the old one-parameter signature: the
+            // resolve gained the pinned-id set as a second parameter (Home M2),
+            // and a stale anchor silently returned the whole file - which made
+            // the "no second gate" pin below pass over text it never meant.
+            .substringAfter("fun resolveBillboard(")
             .substringBefore("private suspend fun billboardKidsSafePool(")
 
     /** The shared implementation the rails, folders, search and billboard use. */

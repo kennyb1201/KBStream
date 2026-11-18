@@ -486,8 +486,12 @@ class ScreensaverWiringContractTest {
     @Test
     fun `the sweep is the billboard's own, run on the image, and still with reduced motion`() {
         assertTrue(
+            // The sweep carries no clock any more (spec audit 2026-11-18, Home
+            // L2): its pace is the renderer's fixed BILLBOARD_KEN_BURNS_MANUAL_MS,
+            // so the dwell is not an argument and this overlay cannot ask for a
+            // faster move than the hero's - it cuts one short instead.
             "the overlay must reuse billboardSweep rather than copy the move",
-            Regex("billboardSweep\\(\\w+, SCREENSAVER_DWELL_MS\\)").containsMatchIn(overlay) &&
+            Regex("billboardSweep\\(\\w+\\)").containsMatchIn(overlay) &&
                 overlay.contains("import androidx.compose.animation.core.Animatable")
         )
         assertTrue(

@@ -4458,6 +4458,16 @@ private fun TeamScheduleSheet(
     onClose: () -> Unit,
 ) {
     val listState = rememberLazyListState()
+    // The season list's landing, the same shape the other card lists use: the
+    // rows are KBCard pills at the row scale, so the landing measures them grown.
+    val density = LocalDensity.current
+    val seasonLanding = remember(density) {
+        SportsCardBringIntoViewSpec(
+            insetPx = with(density) { KBFocusRowInset.toPx() },
+            glowPx = with(density) { KBFocusGlow.toPx() },
+            focusedScale = KBFocusRow
+        )
+    }
     val groups = SportsTeamScheduleRules.groups(state.games)
     // The sheet opens on its first fixture when there is one and on CLOSE when
     // there is not: a dialog that lands with no focus ring anywhere is a dead
@@ -4560,17 +4570,26 @@ private fun TeamScheduleSheet(
                         modifier = Modifier.fillMaxSize()
                     )
 
-                    else -> LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                        contentPadding = PaddingValues(bottom = 12.dp)
+                    // The season's rows are focusable pills under a clip, so this
+                    // scroll takes the same drawn-rect landing every other card
+                    // list in the hub does (spec audit 2026-11-18, Sports M2) -
+                    // without it the last row lands flush with the sheet's bottom
+                    // edge whatever the bring-into-view asks for.
+                    else -> CompositionLocalProvider(
+                        LocalBringIntoViewSpec provides seasonLanding
                     ) {
-                        scheduleGroup("LIVE", groups.live, firstGroupTitle, firstRow, onOpenGame)
-                        scheduleGroup("UPCOMING", groups.upcoming, firstGroupTitle, firstRow, onOpenGame)
-                        // Newest results first, but the heading is the season's
-                        // own word: these are the games already played.
-                        scheduleGroup("RESULTS", groups.final, firstGroupTitle, firstRow, onOpenGame)
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                            contentPadding = PaddingValues(bottom = 12.dp)
+                        ) {
+                            scheduleGroup("LIVE", groups.live, firstGroupTitle, firstRow, onOpenGame)
+                            scheduleGroup("UPCOMING", groups.upcoming, firstGroupTitle, firstRow, onOpenGame)
+                            // Newest results first, but the heading is the season's
+                            // own word: these are the games already played.
+                            scheduleGroup("RESULTS", groups.final, firstGroupTitle, firstRow, onOpenGame)
+                        }
                     }
                 }
             }

@@ -137,8 +137,14 @@ class TasteRatingQueueRulesTest {
         assertEquals(0L, after.single().lastAttemptAt)
         assertNull("the old failure must not caption the new signal", after.single().lastError)
         assertTrue(
+            // A REAL clock: dueAt is lastAttemptAt + the backoff for the COUNT, and
+            // the count is the one thing that carries - with lastAttemptAt reset to
+            // 0 the due time sits minutes after the epoch, i.e. long past. Asking at
+            // 0L asked the clock, not the rule. The second half is the part that
+            // matters: the entry it replaced is still waiting out its own 12 h.
             "and it is due at once rather than waiting out the old entry's backoff",
-            TasteRatingQueueRules.isDue(after.single(), 0L)
+            TasteRatingQueueRules.isDue(after.single(), 2_000_000L) &&
+                !TasteRatingQueueRules.isDue(tried, 2_000_000L)
         )
     }
 
@@ -150,9 +156,20 @@ class TasteRatingQueueRulesTest {
             entry(rating = 2, signal = TasteSignals.DISLIKE)
         )
 
+        assertEquals(
+            "the carried count puts it one failure from the cap, which a fresh " +
+                "entry could never reach by re-thumbing",
+            TasteRatingQueueRules.MAX_ATTEMPTS - 1,
+            pending.single().attempts
+        )
+        val failed = TasteRatingQueueRules.afterFailure(pending.single(), 5_000L, "refused")
         assertTrue(
-            "the next failure is the fifth, so the entry is dropped rather than retried forever",
-            TasteRatingQueueRules.isSpent(pending.single())
+            // The rule's own wording: an entry that has failed MAX_ATTEMPTS times
+            // is DROPPED when it next comes due, rather than making one more
+            // attempt. So the fifth failure leaves it spent, and the drain takes
+            // it from there.
+            "the next failure is the cap, so the entry is dropped rather than retried forever",
+            failed != null && TasteRatingQueueRules.isSpent(failed)
         )
     }
 

@@ -47,9 +47,16 @@ class PhoneSeasonPosterPlacementContractTest {
         assertTrue("one item per season", row.contains("items(") && row.contains("seasons,"))
         assertTrue("keyed by season number", row.contains("key = { it.seasonNumber }"))
         assertTrue("each item draws the shared poster unit", row.contains("SeasonPosterArt("))
+        // The label is one shared rule now (spec audit 2026-11-18, Detail L3),
+        // so SPECIALS, an uppercased own name, an unreleased season's year and
+        // the plain number cannot drift between the phone and the TV row.
         assertTrue(
-            "the caption is the season's name, else its number - the chip's label",
-            row.contains("summary.name") && row.contains("\"Season \$seasonNumber\"")
+            "the caption is the shared season label, not a second spelling of it",
+            row.contains("val seasonLabel = when {") &&
+                row.contains("seasonNumber == 0 -> \"SPECIALS\"") &&
+                row.contains("ownName != null -> ownName.uppercase(Locale.US)") &&
+                row.contains("else -> \"SEASON \$seasonNumber\"") &&
+                row.contains("caption = seasonLabel")
         )
     }
 

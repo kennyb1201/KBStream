@@ -33,12 +33,21 @@ class SportsDetailSheetWatchFooterContractTest {
 
     private val hub: String by lazy { source(HUB).replace(Regex("\\s+"), " ") }
 
-    /** The whole game sheet, including the helpers it calls. */
-    private val sheet: String by lazy { slice("private fun GameDetailSheet(", "private fun DetailRow(") }
+    /**
+     * The whole game sheet, including the helpers it calls.
+     *
+     * Ends at the NEXT composable, not at `DetailRow`: the team-schedule sheet
+     * (spec audit 2026-11-18, Sports M2) was added between them, and a slice that
+     * spanned it read its footer's `weight(1f)` and its own focus request as if
+     * they belonged to this sheet.
+     */
+    private val sheet: String by lazy {
+        slice("private fun GameDetailSheet(", "private fun TeamScheduleSheet(")
+    }
 
-    /** The sheet function alone, ending where the shared scroll body begins. */
+    /** The sheet function alone, ending where the next sheet begins. */
     private val sheetCall: String by lazy {
-        slice("private fun GameDetailSheet(", "private fun ColumnScope.SheetScrollBody(")
+        slice("private fun GameDetailSheet(", "private fun TeamScheduleSheet(")
     }
 
     /** The scrolling middle, ending where the stats block it heads begins. */

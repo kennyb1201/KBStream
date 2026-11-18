@@ -83,8 +83,13 @@ class BingeCatTrackerContractTest {
             submit.contains("recordNeedsReapproval(true)")
         )
         assertTrue(
+            // The gate answers with the OUTCOME now rather than a Boolean (spec
+            // audit 2026-11-18, Data M2): "nothing attempted" is a different
+            // answer from "failed", and the pending-history replay depends on
+            // telling them apart - it must not spend an attempt on a write the
+            // grant never allowed.
             "and no request is made for it: the gate returns before the call",
-            submit.substring(gate2, request).contains("return true")
+            submit.substring(gate2, request).contains("return BingeCatWriteOutcome.NOTHING_ATTEMPTED")
         )
         assertTrue(
             "only a connected, mapped profile needs re-approval - and EITHER missing " +

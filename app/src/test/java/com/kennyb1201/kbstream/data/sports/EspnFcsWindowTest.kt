@@ -156,10 +156,19 @@ class EspnFcsWindowTest {
         assertEquals(1, Regex("\"football/college-football\"").findAll(leagues).count())
         assertTrue(!leagues.contains("\"football/college-football-fcs\"", ignoreCase = true))
         assertTrue(!leagues.contains("groups=81"))
-        // And it is one extra request, not a second league to enable: the group
-        // id is used exactly once, from exactly one place.
+        // And it is still not a second league to enable: the group id is used
+        // only where college football is, in TWO reads - the scoreboard window
+        // and, since the FCS standings table (spec audit 2026-11-18, Sports M1),
+        // the standings body. The default FBS table is exactly as blind to the
+        // FCS division as the default scoreboard is, so one read could not serve
+        // both; each is still college-football-only and neither adds a league.
         val repo = repoSource()
-        assertEquals(1, Regex("groups = FCS_GROUPS").findAll(repo).count())
+        assertEquals(2, Regex("groups = FCS_GROUPS").findAll(repo).count())
+        assertTrue(
+            "the scoreboard window and the standings table, nothing else",
+            repo.contains("fetch(COLLEGE_FOOTBALL, day, groups = FCS_GROUPS)") &&
+                repo.contains("fetchStandings(leaguePath, groups = FCS_GROUPS)")
+        )
         assertTrue(!leagues.contains("fcs", ignoreCase = true))
     }
 

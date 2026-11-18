@@ -171,7 +171,12 @@ class StatePerfBatchContractTest {
             "and the cache write must be gated on it, so an all-empty walk - TMDB\n" +
                 "lagging - is not stored for the whole TTL and does not mark the\n" +
                 "show locally finished with its tracker card suppressed",
-            home.contains("if (populatedSeasons.isNotEmpty()) {") &&
+            // The gate gained a second condition (spec audit 2026-11-18): a walk
+            // that FAILED part-way is not stored either, because the seasons it
+            // never reached are indistinguishable from seasons TMDB answered
+            // empty. Strictly stronger than the original, which is why it is
+            // accepted here rather than the pin loosened to a prefix.
+            home.contains("if (populatedSeasons.isNotEmpty() && !seasonWalkFailed) {") &&
                 home.contains("to populatedSeasons")
         )
         assertTrue(

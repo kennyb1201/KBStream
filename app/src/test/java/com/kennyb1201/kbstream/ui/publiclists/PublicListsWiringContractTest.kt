@@ -300,15 +300,20 @@ class PublicListsWiringContractTest {
             delete.indexOf("if (list.liked)") in
                 0 until delete.indexOf("val deleted = when (list.source)")
         )
+        // The raw read, not its wrapper: the ceiling was split off into
+        // `fetchListItems` (which delegates), so the tracker reads - and the
+        // owner rule among them - live one function below.
         val items = memberBody(
             lib,
-            "private suspend fun fetchListItems(list: LibraryList): List<LibraryItem> {"
+            "private suspend fun fetchListItemsRaw(list: LibraryList): List<LibraryItem> {"
         )
         assertTrue(
             "opening a saved Trakt list must read its items as the list's OWNER: Trakt's " +
                 "route is /users/{user}/lists/{id}/items, and `me` does not resolve someone " +
                 "else's list, so the titles would come back empty",
-            items.contains("list.owner?.takeIf { it.isNotBlank() } ?: \"me\"")
+            // Extracted to a named local by the audit sweep, so the owner rule is
+            // now readable in one line and used by the read below it.
+            items.contains("val owner = list.owner?.takeIf { it.isNotBlank() } ?: \"me\"")
         )
         val rename = memberBody(lib, "fun renameList(list: LibraryList, name: String) {")
         assertTrue(

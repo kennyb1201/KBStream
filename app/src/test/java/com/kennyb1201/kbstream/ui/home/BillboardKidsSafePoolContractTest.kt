@@ -84,7 +84,7 @@ class BillboardKidsSafePoolContractTest {
     @Test
     fun `the resolve filters the whole pool before any page is dealt`() {
         val vm = source(HOME_VM)
-        val resolve = vm.substringAfter("fun resolveBillboard(items: List<MetaPreview>)")
+        val resolve = vm.substringAfter("fun resolveBillboard(")
             .substringBefore("private fun publishBillboardPool(")
         assertTrue(
             "the ceiling pass runs first, and it is the repository's existing filter",
@@ -155,8 +155,11 @@ class BillboardKidsSafePoolContractTest {
             vm.contains("billboardPoolFor = null")
         )
         assertTrue(
-            "and asks for the same pool again, so the new ceiling filters it",
-            vm.contains("billboardRequestedItems?.let { requested -> resolveBillboard(requested) }")
+            "and asks for the same pool again, so the new ceiling filters it - " +
+                "with the same pinned-id set, or the re-deal would forget which " +
+                "titles may not use rail art (Home M2)",
+            vm.contains("billboardRequestedItems?.let { requested ->") &&
+                vm.contains("resolveBillboard(requested, billboardTmdbOnlyIds)")
         )
         assertTrue(
             "the requested pool is remembered when the screens ask",

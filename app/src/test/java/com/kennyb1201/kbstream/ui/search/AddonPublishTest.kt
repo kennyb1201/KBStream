@@ -245,8 +245,16 @@ class AddonPublishTest {
             ).contains("tmdbDedup")
         )
         assertEquals(
-            "exactly one await on the publish path: the consolidated republish",
-            1,
+            // TWO since the enriched re-de-dupe (spec audit 2026-11-18, Browse
+            // M3): the first publish proves duplicates before enrichment, and the
+            // enriched rows are proved again - a row that shipped without a year
+            // could not be proved one before. Neither costs a wait: the first
+            // await builds the index, the second reads the same already-complete
+            // deferred, so a stalled TMDB wave still cannot hold a fast add-on
+            // rail (which is what this pin exists for).
+            "two awaits on the publish path: the consolidated republish, then the " +
+                "enriched one - both on the SAME deferred",
+            2,
             slice(
                 viewModel(),
                 "private fun launchAddonSearch(",
@@ -258,9 +266,12 @@ class AddonPublishTest {
             viewModel().contains("dedupAddonGroups(groups, tmdbDedupDeferred.await())")
         )
         assertTrue(
-            "the only other await is the cache storing the index for a repeat, " +
-                "which publishes nothing",
-            viewModel().contains("tmdbDedup = tmdbDedupDeferred.await()")
+            // The repeat's index is the ACCUMULATED one now (Browse M2): each page
+            // folds its identities in as it lands, so storing it needs no await at
+            // all - which is what keeps the second await above from being a wait.
+            "a repeat's index is the accumulated set, never a second await",
+            viewModel().contains("tmdbDedup = addonDedupIndex") &&
+                !viewModel().contains("tmdbDedup = tmdbDedupDeferred.await()")
         )
     }
 

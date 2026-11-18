@@ -65,7 +65,7 @@ class SportsGameDetailSheetContractTest {
 
     @Test
     fun `the sheet is a bottom sheet, not a centred dialog`() {
-        val sheet = slice("private fun GameDetailSheet(", "private fun DetailRow(")
+        val sheet = sheetSource()
         assertTrue(
             "it takes the whole window so the sheet can sit on the bottom edge",
             sheet.contains("usePlatformDefaultWidth = false")
@@ -78,7 +78,7 @@ class SportsGameDetailSheetContractTest {
 
     @Test
     fun `the sheet renders the loaded game and fetches nothing`() {
-        val sheet = slice("private fun GameDetailSheet(", "private fun DetailRow(")
+        val sheet = sheetSource()
         assertTrue(
             "the status line is the shared one",
             sheet.contains("SportsDetailRules.statusLine(game)")
@@ -108,7 +108,7 @@ class SportsGameDetailSheetContractTest {
 
     @Test
     fun `the watch button plays through the one existing path, and is focused on open`() {
-        val sheet = slice("private fun GameDetailSheet(", "private fun DetailRow(")
+        val sheet = sheetSource()
         assertTrue(
             "enabled, the button plays the ordered feed list - head first, backups behind it",
             sheet.contains("onClick = { onPlay(channels) }")
@@ -126,7 +126,7 @@ class SportsGameDetailSheetContractTest {
 
     @Test
     fun `with no matched channel the button is disabled and says why`() {
-        val sheet = slice("private fun GameDetailSheet(", "private fun DetailRow(")
+        val sheet = sheetSource()
         assertTrue(
             "the disabled label is the rules' own, told which of the two facts this is",
             sheet.contains("SportsDetailRules.watchLabel(false, lineupMissing, matchingDone)")
@@ -155,7 +155,7 @@ class SportsGameDetailSheetContractTest {
 
     @Test
     fun `a game the playlist holds on several feeds offers the others`() {
-        val sheet = slice("private fun GameDetailSheet(", "private fun DetailRow(")
+        val sheet = sheetSource()
         assertTrue(
             "the sheet takes the whole ordered list",
             sheet.contains("channels: List<IptvChannel>")
@@ -224,7 +224,7 @@ class SportsGameDetailSheetContractTest {
         // border and 12dp glow it draws outside that rectangle. The body's
         // scroll therefore gets the same focus landing the hub's card lists
         // use, plus slack past its last row for that landing to exist in.
-        val sheet = slice("private fun GameDetailSheet(", "private fun DetailRow(")
+        val sheet = sheetSource()
         assertTrue(
             "the scrolling body installs the hub's card focus landing",
             sheet.contains(
@@ -241,7 +241,7 @@ class SportsGameDetailSheetContractTest {
 
     @Test
     fun `the possessing side wears the ball, and neither does when the feed is silent`() {
-        val sheet = slice("private fun GameDetailSheet(", "private fun DetailRow(")
+        val sheet = sheetSource()
         assertTrue(
             "each header column asks the shared rule about its own side",
             sheet.contains("possession = SportsDetailRules.possesses(game, game.away),") &&
@@ -290,7 +290,7 @@ class SportsGameDetailSheetContractTest {
         // footer (see SportsDetailSheetWatchFooterContractTest), so what remains
         // inside the scroll is the pill-to-pill chain, and the footer's WATCH
         // names the LAST pill as the stop above it.
-        val sheet = slice("private fun GameDetailSheet(", "private fun DetailRow(")
+        val sheet = sheetSource()
         assertTrue(
             "one requester per backup pill, remade if the list grows while the sheet is open",
             sheet.contains("val backupButtons = remember(backups.size) { List(backups.size) { FocusRequester() } }")
@@ -346,7 +346,7 @@ class SportsGameDetailSheetContractTest {
 
     @Test
     fun `the hub is veiled and its beat held while the sheet is open`() {
-        val sheet = slice("private fun GameDetailSheet(", "private fun DetailRow(")
+        val sheet = sheetSource()
         assertTrue(
             "the plate keeps its inset through its own padding, so the veil covers the whole window " +
                 "instead of stopping short of it",
@@ -372,6 +372,20 @@ class SportsGameDetailSheetContractTest {
             "and every section body is told, so the search results and favourites tabs hold too",
             3 == Regex("pulseEnabled = !sheetOpen").findAll(hub).count()
         )
+    }
+
+    /**
+     * The game sheet AND the helpers it calls - without the team schedule sheet.
+     *
+     * The span runs from the sheet to `DetailRow`, which is what "the whole
+     * sheet" always meant, but the team schedule sheet (spec audit 2026-11-18,
+     * Sports M2) was inserted inside that span. It is a different sheet, so it is
+     * cut out rather than allowed to satisfy - or to contradict - these pins.
+     */
+    private fun sheetSource(): String {
+        val all = slice("private fun GameDetailSheet(", "private fun DetailRow(")
+        return all.substringBefore("private fun TeamScheduleSheet(") +
+            all.substringAfter("private fun ColumnScope.SheetScrollBody(")
     }
 
     private fun slice(startMarker: String, endMarker: String): String {

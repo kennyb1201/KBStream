@@ -902,16 +902,21 @@ class SportsHubLayoutContractTest {
             }
         }
 
+        // Seven since the team schedule sheet (spec audit 2026-11-18, Sports M2):
+        // it is a sheet of its own with its own scrolling body, so it is a
+        // container this rule must cover rather than one that appeared unnoticed.
         assertEquals(
-            "the hub scrolls in six places: the games grid, the standings list, the sheets' " +
-                "bodies, the league picker, the league tabs and the conference chips",
+            "the hub scrolls in seven places: the games grid, the standings list, the sheets' " +
+                "bodies, the team schedule, the league picker, the league tabs and the " +
+                "conference chips",
             listOf(
                 "HubGrid",
                 "HubList",
                 "LeagueTabRow",
                 "LeagueTogglesPanel",
                 "SheetScrollBody",
-                "StandingsConferenceFilter"
+                "StandingsConferenceFilter",
+                "TeamScheduleSheet"
             ),
             where.keys.toList()
         )
@@ -929,10 +934,11 @@ class SportsHubLayoutContractTest {
 
     @Test
     fun `every scroll body in the hub installs the drawn-rect spec, and no other one exists`() {
-        // Four containers draw focusable KBCards under a clip: the games grid,
-        // the standings list, the detail sheets' body and the league picker.
-        // Each hands its scroll the same spec, at the row scale its cards
-        // actually use - and a FIFTH construction somewhere would be a
+        // Five containers draw focusable KBCards under a clip: the games grid,
+        // the standings list, the detail sheets' body, the league picker and -
+        // since the team schedule sheet (spec audit 2026-11-18, Sports M2) - its
+        // season list. Each hands its scroll the same spec, at the row scale its
+        // cards actually use - and a SIXTH construction somewhere would be a
         // container measuring a rect the viewer never sees. (That count is the
         // half this test can see; the census below is the half that catches a
         // container with no construction at all.)
@@ -942,15 +948,17 @@ class SportsHubLayoutContractTest {
             .filterNot { it.contains("internal class") }
             .count()
         assertEquals(
-            "the grid, the standings list, the sheet body and the league picker - and nothing else",
-            4,
+            "the grid, the standings list, the sheet body, the league picker and the " +
+                "season list - and nothing else",
+            5,
             installedIn
         )
         listOf(
             "private fun HubList(" to "private fun HubGrid(",
             "private fun HubGrid(" to "internal class SportsCardBringIntoViewSpec(",
             "private fun ColumnScope.SheetScrollBody(" to "Hand this stop's D-pad Down",
-            "private fun LeagueTogglesPanel(" to "private fun LeagueToggleRow("
+            "private fun LeagueTogglesPanel(" to "private fun LeagueToggleRow(",
+            "private fun TeamScheduleSheet(" to "private fun LazyListScope.scheduleGroup("
         ).forEach { (start, end) ->
             val body = slice(start, end)
             assertTrue(

@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.search
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -137,10 +138,20 @@ class SearchRailKeyContractTest {
                 "LazyColumn key, which throws - the view model merges them first",
             viewModel.contains("private fun coalesceAddonGroups(")
         )
+        // Both publish paths still merge before they hand anything over: the
+        // per-rail snapshot and the consolidated end-of-wave list. The names
+        // moved (the wave's result is `finished` now, not a return expression),
+        // so the pin follows the CALLS rather than the old spelling.
+        assertEquals(
+            "two coalescing publishes: the snapshot, and the consolidated wave",
+            2,
+            Regex("= coalesceAddonGroups\\(").findAll(viewModel).count()
+        )
         assertTrue(
             "and the merged list is what both publish paths hand to the screen",
             viewModel.contains("val snapshot = coalesceAddonGroups(") &&
-                viewModel.contains("return@coroutineScope coalesceAddonGroups(")
+                viewModel.contains("val finished = coalesceAddonGroups(") &&
+                viewModel.contains("return@coroutineScope finished")
         )
     }
 

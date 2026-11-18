@@ -159,7 +159,10 @@ class MobileBillboardContractTest {
         // The default feed is loaded only when the slot is armed.
         assertTrue(home.contains("if (billboardEnabled) viewModel.loadBillboardTrendingDay()"))
         // A missing driver would leave the slot inert again.
-        assertTrue(home.contains("viewModel.resolveBillboard(billboardFeed)"))
+        assertTrue(
+            "and it hands the pinned-id set with it (Home M2)",
+            home.contains("viewModel.resolveBillboard(billboardFeed, billboardTmdbOnlyIds)")
+        )
         assertTrue(home.contains("viewModel.clearBillboard(\"billboard disabled\")"))
     }
 
@@ -522,7 +525,12 @@ class MobileBillboardContractTest {
         val vm = billboardBlock()
 
         assertTrue(vm.contains("private val billboardResolveSemaphore = Semaphore(permits = 3)"))
-        assertTrue(vm.contains("withPermit { resolveBillboardPage(item) }"))
+        assertTrue(
+            "each page resolves under the semaphore, and is told which titles may " +
+                "not use rail art (Home M2)",
+            vm.contains("billboardResolveSemaphore") &&
+                vm.contains("resolveBillboardPage(item, tmdbOnly = item.id in tmdbOnlyIds)")
+        )
         // Per-page atomic publish: one object carries art AND copy.
         assertTrue(vm.contains("_billboardPages.update { pages -> pages.map { page -> if (page.key == key) resolved else page } }"))
         assertTrue(vm.contains("settled = true"))

@@ -36,7 +36,11 @@ class BillboardPageClipContractTest {
     /** The pager's own call, up to its first page body. */
     private fun pagerSetup(): String = mobile
         .substringAfter("            HorizontalPager(")
-        .substringBefore("                val sweep = remember(index, cycleMs)")
+        // The sweep no longer takes a clock (spec audit 2026-11-18, Home L2), so
+        // this anchor lost its `cycleMs` - a stale one silently returned the
+        // whole file, which is how the "no contentPadding" pin below started
+        // reading the phone Home's own lists.
+        .substringBefore("                val sweep = remember(")
 
     // ── F1: the page clips ────────────────────────────────────────────────
 
