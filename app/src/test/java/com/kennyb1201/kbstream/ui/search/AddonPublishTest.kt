@@ -329,8 +329,11 @@ class AddonPublishTest {
         )
         assertTrue(
             "and the publisher republishes the snapshot on every arrival",
-            vm.contains("collectAddonSearchGroup(addon, query) { group ->") &&
-                vm.contains("publishAddonSnapshot(index, group, slots, generation)")
+            // The per-add-on call now also carries the timeout counter, so the
+            // pin is the launch→publisher wiring rather than one literal line.
+            slice(vm, "addons.mapIndexed { index, addon ->", "}.joinAll()")
+                .contains("publishAddonSnapshot(index, group, slots, generation)") &&
+                vm.contains("collectAddonSearchGroup(")
         )
         assertFalse(
             "the wave must not go back to publishing once, after joinAll",

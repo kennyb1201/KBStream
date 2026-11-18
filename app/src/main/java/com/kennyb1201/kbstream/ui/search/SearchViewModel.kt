@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.search
 import android.app.Application
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -47,6 +48,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReferenceArray
@@ -1705,8 +1707,14 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
         addons.mapIndexed { index, addon ->
             launch {
+                val startedAt = SystemClock.elapsedRealtime()
+                val timedOut = AtomicInteger(0)
                 try {
-                    collectAddonSearchGroup(addon, query) { group ->
+                    collectAddonSearchGroup(
+                        addon,
+                        query,
+                        onTimeout = { timedOut.incrementAndGet() }
+                    ) { group ->
                         publishAddonSnapshot(index, group, slots, generation)
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -1714,6 +1722,17 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 } catch (_: Exception) {
                     // One bad add-on must not take the other rails down; the
                     // rails it already published stay published.
+                } finally {
+                    // F4: what this add-on cost, and how many of its requests
+                    // the cap cut. Only the wave that still owns the rails
+                    // reports - a superseded one is not the paste's search.
+                    if (generation == addonSearchGeneration) {
+                        SearchRunTrace.onAddonProbed(
+                            name = addon.displayName,
+                            ms = SystemClock.elapsedRealtime() - startedAt,
+                            timedOut = timedOut.get()
+                        )
+                    }
                 }
             }
         }.joinAll()
@@ -1823,6 +1842,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     private suspend fun collectAddonSearchGroup(
         addon: InstalledAddon,
         query: String,
+        onTimeout: () -> Unit,
         onGroup: suspend (AddonResultGroup) -> Unit
     ): List<AddonResultGroup> = coroutineScope {
         val groups = mutableListOf<AddonResultGroup>()
@@ -1850,11 +1870,20 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         // which is exactly what made the "AI Search" rail disappear.
         if (addon.resources.contains("search")) {
             try {
-                collected += repository.search(
-                    baseUrl,
-                    "*",
-                    query
-                )
+                // F1/F3: the same 8s cap as the catalog probes. A timeout is
+                // a null answer, not a thrown cancellation: it fails THIS
+                // request only (F2), and the add-on still falls through to
+                // its catalogs below.
+                collected += withTimeoutOrNull(SEARCH_ADDON_REQUEST_TIMEOUT_MS) {
+                    repository.search(
+                        baseUrl,
+                        "*",
+                        query
+                    )
+                } ?: run {
+                    onTimeout()
+                    emptyList()
+                }
             } catch (_: Exception) {
             }
         }
@@ -1887,14 +1916,25 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 // the rails listed after it.
                 val probes = searchableCatalogs.map { catalog ->
                     async {
-                        catalog to runCatchingCancellable {
-                            repository.searchCatalog(
-                                baseUrl,
-                                catalog.type,
-                                catalog.id,
-                                query
-                            )
-                        }.getOrDefault(emptyList())
+                        // F1/F3: the catalog path gets the SAME per-request
+                        // cap as the /search probe. A cut request answers
+                        // empty (F2): its own rail is the only thing lost,
+                        // the sibling catalogs and the other add-ons still
+                        // probe, and the rails already published stay.
+                        val answer = runCatchingCancellable {
+                            withTimeoutOrNull(SEARCH_ADDON_REQUEST_TIMEOUT_MS) {
+                                repository.searchCatalog(
+                                    baseUrl,
+                                    catalog.type,
+                                    catalog.id,
+                                    query
+                                )
+                            }
+                        }
+                        // Only a cut request is a timeout: a thrown request is
+                        // already counted by its empty rails, not here.
+                        if (answer.isSuccess && answer.getOrNull() == null) onTimeout()
+                        catalog to answer.getOrNull().orEmpty()
                     }
                 }
 
@@ -2021,16 +2061,22 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             ignoredQueryCache[key]?.let { return it }
         }
         val unfiltered = runCatchingCancellable {
-            repository.getCatalog(
-                baseUrl = baseUrl,
-                type = catalog.type,
-                catalogId = catalog.id,
-                // Live, like the search page above it. A stale snapshot of a
-                // ranking that has since rotated differs by an entry and
-                // looks like a page that honoured the query - which is how a
-                // Top Ten rail kept publishing under the generic label.
-                forceRefresh = true
-            )
+            // Capped like every other request in the add-on wave (F1): this
+            // probe holds the add-on's rail loop until it answers, so an
+            // uncapped browse fetch could still hold the wave past 8s even
+            // with every search probe capped.
+            withTimeoutOrNull(SEARCH_ADDON_REQUEST_TIMEOUT_MS) {
+                repository.getCatalog(
+                    baseUrl = baseUrl,
+                    type = catalog.type,
+                    catalogId = catalog.id,
+                    // Live, like the search page above it. A stale snapshot of
+                    // a ranking that has since rotated differs by an entry and
+                    // looks like a page that honoured the query - which is how
+                    // a Top Ten rail kept publishing under the generic label.
+                    forceRefresh = true
+                )
+            }
         }.getOrNull()
         // No answer is no verdict: return unignored now and re-probe on the
         // next search rather than pinning the rail on for the session off one
@@ -3287,6 +3333,19 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
         /** Catalog probes per catalog-only addon when it has no search resource. */
         const val MAX_ADDON_CATALOG_PROBES = 12
+
+        /**
+         * Per-request cap for one add-on search call (spec 2026-11-17, F1).
+         *
+         * The wave is parallel at both levels, so its total is the slowest
+         * SINGLE request in it - and there was no cap at all, which is how one
+         * hung add-on request held a whole search at 31s. 8s is well clear of
+         * a slow-but-answering add-on (the measured 3s wave was ten add-ons
+         * wide) and short enough that a hang cannot be felt as a freeze. The
+         * cap is per request, not per wave: an add-on's other catalogs still
+         * probe (F2).
+         */
+        const val SEARCH_ADDON_REQUEST_TIMEOUT_MS = 8_000L
 
         /** Per-rail cap on TMDB enrichments for missing year/rating. */
         const val MAX_ENRICH_PER_GROUP = 20

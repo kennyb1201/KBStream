@@ -23,6 +23,10 @@ import android.os.SystemClock
  *    has to be able to say whether a slow search was the debounce or the network.
  *  - whether the answer came from the short-lived search cache (a repeat inside
  *    the TTL fires no wave at all).
+ *  - each add-on's own time (spec 2026-11-17, F4), kept as facts rather than
+ *    ring samples: the wave is parallel, so the total is the slowest single
+ *    request, and only a per-add-on time can name the one that held the 31s
+ *    paste.
  *
  * Held here as well as in [PerfTrace] because the report is taken from Settings,
  * and a session's browsing can evict the newest samples: the facts of the LAST
@@ -49,6 +53,8 @@ internal object SearchRunTrace {
 
     private var legs: List<Pair<String, Long>> = emptyList()
 
+    private var addonTimings: List<SearchAddonTiming> = emptyList()
+
     /** One run's figures, for the diagnostics line. */
     data class Facts(
         val debounceMs: Long,
@@ -57,7 +63,8 @@ internal object SearchRunTrace {
         val addonMs: Long,
         val titlesCount: Int,
         val addonGroups: Int,
-        val legs: List<Pair<String, Long>>
+        val legs: List<Pair<String, Long>>,
+        val addonTimings: List<SearchAddonTiming> = emptyList()
     )
 
     /**
@@ -78,6 +85,7 @@ internal object SearchRunTrace {
             titlesCount = -1
             addonGroups = -1
             legs = emptyList()
+            addonTimings = emptyList()
         }
     }
 
@@ -126,6 +134,25 @@ internal object SearchRunTrace {
         PerfTrace.record("search.addon", leg)
     }
 
+    /**
+     * Records what one add-on cost and how many of its requests the 8s cap cut
+     * (spec 2026-11-17, F4). A re-probe of the same add-on replaces its entry,
+     * so the breakdown is one line per add-on rather than per publish.
+     */
+    fun onAddonProbed(
+        name: String,
+        ms: Long,
+        timedOut: Int = 0
+    ) {
+        // Facts, not [PerfTrace] samples on purpose: the perf summary keeps
+        // only its top six labels, so a sample per add-on would evict the very
+        // launch phases it exists to explain.
+        synchronized(lock) {
+            addonTimings = addonTimings.filterNot { it.name == name } +
+                SearchAddonTiming(name = name, ms = ms, timedOut = timedOut)
+        }
+    }
+
     /** Clears the run, so the next report cannot describe a superseded one. */
     fun reset() {
         synchronized(lock) {
@@ -137,6 +164,7 @@ internal object SearchRunTrace {
             titlesCount = -1
             addonGroups = -1
             legs = emptyList()
+            addonTimings = emptyList()
         }
     }
 
@@ -150,7 +178,8 @@ internal object SearchRunTrace {
             addonMs = addonMs,
             titlesCount = titlesCount,
             addonGroups = addonGroups,
-            legs = legs
+            legs = legs,
+            addonTimings = addonTimings
         )
     }
 }

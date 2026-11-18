@@ -586,6 +586,12 @@ object Diagnostics {
      * figure can be attributed rather than assumed. `cached` says the repeat was
      * answered without firing a wave at all.
      *
+     * Since the 2026-11-17 add-on timeout spec (F4) the line also carries
+     * `addons=` — each add-on's own time, slowest first, with a `*` on one whose
+     * request the 8s cap cut, and `timeouts=`. The wave is parallel, so a 31s
+     * total is the slowest single request and cannot name its owner without
+     * this breakdown.
+     *
      * Absent until something has been searched this session.
      */
     private fun searchLine(): String? {
@@ -603,6 +609,7 @@ object Diagnostics {
             }
             if (facts.titlesCount >= 0) append(" titles-count=").append(facts.titlesCount)
             if (facts.addonGroups >= 0) append(" addon-groups=").append(facts.addonGroups)
+            searchAddonBreakdown(facts.addonTimings)?.let { append(" ").append(it) }
             append(" cached=").append(if (facts.cached) "yes" else "no")
         }
     }
