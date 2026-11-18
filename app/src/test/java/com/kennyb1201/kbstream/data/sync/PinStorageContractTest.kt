@@ -165,6 +165,20 @@ class PinStorageContractTest {
         error("unbalanced: $declaration")
     }
 
-    private fun source(relative: String): String =
-        File("src/main/java/com/kennyb1201/kbstream/$relative").readText()
+    /**
+     * Walks up for the source root rather than assuming the working directory:
+     * Gradle's test task and the harness do not agree on it.
+     */
+    private fun source(relative: String): String {
+        val prefixes = listOf("", "app/")
+        var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
+        while (dir != null) {
+            prefixes.forEach { prefix ->
+                val candidate = File(dir, "${prefix}src/main/java/com/kennyb1201/kbstream/$relative")
+                if (candidate.isFile) return candidate.readText()
+            }
+            dir = dir.parentFile
+        }
+        throw AssertionError("source not found above ${System.getProperty("user.dir")}: $relative")
+    }
 }

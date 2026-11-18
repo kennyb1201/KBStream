@@ -64,7 +64,7 @@ object PinVault {
      * legacy copy.
      */
     fun setParentHash(context: Context, hash: String?): Boolean =
-        write(context, KEY_PARENT, hash, expect = hash?.takeIf { it.isNotBlank() })
+        write(context, KEY_PARENT, expect = hash?.takeIf { it.isNotBlank() })
 
     /** One profile's PIN hash, or null when that profile has no PIN. */
     fun profileHash(context: Context, profileId: String): String? {
@@ -80,7 +80,6 @@ object PinVault {
         return write(
             context,
             profileKey(profileId),
-            hash,
             expect = hash?.takeIf { it.isNotBlank() }
         )
     }
@@ -102,7 +101,6 @@ object PinVault {
     private fun write(
         context: Context,
         key: String,
-        value: String?,
         expect: String?
     ): Boolean = runCatching {
         val prefs = prefs(context)

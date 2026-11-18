@@ -421,8 +421,10 @@ object MdbListClient {
             .putInt(sharedCountKey(profileId), count)
             .apply()
         // If that profile is the one running, its live bucket picks it up now
-        // rather than at the next rollover.
-        budgets.values.forEach { budget ->
+        // rather than at the next rollover. Only HIS buckets: a sibling's figure
+        // is not evidence about any other profile's spend.
+        budgets.entries.forEach { (tag, budget) ->
+            if (profileOfTag(tag) != profileId) return@forEach
             synchronized(budget) {
                 if (budget.day == day && budget.count.get() < count) budget.count.set(count)
             }
@@ -844,7 +846,8 @@ object MdbListClient {
     fun localPauseMs(context: Context): Long {
         val key = apiKey(context)
         if (key.isBlank()) return 0L
-        val budget = budgets[keyTag(key)] ?: return 0L
+        // Same scoping the ledger itself uses, or this would always miss.
+        val budget = budgets[profileScopedTag(keyTag(key))] ?: return 0L
         return (budget.limitedUntilMs - System.currentTimeMillis()).coerceAtLeast(0L)
     }
 
