@@ -73,7 +73,6 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.runtime.derivedStateOf
-import androidx.compose.ui.platform.LocalDensity
 import kotlin.math.roundToInt
 import com.kennyb1201.kbstream.ui.iptv.guideRowSlice
 

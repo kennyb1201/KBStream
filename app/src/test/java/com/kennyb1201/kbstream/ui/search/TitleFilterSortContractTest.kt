@@ -103,10 +103,23 @@ class TitleFilterSortContractTest {
                 "$which sort chips call the view model's sort",
                 src.contains("viewModel.setTitleSort(TitleSort.")
             )
+            // Formatting-independent since the warm-ahead work (spec 2026-11-18,
+            // F3): the phone's Titles rail call is written across lines now, so
+            // the anchor is matched on whitespace-flattened text - the RULE is
+            // the one that matters, the chips are drawn above the rail.
+            val flat = src.replace(Regex("\\s+"), " ")
+            val azAt = flat.indexOf("label = \"A-Z\",")
+            val railAt =
+                listOf(
+                    "MobileSearchRail( title = \"Titles\"",
+                    "LazyRow( state = titlesRailState"
+                ).map { anchor -> flat.indexOf(anchor) }
+                    .filter { at -> at >= 0 }
+                    .minOrNull()
+                    ?: -1
             assertTrue(
                 "$which chip row is drawn before the rail's own row",
-                src.indexOf("label = \"A-Z\",") < src.indexOf("MobileSearchRail(title = \"Titles\"") ||
-                    src.indexOf("label = \"A-Z\",") < src.indexOf("LazyRow(\n                            state = titlesRailState")
+                azAt >= 0 && railAt > azAt
             )
         }
         assertTrue(
