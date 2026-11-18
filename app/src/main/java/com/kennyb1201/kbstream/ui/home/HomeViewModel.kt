@@ -2177,16 +2177,26 @@ Log.d(
         )
         val profile = com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value
         val forProfile = "${profile?.id}:${profile?.kidsMaxAge}"
-        // One hop, because the ceiling pass is a suspend (it resolves each
-        // title's certification through the shared enriched-detail cache). The
-        // epoch is captured BEFORE it, so a filter that lands after a profile
+        // One hop, because the ceiling pass and the digital-release filter are
+        // suspends (each resolves through the shared enriched-detail cache). The
+        // epoch is captured BEFORE them, so a filter that lands after a profile
         // switch is dropped exactly like a resolve would be.
         val epoch = billboardResolveEpoch
         billboardPoolJob?.cancel()
         billboardPoolJob = viewModelScope.launch {
             val pool = billboardKidsSafePool(items)
             if (epoch != billboardResolveEpoch) return@launch
-            publishBillboardPool(pool, forProfile)
+            // The digital-release filter runs HERE, at the same choke point as
+            // the ceiling (spec 2026-11-17, F1/F2): on the ceiling-passed pool,
+            // in this same hop and under the same epoch guard, so every pool that
+            // reaches the dealer - the chosen feed, the walked default fallback
+            // and the kids rails - is filtered once, and a filter that lands
+            // after a profile switch is dropped exactly like a resolve would be.
+            // The shared implementation is gated on the Settings switch itself,
+            // so with the filter OFF the pool is the ceiling's, unchanged (F3).
+            val available = applyDigitalAvailabilityFilter(pool)
+            if (epoch != billboardResolveEpoch) return@launch
+            publishBillboardPool(available, forProfile)
         }
     }
 
@@ -2199,7 +2209,9 @@ Log.d(
      * and every surface reaches it - the phone's hero and the TV's Spotlight hero
      * both resolve through [resolveBillboard], so neither can list a rail the
      * other filters. No ceiling (an adult profile) returns the feed untouched:
-     * one null check, no list copy, no reorder.
+     * one null check, no list copy, no reorder. The digital-release filter is the
+     * caller's second pass over this pool (spec 2026-11-17), so it sees every
+     * rung of this fallback and none of them can reintroduce an unreleased movie.
      *
      * A ceiling-thinned feed falls back to the walked default pool (F3), and to
      * the kids rails when even that is empty (spec 2026-11-16, F1). The threshold
