@@ -225,6 +225,19 @@ class PlayerChrome(
     private val infoButton: View? = root.findViewById(R.id.chrome_btn_info)
     private val settingsButton: View? = root.findViewById(R.id.chrome_btn_settings)
 
+    /**
+     * The D-pad's label, in the bar's own spacer (spec 2026-11-17, F3).
+     *
+     * A television has no hover, so the platform tooltip the phone gets (F2) is
+     * unreachable there. On focus the focused button's own contentDescription is
+     * shown here - the same words TalkBack reads (F7) - and empty text is the
+     * hidden state, so nothing changes visibility and the bar never re-lays-out.
+     */
+    private val focusLabel: TextView? = root.findViewById(R.id.chrome_focus_label)
+
+    /** The button whose label is showing, so a late blur cannot clear another's. */
+    private var labelledButton: View? = null
+
     private val handler = Handler(Looper.getMainLooper())
 
     private val clock12Format by lazy { DateFormats.clock12h() }
@@ -272,6 +285,7 @@ class PlayerChrome(
         // chrome is really for - gets the fixed layout, straight from the XML.
         if (!com.kennyb1201.kbstream.FormFactor.isTv) makeInfoBlockScrollable()
         wireButtons()
+        wireLabels()
         wireSeekBar()
         wireFocusHold()
         seekBar?.max = SEEKBAR_MAX
@@ -344,6 +358,9 @@ class PlayerChrome(
     fun hide() {
         handler.removeCallbacks(hideRunnable)
         hiding = true
+        // The label belongs to the bar, so it goes with it (F3/S4) - not with
+        // the overlay's fade, which would leave a word floating over the video.
+        hideFocusLabel()
         KbViewMotion.fadeOut(overlay) { hiding = false }
         KbViewMotion.fadeOut(seekRow)
         KbViewMotion.fadeOut(clock)
@@ -378,6 +395,9 @@ class PlayerChrome(
         playPauseButton?.setImageResource(
             if (host.chromeIsPlaying()) R.drawable.ic_player_pause else R.drawable.ic_player_play
         )
+        // The glyph and the label are the same fact (F1/S3): "Pause" while
+        // playing, "Play" while paused.
+        syncPlayPauseLabel()
         refreshClock(positionMs, durationMs)
     }
 
@@ -615,13 +635,101 @@ class PlayerChrome(
     /**
      * The same rule both activities used: a focused control holds the bar open,
      * and losing focus starts the countdown again.
+     *
+     * It also carries the focus label (spec 2026-11-17, F3): ONE focus listener
+     * per control, so the hold's behaviour and the label cannot be wired twice
+     * and drift - and so replacing a listener can never silently drop the hold.
      */
     private fun wireFocusHold() {
         controls().forEach { control ->
             control.setOnFocusChangeListener { _, focused ->
-                if (focused) handler.removeCallbacks(hideRunnable) else keepVisible()
+                if (focused) {
+                    handler.removeCallbacks(hideRunnable)
+                    showFocusLabel(control)
+                } else {
+                    keepVisible()
+                    clearFocusLabel(control)
+                }
             }
         }
+    }
+
+    // ── labels (spec 2026-11-17) ─────────────────────────────────────────
+
+    /**
+     * The icon-only buttons that carry a label, in bar order (F1).
+     *
+     * The label IS the button's contentDescription: it is never written twice,
+     * so the tooltip, the focus label and TalkBack cannot drift (F7). Speed and
+     * Aspect gained theirs in player_chrome.xml. Skip Intro is deliberately
+     * absent - it already draws its own text (F5).
+     */
+    private fun labelledButtons(): List<View> = listOfNotNull(
+        playPauseButton,
+        nextButton,
+        sourceButton,
+        episodesButton,
+        audioButton,
+        subtitleButton,
+        speedButton,
+        aspectButton,
+        playerSwitchButton,
+        externalButton,
+        infoButton,
+        settingsButton
+    )
+
+    /**
+     * The platform tooltip, on hover and on long press (F2).
+     *
+     * `setTooltipText` is the whole mechanism: no custom popup, no new view and
+     * no new timing. It is the string the button already announces, which is
+     * also what the focus label shows (F7).
+     */
+    private fun wireLabels() {
+        labelledButtons().forEach { button ->
+            button.setTooltipText(button.contentDescription)
+        }
+        syncPlayPauseLabel()
+    }
+
+    /**
+     * Play/Pause names the action its press performs (F1/S3): "Pause" while
+     * playing, "Play" while paused - matching the glyph it is drawing.
+     */
+    private fun syncPlayPauseLabel() {
+        val button = playPauseButton ?: return
+        val label = if (host.chromeIsPlaying()) "Pause" else "Play"
+        if (button.contentDescription?.toString() == label) return
+        button.contentDescription = label
+        button.setTooltipText(label)
+        if (labelledButton === button) focusLabel?.text = label
+    }
+
+    /** Shows [button]'s label; a control with no label shows nothing. */
+    private fun showFocusLabel(button: View) {
+        val label = button.contentDescription?.toString().orEmpty()
+        if (label.isBlank()) return
+        focusLabel?.text = label
+        labelledButton = button
+    }
+
+    /**
+     * Hides the label IF it is [button]'s.
+     *
+     * Identity-checked because focus moves old -> new in one dispatch: a late
+     * blur from the control being left must not wipe the label the new one has
+     * just put up.
+     */
+    private fun clearFocusLabel(button: View) {
+        if (labelledButton !== button) return
+        hideFocusLabel()
+    }
+
+    /** Hides the label whatever it was showing: focus left the bar, or the bar did. */
+    private fun hideFocusLabel() {
+        focusLabel?.text = ""
+        labelledButton = null
     }
 
     /**
@@ -716,20 +824,7 @@ class PlayerChrome(
      */
     private fun applyFocusUpTarget() {
         val target = host.chromeFocusUpTargetId()
-        listOfNotNull(
-            playPauseButton,
-            nextButton,
-            sourceButton,
-            episodesButton,
-            audioButton,
-            subtitleButton,
-            speedButton,
-            aspectButton,
-            playerSwitchButton,
-            externalButton,
-            infoButton,
-            settingsButton
-        ).forEach { button ->
+        labelledButtons().forEach { button ->
             if (button.nextFocusUpId != target) button.nextFocusUpId = target
         }
     }

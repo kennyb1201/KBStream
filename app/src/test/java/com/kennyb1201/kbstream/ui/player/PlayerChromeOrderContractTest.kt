@@ -48,6 +48,10 @@ class PlayerChromeOrderContractTest {
                 "chrome_extra_controls",
                 "chrome_btn_play_pause",
                 "chrome_btn_next",
+                // The D-pad's focus label took the spacer's slot (spec
+                // 2026-11-17, F3), between the play controls and the right-hand
+                // group - so showing a word moves nothing.
+                "chrome_focus_label",
                 "chrome_btn_episodes",
                 "chrome_btn_source",
                 "chrome_btn_subtitle",
@@ -111,6 +115,7 @@ class PlayerChromeOrderContractTest {
             listOf(
                 "chrome_extra_controls",
                 "chrome_btn_play_pause",
+                "chrome_focus_label",
                 "chrome_btn_source",
                 "chrome_btn_subtitle",
                 "chrome_btn_audio",

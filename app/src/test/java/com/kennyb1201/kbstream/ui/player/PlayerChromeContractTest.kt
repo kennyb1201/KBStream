@@ -168,6 +168,82 @@ class PlayerChromeContractTest {
         assertEquals(6_000L, PlayerChrome.AUTO_HIDE_MS)
     }
 
+    // ── labels (spec 2026-11-17) ────────────────────────────────────────
+
+    @Test
+    fun `every icon-only button carries its label as the platform tooltip`() {
+        val layer = inflateChrome()
+        PlayerChrome(layer, FakeHost())
+
+        labelIds.forEach { id ->
+            val button = layer.findViewById<View>(id)
+            val name = context.resources.getResourceName(id)
+            assertTrue("$name has a label", !button.contentDescription.isNullOrBlank())
+            assertEquals(
+                "$name: the tooltip is the same string TalkBack reads (F7)",
+                button.contentDescription.toString(),
+                button.tooltipText.toString()
+            )
+        }
+    }
+
+    @Test
+    fun `play pause names the action it will perform`() {
+        val host = FakeHost().apply { playing = true }
+        val layer = inflateChrome()
+        val chrome = PlayerChrome(layer, host)
+        val button = layer.findViewById<View>(R.id.chrome_btn_play_pause)
+
+        assertEquals("Pause", button.contentDescription.toString())
+        assertEquals("Pause", button.tooltipText.toString())
+
+        host.playing = false
+        chrome.refreshProgress()
+        assertEquals("Play", button.contentDescription.toString())
+        assertEquals("Play", button.tooltipText.toString())
+    }
+
+    @Test
+    fun `the focus label shows the focused button and clears on hide`() {
+        val layer = inflateChrome()
+        val chrome = PlayerChrome(layer, host = FakeHost())
+        chrome.show()
+        val label = layer.findViewById<TextView>(R.id.chrome_focus_label)
+        val source = layer.findViewById<View>(R.id.chrome_btn_source)
+        val info = layer.findViewById<View>(R.id.chrome_btn_info)
+
+        assertTrue("source takes focus", source.requestFocus())
+        assertEquals("Change source", label.text.toString())
+
+        // A blur from the control being LEFT must not wipe the one just focused:
+        // the old view's loss and the new view's gain are one dispatch.
+        assertTrue("info takes focus", info.requestFocus())
+        assertEquals("Stream info", label.text.toString())
+
+        chrome.hide()
+        assertEquals("the bar taking itself down takes the label", "", label.text.toString())
+    }
+
+    @Test
+    fun `a label appearing never moves the bar`() {
+        val layer = inflateChrome()
+        val chrome = PlayerChrome(layer, FakeHost())
+        chrome.show()
+        val width = 1280
+        val height = 720
+        layoutAt(layer, width, height)
+        val button = layer.findViewById<View>(R.id.chrome_btn_source)
+        val before = button.left
+
+        // The label view took the spacer's own slot, so filling it in cannot
+        // change the row's arithmetic (F3/S5).
+        assertTrue(layer.findViewById<View>(R.id.chrome_btn_info).requestFocus())
+        assertEquals("Stream info", layer.findViewById<TextView>(R.id.chrome_focus_label).text.toString())
+        layoutAt(layer, width, height)
+
+        assertEquals("no button moved when the label appeared", before, button.left)
+    }
+
     // ── chapters ─────────────────────────────────────────────────────────
 
     @Test
@@ -207,7 +283,7 @@ class PlayerChromeContractTest {
             R.id.chrome_btn_audio, R.id.chrome_btn_subtitle, R.id.chrome_btn_speed,
             R.id.chrome_btn_aspect, R.id.chrome_btn_player_switch,
             R.id.chrome_btn_player_external, R.id.chrome_btn_info, R.id.chrome_btn_settings,
-            R.id.chrome_skip_intro
+            R.id.chrome_focus_label, R.id.chrome_skip_intro
         )
         ids.forEach { id ->
             assertTrue(
@@ -329,6 +405,23 @@ class PlayerChromeContractTest {
      * playhead. It is the rename the activities implement: nothing here is
      * overlay logic.
      */
+    /** The twelve labelled buttons, in bar order (F1). */
+    private val labelIds = listOf(
+        R.id.chrome_btn_play_pause, R.id.chrome_btn_next, R.id.chrome_btn_source,
+        R.id.chrome_btn_episodes, R.id.chrome_btn_audio, R.id.chrome_btn_subtitle,
+        R.id.chrome_btn_speed, R.id.chrome_btn_aspect, R.id.chrome_btn_player_switch,
+        R.id.chrome_btn_player_external, R.id.chrome_btn_info, R.id.chrome_btn_settings
+    )
+
+    /** A real measure/layout pass, so "nothing moved" is a layout fact. */
+    private fun layoutAt(view: View, width: Int, height: Int) {
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY)
+        )
+        view.layout(0, 0, width, height)
+    }
+
     private class FakeHost : PlayerChromeHost {
         val calls = mutableListOf<String>()
         var playing = false

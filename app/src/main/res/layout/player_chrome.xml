@@ -373,10 +373,27 @@
                     android:src="@drawable/ic_player_next"
                     android:visibility="gone" />
 
-                <View
+                <!-- The focus label (spec 2026-11-17, F3): the focused button's
+                     own name, for a D-pad that has no hover. It takes the
+                     spacer's weight-1 slot, so a label appearing can never move
+                     the bar and cannot cover a button - that space was always
+                     empty. Empty text is the hidden state, so visibility never
+                     changes and nothing re-lays-out. Not focusable and not
+                     announced: it only repeats the button's contentDescription
+                     (F7), which TalkBack already reads. -->
+                <TextView
+                    android:id="@+id/chrome_focus_label"
                     android:layout_width="0dp"
-                    android:layout_height="0dp"
-                    android:layout_weight="1" />
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:fontFamily="@font/inter_medium"
+                    android:gravity="center"
+                    android:importantForAccessibility="no"
+                    android:maxLines="1"
+                    android:paddingHorizontal="8dp"
+                    android:textColor="@color/kb_text_hi"
+                    android:textSize="11sp" />
 
                 <!-- Episodes: the show's season/episode list. GONE unless the
                      session is a series - a movie has no seasons and a live
@@ -455,6 +472,7 @@
                     android:layout_height="40dp"
                     android:layout_marginEnd="8dp"
                     android:background="@drawable/mpv_control_bg"
+                    android:contentDescription="Playback speed"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
                     android:fontFamily="@font/inter_medium"
@@ -471,6 +489,7 @@
                     android:layout_height="40dp"
                     android:layout_marginEnd="8dp"
                     android:background="@drawable/mpv_control_bg"
+                    android:contentDescription="Aspect ratio"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
                     android:fontFamily="@font/inter_medium"
