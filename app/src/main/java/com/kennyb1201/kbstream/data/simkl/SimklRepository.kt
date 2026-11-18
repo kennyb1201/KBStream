@@ -3941,6 +3941,20 @@ class SimklRepository(
         )
         writeSession(next)
         Log.i(TAG, "Simkl access token refreshed")
+        // A refreshed token is a NEW GRANT that never goes through the connect
+        // screen (spec 2026-11-18, taste drain F2): the refresh proxy mints it
+        // silently, so without this the ratings leg stayed closed for a grant
+        // that no longer exists and its queue waited for a thumb press. Told per
+        // tracker, because this is Simkl's own refresh - and NOT from the 401
+        // interceptor that calls it: that path is mid-request in the very leg a
+        // drain would re-enter.
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { app ->
+            com.kennyb1201.kbstream.data.library.TasteRatingSubmission
+                .onTrackerConnected(
+                    app,
+                    com.kennyb1201.kbstream.data.library.TasteRatingTracker.SIMKL
+                )
+        }
         next.accessToken
     }
 

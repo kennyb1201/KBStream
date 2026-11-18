@@ -473,6 +473,17 @@ class TraktRepository private constructor(private val context: Context?) {
         // is now stale: push the new pair or a sibling will be signed out as
         // soon as its own copy expires.
         publishAuthToSync()
+        // The rotated pair is a NEW GRANT with no connect screen in front of it
+        // (spec 2026-11-18, taste drain F2): without this the ratings leg stayed
+        // closed for the token that was refused, and its queue waited for a
+        // thumb press. Per tracker - this is Trakt's own refresh.
+        context?.applicationContext?.let { app ->
+            com.kennyb1201.kbstream.data.library.TasteRatingSubmission
+                .onTrackerConnected(
+                    app,
+                    com.kennyb1201.kbstream.data.library.TasteRatingTracker.TRAKT
+                )
+        }
         return true
     }
 

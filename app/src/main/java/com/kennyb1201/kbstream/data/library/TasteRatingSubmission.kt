@@ -42,11 +42,14 @@ import java.util.concurrent.atomic.AtomicBoolean
  * "Liked: <title>" feedback keeps firing from the local write alone - a tracker
  * outage must never read as a failed thumb press.
  *
- * The drain triggers are the three the spec pins and no others: a signal change
+ * The drain triggers are the ones the specs pin and no others: a signal change
  * (immediately, plus a re-drain that retries whatever is pending), a tracker
- * (re)connect, and the short follow-up described in [scheduleFollowUp]. There is
- * no worker, no periodic poll and no Home-load coupling - a rating that survives
- * to the next press or reconnect is not lost, it is in the durable queue.
+ * (re)connect or an adopted/refreshed grant, a Home entry or profile switch, app
+ * start, the short follow-up described in [scheduleFollowUp], and ONE deferred
+ * one-shot worker for a park or a backoff longer than that follow-up (spec
+ * 2026-11-18, taste drain F3). There is no periodic poll: a rating that survives
+ * to the next press, reconnect or scheduled wake is not lost, it is in the
+ * durable queue.
  *
  * Failures are a log line, an entry in the queue blob (so COPY DIAGNOSTICS can
  * report the last error per tracker) and nothing the viewer can see. There is no
@@ -68,11 +71,12 @@ object TasteRatingSubmission {
     private const val TAG = "TASTE_RATING_SUBMIT"
 
     /**
-     * A pause longer than this is left to the next trigger instead of being
-     * waited out here: a leg's spacing window is a second or two (worth waiting,
-     * or a second thumb in a row would strand until the viewer pressed something
-     * else), while a 429's `Retry-After` is minutes or hours and idling a
-     * coroutine for it is exactly what the next press and the reconnect are for.
+     * A pause longer than this is not waited out in a coroutine: a leg's spacing
+     * window is a second or two (worth waiting, or a second thumb in a row would
+     * strand until the viewer pressed something else), while a 429's
+     * `Retry-After` is minutes or hours. Anything longer is handed to the
+     * deferred one-shot worker instead (spec 2026-11-18, taste drain F3), which
+     * survives the process an idling coroutine does not.
      */
     private const val FOLLOW_UP_MAX_WAIT_MS = 3_000L
 
@@ -244,10 +248,17 @@ object TasteRatingSubmission {
     /** One full pass over the queue; the caller holds [drainMutex]. */
     private suspend fun drainOnce(app: Context) = run {
             val profileAtStart = activeProfileId()
+            // The earliest moment this pass needs waking again for, or MAX when
+            // nothing in it does (spec 2026-11-18, taste drain F3). Collected
+            // across the whole pass and scheduled once at the end, so a queue
+            // with several waits gets the SOONEST and one pending wake.
+            var wakeAtMs = Long.MAX_VALUE
             for (entry in TasteRatingQueue.entries(app)) {
                 if (activeProfileId() != profileAtStart) return
                 val tracker = entry.trackerOrNull ?: continue
                 if (!enabled(tracker)) continue
+                // A closed leg needs no wake: it re-opens on a grant change, and
+                // that path drains (see the adopted-session callers).
                 if (isLegClosed(app, tracker)) continue
 
                 val now = System.currentTimeMillis()
@@ -275,7 +286,14 @@ object TasteRatingSubmission {
                     )
                     continue
                 }
-                if (!TasteRatingQueueRules.isDue(entry, now)) continue
+                if (!TasteRatingQueueRules.isDue(entry, now)) {
+                    // Not due: the backoff runs on its own clock (1/5/30/120/720
+                    // min) and no trigger may come before it expires - a TV left
+                    // on Home is the field case. Spent entries never reach here
+                    // (dropped above), so this is always a real future attempt.
+                    wakeAtMs = minOf(wakeAtMs, TasteRatingQueueRules.dueAt(entry))
+                    continue
+                }
 
                 val paused = when (tracker) {
                     TasteRatingTracker.TRAKT -> drainTrakt(app, entry, now)
@@ -286,14 +304,36 @@ object TasteRatingSubmission {
                 }
                 if (paused) {
                     val waitMs = remainingPauseMs(app, tracker)
+                    // A park longer than a coroutine's short follow-up is a wake
+                    // WorkManager owns: `Retry-After` is minutes or hours, and the
+                    // process may not live that long (F3).
+                    val longPark = waitMs > FOLLOW_UP_MAX_WAIT_MS
+                    if (longPark) wakeAtMs = minOf(wakeAtMs, now + waitMs)
                     // A parked leg is a WRITE that did not happen, so it has to
                     // leave a trace (spec audit 2026-11-18, Data H2): nothing
                     // here used to record anything - no attempt, no failure -
                     // so a 429 handled inside a leg left the queue looking
                     // frozen, with COPY DIAGNOSTICS able to say "pending" and
-                    // never why nothing was moving.
-                    notePausedPark(app, tracker, now, waitMs)
+                    // never why nothing was moving. The line now also says
+                    // whether a wake is coming (F4), because "next trigger"
+                    // was a lie for a 60 s park.
+                    notePausedPark(app, tracker, now, waitMs, longPark)
                     if (waitMs in 1..FOLLOW_UP_MAX_WAIT_MS) scheduleFollowUp(app, waitMs)
+                }
+            }
+            // Only when something actually needs it: an empty queue, all-closed
+            // legs and spent entries all leave wakeAtMs at MAX, and a wake for
+            // them would be work that can only no-op.
+            if (wakeAtMs != Long.MAX_VALUE) {
+                val delayMs = (wakeAtMs - System.currentTimeMillis()).coerceAtLeast(0L)
+                // Scheduled, never required: the drain has already done its work
+                // for this pass, and a WorkManager that cannot take the request
+                // (an unusual process, a disabled initializer) must not fail the
+                // pass or lose the entry - the next trigger picks it up.
+                runCatching {
+                    com.kennyb1201.kbstream.work.TasteRatingDrainWorker.enqueue(app, delayMs)
+                }.onFailure { e ->
+                    Log.w(TAG, "could not schedule the deferred ratings drain: ${e.message}")
                 }
             }
         }
@@ -309,7 +349,10 @@ object TasteRatingSubmission {
         app: Context,
         tracker: TasteRatingTracker,
         now: Long,
-        waitMs: Long
+        waitMs: Long,
+        // Whether this park scheduled the deferred wake, which decides what the
+        // paste line may promise (F4).
+        wakeScheduled: Boolean
     ) {
         val last = pausedNotedAt[tracker] ?: 0L
         if (now - last < PAUSED_NOTE_INTERVAL_MS) return
@@ -320,11 +363,19 @@ object TasteRatingSubmission {
             else -> "${(waitMs / 1_000L).coerceAtLeast(1L)} s"
         }
         Log.w(TAG, "${tracker.label}: rating write parked for $waitText")
+        // The tail is the field instrument for the deferred wake (F4): a paste
+        // has to be able to tell a leg waiting on a timer from one waiting on
+        // nothing at all.
+        val tail = if (wakeScheduled) {
+            "re-drain scheduled in $waitText"
+        } else {
+            "retried on the next trigger"
+        }
         TasteRatingQueue.noteFailure(
             app,
             tracker,
             now,
-            "${tracker.label} parked rating writes for $waitText (429) - retried on the next trigger"
+            "${tracker.label} parked rating writes for $waitText (429) - $tail"
         )
     }
 

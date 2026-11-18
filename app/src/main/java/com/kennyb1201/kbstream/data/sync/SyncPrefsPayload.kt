@@ -12,6 +12,7 @@ import com.kennyb1201.kbstream.data.kitsu.KitsuToken
 import com.kennyb1201.kbstream.data.kitsu.KitsuTokenStore
 import com.kennyb1201.kbstream.data.library.LibraryTombstones
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
+import com.kennyb1201.kbstream.data.library.TasteRatingTracker
 import com.kennyb1201.kbstream.data.mal.MalToken
 import com.kennyb1201.kbstream.data.mal.MalTokenStore
 import com.kennyb1201.kbstream.data.trakt.TraktToken
@@ -2056,11 +2057,36 @@ object PrefsPayloadApplier {
                 )
         }
 
-        // After the apply, so anything observing the revision reads the
-        // already-updated local stores. Only a change to the ACTIVE profile's
-        // stores can repaint a screen that is on it: a sibling profile's row is
-        // picked up by the next composition after that profile is switched to.
-        if (changed && live) _revision.value += 1
+        // A tracker session this device just ADOPTED is a new grant that never
+        // went through a connect screen (spec 2026-11-18, taste drain F2): the
+        // ratings queue could sit behind it forever, because `isLegClosed`
+        // re-opens a leg whose grant changed only when a drain runs. Draining here
+        // - only for a ratings leg's auth key, only for the active profile, and
+        // only when the pulled blob actually differed - is what makes an adopted
+        // session land the pending queue, per tracker, where the tracker is known.
+        if (changed && live) {
+            adoptedRatingsTracker(prefKey)?.let { tracker ->
+                com.kennyb1201.kbstream.data.library.TasteRatingSubmission
+                    .onTrackerConnected(context, tracker)
+            }
+            _revision.value += 1
+        }
+    }
+
+    /**
+     * The ratings leg an adopted auth row belongs to, or null for any other row.
+     *
+     * This is the sync applier's question only: a session arriving from the
+     * account is a grant the ratings drain has never seen, and each leg's queue
+     * must be told - the auth key names the tracker exactly, so no blanket drain
+     * is needed. BingeCat and MAL are not ratings legs and are absent on purpose.
+     */
+    private fun adoptedRatingsTracker(prefKey: String): TasteRatingTracker? = when (prefKey) {
+        PrefsPayloadBuilder.KEY_SIMKL_AUTH -> TasteRatingTracker.SIMKL
+        PrefsPayloadBuilder.KEY_TRAKT_AUTH -> TasteRatingTracker.TRAKT
+        PrefsPayloadBuilder.KEY_KITSU_AUTH -> TasteRatingTracker.KITSU
+        PrefsPayloadBuilder.KEY_ANILIST_AUTH -> TasteRatingTracker.ANILIST
+        else -> null
     }
 
     /**

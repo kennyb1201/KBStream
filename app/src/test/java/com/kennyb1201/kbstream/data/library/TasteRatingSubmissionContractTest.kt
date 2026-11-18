@@ -202,9 +202,29 @@ class TasteRatingSubmissionContractTest {
             val src = source(path)
             assertFalse("$path must not toast", src.contains("Toast"))
             assertFalse("$path must not snack a failure", src.contains("Snackbar"))
-            assertFalse("$path must not schedule a worker", src.contains("WorkManager"))
             assertFalse("$path must not poll", src.contains("PeriodicWorkRequest"))
         }
+        // The write legs own no worker of their own.
+        //
+        // TasteRatingSubmission.kt used to be in the list above, because the
+        // drain scheduled nothing at all. Spec 2026-11-18 (taste-ratings drain
+        // F3) deliberately reversed exactly that: a 429 park or a spent backoff
+        // now hands ONE deferred one-shot wake to TasteRatingDrainWorker, which
+        // is what a TV left on Home needs. What stays true - and is what this
+        // test is about - is that nothing here ever puts a failure in front of
+        // the viewer, and nothing polls. The worker's own shape (one-shot,
+        // unique, network-gated, never Result.retry) is pinned in
+        // TasteRatingDrainWiringContractTest.
+        listOf(TRAKT_WRITES, SIMKL_WRITES).forEach { path ->
+            assertFalse(
+                "$path must not schedule a worker",
+                source(path).contains("WorkManager")
+            )
+        }
+        assertTrue(
+            "the drain's only wake is one-shot: no periodic work",
+            !source(SUBMISSION).contains("PeriodicWorkRequestBuilder")
+        )
     }
 
     // ── the retry rules ──────────────────────────────────────────────
@@ -241,7 +261,12 @@ class TasteRatingSubmissionContractTest {
                 source(MDBLIST).contains("fun localPauseMs(context: Context): Long")
         )
         assertTrue(
-            "and the wait is bounded: a long park is left to the next trigger",
+            // Spec 2026-11-18 (taste drain F3) changed the LONG half of this:
+            // a park past the boundary is no longer "left to the next trigger",
+            // it schedules the deferred one-shot worker. The boundary itself is
+            // unchanged, and the worker's own pins live in
+            // TasteRatingDrainWiringContractTest.
+            "and the wait is still split at the short-follow-up boundary",
             src.contains("FOLLOW_UP_MAX_WAIT_MS")
         )
     }

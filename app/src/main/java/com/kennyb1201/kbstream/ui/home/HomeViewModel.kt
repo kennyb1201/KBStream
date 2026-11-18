@@ -510,6 +510,44 @@ class HomeViewModel(
         _rails.asStateFlow()
 
     /**
+     * A card's place in the published rails: which rail, and which item in it.
+     *
+     * Only the focus-path warms read it, and all they need is the pair of
+     * indices the scans used to produce.
+     */
+    private class WarmSlot(
+        val rail: Rail,
+        val railIndex: Int,
+        val itemIndex: Int
+    )
+
+    /**
+     * `type:id` -> position, for the warms on the focus path (spec 2026-11-18,
+     * warm-ahead dispatch cost, F1).
+     *
+     * The warm used to find its card by scanning: `rails.indexOfFirst { ANY item
+     * matches }` and then `rail.items.indexOfFirst`, twice - once in
+     * [warmHeroLookahead] and once in [warmRailTiles] - on the Main thread, on
+     * every focus step, before a single decode was queued. On a held D-pad that
+     * is four full passes over every rail's items every 30-100 ms, which is the
+     * hitch the walk felt before the warm even started.
+     *
+     * The index is DERIVED, not maintained by hand: [warmIndexSource] holds the
+     * item lists it was built from, by identity, so a publish that changed any
+     * rail's items (a rebuild, a page append, a clear) invalidates it and the
+     * next focus step rebuilds ONCE - where the scans paid that cost on every
+     * step. `Rail` is immutable and every mutation replaces the list, so a
+     * single identity comparison per rail is the whole check (the list itself,
+     * not `rail`, because the landscape-art merge copies rails without touching
+     * their items).
+     *
+     * FIRST wins, like the scans: the first rail carrying the card, and the first
+     * copy of it in that rail.
+     */
+    private var warmIndexSource: List<List<MetaPreview>> = emptyList()
+    private var warmIndex: Map<String, WarmSlot> = emptyMap()
+
+    /**
      * Profile id the current [rails] content was built for. Home renders the
      * list only while this matches the active profile: clearing the rails on
      * a switch is dispatched, so without this gate the previous profile's
@@ -2893,6 +2931,50 @@ Log.d(
     }
 
     /**
+     * The billboard's own hero-size warm (spec 2026-11-18, Billboard Warm F1).
+     *
+     * The lookahead's [warmHeroArtBitmap] writes a `Size(1280, 720)` entry, which
+     * is the TV Modern hero's decode and Detail's - and NOT the billboard's. Both
+     * billboard surfaces (the phone Home and the TV's Spotlight) draw through
+     * [com.kennyb1201.kbstream.ui.mobile.MobileHero], which asks Coil for
+     * `Size(1280, 800)`. A size mismatch warms a second, useless entry - the
+     * same rule the rail-tile warm states - so every billboard page turn was
+     * paying a fresh hero-size decode while `warmHeroArtBitmap` counted warms.
+     *
+     * Memory-only, at the billboard's exact size, keyed on the page's RESOLVED
+     * art url: a page whose backdrop has not resolved yet is skipped rather than
+     * warmed at the poster fallback, which is not what the settled page draws.
+     * The 1280x720 warm is untouched (S3) - this is an additional entry, not a
+     * replacement, and the two sizes coexist in Coil's cache.
+     */
+    fun warmBillboardArt(artUrl: String?) {
+        val url = artUrl?.takeIf { it.isNotBlank() } ?: return
+        // Same in-flight set the rail warms use: a swipe burst over the same
+        // page must not stack decodes of the same url.
+        if (!heroArtPrefetchInFlight.add(url)) return
+        val application = getApplication<Application>()
+        viewModelScope.launch {
+            try {
+                heroArtPrefetchSemaphore.withPermit {
+                    runCatchingCancellable {
+                        coil3.SingletonImageLoader.get(application).execute(
+                            coil3.request.ImageRequest.Builder(application)
+                                .data(url)
+                                .size(
+                                    BILLBOARD_LOOKAHEAD_BITMAP_WIDTH,
+                                    BILLBOARD_LOOKAHEAD_BITMAP_HEIGHT
+                                )
+                                .build()
+                        )
+                    }
+                }
+            } finally {
+                heroArtPrefetchInFlight.remove(url)
+            }
+        }
+    }
+
+    /**
      * The near-field warm, fired ON FOCUS (spec 2026-11-17, F1).
      *
      * This is what the focus handler calls the moment a card takes focus - not
@@ -2905,13 +2987,130 @@ Log.d(
      * The 60-card metadata + disk-byte warm in [prefetchHeroArt] is unchanged,
      * and [reWarmIfCachesWereReleased] still calls these same two directly.
      */
+    /**
+     * The card's place, from the index [warmIndex] beside [_rails].
+     *
+     * Rebuilds the index only when a rail's ITEMS changed since the last publish
+     * it saw - the two warms below call this per focus step, so the common case
+     * is one identity comparison per rail and a map read. [rails] is the caller's
+     * own read of `_rails`, so the slot and the neighbour lookups that follow it
+     * always describe the same list.
+     *
+     * Synchronised because the warms run on whichever thread the focus handler
+     * is on while a page append (which republishes `_rails`) may land from its
+     * own coroutine: the index is replaced, never mutated in place, so the lock
+     * only has to cover the swap and the read.
+     */
+    @Synchronized
+    private fun warmSlotOf(rails: List<Rail>, item: MetaPreview): WarmSlot? {
+        val source = warmIndexSource
+        val changed =
+            rails.size != source.size || rails.indices.any { index -> source[index] !== rails[index].items }
+        if (changed) {
+            val total = rails.sumOf { rail -> rail.items.size }
+            val built = HashMap<String, WarmSlot>(total * 2)
+            rails.forEachIndexed { railIndex, rail ->
+                rail.items.forEachIndexed { itemIndex, candidate ->
+                    // First wins, exactly like `indexOfFirst` then
+                    // `items.indexOfFirst`: the first rail carrying the card, and
+                    // the first copy of it in that rail.
+                    val key = warmKeyOf(candidate)
+                    if (key !in built) built[key] = WarmSlot(rail, railIndex, itemIndex)
+                }
+            }
+            warmIndexSource = rails.map { rail -> rail.items }
+            warmIndex = built
+        }
+        return warmIndex[warmKeyOf(item)]
+    }
+
+    /**
+     * The index's key: the id exactly, the type case-insensitively - which is the
+     * comparison the scans made.
+     */
+    private fun warmKeyOf(item: MetaPreview): String = "${item.type.lowercase()}:${item.id}"
+
     fun warmHeroFocus(item: MetaPreview?) {
         if (item == null) return
         // F5: one arrival, so the paste's hit rate is read against the walk the
         // viewer actually did rather than against the number of warms.
         ImageLoadTrace.noteHeroFocusArrival()
+        // Continue Watching and Upcoming are their own lists, not catalog rails,
+        // so both warms below returned at their first lookup for a card in
+        // either - which is why a walk down those rows was the one the seam
+        // showed on (spec 2026-11-18, Warm-ahead F1).
+        if (warmEpisodeRowNeighbours(item)) return
         warmHeroLookahead(item)
         warmRailTiles(item)
+    }
+
+    /**
+     * The Continue Watching / Upcoming near field, at HERO size.
+     *
+     * Those rows draw episode stills the list already holds as urls, so there is
+     * nothing to resolve - only a bitmap to decode before the walk lands on it.
+     * The near field is the same one the rails use: the cards either side and the
+     * head of the adjacent row, capped, deduped, and warmed through the shared
+     * limiter so a focus burst cannot stack decodes.
+     *
+     * Answers whether [item] was one of those rows' cards; false means the caller
+     * should run the rail warms it always ran.
+     */
+    private fun warmEpisodeRowNeighbours(item: MetaPreview): Boolean {
+        val upNext = _upNext.value
+        val upcoming = _upcomingSchedule.value
+        val cwIndex = upNext.indexOfFirst { it.id == item.id }
+        val upIndex = if (cwIndex < 0) {
+            upcoming.indexOfFirst { it.id == item.id }
+        } else {
+            -1
+        }
+        if (cwIndex < 0 && upIndex < 0) return false
+
+        val art: List<String?> = if (cwIndex >= 0) {
+            val index = cwIndex
+            buildList {
+                if (index > 0) add(upNext[index - 1].poster)
+                addAll(upNext.drop(index + 1).take(HERO_LOOKAHEAD_CARDS).map { it.poster })
+                addAll(upcoming.take(HERO_LOOKAHEAD_RAIL_HEAD).map { it.poster ?: it.backdrop })
+            }
+        } else {
+            val index = upIndex
+            buildList {
+                if (index > 0) add(upcoming[index - 1].poster ?: upcoming[index - 1].backdrop)
+                addAll(
+                    upcoming.drop(index + 1).take(HERO_LOOKAHEAD_CARDS)
+                        .map { it.poster ?: it.backdrop }
+                )
+                addAll(upNext.take(HERO_LOOKAHEAD_RAIL_HEAD).map { it.poster })
+            }
+        }
+
+        val urls = art.filterNotNull().filter { it.isNotBlank() }
+            .distinct()
+            .take(HERO_LOOKAHEAD_MAX_CARDS)
+        if (urls.isEmpty()) return true
+        val context = getApplication<android.app.Application>()
+        viewModelScope.launch {
+            urls.map { url ->
+                async {
+                    if (!heroArtPrefetchInFlight.add(url)) return@async
+                    try {
+                        heroArtPrefetchSemaphore.withPermit {
+                            com.kennyb1201.kbstream.ui.components.ArtWarm
+                                .warmAll(context, listOf(url), EPISODE_STILL_W, EPISODE_STILL_H)
+                        }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        // Best-effort: the card decodes on first sight, as before.
+                    } finally {
+                        heroArtPrefetchInFlight.remove(url)
+                    }
+                }
+            }.awaitAll()
+        }
+        return true
     }
 
     /**
@@ -2941,15 +3140,13 @@ Log.d(
     private fun warmHeroLookahead(item: MetaPreview) {
         val rails = _rails.value
         if (rails.isEmpty()) return
-        val railIndex = rails.indexOfFirst { rail ->
-            rail.items.any { it.id == item.id && it.type.equals(item.type, ignoreCase = true) }
-        }
-        if (railIndex < 0) return
-        val rail = rails[railIndex]
-        val index = rail.items.indexOfFirst {
-            it.id == item.id && it.type.equals(item.type, ignoreCase = true)
-        }
-        if (index < 0) return
+        // O(1) instead of the four scans this used to run per focus step (F1).
+        // Handed the same list the neighbours below are read from, so the two
+        // cannot disagree if a publish lands mid-step.
+        val slot = warmSlotOf(rails, item) ?: return
+        val railIndex = slot.railIndex
+        val rail = slot.rail
+        val index = slot.itemIndex
 
         val targets = buildList {
             addAll(rail.items.drop(index + 1).take(HERO_LOOKAHEAD_CARDS))
@@ -3029,15 +3226,11 @@ Log.d(
     private fun warmRailTiles(item: MetaPreview) {
         val rails = _rails.value
         if (rails.isEmpty()) return
-        val railIndex = rails.indexOfFirst { rail ->
-            rail.items.any { it.id == item.id && it.type.equals(item.type, ignoreCase = true) }
-        }
-        if (railIndex < 0) return
-        val rail = rails[railIndex]
-        val index = rail.items.indexOfFirst {
-            it.id == item.id && it.type.equals(item.type, ignoreCase = true)
-        }
-        if (index < 0) return
+        // The same lookup, the same index - one build serves both warms (F1).
+        val slot = warmSlotOf(rails, item) ?: return
+        val railIndex = slot.railIndex
+        val rail = slot.rail
+        val index = slot.itemIndex
 
         val neighbours = buildList {
             if (index > 0) {
@@ -3383,6 +3576,14 @@ Log.d(
                     refreshUpNext()
                     // The incoming profile's own completions, blended afresh.
                     refreshTopPicks()
+                    // And its ratings queue, on the same reasoning (spec 2026-11-18,
+                    // taste drain F1): placed AFTER the switch has landed, so
+                    // the drain reads the queue of the profile that just became
+                    // active rather than the one being left. `drain` is
+                    // profile-safe on its own - it stops if the profile changes
+                    // mid-pass.
+                    com.kennyb1201.kbstream.data.library.TasteRatingSubmission
+                        .requestDrain(getApplication())
                 }
         }
     }
@@ -6083,16 +6284,17 @@ Log.d(
             // on, and the number the diagnostics perf block reports.
             val startedAt = android.os.SystemClock.elapsedRealtime()
 
-            // A parked taste queue gets its retry on every Home load (spec audit
-            // 2026-11-18, Data H1): Home is where a profile that has just
-            // switched lands, and where the app is most likely to have a network
-            // when a thumb was queued offline. Cheap when the queue is empty.
-            com.kennyb1201.kbstream.data.library.TasteRatingSubmission
-                .requestDrain(getApplication())
+            // NOTE: the taste-queue drain is NOT here (spec 2026-11-18, taste
+            // drain F1). This function has no production caller - the live Home
+            // paths are [onHomeResumed] and the profile-switch observer - so the
+            // audit sweep's "Home load" trigger never fired: a queue parked while
+            // the app was running (TV on, profile switched, Simkl connected on the
+            // TV) waited for a thumb press or a restart. Those two paths carry the
+            // call now.
 
-            // And BingeCat's pending completions, on the same reasoning (spec
-            // audit 2026-11-18, Data M2): Home is where a profile that has just
-            // switched lands, and the replay must not wait for a player to
+            // BingeCat's pending completions get their retry on every Home load
+            // (spec audit 2026-11-18, Data M2): Home is where a profile that has
+            // just switched lands, and the replay must not wait for a player to
             // finish another episode.
             runCatching {
                 com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
@@ -6169,6 +6371,16 @@ Log.d(
      * from the warm catalog cache — no network refetch.
      */
     fun onHomeResumed() {
+
+        // A parked taste queue gets its retry on every Home (re)entry (spec
+        // 2026-11-18, taste drain F1). Unconditional, not inside the rebuild
+        // below: this is the path the TV actually takes when the viewer comes
+        // back to Home, and a queue parked while the app was running has no other
+        // trigger short of a thumb press. Cheap when the queue is empty - one
+        // status read, then a drain that returns - and a drain already running
+        // just asks for one more pass (see TasteRatingSubmission.drain).
+        com.kennyb1201.kbstream.data.library.TasteRatingSubmission
+            .requestDrain(getApplication())
 
         // Rebuild the rails when either display toggle changed in Settings:
         // hide-upcoming needs a refilter, and landscape cards need
@@ -14196,6 +14408,28 @@ private suspend fun calculateEpisodesRemaining(
          */
         private const val HERO_LOOKAHEAD_BITMAP_WIDTH = 1280
         private const val HERO_LOOKAHEAD_BITMAP_HEIGHT = 720
+
+        /**
+         * The Continue Watching / Upcoming stills' warm size (spec 2026-11-18,
+         * Warm-ahead F1). Their hero art IS an episode still, drawn in the same
+         * hero box as a backdrop, so it is the hero's own decode - the same
+         * entry [HeroBackdropArt] reads for a card in either of those rows.
+         */
+        private const val EPISODE_STILL_W = HERO_LOOKAHEAD_BITMAP_WIDTH
+        private const val EPISODE_STILL_H = HERO_LOOKAHEAD_BITMAP_HEIGHT
+
+        /**
+         * The size the BILLBOARD draws at (spec 2026-11-18, Billboard Warm F1).
+         *
+         * [MobileHero](com.kennyb1201.kbstream.ui.mobile.MobileHero) asks for
+         * `Size(1280, 800)` - 16:10, the phone hero's frame - while the Modern
+         * hero and Detail ask for 1280x720. A warm writes the cache entry of the
+         * size it asked for and no other, so the billboard needs its own pair.
+         * The draw site is the source of truth for these two numbers; if that
+         * frame ratio changes, this must change with it.
+         */
+        private const val BILLBOARD_LOOKAHEAD_BITMAP_WIDTH = 1280
+        private const val BILLBOARD_LOOKAHEAD_BITMAP_HEIGHT = 800
 
         private const val TMDB_MAX_CONCURRENT_LOOKUPS =
             5
