@@ -189,9 +189,11 @@ class ContinueWatchingHeadLandingContractTest {
     @Test
     fun `the rail knows whether focus is inside it`() {
         assertTrue(
+            // Owned by the rail, and carrying the idle pre-composition window
+            // (spec 2026-11-18, F1) - the position is still the rail's own.
             "the rail holds its own scroll position now",
             row.contains("state = railState") &&
-                rail.contains("val railState = rememberLazyListState()")
+                rail.contains("val railState = rememberIdleLazyListState()")
         )
         assertTrue(
             "and observes focus on the ROW: hasFocus is \"this node or any " +
@@ -299,7 +301,7 @@ class ContinueWatchingHeadLandingContractTest {
         )
         assertTrue(
             "the row owns its state and a requester for position 0 alone",
-            upcoming.contains("val railState = rememberLazyListState()") &&
+            upcoming.contains("val railState = rememberIdleLazyListState()") &&
                 upcoming.contains("val headRequester = remember { FocusRequester() }")
         )
         val upcomingLanding = upcoming

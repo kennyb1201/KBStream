@@ -558,8 +558,10 @@ class HomeScreenMobileContractTest {
             .substringBefore("Every rail the loader produced has been hidden")
 
         assertTrue(
+            // Same state, now carrying the idle pre-composition window
+            // (spec 2026-11-18, F2): the sentinel watches it either way.
             "the rail row must own a scroll state the sentinel can watch",
-            row.contains("val railRowState = rememberLazyListState()")
+            row.contains("val railRowState = rememberIdleLazyListState()")
         )
         assertTrue(
             "the sentinel must be driven by the rail's own LazyRow state",

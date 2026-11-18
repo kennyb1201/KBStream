@@ -820,9 +820,10 @@ class SportsHubLayoutContractTest {
             ).findAll(src).count()
         )
         assertEquals(
-            "and the spec's own margin is still the row inset, at all four sites: widening it " +
-                "would move every landing in the hub",
-            4,
+            "and the spec's own margin is still the row inset, at all five sites: widening " +
+                "it would move every landing in the hub (the fifth is the team schedule " +
+                "sheet's season list, Sports M2)",
+            5,
             Regex("insetPx = with\\([A-Za-z]+\\) \\{ KBFocusRowInset\\.toPx\\(\\) \\}")
                 .findAll(src).count()
         )
