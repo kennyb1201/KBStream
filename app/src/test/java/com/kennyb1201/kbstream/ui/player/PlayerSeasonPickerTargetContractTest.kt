@@ -100,6 +100,35 @@ class PlayerSeasonPickerTargetContractTest {
     }
 
     @Test
+    fun `the focused marks are unconditional, on any input path`() {
+        // Spec 2026-11-17, amendment to F2: the marks used to be gated on
+        // `!chip.isInTouchMode`, and a chip focused while the device was in touch
+        // mode drew exactly like an unfocused one - the field's fourth "no visible
+        // focus indicator" report. The gate is the fix that failed, so it goes.
+        val adapter = source(STRIP)
+        assertFalse(
+            "no touch-mode gate left in the strip's CODE (the history in its comments " +
+                "may still name it)",
+            codeOnly(adapter).contains("isInTouchMode")
+        )
+        assertTrue(
+            "the focus flag alone drives the fill, the label weight and the scale",
+            adapter.contains("SeasonChipStyle.apply(chip, item.isSelected, focused)")
+        )
+        assertTrue(
+            "and the ring, which is the chip's foreground",
+            adapter.contains(
+                "chip.foreground = if (focused) SeasonChipStyle.ring(chip.context, item.isSelected) else null"
+            )
+        )
+        assertTrue(
+            "the background stroke follows the same flag, so the two coincide on a " +
+                "focused chip of either state",
+            source(CHIP_STYLE).contains("if (focused) setStroke(")
+        )
+    }
+
+    @Test
     fun `the selected chip keeps the accent fill and the plain chips stay plain`() {
         val style = source(CHIP_STYLE)
         val fill = style.substringAfter("fun fillFor(").substringBefore("fun ring(")
@@ -217,6 +246,11 @@ class PlayerSeasonPickerTargetContractTest {
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
+
+    /** [source] with its comment lines dropped, for "this is gone from the code" pins. */
+    private fun codeOnly(source: String): String = source.lineSequence()
+        .filterNot { line -> line.trim().let { it.startsWith("//") || it.startsWith("*") || it.startsWith("/*") } }
+        .joinToString("\n")
 
     private fun source(path: String): String {
         val prefixes = listOf("", "app/")

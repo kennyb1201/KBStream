@@ -61,6 +61,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -2079,6 +2080,28 @@ private fun MobileHero(
                     Modifier.aspectRatio(16f / 10f)
                 }
             )
+            // THE PAGE CLIPS TO ITS OWN BOUNDS (spec 2026-11-17, F1). Every page
+            // in the pager is composed with the pager's full width, so a page's
+            // art that is DRAWN wider than the page is drawn over its neighbour:
+            // this is the strip of the next title's art that has sat at the
+            // billboard's right edge at rest. A page that is not current is held
+            // at its sweep's START scale (1.04 even / 1.10 odd - the Ken Burns
+            // push), centred, so it overhangs its own box by 2% / 5% of a page
+            // on each side, and layout order puts the later page on top in that
+            // overlap. Nothing else in the billboard path clips: the only clip is
+            // the ROUNDED frame around the whole pager, which is why the sliver
+            // showed on the inner edge and survived both the sweep fix and the
+            // rest-offset fix - neither of them is this mechanism.
+            //
+            // On the page root rather than on the image, so anything a page
+            // paints outside itself is contained, and before the clickable so
+            // the touch target is the page's own box either way. The chevrons
+            // (2dp in from the edge), the copy column, the pills, the segments
+            // and the trailer's close mark are all inside the page, so none of
+            // them is cut - and the current page's art still fills its frame
+            // edge to edge, because the clip is at the page bounds the frame
+            // already is.
+            .clipToBounds()
             .clickable(onClick = onClick)
     ) {
         // The last frame THIS page painted, held as the placeholder (spec

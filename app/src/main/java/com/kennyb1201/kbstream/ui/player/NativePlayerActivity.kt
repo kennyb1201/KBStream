@@ -340,6 +340,23 @@ private const val ASPECT_MODE_FORCE_4_3 = 4
 // Shared with the MPV player, which raises the same card with the same timing.
 internal const val NEXT_UP_COUNTDOWN_SECONDS = 5
 
+/**
+ * How long after a load's first playable moment a MEDIA_PAUSE is treated as the
+ * spurious kind, on both engines (spec 2026-11-17, F1).
+ *
+ * Fire OS emits MEDIA_PAUSE around HDMI-CEC and voice-remote activity, and it
+ * does not stop once the picture is up: the guards that existed only covered
+ * BEFORE the first frame, so one of those events landed after it, paused the
+ * session and nothing ever resumed it - "after initial load of a file it pauses
+ * and I have to go and hit play". The window now opens with the load's first
+ * play (Exo) / the file open (MPV) and closes ten seconds later, after which a
+ * MEDIA_PAUSE pauses exactly as it always did.
+ *
+ * The cost is one swallowed press inside those ten seconds: a viewer pausing
+ * that early presses again and the second press lands.
+ */
+internal const val SPURIOUS_PAUSE_GUARD_MS = 10_000L
+
 // The Up Next panel now opens before the episode ends, so its auto-advance
 // countdown is held until this close to the end. A touch longer than
 // [NEXT_UP_COUNTDOWN_SECONDS] keeps the handoff on the end of the episode
@@ -2894,6 +2911,34 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     /// resets it), but never on mid-playback rebuffers or when returning from
     /// the actor overlay (fromActorReturn).
     private var hasPlayedOnce = false
+
+    /**
+     * Until this **elapsed-realtime** instant a MEDIA_PAUSE is treated as the
+     * spurious Fire OS kind, or 0 when no window is open (spec 2026-11-17, F1).
+     *
+     * Armed by [markFirstFrameRendered] on the first play of a LOAD - the
+     * transition of [hasPlayedOnce], which is what a load resets. A mid-playback
+     * rebuild (sidecar attach, tunnel change, retry) renders its own "first
+     * frame" without being a load, and a viewer who pauses there is a viewer
+     * pausing, so that one does not reopen the window.
+     */
+    private var spuriousPauseGuardUntilMs = 0L
+
+    /** Whether a MEDIA_PAUSE arriving right now is the spurious kind (F1). */
+    private fun spuriousPauseGuardActive(): Boolean =
+        spuriousPauseGuardUntilMs > 0L &&
+            SystemClock.elapsedRealtime() < spuriousPauseGuardUntilMs
+
+    /**
+     * Opens the spurious-pause window for the load that just started playing.
+     *
+     * One place, so the two MEDIA_PAUSE arms and the log-free predicate cannot
+     * disagree about when the window is: it is the load's first play plus
+     * [SPURIOUS_PAUSE_GUARD_MS].
+     */
+    private fun armSpuriousPauseGuard() {
+        spuriousPauseGuardUntilMs = SystemClock.elapsedRealtime() + SPURIOUS_PAUSE_GUARD_MS
+    }
 
     /**
      * True when [onStop] took this screen's player down with it.
@@ -5553,7 +5598,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     // auto-resumed - the viewer saw "it pauses after initial load
                     // and I have to unpause". Before the first frame there is
                     // nothing on screen to pause, so the press is swallowed.
-                    if (!hasPlayedOnce) true else {
+                    //
+                    // F1: those events keep coming AFTER the first frame too,
+                    // which is why the guard is a ten-second window from the
+                    // load's first play rather than the first-frame latch alone
+                    // (see [spuriousPauseGuardActive]).
+                    if (!hasPlayedOnce || spuriousPauseGuardActive()) true else {
                         exoPlayer?.pause(); showControls(); true
                     }
                 }
@@ -5736,11 +5786,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 exoPlayer?.play(); hideControls(); return true
             }
             KeyEvent.KEYCODE_MEDIA_PAUSE -> {
-                // Same startup guard as the surface listener's arm: a spurious
+                // Same guard as the surface listener's arm: a spurious
                 // MEDIA_PAUSE during the initial load (Fire TV emits them around
                 // CEC / voice-remote events) would otherwise park the player on
-                // frame 1 with nothing to resume it.
-                if (hasPlayedOnce) {
+                // frame 1 with nothing to resume it - and F1 keeps swallowing
+                // them for the load's first ten seconds of play, because the
+                // events do not stop at the first frame.
+                if (hasPlayedOnce && !spuriousPauseGuardActive()) {
                     exoPlayer?.pause(); showControls()
                 }
                 return true
@@ -8570,7 +8622,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // The "player has started" latch also belongs to the first frame:
         // setting it on isPlaying turned any post-audio buffering into the
         // small-spinner branch instead of the full splash.
+        //
+        // ...and its transition - false to true - is this load's first play, so
+        // that is where the spurious-pause window opens (F1). Reading it before
+        // the write is the whole point: a rebuilt player renders a "first frame"
+        // mid-episode, and the latch is already true there.
+        val firstPlayOfThisLoad = !hasPlayedOnce
         hasPlayedOnce = true
+        if (firstPlayOfThisLoad) armSpuriousPauseGuard()
         // Dolby Vision passthrough that actually renders is proof this box can
         // do it, so forget any recorded failure. A track that still carries the
         // dvhe/dvh1 label arrived as Dolby Vision (the extractor did not strip

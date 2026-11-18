@@ -89,7 +89,7 @@ class MpvOpenFailureAdvanceContractTest {
         assertTrue(
             "the one raiser is the shared open-failure report",
             view.substringAfter("private fun reportOpenFailure(reason: String?)")
-                .substringBefore("override fun eventProperty(property: String) = Unit")
+                .substringBefore("override fun eventProperty(property: String) {")
                 .contains("onPlaybackError?.invoke(")
         )
         // The END_FILE handler classifies its one event into four outcomes (see

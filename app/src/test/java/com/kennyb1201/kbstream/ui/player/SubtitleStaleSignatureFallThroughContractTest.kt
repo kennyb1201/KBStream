@@ -190,9 +190,11 @@ class SubtitleStaleSignatureFallThroughContractTest {
             attached.contains("subtitleFallThroughApplied = false")
         )
         assertEquals(
-            "reset per player build, per title load, and per new file's track list " +
-                "(spec 2026-11-16: a source switch inside one player gets its own pass)",
-            3,
+            "reset per player build, per title load, per new file's track list " +
+                "(spec 2026-11-16: a source switch inside one player gets its own pass) " +
+                "and per media item prepared again on the same player (the addon-subtitle " +
+                "batch re-prepares the same file, which drops every override)",
+            4,
             bridge.lines().count { it.trim() == "subtitleFallThroughApplied = false" }
         )
         assertFalse(

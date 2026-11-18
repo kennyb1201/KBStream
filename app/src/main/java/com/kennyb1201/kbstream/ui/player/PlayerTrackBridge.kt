@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.media3.common.C
 import androidx.media3.common.Format
+import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
@@ -426,11 +427,14 @@ internal object PlayerTrackBridge {
     fun chooseAudioTrack(context: Context, signature: String) {
         val player = playerProvider?.invoke()
         audioTrackSignature = signature
-        persist(context)
         rememberedTrackApplied = true
 
-        if (player == null) return
+        if (player == null) {
+            persist(context)
+            return
+        }
         if (signature.isBlank()) {
+            persist(context)
             player.trackSelectionParameters = player.trackSelectionParameters
                 .buildUpon()
                 .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
@@ -453,6 +457,7 @@ internal object PlayerTrackBridge {
         }
         val match = findTrack(player, C.TRACK_TYPE_AUDIO, signature)
         if (match == null) {
+            persist(context)
             Log.i(TAG, "chosen audio track '$signature' not present in this file")
             refreshAudioTracks()
             return
@@ -467,6 +472,15 @@ internal object PlayerTrackBridge {
         // comparison against the next episode's tags is apples to apples.
         LanguageMatch.canonical(match.group.getTrackFormat(match.index).language)
             ?.let { audioLanguage = it }
+        // Written AFTER the language above, never before it: [persist] carries
+        // [audioLanguage], so the old write order stored the PREVIOUS language
+        // together with the new pick. A show whose remembered language was still
+        // "fr" from an earlier pick then kept asking for French on every later
+        // episode - this pick's signature resolves while the encode matches, and
+        // the moment it misses (another release of the same episode), the
+        // fall-through armed French and the English pick looked ignored. The
+        // pick's own language is what the show has to remember.
+        persist(context)
         refreshAudioTracks()
     }
 
@@ -601,7 +615,58 @@ internal object PlayerTrackBridge {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_READY) applyOnReady(player)
             }
+
+            /**
+             * A media item REBUILT on the same player starts with no track
+             * overrides at all.
+             *
+             * An override names a track group of the TIMELINE it was made on,
+             * and a rebuilt item is a new timeline with new group objects, so
+             * media3 drops every override and falls back to the muxer's own
+             * default track. [KBPlayerView]'s addon-subtitle attach does exactly
+             * this: `AddonSubtitles.attachTracks` downloads the batch, then
+             * `setMediaItem` + `prepare()` on the LIVE player with the sidecar
+             * configs added - seconds into the episode, long after the READY
+             * pass picked the viewer's track.
+             *
+             * The per-FILE rearm below could not answer it: this is the same
+             * file, so its track-list fingerprint does not change and the latches
+             * are correctly left spent. "Once per file" still holds - a rebuffer
+             * prepares no media item - but the file is the prepared ITEM, not
+             * the player and not the track list, and one file can be prepared
+             * twice in a session.
+             *
+             * Reported: a Paw Patrol episode with English picked in the picker
+             * (both English tracks correctly labelled) started in a different
+             * language every time, and the same happened to the episodes after
+             * it. The pick was never wrong; it was re-stated nowhere after the
+             * subtitle batch rebuilt the item, so the muxer's default played.
+             */
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                rearmForRebuiltMediaItem()
+                // Already ready (a rebuild that never went back through
+                // BUFFERING): no READY event is coming for this state.
+                if (player.playbackState == Player.STATE_READY) applyOnReady(player)
+            }
         })
+    }
+
+    /**
+     * Gives every per-file latch back for a media item prepared AGAIN on the
+     * same player (see the listener's `onMediaItemTransition` in
+     * [onPlayerAttached]).
+     *
+     * Deliberately leaves the stored choice alone: the signature and the
+     * language stay exactly as the viewer set them, which is what lets the pass
+     * that follows re-state them instead of picking something new. Nothing here
+     * guesses a track, and a rebuffer re-arms nothing - it prepares no item.
+     */
+    private fun rearmForRebuiltMediaItem() {
+        rememberedTrackApplied = false
+        reportedAudioMissFor = null
+        rememberedSubtitleTrackApplied = false
+        subtitleFallThroughApplied = false
+        audioFallThroughApplied = false
     }
 
     /** One corrected pass over a ready player: languages, then the tracks. */
@@ -975,7 +1040,10 @@ internal object PlayerTrackBridge {
      *  3. A miss never deletes the pick; a later file that carries it re-applies
      *     it.
      *  4. A manual pick applies immediately and exactly, and no language pass
-     *     second-guesses it for the rest of the session.
+     *     second-guesses it for the rest of the session. Its own language is
+     *     what the show then remembers ([chooseAudioTrack] here, MPV's
+     *     `chooseAudioTrackById`), so the pick still means English after the
+     *     signature stops resolving on a later encode.
      *  5. "Default" clears the signature and applies the language at once.
      *  6. No signature -> the language pass runs, with the avoid-known-wrong
      *     fallback ([LanguageMatch.fallbackTrackIndex]) when no track in the file
@@ -984,6 +1052,14 @@ internal object PlayerTrackBridge {
      *     ([com.kennyb1201.kbstream.data.player.PlayerTitlePrefs.titleKeyFor]).
      *  8. A missed SUBTITLE pick falls through to the auto-pick on both engines
      *     ([applySubtitleFallThrough]; MPV's `fallThroughToSubtitleAutoPick`).
+     *  9. A file PREPARED AGAIN on the same player (the addon-subtitle batch's
+     *     `setMediaItem` + `prepare()`) is a new timeline with no overrides on
+     *     it, so the pick is stated again rather than left to the muxer's
+     *     default ([rearmForRebuiltMediaItem], from the player listener).
+     * 10. A track list that arrives AFTER the engine's open pass is acted on,
+     *     not left as the engine's own default: MPV re-runs its file-open pass
+     *     on the `track-list` change (`onTrackListChanged`), and Exo's READY
+     *     pass owns the same case because its latches are per prepared item.
      *
      * Which of [tracks] a stored [signature] means, or null when none does.
      *

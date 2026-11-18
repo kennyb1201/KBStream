@@ -45,11 +45,21 @@ class EpisodePickerFocusContractTest {
     }
 
     @Test
-    fun `the ring is the D-pad's and never sticks after a tap`() {
+    fun `focused always reads as focused, whatever the input`() {
+        // Spec 2026-11-17, amendment to F2: the touch-mode gate was the one
+        // thing that could zero the ring, the bold label and the scale out - a
+        // chip focused in touch mode drew like an unfocused one, which is the
+        // field's "still no visible focus indicator".
+        assertFalse(
+            "the touch-mode gate is gone from the strip's code (its comments may " +
+                "still name the history)",
+            strip.lineSequence()
+                .filterNot { line -> line.trim().let { it.startsWith("//") || it.startsWith("*") } }
+                .any { line -> line.contains("isInTouchMode") }
+        )
         assertTrue(
-            "a touched chip stays focused in touch mode, and a ring there reads as " +
-                "a selection that never happened",
-            strip.contains("focused && !chip.isInTouchMode")
+            "and the focused state drives all three marks unconditionally",
+            strip.contains("SeasonChipStyle.apply(chip, item.isSelected, focused)")
         )
         assertTrue(
             "the ring itself is untouched - the bug was never the ring (it lives " +
@@ -57,10 +67,11 @@ class EpisodePickerFocusContractTest {
             chipStyle.contains("RING_DP = 3f") && chipStyle.contains("(RING_DP * density).toInt()")
         )
         assertTrue(
-            "and a tap cannot leave it behind: the ring is put on the chip's " +
-                "foreground only while the D-pad holds it, and taken off otherwise",
+            "the ring is put on the chip's foreground while it holds focus and " +
+                "taken off otherwise - and since the tap that focuses a chip also " +
+                "SELECTS its season, a ring left by a tap marks the selection",
             strip.contains(
-                "chip.foreground = if (dpad) SeasonChipStyle.ring(chip.context, item.isSelected) else null"
+                "chip.foreground = if (focused) SeasonChipStyle.ring(chip.context, item.isSelected) else null"
             )
         )
     }

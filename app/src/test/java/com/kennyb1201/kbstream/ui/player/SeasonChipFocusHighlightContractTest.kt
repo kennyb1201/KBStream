@@ -84,7 +84,7 @@ class SeasonChipFocusHighlightContractTest {
         assertTrue(
             "and the ring in the SAME function, so a rebind cannot keep one " +
                 "without the other",
-            restyle.contains("chip.foreground = if (dpad) SeasonChipStyle.ring(")
+            restyle.contains("chip.foreground = if (focused) SeasonChipStyle.ring(")
         )
         assertTrue(
             "the bind runs it",
@@ -97,9 +97,10 @@ class SeasonChipFocusHighlightContractTest {
                 adapter.contains("restyle(focused)")
         )
         assertTrue(
-            "THE RING IS THE D-PAD'S (the F1(e) rule): a touch keeps the chip " +
-                "focused but must not leave a ring behind",
-            restyle.contains("val dpad = focused && !chip.isInTouchMode")
+            "FOCUS IS UNCONDITIONAL (spec 2026-11-17, amendment to F2): the " +
+                "touch-mode gate that zeroed the ring out is gone",
+            restyle.contains("SeasonChipStyle.apply(chip, item.isSelected, focused)") &&
+                !restyle.contains("isInTouchMode")
         )
         assertTrue(
             "a season switch rebinds the SAME adapter, so focus (and its ring) " +

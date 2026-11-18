@@ -189,6 +189,17 @@ class MpvPlayerView @JvmOverloads constructor(
     /** Demuxer opened the file; [mediaTitle] is mpv's idea of its name. */
     var onFileLoaded: ((mediaTitle: String?) -> Unit)? = null
 
+    /**
+     * mpv's track list changed: the file's first list, or one that grew after
+     * the open (a split stream's `audio-add`, a container index still being
+     * built).
+     *
+     * The notification is bare ([MpvFormat.MPV_FORMAT_NONE]) - the list itself
+     * is read through its property paths when it is needed - and it fires again
+     * whenever a track is selected, because `selected` is part of the list.
+     */
+    var onTrackListChanged: (() -> Unit)? = null
+
     /** (positionMs, durationMs) — durationMs is 0 while still unknown. */
     var onProgress: ((Long, Long) -> Unit)? = null
 
@@ -2409,7 +2420,15 @@ class MpvPlayerView @JvmOverloads constructor(
         }
     }
 
-    override fun eventProperty(property: String) = Unit
+    override fun eventProperty(property: String) {
+        if (released) return
+        // Bare observations deliver the name only (see [observeProperties]), and
+        // `track-list` is the one the activity acts on: it applies this title's
+        // audio pick from the file-loaded callback, and a list that is still
+        // empty there leaves mpv's own default track playing for the whole
+        // episode unless the pass is told the list has arrived.
+        if (property == "track-list") post { onTrackListChanged?.invoke() }
+    }
 
     /**
      * mpv's log, kept at error and warning level.

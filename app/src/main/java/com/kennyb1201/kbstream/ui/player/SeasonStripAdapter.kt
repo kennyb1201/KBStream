@@ -31,6 +31,14 @@ import com.kennyb1201.kbstream.R
  * bold label and a slight scale-up - and the strip keeps it whole at the panel's
  * edge ([reveal]), because a half-cut chip is a season the viewer cannot read.
  *
+ * FOCUSED ALWAYS LOOKS FOCUSED (spec 2026-11-17 amendment to F2). The marks used
+ * to be gated on `!chip.isInTouchMode`, and that gate is the one thing that can
+ * zero them out: a chip focused while the device is in touch mode rendered
+ * exactly like an unselected, unfocused one - the field's "still no visible focus
+ * indicator". It is gone, and the worry it answered does not apply: a tap SELECTS
+ * that season through the chip's onClick, so a tapped chip is the accent-filled
+ * selected one, where a ring marks the selection rather than inventing one.
+ *
  * The POSTER NEVER FOLLOWS FOCUS (spec 2026-11-17, F4): it shows the season the
  * episode list is showing, so the two cannot disagree. [PlayerEpisodePicker.seasonStrip]'s
  * selected chip is that season; the strip is what carries the target.
@@ -76,12 +84,19 @@ class SeasonStripAdapter(
         // from the focus listener so a chip that is only focused never loses its
         // ring when the selection moves elsewhere.
         //
-        // THE RING IS THE D-PAD'S (spec 2026-11-14, F1(e)): a touch leaves the
-        // tapped chip focused (it is focusableInTouchMode), and a ring left on it
-        // read as a selection that never happened.
+        // FOCUS IS FOCUS, ON ANY INPUT PATH (spec 2026-11-17 amendment to F2).
+        // This used to be `focused && !chip.isInTouchMode`, carried over from
+        // spec 2026-11-14 F1(e), where a ring left on a tapped chip read as a
+        // selection that never happened. That worry is answered by the tap
+        // itself: a touched chip's onClick selects its season, so the chip is
+        // the selected (accent-filled) one and a ring on it confirms the
+        // selection instead of inventing one. What the gate DID do was make a
+        // chip focused in touch mode - the chip focus lands on when a panel
+        // opens, before any remote press - look identical to an unfocused one,
+        // ring and all, which is the field's "no visible focus indicator" for
+        // the fourth time. So the focused state is unconditional now.
         fun restyle(focused: Boolean) {
-            val dpad = focused && !chip.isInTouchMode
-            SeasonChipStyle.apply(chip, item.isSelected, dpad)
+            SeasonChipStyle.apply(chip, item.isSelected, focused)
             // THE RING IS THE CHIP'S FOREGROUND (spec 2026-11-15, F2). It used to
             // be a stroke on the background, and the background is the one thing
             // the player's theme walk replaces wholesale - a copy of the shape
@@ -91,7 +106,7 @@ class SeasonStripAdapter(
             // re-ran the restyle, because no focus change followed. A foreground
             // is never part of that walk: the ring now sits above the fill, where
             // only this listener can put it or take it away.
-            chip.foreground = if (dpad) SeasonChipStyle.ring(chip.context, item.isSelected) else null
+            chip.foreground = if (focused) SeasonChipStyle.ring(chip.context, item.isSelected) else null
         }
         restyle(chip.isFocused)
         chip.setOnFocusChangeListener { _, focused ->

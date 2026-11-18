@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
 import android.view.KeyEvent
@@ -30,6 +31,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -694,6 +696,18 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private var subtitleOffsetMs = 0
     private var audioTrackSignature = ""
     /**
+     * True while the file-open pass had NO audio track list to work from (see
+     * [applyRememberedTracks]), so the pick it was asked to apply never landed
+     * and mpv's own default track is playing instead.
+     *
+     * The pass runs from mpv's file-loaded callback, and mpv's track list is
+     * not final at that moment for every stream: a split stream's audio arrives
+     * afterwards through `audio-add`, and a container index that is still being
+     * built reports its tracks in a later `track-list` change. [onTrackListChanged]
+     * is what re-runs the pass once there is a list to choose from.
+     */
+    private var audioSelectionWaitingForTracks = false
+    /**
      * Explicit per-show "no subtitles" (the picker's OFF), remembered like the
      * main player's bridge does: a blank subtitle language means "Auto, follow
      * the global MODE", so the refusal has to be its own fact or the next file
@@ -886,6 +900,31 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
     /** True once the file is open: the prompt must never appear over the splash. */
     private var fileLoaded = false
+
+    /**
+     * Until this **elapsed-realtime** instant a MEDIA_PAUSE is treated as the
+     * spurious Fire OS kind, or 0 when no window is open (spec 2026-11-17, F1).
+     *
+     * Armed per file load in [onFileLoaded] - once per file, which is what
+     * `FILE_LOADED` is - so a resolution change (`VIDEO_RECONFIG`) or a
+     * re-applied track cannot reopen it mid-episode.
+     */
+    private var spuriousPauseGuardUntilMs = 0L
+
+    /** Whether a MEDIA_PAUSE arriving right now is the spurious kind (F1). */
+    private fun spuriousPauseGuardActive(): Boolean =
+        spuriousPauseGuardUntilMs > 0L &&
+            SystemClock.elapsedRealtime() < spuriousPauseGuardUntilMs
+
+    /**
+     * True when THIS listener paused the session on an audio-focus loss, so a
+     * gain may undo it (spec 2026-11-17, F2).
+     *
+     * Set only when the loss actually stopped a PLAYING session, so a viewer who
+     * had already paused keeps their pause - and cleared by every viewer pause /
+     * play, so a manual pause after the interruption is never resumed.
+     */
+    private var pausedByFocusLoss = false
 
     /**
      * Ranked sources this session has already failed to OPEN, for the
@@ -1235,6 +1274,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             )
             onFileLoaded(title)
         }
+        // mpv's track list is not final at file-loaded for every stream: the
+        // audio pick is applied from that callback, so a list that arrives after
+        // it has to re-run the pass (see onTrackListChanged).
+        view.onTrackListChanged = { onTrackListChanged() }
         view.onProgress = { position, duration -> onProgress(position, duration) }
         view.onPausedChanged = { paused -> onPausedChanged(paused) }
         view.onPictureReady = {
@@ -2244,6 +2287,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 // it from the top behind the end panel. Replay is an explicit
                 // seek or a fresh session, not a toggle.
                 if (!endedHandled) {
+                    // A play request is the viewer's: it cancels any pending
+                    // focus resume rather than racing one.
+                    pausedByFocusLoss = false
                     surface?.setPaused(false)
                     keepControlsVisible()
                 }
@@ -2254,7 +2300,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 // remote app) landing before the first frame must not park the
                 // session on frame 1 - the Fire TV symptom class this guard
                 // exists for. Nothing is on screen to pause yet.
-                if (sessionHasPlayed()) {
+                //
+                // F1: and the same ten-second window after the load, because
+                // these events keep arriving once the picture is up too.
+                if (sessionHasPlayed() && !spuriousPauseGuardActive()) {
+                    pausedByFocusLoss = false
                     surface?.setPaused(true)
                     keepControlsVisible()
                 }
@@ -2308,6 +2358,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      */
     private fun togglePlayPauseFromControls(): Boolean {
         if (endedHandled) return true
+        // The viewer's own press outranks a pending focus resume: whatever the
+        // toggle does, the session is theirs again from here.
+        pausedByFocusLoss = false
         surface?.togglePause()
         return false
     }
@@ -4522,6 +4575,35 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         )
     }
 
+    /**
+     * mpv's track list arrived (or grew) after the file-open pass already ran.
+     *
+     * The open pass ([applyRememberedTracks], from `onFileLoaded`) states this
+     * title's audio pick once, and mpv's own `alang` covers the ordinary case at
+     * open time. A stream whose audio lands later had NOTHING to choose from
+     * there: the remembered pick missed, the language found no track to select,
+     * and mpv's own choice - the muxer's first or DEFAULT-flagged track, on a
+     * dual-audio release often another language - played for the whole episode
+     * with nothing left to correct it.
+     *
+     * Only a pass that really had no list re-runs, so a hand pick made later in
+     * the session is never second-guessed, and the wait is consumed BEFORE that
+     * re-run: selecting a track rewrites `track-list/<n>/selected`, which is
+     * another change of this same property, and re-entering on it would chase
+     * its own tail.
+     */
+    private fun onTrackListChanged() {
+        val view = surface ?: return
+        // A list that lands between loadfile and file-loaded belongs to the file
+        // being opened; that open's own pass runs in onFileLoaded.
+        if (!fileLoaded) return
+        if (!audioSelectionWaitingForTracks) return
+        if (view.audioTracks().isEmpty()) return
+        audioSelectionWaitingForTracks = false
+        Log.i(TAG, "track list arrived after the file open; re-applying this title's audio")
+        applyRememberedTracks()
+    }
+
     /** Re-states the remembered track and languages once the file is open. */
     private fun applyRememberedTracks() {
         val view = surface ?: return
@@ -4551,6 +4633,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         if (audioTrackSignature.isBlank() || !view.applyRememberedAudioTrack(audioTrackSignature)) {
             view.selectAudioLanguage(effectiveAudioLanguage())
         }
+        // Whether that decision had anything to work from. False on every
+        // ordinary file, and it is what [onTrackListChanged] waits on: a list
+        // that arrives late re-runs this pass instead of leaving mpv's default
+        // track playing (see the field note there).
+        audioSelectionWaitingForTracks = view.audioTracks().isEmpty()
         // Subtitle priority, the same order the main player's bridge uses. An
         // explicit per-show OFF wins over everything, so the next episode of a
         // show whose subtitles were turned off opens with sid=no even when the
@@ -4768,6 +4855,14 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
     internal fun chooseAudioTrack(signature: String) {
         audioTrackSignature = signature
+        // The chosen language follows the track here too - this is the settings
+        // panel's row, which hands back a signature, so the file's own list is
+        // what names the language. Left out, the show kept the language it had
+        // before the pick and every later episode's fall-through asked for that
+        // one (see [chooseAudioTrackById] and the parity table's row 4).
+        surface?.audioTracks()
+            ?.firstOrNull { track -> track.signature == signature }
+            ?.let { track -> LanguageMatch.canonical(track.language)?.let { audioLanguage = it } }
         persistTitlePreferences()
         if (signature.isBlank()) {
             surface?.selectAudioLanguage(effectiveAudioLanguage())
@@ -4787,6 +4882,14 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      */
     private fun chooseAudioTrackById(track: MpvPlayerView.Track) {
         audioTrackSignature = track.signature
+        // The chosen language follows the track, exactly as on the main player
+        // ([com.kennyb1201.kbstream.ui.player.PlayerTrackBridge.chooseAudioTrack]):
+        // a show whose remembered language was still another one kept asking for
+        // it on every later episode, and as soon as this signature missed (the
+        // next release of the same episode) the file-open fall-through armed
+        // that old language instead of the English track just picked. Written
+        // before the persist below, which carries [audioLanguage].
+        LanguageMatch.canonical(track.language)?.let { audioLanguage = it }
         persistTitlePreferences()
         surface?.selectAudioTrack(track.id)
         refreshSettings()
@@ -5903,6 +6006,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
     private fun onFileLoaded(mediaTitle: String?) {
         fileLoaded = true
+        // F1: the spurious-pause window opens here, once per file. Fire OS emits
+        // MEDIA_PAUSE around HDMI-CEC and voice-remote activity after the first
+        // frame as well as during the load, and the old guard (the playhead had
+        // not moved) stopped covering them the moment the file played.
+        spuriousPauseGuardUntilMs = SystemClock.elapsedRealtime() + SPURIOUS_PAUSE_GUARD_MS
         // A file that opens and never produces a video frame is the third way a
         // source is dead here (audit S-F13): audio plays, the screen stays
         // black, and nothing errors, so nothing walked. Armed per file load and
@@ -7819,6 +7927,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                     // must not restart the episode from the top. Replay is an
                     // explicit seek or a fresh session, not a toggle.
                     if (endedHandled) return true
+                    pausedByFocusLoss = false
                     surface?.togglePause()
                     showControls()
                     return true
@@ -7828,6 +7937,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                     if (endedHandled) return true
                     // Idempotent, and harmless before the first frame (there is
                     // nothing to resume; mpv is already headed for play).
+                    pausedByFocusLoss = false
                     surface?.setPaused(false)
                     showControls()
                     return true
@@ -7842,7 +7952,12 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                     // pausing then parked the session on frame 1 with nothing to
                     // resume it. Nothing is on screen to pause until the
                     // playhead has moved, so the press is swallowed.
-                    if (!sessionHasPlayed()) return true
+                    //
+                    // F1: those events keep coming AFTER the first frame too, so
+                    // the guard is the load's own ten-second window (armed in
+                    // onFileLoaded), not the playhead alone.
+                    if (!sessionHasPlayed() || spuriousPauseGuardActive()) return true
+                    pausedByFocusLoss = false
                     surface?.setPaused(true)
                     showControls()
                     return true
@@ -7922,11 +8037,35 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             .setWillPauseWhenDucked(false)
             .setOnAudioFocusChangeListener { change ->
                 // mpv's own audio output does not follow focus, so losing focus
-                // has to stop playback explicitly.
-                if (change == AudioManager.AUDIOFOCUS_LOSS ||
-                    change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
-                ) {
-                    surface?.setPaused(true)
+                // has to stop playback explicitly - and gaining it has to start
+                // playback again, because nothing else here watches focus (F2,
+                // spec 2026-11-17). Without the gain branch a notification or a
+                // system sound mid-episode parked the session paused until the
+                // viewer pressed play, which reads as "it pauses by itself" and
+                // is what the Next Up card then reported as "Paused - playing
+                // next when you resume".
+                when (change) {
+                    AudioManager.AUDIOFOCUS_LOSS,
+                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                        // Only a loss that stopped a PLAYING session is ours to
+                        // undo: a session the viewer had already paused keeps
+                        // its pause through the interruption.
+                        if (surface?.isPaused() == false) {
+                            pausedByFocusLoss = true
+                            surface?.setPaused(true)
+                        }
+                    }
+                    AudioManager.AUDIOFOCUS_GAIN -> {
+                        // Resume only our own pause, and only while this screen
+                        // is still the one on display: a call ending while the
+                        // app is backgrounded must not start audio behind it.
+                        val foreground =
+                            lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+                        if (pausedByFocusLoss && foreground) {
+                            pausedByFocusLoss = false
+                            surface?.setPaused(false)
+                        }
+                    }
                 }
             }
             .build()
@@ -8086,6 +8225,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             // Pause rather than tear down: the native instance is released in
             // onDestroy, and a backgrounded player that kept playing would be a
             // bug report of its own.
+            //
+            // Not a focus pause, so a later GAIN must not undo it (F2): the
+            // background is where a call ending would otherwise start audio.
+            pausedByFocusLoss = false
             surface?.setPaused(true)
         }
         // Not when this session is being continued in another engine (the
