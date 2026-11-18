@@ -1186,13 +1186,21 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                 // Keyword hits are tags, not titles: there is nothing here to
                 // de-dupe against the title rails (a different kind of thing
-                // altogether) and nothing for the kids ceiling to vet either -
-                // the app's existing rule is that a NAME is not content, which
-                // is why studios are published untouched too. The Tag page the
-                // tap opens is where the titles underneath are ceiling-checked
-                // (F4).
+                // altogether), and studios stay published untouched because a
+                // company name is a label. A KEYWORD is not a label, it is a
+                // content descriptor, and its own spelling can be adult - so on
+                // a kids profile the rail is kept and each keyword is vetted by
+                // its TITLES, the way a collection is vetted by its members
+                // (spec 2026-11-18, F1). The Tag page the tap opens is still the
+                // backstop that ceiling-checks the titles underneath (F4).
                 _keywordResults.value =
-                    keywordResults.distinctBy { it.id }.take(MAX_KEYWORD_RESULTS)
+                    if (tmdbRepository.kidsMaxAge() == null) {
+                        keywordResults.distinctBy { it.id }.take(MAX_KEYWORD_RESULTS)
+                    } else {
+                        tmdbRepository.kidsFilterKeywords(keywordResults)
+                            .distinctBy { it.id }
+                            .take(MAX_KEYWORD_RESULTS)
+                    }
 
                 // Remember the answer now that every rail is published, so a
                 // repeat restores exactly what this search put on screen.

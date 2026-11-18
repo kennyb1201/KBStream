@@ -328,6 +328,10 @@ fun DetailScreenMobile(
 
         val meta by viewModel.meta.collectAsStateWithLifecycle()
         val tmdbDetail by viewModel.tmdbDetail.collectAsStateWithLifecycle()
+        // The active profile's kids ceiling, or null (spec 2026-11-18, F2): the
+        // keyword chips below are dropped while it is set, exactly as on the TV
+        // page.
+        val kidsCeiling by viewModel.kidsCeiling.collectAsStateWithLifecycle()
         // PLAY ON TV exists only while a TV is connected (spec 2026-11-16, F2):
         // the button used to render on every title and answer a tap with "connect
         // first", which is a promise the screen had no business making. The same
@@ -648,7 +652,14 @@ fun DetailScreenMobile(
         // chip that was pressed, with the route's own media type - the same
         // arguments the TV chips hand `onNavigateTag`.
         val tmdbGenres = tmdbDetail?.genres.orEmpty()
-        val keywords = remember(tmdbDetail) { tmdbDetail?.keywords?.list().orEmpty() }
+        // Keywords are dropped on a kids profile (spec 2026-11-18, F2), the same
+        // rule as the TV page: a keyword is a content descriptor whose name can
+        // itself be adult, and this title passed the ceiling - so it is one of
+        // each of its keywords' titles and vetting would clear them all. Genres
+        // stay: that vocabulary is fixed and carries no such names.
+        val keywords = remember(tmdbDetail, kidsCeiling) {
+            if (kidsCeiling != null) emptyList() else tmdbDetail?.keywords?.list().orEmpty()
+        }
         // The trailer the button OFFERS is the trailer it PLAYS (one pick, one
         // rule - see TrailerPick): a series files its promos as Teaser/Clip.
         val trailerVideo = remember(tmdbDetail) {

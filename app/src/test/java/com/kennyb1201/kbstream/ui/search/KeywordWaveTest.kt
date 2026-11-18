@@ -94,10 +94,18 @@ class KeywordWaveTest {
         val vm = viewModel()
 
         assertTrue(
-            "the rail is published from the wave's own list",
+            "the rail is published from the wave's own list - unvetted on an adult " +
+                "profile, and vetted by its titles on a kids one (spec 2026-11-18, F1); " +
+                "either way the cap runs AFTER the filter",
             vm.contains(
                 "_keywordResults.value =\n" +
-                    "                    keywordResults.distinctBy { it.id }.take(MAX_KEYWORD_RESULTS)"
+                    "                    if (tmdbRepository.kidsMaxAge() == null) {\n" +
+                    "                        keywordResults.distinctBy { it.id }.take(MAX_KEYWORD_RESULTS)\n" +
+                    "                    } else {\n" +
+                    "                        tmdbRepository.kidsFilterKeywords(keywordResults)\n" +
+                    "                            .distinctBy { it.id }\n" +
+                    "                            .take(MAX_KEYWORD_RESULTS)\n" +
+                    "                    }"
             )
         )
         assertTrue(

@@ -1693,6 +1693,9 @@ fun DetailScreen(
     val awards by viewModel.awards.collectAsStateWithLifecycle()
     val allReviews by viewModel.allReviews.collectAsStateWithLifecycle()
     val tmdbDetail by viewModel.tmdbDetail.collectAsStateWithLifecycle()
+    // The active profile's kids ceiling, or null (spec 2026-11-18, F2): the
+    // keywords row below is dropped while it is set.
+    val kidsCeiling by viewModel.kidsCeiling.collectAsStateWithLifecycle()
 
     // AnimeThemes' openings and endings for the Media row's fourth page (spec
     // 2026-11-13). One lookup per Detail open, gated on TMDB's Animation genre
@@ -4505,8 +4508,15 @@ fun DetailScreen(
                 )
             }
 
-            val keywords = remember(tmdbDetail) {
-                tmdbDetail?.keywords?.list().orEmpty()
+            // THE KEYWORDS ROW IS DROPPED ON A KIDS PROFILE (spec 2026-11-18,
+            // F2). A keyword is a content descriptor, not a label, and this
+            // title passed the ceiling - so it is one of each of its keywords'
+            // titles, and vetting the row the way collections are vetted would
+            // clear every chip on it. The names themselves are the leak. The
+            // search rail's own keywords are vetted by their titles instead
+            // (TmdbRepository.kidsFilterKeywords), where that rule does work.
+            val keywords = remember(tmdbDetail, kidsCeiling) {
+                if (kidsCeiling != null) emptyList() else tmdbDetail?.keywords?.list().orEmpty()
             }
 
             // The rows this page actually paints, in one place: the chain

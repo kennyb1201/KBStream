@@ -330,6 +330,15 @@ class TmdbRepository private constructor(context: Context) :
     // Caps parallel TMDB availability lookups for the digital-release filter.
     private val availabilitySemaphore = Semaphore(permits = 6)
 
+    /**
+     * How many of a keyword's titles the kids ceiling looks at (spec 2026-11-18,
+     * F1) - see [kidsFilterKeywords]. Twelve, not a page of forty: the answer is
+     * "does anything under this keyword pass?" and the popular end answers it,
+     * while a full walk would hold this gate against the rails for no better
+     * answer.
+     */
+    private val keywordTitleSample = 12
+
     // Vote floors per rail kind. RECENT is split by media type (spec
     // 2026-11-14, and [TmdbRailFloors] holds the numbers and the reasoning): a
     // movie RECENT rail needs 5 votes and a 40-minute runtime, a TV RECENT rail
@@ -3470,6 +3479,96 @@ class TmdbRepository private constructor(context: Context) :
                     if (allowed) collection else null
                 }
             }.awaitAll().filterNotNull()
+        }
+    }
+
+    /**
+     * Kids ceiling for the search screen's Keywords rail (spec 2026-11-18, F1).
+     *
+     * A keyword is not a studio and not a person. A studio name and a person's
+     * name are labels; a keyword is a CONTENT DESCRIPTOR, and its own spelling
+     * can be adult - so a kids profile that published the rail put the words on
+     * screen even though the Tag page behind a tap filters the titles under it.
+     * The rail is therefore KEPT on a kids profile and each keyword is vetted by
+     * its titles, exactly the way [kidsFilterCollections] vets a franchise by its
+     * members: keep the keyword when at least one of its titles passes the
+     * active ceiling.
+     *
+     * A keyword's titles span both media types, so both endpoints are asked
+     * ([TmdbApiService.getKeywordMovies], [TmdbApiService.getKeywordTv]) and the
+     * answers are checked together. TMDB's `search/keyword` takes no
+     * `include_adult` (see [TmdbApiService.searchKeyword]), so this is the only
+     * end of the problem where it can be solved.
+     *
+     * Titles are checked until ONE passes rather than all of them, and only the
+     * keyword's popular end ([keywordTitleSample]) is looked at: the question
+     * is yes/no, a hit usually answers it in a read or two, and this runs on the
+     * search path behind the same 6-permit gate the rails need - certifying a
+     * page of 40 titles per keyword would starve them for the same yes/no. The
+     * rule per title is [kidsAllowed]'s, the known-unknown rule [kidsFilterMetas]
+     * applies. Sampling can only DROP a keyword whose clean titles sit below the
+     * sample, which is the safe direction: a missing chip is a rail of seven,
+     * an adult name is the bug.
+     *
+     * Stated limit, shared with collections: this catches keywords whose titles
+     * are ALL adult. An adult-named keyword attached to even one clean title
+     * still shows - the name itself is not vetted, because a blocklist of
+     * keyword names is unmaintainable and evadable by synonyms.
+     *
+     * The cap runs AFTER this filter (see the caller), so a strict profile still
+     * sees a full page of allowed keywords.
+     */
+    suspend fun kidsFilterKeywords(
+        keywords: List<TmdbSearchKeywordResult>
+    ): List<TmdbSearchKeywordResult> {
+        if (keywords.isEmpty() || kidsMaxAge() == null) return keywords
+        return coroutineScope {
+            keywords.map { keyword ->
+                async {
+                    val ceiling = kidsMaxAge()
+                    // Fetch the keyword's titles; keep the keyword if any of
+                    // them passes the ceiling.
+                    val titles = availabilitySemaphore.withPermit {
+                        runCatchingCancellable { keywordTitles(keyword.id) }.getOrNull()
+                    }.orEmpty()
+                    val sample = titles.take(keywordTitleSample)
+                    val allowed = if (sample.isEmpty()) {
+                        // Cannot vet: fail closed under strict ceilings (G/PG),
+                        // fail open under PG-13 (matches kidsFilterMetas).
+                        ceiling == KidsMode.CEIL_PG13
+                    } else {
+                        sample.any { (tmdbId, mediaType) -> kidsAllowed(tmdbId, mediaType) }
+                    }
+                    if (allowed) keyword else null
+                }
+            }.awaitAll().filterNotNull()
+        }
+    }
+
+    /**
+     * One keyword's titles as the ceiling keys them: (tmdbId, "movie"/"series").
+     *
+     * Both endpoints, in parallel, FIRST page each - a keyword's page is its most
+     * popular titles, which is the sample a "does anything under this keyword
+     * pass?" answer wants (and a keyword with thousands of titles cannot be
+     * walked from a search box). A failed side is an empty list, so one dead
+     * endpoint cannot make a keyword look vetted when it was not: the caller's
+     * known-unknown rule decides.
+     */
+    private suspend fun keywordTitles(keywordId: Int): List<Pair<Int, String>> {
+        if (apiKey.isBlank()) return emptyList()
+        return coroutineScope {
+            val movies = async {
+                runCatchingCancellable { api.getKeywordMovies(keywordId, apiKey).results }
+                    .getOrDefault(emptyList())
+                    .map { result -> result.id to "movie" }
+            }
+            val series = async {
+                runCatchingCancellable { api.getKeywordTv(keywordId, apiKey).results }
+                    .getOrDefault(emptyList())
+                    .map { result -> result.id to "series" }
+            }
+            movies.await() + series.await()
         }
     }
 

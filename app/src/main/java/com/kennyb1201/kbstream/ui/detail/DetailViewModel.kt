@@ -677,6 +677,26 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
             initialValue = addonManager.streamAddons.value.isNotEmpty()
         )
 
+    /**
+     * The ACTIVE profile's kids ceiling, or null when kids mode is off
+     * (spec 2026-11-18, F2).
+     *
+     * The keywords row prints keyword NAMES, and a keyword is a content
+     * descriptor rather than a label - a kids-allowed title can carry an adult
+     * one. Vetting the row by its titles cannot help here: the title being
+     * viewed is one of each keyword's titles and it already passed, so every
+     * chip would clear. The row is dropped instead, and this is the flag the
+     * screen reads. Reactive so a profile switch while the page is open cannot
+     * leave the row up.
+     */
+    val kidsCeiling: StateFlow<Int?> = ProfileManager.activeProfile
+        .map { profile -> profile?.kidsMaxAge }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = ProfileManager.activeProfile.value?.kidsMaxAge
+        )
+
     fun watchedKey(id: String, type: String): String = "${type.lowercase()}::$id"
 
     fun posterLookupKey(tmdbId: Int, mediaType: String): String = "${mediaType.lowercase()}::$tmdbId"

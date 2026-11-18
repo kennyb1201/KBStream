@@ -52,6 +52,8 @@ class KidsCeilingSurfaceContractTest {
         const val LIBRARY = "com/kennyb1201/kbstream/ui/library/LibraryViewModel.kt"
         const val HOME = "com/kennyb1201/kbstream/ui/home/HomeViewModel.kt"
         const val SEARCH = "com/kennyb1201/kbstream/ui/search/SearchViewModel.kt"
+        const val DETAIL = "com/kennyb1201/kbstream/ui/detail/DetailScreen.kt"
+        const val DETAIL_MOBILE = "com/kennyb1201/kbstream/ui/mobile/DetailScreenMobile.kt"
         const val IPTV = "com/kennyb1201/kbstream/ui/iptv/IptvViewModel.kt"
         const val KB = "com/kennyb1201/kbstream/data/kb/KBContentLoader.kt"
 
@@ -80,6 +82,17 @@ class KidsCeilingSurfaceContractTest {
             // that fetched it.
             Surface("KB folder add-on rails", KB, "kidsFilterMetas(", 1),
             Surface("search Collections rail", SEARCH, "kidsFilterCollections(", 1),
+            // The last rail published with no kids check: names are labels for a
+            // studio, but a keyword is a content descriptor, so the rail is kept
+            // on a kids profile and each keyword vetted by its titles (spec
+            // 2026-11-18, F1).
+            Surface("search Keywords rail", SEARCH, "kidsFilterKeywords(", 1),
+            // Detail's keywords row cannot be vetted the same way - the title
+            // being viewed is one of each keyword's titles and it already
+            // passed - so it is dropped while the ceiling is set (spec
+            // 2026-11-18, F2).
+            Surface("detail keywords row", DETAIL, "kidsCeiling != null", 1),
+            Surface("phone detail keyword chips", DETAIL_MOBILE, "kidsCeiling != null", 1),
             Surface("Browse keyword and collection chips", SEARCH, "forMode(", 2),
             Surface("Live TV channels (lock, not a rating)", IPTV, "kidsFilterChannels(", 2)
         )

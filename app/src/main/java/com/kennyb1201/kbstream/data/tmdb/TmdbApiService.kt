@@ -322,6 +322,30 @@ interface TmdbApiService {
         @Query("page") page: Int = 1
     ): TmdbSearchKeywordResponse
 
+    // A KEYWORD'S OWN TITLES (spec 2026-11-18, F1). The Tag page discovers by
+    // keyword through discover/movie|tv below; these two are the plain lists -
+    // no vote floor, no sort knob - which is what the kids ceiling needs to
+    // answer "is anything under this keyword allowed?".
+    //
+    // NOTE the asymmetry: THESE accept include_adult, while search/keyword does
+    // not (F3). Adding it there would be a silent no-op; here it keeps TMDB's
+    // hard-core entries out of the list the ceiling walks.
+    @GET("keyword/{keyword_id}/movies")
+    suspend fun getKeywordMovies(
+        @Path("keyword_id") keywordId: Int,
+        @Query("api_key") apiKey: String,
+        @Query("include_adult") includeAdult: Boolean = false,
+        @Query("page") page: Int = 1
+    ): TmdbSearchTitleResponse
+
+    @GET("keyword/{keyword_id}/tv")
+    suspend fun getKeywordTv(
+        @Path("keyword_id") keywordId: Int,
+        @Query("api_key") apiKey: String,
+        @Query("include_adult") includeAdult: Boolean = false,
+        @Query("page") page: Int = 1
+    ): TmdbSearchTitleResponse
+
     @GET("search/collection")
 suspend fun searchCollection(
     @Query("query") query: String,
