@@ -3329,7 +3329,9 @@ internal fun MobileBillboard(
                 sweepProgress.animateTo(
                     targetValue = 0f,
                     animationSpec = tween(
-                        durationMillis = BILLBOARD_KEN_BURNS_MANUAL_MS,
+                        // The constant is a Long (it shares the TV hero's clock);
+                        // tween takes Int, so this one conversion is where they meet.
+                        durationMillis = BILLBOARD_KEN_BURNS_MANUAL_MS.toInt(),
                         easing = LinearEasing
                     )
                 )

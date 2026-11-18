@@ -17,7 +17,7 @@ import com.kennyb1201.kbstream.data.trakt.TraktPollTrace
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.ui.profiles.ParentPinSubmit
 import com.kennyb1201.kbstream.ui.profiles.parentPinPromptSpec
-import com.kennyb1201.kbstream.ui.profiles.submitParentPinPrompt
+import com.kennyb1201.kbstream.ui.profiles.submitParentPin as submitParentPinPrompt
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow

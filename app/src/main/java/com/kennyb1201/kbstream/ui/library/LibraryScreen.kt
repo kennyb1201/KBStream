@@ -618,6 +618,7 @@ fun LibraryScreen(
                     listItems = state.selectedListItems,
                     loading = state.loading,
                     listLoading = state.listLoading,
+                    listReadFailed = state.listReadFailed,
                     onListSelect = { viewModel.selectList(it) },
                     onListLongPress = { list ->
                         // EVERY list row gets the menu now, not only the ones
@@ -1575,6 +1576,12 @@ private fun ListsPane(
      * empty" for the whole fetch - a sentence about the wrong thing.
      */
     listLoading: Boolean,
+    /**
+     * True when the OPEN list's read did not answer (Library L1) - not the same
+     * thing as an empty list, and the only way this pane can say so: the read
+     * failure lives on the ViewModel's state, which this pane does not hold.
+     */
+    listReadFailed: Boolean,
     onListSelect: (LibraryList) -> Unit,
     onListLongPress: (LibraryList) -> Unit,
     /**
@@ -1838,7 +1845,7 @@ private fun ListsPane(
                 // Library L1: a read that did not answer is not an empty list
                 // (BingeCat's >1,000-row walk and any failed page both answer
                 // nothing, and used to draw the sentence below).
-                state.listReadFailed -> "This list couldn't be loaded — it did " +
+                listReadFailed -> "This list couldn't be loaded — it did " +
                     "not answer, or it is too large to read in one pass. " +
                     "Reopen it to try again."
                 else -> "This list is empty. Long-press any poster app-wide " +
