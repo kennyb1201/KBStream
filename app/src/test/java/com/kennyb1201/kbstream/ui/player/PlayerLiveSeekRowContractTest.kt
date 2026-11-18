@@ -145,9 +145,16 @@ class PlayerLiveSeekRowContractTest {
         assertTrue(
             "the whole bar is covered - play/pause, next, every picker, info and " +
                 "settings - not a hand-picked few",
-            apply.contains("playPauseButton,") &&
-                apply.contains("episodesButton,") &&
-                apply.contains("settingsButton")
+            // One list now walks all three (UP targets, tooltips, focus labels), so
+            // the coverage lives in it rather than being repeated here - see
+            // PlayerButtonLabelsContractTest for the full twelve.
+            apply.contains("labelledButtons().forEach") &&
+                between(chrome, "private fun labelledButtons()", "private fun wireLabels()")
+                    .let { buttons ->
+                        buttons.contains("playPauseButton,") &&
+                            buttons.contains("episodesButton,") &&
+                            buttons.contains("settingsButton")
+                    }
         )
         assertTrue(
             "applied on hide...",
