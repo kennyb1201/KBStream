@@ -4449,6 +4449,7 @@ private fun teamLabel(team: SportsTeam): String =
  * side of somebody else's game - so it is the one place a team can be followed
  * from the team's own page, including one that is not playing today.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TeamScheduleSheet(
     state: TeamScheduleState,
