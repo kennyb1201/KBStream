@@ -147,17 +147,37 @@ class ScrollRoundTwoContractTest {
     }
 
     @Test
-    fun `the lookahead fires once per focus, after the meta dwell`() {
+    fun `the lookahead fires on focus, not after the resolve dwell`() {
         val vm = source(VIEW_MODEL)
-        val resolve = vm.substringAfter("fun resolveHeroMeta(")
-            .substringBefore("// ── The phone Home billboard")
-        val dwell = resolve.indexOf("delay(HERO_RESOLVE_DWELL_MS)")
-        val warm = resolve.indexOf("warmHeroLookahead(item)")
-        assertTrue("the lookahead must fire from the hero resolve", warm > 0)
+        val focusEntry = vm.substringAfter("fun warmHeroFocus(")
+            .substringBefore("private fun warmHeroLookahead(")
         assertTrue(
-            "after the dwell: a walk step that is cancelled has already fired it, " +
-                "and the card the walk is heading to is the one being warmed",
-            dwell > 0 && warm > dwell
+            "both halves of the near field are fired from the one focus entry",
+            focusEntry.contains("warmHeroLookahead(item)") &&
+                focusEntry.contains("warmRailTiles(item)")
+        )
+        assertTrue(
+            "and the hit rate is counted per focus arrival, not per warm",
+            focusEntry.contains("ImageLoadTrace.noteHeroFocusArrival()")
+        )
+        val resolve = vm.substringAfter("fun resolveHeroMeta(")
+            .substringBefore("fun reWarmIfCachesWereReleased()")
+        assertFalse(
+            "the warm must NOT be launched from the resolve job any more: the 150 ms " +
+                "debounce plus the dwell kept a held walk ahead of it",
+            resolve.contains("warmHeroLookahead(item)")
+        )
+        assertTrue(
+            "while the dwells still gate what the resolve PUBLISHES",
+            resolve.contains("delay(HERO_RESOLVE_DWELL_MS)")
+        )
+        // The focus handler is where it starts, before any debounce.
+        val screen = source(SCREEN)
+        val select = screen.substringAfter("fun selectHero(")
+            .substringBefore("fun selectContinueWatchingHero(")
+        assertTrue(
+            "the card's focus handler asks for the warm directly",
+            select.contains("viewModel.warmHeroFocus(item)")
         )
     }
 

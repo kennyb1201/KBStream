@@ -1590,14 +1590,12 @@ class HomeViewModel(
                 val resolveStartedAtMs = android.os.SystemClock.elapsedRealtime()
                 delay(HERO_RESOLVE_DWELL_MS)
 
-                // F3 (spec 2026-11-15, scrolling round two): the cards AFTER
-                // this one in its own rail, warmed at hero size into the memory
-                // cache while the viewer is still looking at this one. See
-                // [warmHeroLookahead].
-                warmHeroLookahead(item)
-                // The rail-size half: the tiles the walk will land on, warmed
-                // both ways and across the rails above and below (F3).
-                warmRailTiles(item)
+                // The near-field warms are NOT here any more (spec 2026-11-17,
+                // F1). They used to run after this dwell, which a held D-pad
+                // never survives - so the walk outran them. They fire from the
+                // focus handler instead, through [warmHeroFocus], before the
+                // debounce even starts. What stays gated by the dwell is what
+                // this job PUBLISHES.
 
                 coroutineScope {
                     val addonMetaDeferred = async {
@@ -2837,58 +2835,106 @@ Log.d(
     }
 
     /**
-     * Warms the cards AFTER [item] in its own rail, at hero size, into the memory
-     * cache (spec 2026-11-15, scrolling round two F3).
+     * The near-field warm, fired ON FOCUS (spec 2026-11-17, F1).
      *
-     * Called once per hero resolve, from inside the dwell job, for the
-     * [HERO_LOOKAHEAD_CARDS] cards that follow the focused one - the direction a
-     * rail walk travels. Bounded and polite by construction:
+     * This is what the focus handler calls the moment a card takes focus - not
+     * the hero resolve, which waits out the 150 ms debounce and then the dwell.
+     * A held D-pad steps every ~30-100 ms, so that path never reached the warm:
+     * the walk outran it and arrived on cold art, which is exactly when the jank
+     * is felt. Nothing about WHAT is warmed or what bounds it changes - only
+     * when it starts. The dwells still gate the hero's own meta/art publish.
      *
-     *  - it shares [heroArtPrefetchSemaphore] (2 permits) and
-     *    [heroArtPrefetchInFlight], so it can never hold the TMDB/OkHttp capacity
-     *    the foreground needs and never warms the same card twice;
-     *  - it is a `viewModelScope` launch of its own, NOT a child of the resolve
-     *    job: a walk step that cancels the hero resolve must not cancel the warm
-     *    it already started (that warm is for the card the walk is heading to),
-     *    and leaving Home drops it with the ViewModel;
-     *  - it touches TMDB artwork only - never MDBList, never a tracker.
+     * The 60-card metadata + disk-byte warm in [prefetchHeroArt] is unchanged,
+     * and [reWarmIfCachesWereReleased] still calls these same two directly.
+     */
+    fun warmHeroFocus(item: MetaPreview?) {
+        if (item == null) return
+        // F5: one arrival, so the paste's hit rate is read against the walk the
+        // viewer actually did rather than against the number of warms.
+        ImageLoadTrace.noteHeroFocusArrival()
+        warmHeroLookahead(item)
+        warmRailTiles(item)
+    }
+
+    /**
+     * Warms the near field around [item] at HERO size, into the memory cache
+     * (spec 2026-11-15 F3, widened by 2026-11-17 F2/F3).
      *
-     * The 60-card metadata + disk-byte warm in [prefetchHeroArt] is unchanged:
-     * this is the near field, that is the backlog.
+     * The near field is the same one [warmRailTiles] covers at rail size - the
+     * card BEFORE the focused one (a walk back), the [HERO_LOOKAHEAD_CARDS]
+     * after it, and the head card of the rail above and the rail below (a
+     * vertical move's landing card) - capped at [HERO_LOOKAHEAD_MAX_CARDS].
+     * Forward-only warming left a walk back or a vertical move paying a fresh
+     * 1280x720 decode on arrival while the rail-size tile beside it was warm.
+     *
+     * ONE `async` per card, joined, not the sequential loop this used to run: a
+     * card's cost used to be paid per card, so three cards cost three cards'
+     * latency. They now share [heroArtPrefetchSemaphore] (2 permits) - at most
+     * two run at once, the rest queue - and [heroArtPrefetchInFlight], so the
+     * same card is never warmed twice. The permit covers the decode as well as
+     * the resolve, so a focus burst cannot put six 1280x720 bitmaps in flight at
+     * once on a box with little memory to spare.
+     *
+     * It is a `viewModelScope` launch of its own, not a child of the hero
+     * resolve: a walk step that cancels the resolve must not cancel the warm
+     * (that warm is for the card the walk is heading to). It touches TMDB
+     * artwork only - never MDBList, never a tracker.
      */
     private fun warmHeroLookahead(item: MetaPreview) {
-        val rail =
-            _rails.value.firstOrNull { rail -> rail.items.any { it.id == item.id } }
-                ?: return
-        val index =
-            rail.items.indexOfFirst {
-                it.id == item.id && it.type.equals(item.type, ignoreCase = true)
-            }
+        val rails = _rails.value
+        if (rails.isEmpty()) return
+        val railIndex = rails.indexOfFirst { rail ->
+            rail.items.any { it.id == item.id && it.type.equals(item.type, ignoreCase = true) }
+        }
+        if (railIndex < 0) return
+        val rail = rails[railIndex]
+        val index = rail.items.indexOfFirst {
+            it.id == item.id && it.type.equals(item.type, ignoreCase = true)
+        }
         if (index < 0) return
-        val ahead = rail.items
-            .drop(index + 1)
+
+        val targets = buildList {
+            addAll(rail.items.drop(index + 1).take(HERO_LOOKAHEAD_CARDS))
+            if (index > 0) {
+                addAll(
+                    rail.items
+                        .subList(maxOf(0, index - HERO_LOOKAHEAD_BACK), index)
+                        .asReversed()
+                )
+            }
+            rails.getOrNull(railIndex - 1)?.items
+                ?.take(HERO_LOOKAHEAD_RAIL_HEAD)
+                ?.let { addAll(it) }
+            rails.getOrNull(railIndex + 1)?.items
+                ?.take(HERO_LOOKAHEAD_RAIL_HEAD)
+                ?.let { addAll(it) }
+        }
             .filter { it.id.isNotBlank() }
             .distinctBy { "${it.type}:${it.id}" }
-            .take(HERO_LOOKAHEAD_CARDS)
-        if (ahead.isEmpty()) return
+            .take(HERO_LOOKAHEAD_MAX_CARDS)
+        if (targets.isEmpty()) return
 
         viewModelScope.launch {
-            ahead.forEach { next ->
-                val key = "${next.type}:${next.id}"
-                if (!heroArtPrefetchInFlight.add(key)) return@forEach
-                try {
-                    val artwork = heroArtPrefetchSemaphore.withPermit {
-                        resolveHeroArtworkForPrefetch(next)
+            targets.map { next ->
+                async {
+                    val key = "${next.type}:${next.id}"
+                    if (!heroArtPrefetchInFlight.add(key)) return@async
+                    try {
+                        // The permit covers the bitmap decode too (see above):
+                        // two warms at a time is the memory ceiling, not just
+                        // the network one.
+                        heroArtPrefetchSemaphore.withPermit {
+                            warmHeroArtBitmap(resolveHeroArtworkForPrefetch(next))
+                        }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        // Best-effort: the focus path resolves it properly.
+                    } finally {
+                        heroArtPrefetchInFlight.remove(key)
                     }
-                    warmHeroArtBitmap(artwork)
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    // Best-effort: the focus path resolves it properly.
-                } finally {
-                    heroArtPrefetchInFlight.remove(key)
                 }
-            }
+            }.awaitAll()
         }
     }
 
@@ -2909,8 +2955,8 @@ Log.d(
      *    as warm as the walk forward;
      *  - the head cards of the rail above and below, because a vertical move
      *    lands on a card in a rail that has not been walked at all;
-     *  - in PARALLEL, not the sequential loop the hero warm runs, so six cards
-     *    cost one card's latency rather than six;
+     *  - in PARALLEL, like the hero warm since the 2026-11-17 spec, so six
+     *    cards cost one card's latency rather than six;
      *  - at the card's own drawn size, from [HomeRailMetrics] and the display
      *    density, so the entry written is the entry the card's AsyncImage reads
      *    (a size mismatch would warm a second, useless entry).
@@ -14022,6 +14068,26 @@ private suspend fun calculateEpisodesRemaining(
 
         /** Cards after the focused one whose hero art the lookahead warms (F3). */
         private const val HERO_LOOKAHEAD_CARDS = 3
+
+        /**
+         * The card BEFORE the focused one, warmed at hero size (spec
+         * 2026-11-17, F3): a walk back used to land on cold art because the
+         * lookahead only ever looked forward.
+         */
+        private const val HERO_LOOKAHEAD_BACK = 1
+
+        /**
+         * The head card of the rail above and of the rail below: the card a
+         * vertical move lands on (F3). One each, as the rail-tile warm does.
+         */
+        private const val HERO_LOOKAHEAD_RAIL_HEAD = 1
+
+        /**
+         * At most this many hero warms per focus event (F3): three forward,
+         * one back and one head card of each neighbouring rail. A cap rather
+         * than a coincidence - the directions add up to it.
+         */
+        private const val HERO_LOOKAHEAD_MAX_CARDS = 6
 
         /** Rail tiles warmed each way along the focused card's own rail (F3). */
         private const val RAIL_TILE_LOOKAHEAD_FORWARD = 4

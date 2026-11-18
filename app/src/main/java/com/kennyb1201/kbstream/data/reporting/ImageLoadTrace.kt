@@ -89,6 +89,16 @@ internal object ImageLoadTrace {
     private var heroWarms = 0
     private var tileWarms = 0
 
+    // F5 (spec 2026-11-17, lookahead warm-ahead): the hit RATE is the proof.
+    // `heroWarms` counts decodes the lookahead paid; it cannot say whether the
+    // walk then LANDED on them. Every focus arrival is counted, and every hero
+    // draw is counted by whether its bitmap was already in the memory cache -
+    // `hits / (hits + misses)` is the number that has to rise, and a warm the
+    // walk never reached shows up as neither.
+    private var heroFocusArrivals = 0
+    private var heroDrawHits = 0
+    private var heroDrawMisses = 0
+
     /** "WxH" -> count, first-seen order kept (LinkedHashMap). */
     private val sizes = LinkedHashMap<String, Int>()
 
@@ -125,9 +135,27 @@ internal object ImageLoadTrace {
         }
     }
 
-    /** The hero drew a backdrop (memory hit or decode - it was on screen). */
-    fun noteHeroDraw() {
-        synchronized(lock) { heroDraws++ }
+    /**
+     * The hero drew a backdrop (memory hit or decode - it was on screen).
+     *
+     * [memoryCached] is Coil's own answer for THIS draw: the bitmap came from
+     * the memory cache, so the walk arrived on art the warm had already decoded.
+     * That is F5's other half - the hit, not the warm.
+     */
+    fun noteHeroDraw(memoryCached: Boolean) {
+        synchronized(lock) {
+            heroDraws++
+            if (memoryCached) heroDrawHits++ else heroDrawMisses++
+        }
+    }
+
+    /**
+     * Focus landed on a card: the lookahead was asked to warm its near field
+     * (spec 2026-11-17, F1/F5). Counted per arrival, not per card warmed, so
+     * the rate is read against the walk the viewer actually did.
+     */
+    fun noteHeroFocusArrival() {
+        synchronized(lock) { heroFocusArrivals++ }
     }
 
     /**
@@ -175,7 +203,7 @@ internal object ImageLoadTrace {
     fun lines(): List<String> = synchronized(lock) {
         val loads = memoryHits + diskDecodes + networkDecodes + otherDecodes
         if (loads == 0 && trims.isEmpty() && heroDraws == 0 &&
-            heroWarms == 0 && tileWarms == 0
+            heroWarms == 0 && tileWarms == 0 && heroFocusArrivals == 0
         ) {
             return emptyList()
         }
@@ -200,6 +228,13 @@ internal object ImageLoadTrace {
             out += "art: heroDraws=$heroDraws heroWarms=$heroWarms " +
                 "tileWarms=$tileWarms"
         }
+        // The lookahead's own line (spec 2026-11-17, F5): focus arrivals, and
+        // of the hero draws that followed, how many were already decoded. The
+        // warms above can be healthy while the walk still lands cold; this is
+        // the one line that answers it.
+        if (heroFocusArrivals > 0 || heroDrawHits > 0 || heroDrawMisses > 0) {
+            out += heroLookaheadLine()
+        }
         if (sizes.isNotEmpty()) {
             out += "decoded at: " +
                 sizes.entries.joinToString(", ") { "${it.key} x${it.value}" }
@@ -209,6 +244,18 @@ internal object ImageLoadTrace {
                 trims.entries.joinToString(", ") { "${it.key} x${it.value}" }
         }
         out
+    }
+
+    /**
+     * The lookahead's one line: focus arrivals, hero-draw hits and misses, and
+     * the integer hit rate. No formatting or locale: `rate=80%` is the same
+     * string on every device, and an arrival with no draw yet reads 0%.
+     */
+    private fun heroLookaheadLine(): String {
+        val draws = heroDrawHits + heroDrawMisses
+        val rate = if (draws == 0) 0 else heroDrawHits * 100 / draws
+        return "hero: lookahead arrivals=$heroFocusArrivals " +
+            "hits=$heroDrawHits misses=$heroDrawMisses rate=$rate%"
     }
 
     /** Clears the counters (tests). */
@@ -223,6 +270,9 @@ internal object ImageLoadTrace {
             heroDraws = 0
             heroWarms = 0
             tileWarms = 0
+            heroFocusArrivals = 0
+            heroDrawHits = 0
+            heroDrawMisses = 0
             sizes.clear()
             trims.clear()
         }

@@ -87,7 +87,13 @@ class RecompositionCounterWiringContractTest {
         assertTrue(
             "the draw, not the decode: this fires for a memory hit too, which is " +
                 "exactly what `heroDecodes` cannot show",
-            art.contains("onSuccess = { ImageLoadTrace.noteHeroDraw() }")
+            art.contains("onSuccess = { state ->") &&
+                art.contains("ImageLoadTrace.noteHeroDraw(")
+        )
+        assertTrue(
+            "and Coil's own answer says whether the walk landed on a warm bitmap " +
+                "(spec 2026-11-17, F5) - the hit rate, not just the draw count",
+            art.contains("coil3.decode.DataSource.MEMORY_CACHE")
         )
     }
 

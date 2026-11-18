@@ -1325,7 +1325,14 @@ private fun HeroBackdropArt(url: String?) {
         // whether a 1280x720 decode was this draw, Detail's, Actor's, or a warm
         // that was never displayed. Fires for a memory hit too: the question is
         // what the hero had to draw, not what it had to decode.
-        onSuccess = { ImageLoadTrace.noteHeroDraw() }
+        // F5 (spec 2026-11-17): Coil's own answer for this draw, so the paste
+        // can say whether the walk landed on art the lookahead had decoded or
+        // paid a fresh one. A memory hit is a warm the walk actually reached.
+        onSuccess = { state ->
+            ImageLoadTrace.noteHeroDraw(
+                state.result.dataSource == coil3.decode.DataSource.MEMORY_CACHE
+            )
+        }
     )
 }
 
@@ -6424,6 +6431,11 @@ fun HomeScreen(
         focusedFolder = null
         focusedContinueWatchingItem = null
         focusedBrowseShortcut = null
+        // The near-field warm starts HERE (spec 2026-11-17, F1) - on the focus
+        // event, before the 150 ms resolve debounce. It used to start inside
+        // the resolve, after that debounce and its own dwell, which a held
+        // D-pad never survives; the walk then outran the warm and landed cold.
+        viewModel.warmHeroFocus(item)
     }
 
     /**
