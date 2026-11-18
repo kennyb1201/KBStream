@@ -2,9 +2,11 @@ package com.kennyb1201.kbstream.ui.player
 
 import android.content.Context
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.widget.TextView
 import androidx.core.content.ContextCompat
+import androidx.core.content.res.ResourcesCompat
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 
@@ -25,7 +27,7 @@ import com.kennyb1201.kbstream.ui.theme.themeAccentColor
  * the framework does not recognise gets `drawDefaultFocusHighlight`, and
  * `View.draw()` paints that highlight at step 7 - AFTER `onDrawForeground` (step
  * 6), which is where a foreground ring lives. So the system's light rounded rect
- * covered the fill and drew over the 2dp ring, which is both symptoms at once.
+ * covered the fill and drew over the ring, which is both symptoms at once.
  * The chip now turns that highlight off at its source (the layout, plus the
  * adapter's bind) - a foreground ring was the right half of the first fix, one
  * draw step short of the whole.
@@ -50,8 +52,39 @@ internal object SeasonChipStyle {
     /** The chip's 10dp corner - KBShapeChip's radius, which every chip wears. */
     private const val CORNER_DP = 10f
 
-    /** The episode rows' own focus weight (picker_item_bg's state_focused). */
-    private const val RING_DP = 2f
+    /**
+     * The TARGET chip's ring (spec 2026-11-17, F2).
+     *
+     * 3dp, not the episode rows' 2dp: the field has now read a 2dp ring as "no
+     * ring" three times, and this chip's whole job is to say which season the
+     * D-pad is about to open - a mark that has to be visible from a sofa, next
+     * to a chip that is already accent-filled.
+     */
+    private const val RING_DP = 3f
+
+    /**
+     * How much the target chip grows (spec 2026-11-17, F2).
+     *
+     * Read through the adapter's reveal, which asks this much room around the
+     * measured chip: a chip drawn 5% wider than it measures would otherwise have
+     * the ring this whole change is about clipped at the strip's edge.
+     */
+    internal const val FOCUS_SCALE = 1.05f
+
+    /**
+     * The chip's label weight in each state (spec 2026-11-17, F2).
+     *
+     * Bold for the target, the chip's own medium cut otherwise: bold is the third
+     * mark that has to survive the theme walk (which rebuilds the chip's fill and
+     * could hide a ring in it), and it is the one that reads at TV distance
+     * whatever the panel's contrast does.
+     */
+    internal fun labelFontRes(focused: Boolean): Int =
+        if (focused) R.font.inter_bold else R.font.inter_medium
+
+    private fun typefaceFor(context: Context, focused: Boolean): Typeface =
+        ResourcesCompat.getFont(context, labelFontRes(focused))
+            ?: Typeface.create(Typeface.DEFAULT, if (focused) Typeface.BOLD else Typeface.NORMAL)
 
     fun apply(chip: TextView, selected: Boolean, focused: Boolean) {
         val context = chip.context
@@ -64,11 +97,18 @@ internal object SeasonChipStyle {
                 else -> ContextCompat.getColor(context, R.color.kb_text_lo)
             }
         )
+        // The target's other two marks (spec 2026-11-17, F2). Both are reset in
+        // the same call that sets them, so a recycled or re-bound chip cannot
+        // keep a bold label or a grown frame from the focus it used to have.
+        chip.typeface = typefaceFor(context, focused)
+        val scale = if (focused) FOCUS_SCALE else 1f
+        chip.scaleX = scale
+        chip.scaleY = scale
         chip.background = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = CORNER_DP * density
             setColor(fill)
-            // Kept as well as the foreground ring: this is the same 2dp stroke in
+            // Kept as well as the foreground ring: this is the same 3dp stroke in
             // the same place, so the two coincide exactly and neither looks like a
             // second outline. A background stroke is the chip's own, drawn on the
             // chip it belongs to - the walk replacing the background with a
@@ -91,7 +131,7 @@ internal object SeasonChipStyle {
     }
 
     /**
-     * The focused chip's ring: the 2dp stroke, and nothing else.
+     * The focused chip's ring: the 3dp stroke, and nothing else.
      *
      * Its colour comes from [ringFor], i.e. from the fill it will sit on: the
      * accent on the dark unselected chips, and the contrasting extreme on an
@@ -100,7 +140,7 @@ internal object SeasonChipStyle {
     fun ring(context: Context, selected: Boolean): GradientDrawable =
         outline(context, ringFor(context, fillFor(context, selected, focused = true)))
 
-    /** The 2dp outline in [color], transparent inside - the chip's own ring. */
+    /** The 3dp outline in [color], transparent inside - the chip's own ring. */
     private fun outline(context: Context, color: Int): GradientDrawable {
         val density = context.resources.displayMetrics.density
         return GradientDrawable().apply {

@@ -91,8 +91,10 @@ class SeasonChipFocusHighlightContractTest {
             adapter.contains("restyle(chip.isFocused)")
         )
         assertTrue(
-            "and a focus change runs it again",
-            adapter.contains("chip.setOnFocusChangeListener { _, focused -> restyle(focused) }")
+            "and a focus change runs it again (and, on a gain, reveals the chip - " +
+                "spec 2026-11-17, F3)",
+            adapter.contains("chip.setOnFocusChangeListener { _, focused ->") &&
+                adapter.contains("restyle(focused)")
         )
         assertTrue(
             "THE RING IS THE D-PAD'S (the F1(e) rule): a touch keeps the chip " +

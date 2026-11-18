@@ -12802,6 +12802,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      */
     private fun bindEpisodeSeasonPoster() {
         val view = pickerSeasonPoster ?: return
+        // THE DETAIL SEASON POSTER'S SIZE (spec 2026-11-17, F1). The layout's
+        // 84dp is the television's; a phone narrows it to 72dp, which XML
+        // cannot ask because the form factor is a runtime answer. Applied here
+        // rather than at findViewById so the poster cannot be bound at one size
+        // and measured at another - and so both engines reach the same number
+        // through PlayerEpisodePicker rather than each carrying its own.
+        val posterWidth = PlayerEpisodePicker.seasonPosterWidthPx(this)
+        if (view.layoutParams.width != posterWidth) {
+            view.layoutParams = view.layoutParams.apply { width = posterWidth }
+        }
         val url = episodePickerPosterUrl
         if (url.isNullOrBlank()) {
             view.visibility = View.GONE

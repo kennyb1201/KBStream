@@ -81,21 +81,51 @@ class SeasonChipStyleTest {
         assertNotSame("the walk replaces the drawable with a copy", original, copy)
         assertEquals("the copy keeps the ring's width", before.first, stroke(copy).first)
         assertEquals("and its colour", before.second, stroke(copy).second)
-        assertTrue("a ring of 2dp is what the chip is drawn with", before.first > 0)
+        assertTrue("a stroke is what the chip is drawn with", before.first > 0)
     }
 
     // ── F2: the ring the chip actually wears ──────────────────────────────
 
     @Test
-    fun `the focused ring is a 2dp accent outline on an unselected chip`() {
+    fun `the focused ring is a 3dp accent outline on an unselected chip`() {
         moveTheme()
         val ring = SeasonChipStyle.ring(context, selected = false)
         val density = context.resources.displayMetrics.density
 
         val (width, color) = stroke(ring)
-        assertEquals((2 * density).toInt().coerceAtLeast(1), width)
+        assertEquals((3 * density).toInt().coerceAtLeast(1), width)
         assertEquals("the accent, so it reads on the near-black surface", themeAccentColor(context), color)
         assertTrue("the ring draws the outline only, over the fill", transparentFill(ring))
+    }
+
+    @Test
+    fun `the target chip grows and goes bold, and gives both back when focus leaves`() {
+        // Spec 2026-11-17, F2: a 2dp ring was read as no ring three times in the
+        // field, so the focused chip carries three marks at once. The ring is
+        // pinned above; these are the other two, set by the same call that draws
+        // it, so a bind cannot deliver one without the others.
+        val chip = TextView(context)
+        chip.id = R.id.picker_season_chip
+
+        SeasonChipStyle.apply(chip, selected = false, focused = true)
+        assertEquals("the target grows", SeasonChipStyle.FOCUS_SCALE, chip.scaleX, 0.001f)
+        assertEquals("in both axes", SeasonChipStyle.FOCUS_SCALE, chip.scaleY, 0.001f)
+        assertEquals(
+            "on the bold cut",
+            R.font.inter_bold,
+            SeasonChipStyle.labelFontRes(focused = true)
+        )
+        assertNotNull("and the cut is actually applied to the label", chip.typeface)
+
+        SeasonChipStyle.apply(chip, selected = false, focused = false)
+        assertEquals("a plain chip is its measured size", 1f, chip.scaleX, 0.001f)
+        assertEquals("in both axes", 1f, chip.scaleY, 0.001f)
+        assertEquals(
+            "and reads in the chip's own medium cut again - a re-bound chip keeps " +
+                "neither of the target's marks",
+            R.font.inter_medium,
+            SeasonChipStyle.labelFontRes(focused = false)
+        )
     }
 
     @Test

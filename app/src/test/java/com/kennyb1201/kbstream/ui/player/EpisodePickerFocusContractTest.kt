@@ -52,9 +52,9 @@ class EpisodePickerFocusContractTest {
             strip.contains("focused && !chip.isInTouchMode")
         )
         assertTrue(
-            "the 2dp ring itself is untouched - the bug was never the ring (it lives " +
-                "in SeasonChipStyle since spec 2026-11-15, still 2dp)",
-            chipStyle.contains("RING_DP = 2f") && chipStyle.contains("(RING_DP * density).toInt()")
+            "the ring itself is untouched - the bug was never the ring (it lives " +
+                "in SeasonChipStyle since spec 2026-11-15, and 3dp since 2026-11-17)",
+            chipStyle.contains("RING_DP = 3f") && chipStyle.contains("(RING_DP * density).toInt()")
         )
         assertTrue(
             "and a tap cannot leave it behind: the ring is put on the chip's " +

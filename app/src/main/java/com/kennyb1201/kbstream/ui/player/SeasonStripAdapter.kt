@@ -19,10 +19,21 @@ import com.kennyb1201.kbstream.R
  * strip is one word wide, not the still-plus-overview shape of an episode row.
  *
  * The selected chip takes the accent, the way a selected row's label does; a
- * focused chip ALWAYS wears a 2dp ring - the accent on an unselected chip, and
+ * focused chip ALWAYS wears a 3dp ring - the accent on an unselected chip, and
  * kb_text_hi on the selected one, where an accent ring would vanish into the
  * fill - so the D-pad's position is never in doubt, including on the season the
  * list is already showing.
+ *
+ * THE TARGET HAS TO BE UNMISTAKABLE (spec 2026-11-17, F2). A ring alone was read
+ * as "no ring" three times in the field, and the two chips it has to be told
+ * apart from are both neighbours: the selected one (accent fill) and the plain
+ * ones. So the focused chip now carries three marks at once - the 3dp ring, a
+ * bold label and a slight scale-up - and the strip keeps it whole at the panel's
+ * edge ([reveal]), because a half-cut chip is a season the viewer cannot read.
+ *
+ * The POSTER NEVER FOLLOWS FOCUS (spec 2026-11-17, F4): it shows the season the
+ * episode list is showing, so the two cannot disagree. [PlayerEpisodePicker.seasonStrip]'s
+ * selected chip is that season; the strip is what carries the target.
  */
 class SeasonStripAdapter(
     items: List<PickerItem>
@@ -48,7 +59,7 @@ class SeasonStripAdapter(
         // THE FRAMEWORK'S OWN FOCUS HIGHLIGHT IS OFF, AND THAT IS THE FIX (spec
         // 2026-11-15, second attempt). View.draw() paints it at step 7, after the
         // foreground (step 6) - so on a focused chip it covered both the accent
-        // fill and the 2dp ring this adapter sets, which is the field's white pill
+        // fill and the ring this adapter sets, which is the field's white pill
         // with no outline. Set in the layout as well; set here so a layout edit
         // cannot quietly bring the white pill back.
         view.findViewById<TextView>(R.id.picker_season_chip)
@@ -83,7 +94,15 @@ class SeasonStripAdapter(
             chip.foreground = if (dpad) SeasonChipStyle.ring(chip.context, item.isSelected) else null
         }
         restyle(chip.isFocused)
-        chip.setOnFocusChangeListener { _, focused -> restyle(focused) }
+        chip.setOnFocusChangeListener { _, focused ->
+            restyle(focused)
+            // THE TARGET STAYS WHOLE (spec 2026-11-17, F3). Focus search on a
+            // RecyclerView scrolls a child just far enough to TOUCH the viewport
+            // edge, which leaves half a chip under the panel's border: the season
+            // the viewer was about to pick, unreadable. Posted so the chip is
+            // laid out at its final position before the strip is asked to move.
+            if (focused) holder.itemView.post { reveal(holder) }
+        }
         // The focused view is the CHIP, not the root, and a center press calls
         // performClick() on the focused view - so the listener has to sit on the
         // chip or OK would do nothing on a focused chip (spec 2026-11-14,
@@ -146,6 +165,36 @@ class SeasonStripAdapter(
                 ?.requestFocus()
         }
         return true
+    }
+
+    /**
+     * Scrolls the strip the least it can to show the focused chip whole
+     * (spec 2026-11-17, F3).
+     *
+     * The arithmetic is [SeasonStripReveal]'s, so both the "how far" and the
+     * "does it fit at all" answers are testable without a window.
+     */
+    private fun reveal(holder: ViewHolder) {
+        val strip = holder.itemView.parent as? RecyclerView ?: return
+        val child = holder.itemView
+        // A post runs after the D-pad may have moved on, and after a recycle may
+        // have handed this view to another season: a chip that is no longer the
+        // focused one must not be scrolled to.
+        if (!child.hasFocus()) return
+        if (child.width <= 0 || strip.width <= 0) return
+        // The chip is DRAWN 5% larger than it measures (SeasonChipStyle.FOCUS_SCALE),
+        // so the room it needs is the grown chip's - the ring is the point of the
+        // focus state and it must not be the part left under the edge.
+        val grow = ((child.width * (SeasonChipStyle.FOCUS_SCALE - 1f)) / 2f).toInt()
+        // The chip's own left/right are already in the strip's coordinates, which
+        // start at its left edge.
+        val dx = SeasonStripReveal.dx(
+            childLeft = child.left - grow,
+            childRight = child.right + grow,
+            viewportLeft = 0,
+            viewportRight = strip.width
+        )
+        if (dx != 0) strip.scrollBy(dx, 0)
     }
 
     /** True when a chip this adapter owns currently holds the D-pad. */

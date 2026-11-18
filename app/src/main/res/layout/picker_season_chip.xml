@@ -10,7 +10,7 @@
      THE PLATFORM MUST NOT DRAW ITS OWN FOCUS HIGHLIGHT (spec 2026-11-15, second
      attempt). defaultFocusHighlightEnabled defaults to true on API 26+, and
      View.draw() paints that highlight at step 7 - after the foreground, which is
-     where this chip's 2dp ring lives. A focused chip therefore got a light
+     where this chip's ring lives. A focused chip therefore got a light
      rounded rect from the system over its fill and over its ring: the field's
      "the pill is WHITE and there is no outline", from a code path that can draw
      neither white nor nothing. The ring below is the chip's own; the framework's

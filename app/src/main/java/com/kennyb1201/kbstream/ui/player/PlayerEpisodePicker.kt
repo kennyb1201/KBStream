@@ -1,10 +1,12 @@
 package com.kennyb1201.kbstream.ui.player
 
+import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tvdb.shownEpisode
 import com.kennyb1201.kbstream.data.tvdb.shownSeason
 import com.kennyb1201.kbstream.ui.detail.formatEpisodeAirDate
 import com.kennyb1201.kbstream.ui.detail.isEpisodeUnavailable
+import kotlin.math.roundToInt
 
 /**
  * Builds the in-player episode picker's rows, once for both engines.
@@ -105,6 +107,28 @@ internal object PlayerEpisodePicker {
                 season = wanted,
                 wantFullSize = false
             )
+    }
+
+    /** The Detail season poster's width on a television (spec 2026-11-17, F1). */
+    internal const val TV_SEASON_POSTER_DP = 84
+
+    /** ...and on a phone, where the same row is drawn smaller. */
+    internal const val PHONE_SEASON_POSTER_DP = 72
+
+    /**
+     * The panel's season poster width, in pixels (spec 2026-11-17, F1).
+     *
+     * The Detail season posters' two sizes, because this poster does the same
+     * job Detail's row does: it says which season the episodes below belong to.
+     * The panel gave each engine its own size instead (120dp on MPV, 96dp on
+     * Native) - both of them bigger than the Detail row with the same meaning,
+     * and both taking that height out of the episode list - and they disagreed
+     * with each other on top of it. One number for both engines, chosen here
+     * where the form factor is known and XML is not.
+     */
+    fun seasonPosterWidthPx(context: android.content.Context): Int {
+        val dp = if (FormFactor.isTv) TV_SEASON_POSTER_DP else PHONE_SEASON_POSTER_DP
+        return (dp * context.resources.displayMetrics.density).roundToInt()
     }
 
     /**

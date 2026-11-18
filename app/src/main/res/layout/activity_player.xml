@@ -327,10 +327,16 @@
         <!-- The selected season's own poster (spec 2026-11-13, F3): under the
              strip, above the rows. GONE whenever the season has no poster of
              its own - a season request answers season art or nothing, never
-             the show's poster. -->
+             the show's poster.
+
+             The Detail season poster's own size (spec 2026-11-17, F1): it does
+             the same job, so it no longer takes a bigger bite of the panel than
+             the row that means the same thing - 84dp here, and the activity
+             narrows it to 72dp on a phone, where XML cannot ask the form factor
+             (PlayerEpisodePicker.seasonPosterWidthPx). -->
         <ImageView
             android:id="@+id/picker_season_poster"
-            android:layout_width="96dp"
+            android:layout_width="84dp"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
             android:adjustViewBounds="true"

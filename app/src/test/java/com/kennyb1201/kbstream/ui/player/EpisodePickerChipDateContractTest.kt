@@ -14,7 +14,7 @@ import org.junit.Test
  *  - the selected season chip showed NOTHING when focused, because the stroke
  *    was `focused && !selected` at 1dp - so the common landing (scrolling up
  *    onto the season already loaded) changed nothing, and 1dp read as nothing
- *    from a sofa. A focused chip now always wears a 2dp ring, in the colour that
+ *    from a sofa. A focused chip now always wears a 3dp ring, in the colour that
  *    reads on its own fill;
  *  - the air date was in the row's data and never drawn, because the label was
  *    built from the episode id and the name only. The date is its own view
@@ -33,7 +33,7 @@ class EpisodePickerChipDateContractTest {
     // ── F1: the chip's ring ─────────────────────────────────────────────
 
     @Test
-    fun `a focused chip always wears a 2dp ring, selected or not`() {
+    fun `a focused chip always wears a 3dp ring, selected or not`() {
         // The style moved out of the adapter into SeasonChipStyle (spec
         // 2026-11-15): the ring is now the chip's foreground as well as its
         // background stroke, and it has to be buildable without a RecyclerView.
@@ -48,8 +48,9 @@ class EpisodePickerChipDateContractTest {
             style.contains("focused && !selected")
         )
         assertTrue(
-            "2dp, the weight the episode rows' own focus state uses",
-            chipStyle.contains("RING_DP = 2f") && style.contains("(RING_DP * density).toInt()")
+            "3dp since the target-strip fix (spec 2026-11-17, F2) - a 2dp ring " +
+                "was read as no ring three times in the field",
+            chipStyle.contains("RING_DP = 3f") && style.contains("(RING_DP * density).toInt()")
         )
         assertFalse("1dp is what was invisible", style.contains("(1 * density).toInt()"))
     }
