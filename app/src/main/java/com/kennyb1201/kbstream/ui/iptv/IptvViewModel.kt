@@ -1131,6 +1131,24 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     private val gridWindowReads = LinkedHashSet<String>()
 
     /**
+     * The playlist [guideChannelIndex] was built from, and the map itself.
+     *
+     * Spec 2026-11-18, Guide/Sports F2. Resolving a window's ids used to be
+     * `playlist.channels.firstOrNull { it.id == id }` per requested id, in the
+     * caller's own body - i.e. on Main, once per visible-index change during a
+     * fling, over playlists that run to five figures. The grid's already-read set
+     * makes the repeats cheap AFTER that filter; the filter itself re-ran every
+     * time.
+     *
+     * Keyed on the playlist's IDENTITY: the list is an immutable data class and
+     * every mutation (a reload, a merge, an import) replaces the instance, so
+     * identity is a sufficient version. Built lazily on the first window after a
+     * change, never per request.
+     */
+    private var guideIndexSource: IptvPlaylist? = null
+    private var guideChannelIndex: Map<String, IptvChannel> = emptyMap()
+
+    /**
      * Reads the grid window for [channelIds] (the rows on screen plus a page of
      * lookahead), skipping any (channel, window) pair already read.
      *
@@ -1139,6 +1157,25 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      * `PROGRAM_QUERY_BATCH_SIZE` channel ids, so the grid's parallelism is row
      * paging and the EPG query budget is the list's own (F1a, F1d).
      */
+    /**
+     * [playlist]'s channels by id, built once per playlist instance (F2).
+     *
+     * `@Synchronized` because the map is replaced, not mutated: a window request
+     * on the main thread and a later one can both arrive while it is being built,
+     * and a half-filled map would drop a row from a window.
+     */
+    @Synchronized
+    private fun channelIndexFor(playlist: IptvPlaylist): Map<String, IptvChannel> {
+        if (guideIndexSource === playlist) return guideChannelIndex
+        val built = HashMap<String, IptvChannel>(playlist.channels.size * 2)
+        playlist.channels.forEach { channel ->
+            if (channel.id !in built) built[channel.id] = channel
+        }
+        guideIndexSource = playlist
+        guideChannelIndex = built
+        return built
+    }
+
     fun requestGuideGridWindow(
         channelIds: List<String>,
         windowStart: Long,
@@ -1154,9 +1191,13 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         if (channelIds.isEmpty() || windowEnd <= windowStart) return
 
         val hiddenIds = _hiddenChannelIds.value
+        // A map lookup per id, not a scan per id (F2). The map keeps the FIRST
+        // channel per id, exactly the row `firstOrNull` used to answer with, so
+        // a playlist that names an id twice still resolves to the same row.
+        val byId = channelIndexFor(playlist)
         val wanted = channelIds.asSequence()
             .distinct()
-            .mapNotNull { id -> playlist.channels.firstOrNull { it.id == id } }
+            .mapNotNull { id -> byId[id] }
             .filter { it.id !in hiddenIds }
             .take(MAX_GUIDE_CHANNELS_PER_REQUEST)
             .toList()

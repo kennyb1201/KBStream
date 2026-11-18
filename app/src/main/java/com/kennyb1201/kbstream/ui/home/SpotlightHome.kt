@@ -370,6 +370,10 @@ internal fun SpotlightHeroSection(
         // does (spec 2026-11-17, F1): Detail presses its own Play on arrival.
         onPlay = { page -> onPlay(page.preview) },
         onDetails = { page -> onDetails(page.preview) },
+        // The billboard's own art warm on every page turn (spec 2026-11-18,
+        // Billboard Warm F2) - the TV Home has no focused rail card at the top,
+        // so the focus warm never fired here.
+        onWarmNextPageArt = viewModel::warmBillboardArt,
         // F4's signal, and F6's UP chain: both belong to the pill group, so the
         // billboard reports the first and asks the second.
         onPillFocusChange = onPillFocusChange,

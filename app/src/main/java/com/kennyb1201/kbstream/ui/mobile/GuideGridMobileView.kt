@@ -33,6 +33,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.ContentScale
@@ -47,6 +49,8 @@ import com.kennyb1201.kbstream.ui.iptv.GridCellScore
 import com.kennyb1201.kbstream.ui.iptv.GridProgram
 import com.kennyb1201.kbstream.ui.iptv.GridWindow
 import com.kennyb1201.kbstream.ui.iptv.GuideGrid
+import com.kennyb1201.kbstream.ui.components.WarmRowAhead
+import com.kennyb1201.kbstream.ui.iptv.GuideRowCellMemo
 import com.kennyb1201.kbstream.ui.iptv.GuideRowGuideState
 import com.kennyb1201.kbstream.ui.iptv.GuideScore
 import com.kennyb1201.kbstream.ui.iptv.GRID_SCALE_DP_PER_MIN
@@ -59,7 +63,6 @@ import com.kennyb1201.kbstream.ui.iptv.gridContentWidthDp
 import com.kennyb1201.kbstream.ui.iptv.hourMarks
 import com.kennyb1201.kbstream.ui.iptv.scoreFor
 import com.kennyb1201.kbstream.ui.iptv.liveFillFraction
-import com.kennyb1201.kbstream.ui.iptv.rowCells
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
@@ -154,9 +157,14 @@ internal fun GuideGridMobileView(
         timeScroll.scrollTo(0)
     }
 
+    // Memoised per channel, the same cache the TV grid uses (spec 2026-11-18,
+    // Warm-ahead F5): the window page answer republishes programsByChannel, which
+    // keys this remember, so without the per-channel memo a page landing rebuilt
+    // every channel's cells for the whole lineup - the phone's version of the
+    // whole-lineup rebuild the TV grid stopped doing (dig four §2b).
     val rows = remember(items, programsByChannel, window) {
         items.map { item ->
-            item to rowCells(
+            item to GuideRowCellMemo.cells(
                 channelKey = item.channel.id,
                 programs = programsByChannel[item.channel.id].orEmpty(),
                 window = window,
@@ -211,6 +219,24 @@ internal fun GuideGridMobileView(
                         }
                     }
                 }
+            }
+        }
+
+        // The next channels' logos, decoded before the scroll reaches them
+        // (spec 2026-11-18, Warm-ahead F5): the same 20dp the mark is drawn at
+        // inside its plate, which is what the TV grid warms - warming the plate
+        // would be a bitmap the cell never asks for.
+        val logoDensity = LocalDensity.current
+        WarmRowAhead(
+            state = listState,
+            count = rows.size,
+            sizePx = with(logoDensity) {
+                val side = 20.dp.roundToPx()
+                IntSize(side, side)
+            }
+        ) { index ->
+            rows.getOrNull(index)?.first?.let { row ->
+                row.channel.logoUrl ?: row.epgChannel?.iconUrl
             }
         }
 

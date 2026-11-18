@@ -45,6 +45,8 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import androidx.compose.animation.core.tween
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
+import com.kennyb1201.kbstream.ui.components.LandscapeArtRequest
+import com.kennyb1201.kbstream.ui.components.PrefetchLandscapeAhead
 import com.kennyb1201.kbstream.ui.components.WarmGridAhead
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KB_ART_FADE_MS
@@ -498,13 +500,40 @@ fun CatalogGridScreen(
                 // Coil for the same bitmap. `peek` never triggers a page load:
                 // a placeholder has no url and warms nothing.
                 val densityNow = LocalDensity.current
-                WarmGridAhead(
-                    state = gridState,
-                    count = lazyItems.itemCount,
-                    sizePx = with(densityNow) {
-                        IntSize(tileWidth.roundToPx(), tileHeight.roundToPx())
-                    }
-                ) { index -> lazyItems.peek(index)?.poster }
+                if (!landscape) {
+                    WarmGridAhead(
+                        state = gridState,
+                        count = lazyItems.itemCount,
+                        sizePx = with(densityNow) {
+                            IntSize(tileWidth.roundToPx(), tileHeight.roundToPx())
+                        }
+                    ) { index -> lazyItems.peek(index)?.poster }
+                } else {
+                    // Landscape Posters ON: the cell draws a resolved TMDB
+                    // backdrop, not the poster, so the poster warm above files a
+                    // bitmap the card never asks for (spec 2026-11-18, Warm-ahead
+                    // F4). The phone grid already prefetched its landscape
+                    // answers; this is the same walk on the same tiles, keyed the
+                    // way this grid keys its own cells.
+                    PrefetchLandscapeAhead(
+                        state = gridState,
+                        entries = (0 until lazyItems.itemCount).map { index ->
+                            val meta = lazyItems.peek(index)
+                            val key = if (meta != null) {
+                                "${meta.type}:${meta.id}#$index"
+                            } else {
+                                "placeholder#$index"
+                            }
+                            key to meta?.let {
+                                LandscapeArtRequest(
+                                    id = meta.id,
+                                    type = meta.type,
+                                    addonBackdrop = meta.background
+                                )
+                            }
+                        }
+                    )
+                }
 
                 LazyVerticalGrid(
                     state = gridState,

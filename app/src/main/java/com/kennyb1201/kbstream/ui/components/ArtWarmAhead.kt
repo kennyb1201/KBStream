@@ -289,18 +289,43 @@ internal fun PrefetchLandscapeAhead(
     state: LazyGridState,
     entries: List<Pair<String, LandscapeArtRequest?>>,
     ahead: Int = WARM_AHEAD_CELLS
+) = PrefetchLandscapeWalk(entries, ahead) {
+    state.layoutInfo.visibleItemsInfo.lastOrNull()?.key as? String
+}
+
+/**
+ * The same window for a horizontal RAIL (a `LazyRow`), added for spec
+ * 2026-11-18 Warm-ahead F6: Home's rails are LazyRows, and the landscape half of
+ * their warm was unreachable because the walk above takes a grid state.
+ *
+ * It is the same walk on the same keys - not a second implementation of the
+ * rule - so a rail and a grid prefetch identically.
+ */
+@Composable
+internal fun PrefetchLandscapeAhead(
+    state: LazyListState,
+    entries: List<Pair<String, LandscapeArtRequest?>>,
+    ahead: Int = WARM_AHEAD_CELLS
+) = PrefetchLandscapeWalk(entries, ahead) {
+    state.layoutInfo.visibleItemsInfo.lastOrNull()?.key as? String
+}
+
+/** The window both overloads share: the next [ahead] keys after the last laid out one. */
+@Composable
+private fun PrefetchLandscapeWalk(
+    entries: List<Pair<String, LandscapeArtRequest?>>,
+    ahead: Int,
+    lastKey: () -> String?
 ) {
     val context = LocalContext.current
-    LaunchedEffect(state, entries, ahead) {
+    LaunchedEffect(entries, ahead) {
         val requests = entries.associate { it.first to it.second }
         val order = entries.map { it.first }
-        snapshotFlow {
-            (state.layoutInfo.visibleItemsInfo.lastOrNull()?.key as? String)
-        }
+        snapshotFlow { lastKey() }
             .distinctUntilChanged()
-            .collect { lastKey ->
-                if (lastKey == null) return@collect
-                val position = order.indexOf(lastKey)
+            .collect { key ->
+                if (key == null) return@collect
+                val position = order.indexOf(key)
                 if (position < 0) return@collect
                 val next = order.drop(position + 1).take(ahead).mapNotNull { requests[it] }
                 if (next.isEmpty()) return@collect

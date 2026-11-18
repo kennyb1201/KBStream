@@ -410,7 +410,13 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         // of its own, so the sheet draws the card it already has rather than
         // spending a request that can only come back 400 (spec 2026-11-13 F2).
         if (SportsLeagues.byPath(leaguePath)?.isTheSportsDb == true) return
-        _detailSummary.value = espn.gameSummary(leaguePath, eventId)
+        // And the SAME rule as the beat above (spec 2026-11-18, Guide/Sports F1):
+        // this rides refreshDetailSummary, which the beat calls, and gameSummary
+        // parses the summary JSON on its caller - so fetching on IO and parsing
+        // back on Main was the other half of the per-beat parse cost.
+        _detailSummary.value = withContext(Dispatchers.IO) {
+            espn.gameSummary(leaguePath, eventId)
+        }
     }
 
     private val _isLoading = MutableStateFlow(true)
@@ -1244,11 +1250,26 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         favoritesOnly: Boolean = false,
         favoriteKeys: Set<String> = emptySet(),
     ): Boolean {
-        val fresh = HashMap<String, LeagueSection>()
-        paths.forEach { path ->
-            val league = SportsLeagues.byPath(path) ?: return@forEach
-            val previous = _sections.value.firstOrNull { it.league.path == path }
-            fresh[path] = fetchSection(league, previous)
+        // OFF THE MAIN THREAD (spec 2026-11-18, Guide/Sports F1).
+        //
+        // The beat calls this from a viewModelScope.launch, so every fetch AND
+        // its JSON parse landed on Main - and the repository's `fetch` only
+        // switches to IO for the network itself, so `parseScoreboardOrNull`
+        // (plus the FCS carry-over windows, which can be two or three parses for
+        // college football) ran on the frame thread every ~30 s while a game was
+        // live. The 60 s TTL means roughly every other beat re-parsed.
+        //
+        // Same shape as [fetchSections], which has always done its initial load
+        // this way. Only the dispatcher moves: the cadence, the TTLs, the
+        // no-republish guard and the merge below are untouched (F3).
+        val fresh = withContext(Dispatchers.IO) {
+            val sections = HashMap<String, LeagueSection>()
+            paths.forEach { path ->
+                val league = SportsLeagues.byPath(path) ?: return@forEach
+                val previous = _sections.value.firstOrNull { it.league.path == path }
+                sections[path] = fetchSection(league, previous)
+            }
+            sections
         }
         if (fresh.isEmpty()) return false
         val updated = _sections.value.map { fresh[it.league.path] ?: it }

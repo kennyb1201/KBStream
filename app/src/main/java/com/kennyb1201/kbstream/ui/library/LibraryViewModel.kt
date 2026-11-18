@@ -1027,11 +1027,22 @@ class LibraryViewModel(
             // a "Loading…" placeholder — which is also what made an
             // "Add to Library" look like it had done nothing when this tab
             // was opened right after adding.
-            val localItems = LocalLibraryStore.myList(appContext)
-            val localLists = LocalLibraryStore.userLists(appContext)
-            val localListItems = localLists
-                .filter { it.source.isLocalList }
-                .flatMap { LocalLibraryStore.listItems(appContext, it.id) }
+            // OFF THE MAIN THREAD (spec 2026-11-18, Library F1). This is the
+            // local half: every stored list is read and JSON-parsed here, and
+            // the phone calls refresh() on EVERY visit - so on the main thread
+            // the entry stuttered in proportion to the library's size. The
+            // store's own parse cache means a re-entry with nothing written
+            // since does not parse at all (S3).
+            val (localItems, localLists, localListItems) = withContext(Dispatchers.IO) {
+                val lists = LocalLibraryStore.userLists(appContext)
+                Triple(
+                    LocalLibraryStore.myList(appContext),
+                    lists,
+                    lists
+                        .filter { it.source.isLocalList }
+                        .flatMap { LocalLibraryStore.listItems(appContext, it.id) }
+                )
+            }
             localListFlatCache = localListItems
             canonicalLocal = localItems
             canonicalAll = mergeAllSources(
@@ -1041,7 +1052,9 @@ class LibraryViewModel(
                 loading = false,
                 lists = localLists + _uiState.value.lists.filter { !it.source.isLocalList }
             )
-            pushDisplay()
+            // The local half changed, and ALL is merged from it - the other two
+            // are exactly as they were (spec 2026-11-18, Library F2).
+            pushDisplay(setOf(DisplaySection.ALL, DisplaySection.LOCAL))
 
             val simklConnected =
                 simklRepository.isConfigured() && simklRepository.hasToken()
@@ -1478,7 +1491,12 @@ class LibraryViewModel(
                 bingecatConnected = bingecatReady,
                 bingecatNeedsReconnect = bingecatRepository.needsReconnect()
             )
-            pushDisplay()
+            // The remote watchlist arrived, so ALL and WATCHLIST changed, and
+            // this refresh re-derived the OPEN list's rows too (LS-P2-17, just
+            // above) - the local one did not (spec 2026-11-18, Library F2).
+            pushDisplay(
+                setOf(DisplaySection.ALL, DisplaySection.WATCHLIST, DisplaySection.SELECTED)
+            )
 
             // Enrichment pass: kids filter + ratings + watched badges.
             // canonicalAll is the superset (local + watchlist + local lists).
@@ -1716,7 +1734,10 @@ class LibraryViewModel(
             if (version != requestVersion) return@launch
             canonicalListItems = items
             _uiState.value = _uiState.value.copy(listLoading = false)
-            pushDisplay()
+            // Only the pane that just loaded - and only ALL as well when the
+            // list opened is a LOCAL one, whose rows it also carries
+            // (spec 2026-11-18, Library F2).
+            pushDisplay(sectionsTouching(items))
             enrich(items, version)
         }
     }
@@ -2208,14 +2229,27 @@ class LibraryViewModel(
                 row.partiallyWatched?.let { partiallyWatchedKeys += it }
             }
 
-            _uiState.value = _uiState.value.copy(
-                ratings = ratings,
-                posters = posters,
-                years = years,
-                watchedKeys = watchedKeys,
-                partiallyWatchedKeys = partiallyWatchedKeys
+            // A map that reads the same is the SAME map (spec 2026-11-18,
+            // Library F2). Every card reads `ratings` and `watchedKeys`
+            // (`LibraryScreen`'s own line, and the phone's), so handing the grid
+            // a fresh instance for an unchanged map recomposes the rows that
+            // read it for no new information - which is most of an enrichment
+            // landing mid-scroll.
+            val current = _uiState.value
+            _uiState.value = current.copy(
+                ratings = if (ratings == current.ratings) current.ratings else ratings,
+                posters = if (posters == current.posters) current.posters else posters,
+                years = if (years == current.years) current.years else years,
+                watchedKeys =
+                    if (watchedKeys == current.watchedKeys) current.watchedKeys else watchedKeys,
+                partiallyWatchedKeys = if (partiallyWatchedKeys == current.partiallyWatchedKeys) {
+                    current.partiallyWatchedKeys
+                } else {
+                    partiallyWatchedKeys
+                }
             )
-            pushDisplay()
+            // Only the lists that hold a row from this batch (F2).
+            pushDisplay(sectionsTouching(items))
         }
     }
 
@@ -2244,11 +2278,27 @@ class LibraryViewModel(
     }
 
     /**
-     * Rebuilds every display list from the canonical rows: sort + kids
+     * The display lists [pushDisplay] can rebuild, one per canonical source.
+     *
+     * Spec 2026-11-18, Library F2. A publish used to rebuild all four on every
+     * call, so an enrichment that touched only the open personal list re-sorted
+     * and re-applied the maps to three lists whose rows had not changed - new
+     * list identity for the grid, which is a recomposition (and a placement
+     * animation pass) over rows nobody had touched.
+     */
+    internal enum class DisplaySection { ALL, LOCAL, WATCHLIST, SELECTED }
+
+    /**
+     * Rebuilds the requested display lists from the canonical rows: sort + kids
      * filter + UNWATCHED toggle in one place, so toggling filters never
      * loses rows and enrichment updates stay consistent everywhere.
+     *
+     * [sections] defaults to all four, which is the answer everywhere a write can
+     * have changed any row (filters, toggles, local mutations). The publish paths
+     * that KNOW only one list's rows moved pass the narrow set - see the
+     * enrichment publish and [com.kennyb1201.kbstream.data.library.LibraryModels].
      */
-    private fun pushDisplay() {
+    private fun pushDisplay(sections: Set<DisplaySection> = ALL_SECTIONS) {
         val state = _uiState.value
         val sort = state.sort
         val ascending = state.sortAscending
@@ -2263,40 +2313,58 @@ class LibraryViewModel(
         val taste = TasteSignals.snapshot(getApplication())
         // Years are applied BEFORE the sort: the DATE chip orders on the row's
         // own year, so a backfilled one has to be on the row the sort reads.
-        _uiState.value = state.copy(
-            allItems = applyUnwatched(
-                applyPosters(
-                    sortItems(applyYears(canonicalAll, years), sort, ratings, ascending, taste),
-                    posters
-                ),
-                watched,
-                hide
+        fun rebuild(rows: List<LibraryItem>): List<LibraryItem> = applyUnwatched(
+            applyPosters(
+                sortItems(applyYears(rows, years), sort, ratings, ascending, taste),
+                posters
             ),
-            localItems = applyUnwatched(
-                applyPosters(
-                    sortItems(applyYears(canonicalLocal, years), sort, ratings, ascending, taste),
-                    posters
-                ),
-                watched,
-                hide
-            ),
-            watchlistItems = applyUnwatched(
-                applyPosters(
-                    sortItems(applyYears(canonicalWatchlist, years), sort, ratings, ascending, taste),
-                    posters
-                ),
-                watched,
-                hide
-            ),
-            selectedListItems = applyUnwatched(
-                applyPosters(
-                    sortItems(applyYears(canonicalListItems, years), sort, ratings, ascending, taste),
-                    posters
-                ),
-                watched,
-                hide
-            )
+            watched,
+            hide
         )
+        // The untouched lists keep the value they already had, so they keep
+        // their IDENTITY too - that is what lets the grid skip the rows whose
+        // data did not move (F2, and the maps above are passed through as-is).
+        _uiState.value = state.copy(
+            allItems = if (DisplaySection.ALL in sections) rebuild(canonicalAll) else state.allItems,
+            localItems =
+                if (DisplaySection.LOCAL in sections) rebuild(canonicalLocal) else state.localItems,
+            watchlistItems =
+                if (DisplaySection.WATCHLIST in sections) {
+                    rebuild(canonicalWatchlist)
+                } else {
+                    state.watchlistItems
+                },
+            selectedListItems =
+                if (DisplaySection.SELECTED in sections) {
+                    rebuild(canonicalListItems)
+                } else {
+                    state.selectedListItems
+                }
+        )
+    }
+
+    /**
+     * The sections whose rows intersect [enriched], by the store's own dedupe key.
+     *
+     * Spec 2026-11-18, Library F2: an enrichment is a batch of ROWS, so the lists
+     * that need rebuilding are exactly the ones that hold at least one of them.
+     * Enriching the open personal list therefore leaves ALL alone unless one of
+     * those rows is also in it, and enriching `canonicalAll` (which every list
+     * contributes to) rebuilds all four - the two cases the spec names.
+     *
+     * Set lookups only: no sort, no map rebuild, so deciding this costs one pass
+     * over the canonical rows rather than a rebuild of each list.
+     */
+    private fun sectionsTouching(enriched: Collection<LibraryItem>): Set<DisplaySection> {
+        if (enriched.isEmpty()) return emptySet()
+        val keys = enriched.mapTo(HashSet()) { LocalLibraryStore.dedupeKey(it) }
+        fun touched(rows: List<LibraryItem>) = rows.any { LocalLibraryStore.dedupeKey(it) in keys }
+        return buildSet {
+            if (touched(canonicalAll)) add(DisplaySection.ALL)
+            if (touched(canonicalLocal)) add(DisplaySection.LOCAL)
+            if (touched(canonicalWatchlist)) add(DisplaySection.WATCHLIST)
+            if (touched(canonicalListItems)) add(DisplaySection.SELECTED)
+        }
     }
 
     /**
@@ -2326,19 +2394,29 @@ class LibraryViewModel(
      */
     private fun recomputeAll() {
         val appContext = getApplication<Application>()
-        localListFlatCache = _uiState.value.lists
-            .filter { it.source.isLocalList }
-            .flatMap { LocalLibraryStore.listItems(appContext, it.id) }
-        val merged = mergeAllSources(
-            listOf(canonicalLocal, canonicalWatchlist, localListFlatCache)
-        )
+        val localLists = _uiState.value.lists.filter { it.source.isLocalList }
+        val local = canonicalLocal
+        val watchlist = canonicalWatchlist
         // THE CEILING HOLDS HERE TOO (spec audit 2026-11-18, Library H1): this
         // rebuild runs after every local add/remove and used to write the merged
         // rows straight into ALL, so one removal was enough to re-expose
         // over-ceiling titles until the next full refresh. Off the main thread
         // because the filter reads certifications; the publish follows it.
+        //
+        // The per-list PARSE moved into that same hop (spec 2026-11-18, Library
+        // F1): it ran on main before the launch, so every add/remove re-read
+        // every local list in front of the press that made it.
         viewModelScope.launch {
-            canonicalAll = kidsFiltered(merged)
+            val flat = withContext(Dispatchers.IO) {
+                localLists.flatMap { LocalLibraryStore.listItems(appContext, it.id) }
+            }
+            localListFlatCache = flat
+            canonicalAll = kidsFiltered(mergeAllSources(listOf(local, watchlist, flat)))
+            // EVERY section, not just ALL: the callers of this are mutations, and
+            // a mutation can move more than one canonical - a removal clears the
+            // local twin AND the watchlist copy (LS-P2-12), and a list edit
+            // rewrites the open pane. Narrowing a publish belongs to the paths
+            // that KNOW exactly which rows moved (F2); this one does not.
             pushDisplay()
         }
     }
@@ -2367,6 +2445,9 @@ class LibraryViewModel(
     ): List<LibraryItem> = sortLibraryItems(items, sort, ratings, ascending, taste)
 
     companion object {
+        /** Every section: the default, and what a mutation of all rows asks for. */
+        private val ALL_SECTIONS: Set<DisplaySection> = DisplaySection.values().toSet()
+
         private const val TAG = "LIBRARY"
 
         /**

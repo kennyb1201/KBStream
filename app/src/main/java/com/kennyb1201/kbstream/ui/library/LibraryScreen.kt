@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -87,6 +88,8 @@ import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
+import com.kennyb1201.kbstream.ui.components.TrackFocusSteps
+import com.kennyb1201.kbstream.ui.components.TrackScrollFrames
 import com.kennyb1201.kbstream.ui.components.LandscapeArtRequest
 import com.kennyb1201.kbstream.ui.components.PrefetchLandscapeAhead
 import com.kennyb1201.kbstream.ui.components.WarmGridAhead
@@ -1374,6 +1377,17 @@ private fun ItemGrid(
     // detail page says why instead of swallowing the press.
     val feedback = rememberKBFeedback()
 
+    // The TV Library's frame line (spec 2026-11-18, F2). The phone's Library has
+    // written one since scrolling dig five; the TV's never did, so the Library
+    // H1/H2 proofs had nothing to be confirmed against. The grid's own state for
+    // the fling, and the card step for a walk - a D-pad step inside a grid brings
+    // the next row into view through the same path the phone's drag does, but on
+    // a grid already showing the target that is no scroll at all, so the walk
+    // needs its own trigger (see [TrackFocusSteps]).
+    TrackScrollFrames(label = "library", state = gridState)
+    var walkStep by remember { mutableStateOf<String?>(null) }
+    TrackFocusSteps(label = "library", step = { walkStep })
+
     if (items.isEmpty()) {
         // The app's ONE status card, not a bare centered line: every browse
         // screen says "nothing here" with this plate, and the Library's empty
@@ -1548,6 +1562,10 @@ private fun ItemGrid(
                     // mid-placement is still the same node.
                     .animateItem()
                     .focusRequester(cardRequester)
+                    // The walk's trigger: the key of the poster the D-pad just
+                    // landed on (see [TrackFocusSteps]). Read inside a
+                    // snapshotFlow, so this write composes nothing.
+                    .onFocusChanged { if (it.isFocused) walkStep = cardKey }
                     .then(
                         if (isReturnItem) {
                             Modifier.focusRequester(returnFocusRequester)
@@ -1617,8 +1635,25 @@ private fun ListsPane(
     // exactly the field they always had.
     var createSource by remember { mutableStateOf(LibrarySource.LOCAL_LIST) }
 
+    // The LISTS view's frame line (spec 2026-11-18, F2 follow-up). The pane's
+    // item grid writes one through [ItemGrid]; the lists rail beside it is a
+    // LazyColumn of its own and wrote none, so a fling down the rail - the first
+    // thing a LISTS view does - was invisible to the meter while every other
+    // Library scroll was measured. The rail's state is hoisted for exactly this
+    // reason: `TrackScrollFrames` needs the state the list already owns, never a
+    // second one.
+    //
+    // The SAME "library" label, because it is the same screen and the paste
+    // reads one line per surface. Two meters under one label are what
+    // [com.kennyb1201.kbstream.data.reporting.UiFrameTrace.begin] is written for:
+    // the newest gesture wins the session, and the one it displaces is finished
+    // and kept rather than dropped.
+    val listsRailState = rememberLazyListState()
+    TrackScrollFrames(label = "library", state = listsRailState)
+
     Row(modifier = Modifier.fillMaxSize()) {
         RailListColumn(
+            state = listsRailState,
             // Room at both ends, INSIDE the clip, for a focused row's grown
             // edge and glow: at scroll 0 the first row's drawn top is
             // `padding - overhang`, and no landing can give it that room - the
@@ -1890,6 +1925,11 @@ private fun ListsPane(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RailListColumn(
+    // Hoisted so the frame meter can watch the rail it draws (see the LISTS
+    // pane's `TrackScrollFrames`). The state is the one the column would have
+    // made for itself - a plain [rememberLazyListState] at the call site - so
+    // nothing about the rail's scrolling changes here.
+    state: LazyListState,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
     content: LazyListScope.() -> Unit
@@ -1909,6 +1949,7 @@ private fun RailListColumn(
     }
     CompositionLocalProvider(LocalBringIntoViewSpec provides rowBringIntoViewSpec) {
         LazyColumn(
+            state = state,
             verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = contentPadding,
             modifier = modifier,

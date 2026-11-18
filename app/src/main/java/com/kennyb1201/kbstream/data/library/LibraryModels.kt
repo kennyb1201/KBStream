@@ -456,6 +456,23 @@ object LocalLibraryStore {
      */
     private val lastGood = java.util.concurrent.ConcurrentHashMap<String, Any>()
 
+    /**
+     * The last parse of each stored blob, keyed by [cacheKey], with the RAW text
+     * it came from (spec 2026-11-18, Library F1).
+     *
+     * The phone calls `refresh()` on every Library visit, and that path reads and
+     * `JSONArray`-parsed every local list - so re-entering the tab re-parsed a
+     * library that had not changed at all, on the main thread. The stored text IS
+     * the version: a write changes it, so a matching raw string means nothing has
+     * been written since the last parse and the parsed rows can be served as-is.
+     *
+     * The map keeps at most one entry per stored key (my list, the lists blob,
+     * and one per local list), and holds the same rows [lastGood] does - it is a
+     * parsed-value cache, never a second source of truth.
+     */
+    private val lastParsed =
+        java.util.concurrent.ConcurrentHashMap<String, Pair<String, List<LibraryItem>>>()
+
     private fun cacheKey(context: Context, key: String): String =
         "${ProfileStorage.prefsName(context, BASE_NAME)}::$key"
 
@@ -525,6 +542,13 @@ object LocalLibraryStore {
 
     private fun readListOrNull(context: Context, key: String): MutableList<LibraryItem>? {
         val raw = prefs(context).getString(key, null) ?: return mutableListOf()
+        val storeKey = cacheKey(context, key)
+        // Unchanged since the last parse: no JSONArray, no per-row rebuild
+        // (spec 2026-11-18, Library F1/S3). The copy keeps the caller's
+        // read-modify-write habit from touching the cached rows.
+        lastParsed[storeKey]?.let { (shown, rows) ->
+            if (shown == raw) return rows.toMutableList()
+        }
         val parsed = runCatching {
             val arr = JSONArray(raw)
             (0 until arr.length()).mapNotNull { i ->
@@ -539,7 +563,8 @@ object LocalLibraryStore {
             )
             return null
         }
-        lastGood[cacheKey(context, key)] = parsed
+        lastGood[storeKey] = parsed
+        lastParsed[storeKey] = raw to parsed
         return parsed.toMutableList()
     }
 

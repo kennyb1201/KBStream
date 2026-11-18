@@ -31,10 +31,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
@@ -58,6 +62,7 @@ import com.kennyb1201.kbstream.ui.components.VoiceSearchChip
 import com.kennyb1201.kbstream.ui.components.voiceSearchAvailable
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
+import com.kennyb1201.kbstream.ui.components.WarmRowAhead
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusCard
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
@@ -361,14 +366,55 @@ internal val SEARCH_RAIL_EDGE_PADDING = KBScreenEdge
  * the tiles line up with the heading above them and the focused poster's border
  * and glow still have somewhere to grow.
  */
+/**
+ * What a rail needs to warm itself (spec 2026-11-18, Warm-ahead F2).
+ *
+ * The caller knows its items, so it names them; the rail owns the window. Kept
+ * to these two values because the warm is a POSTER decode - a landscape tile
+ * draws resolved TMDB art instead, which is why the Titles rail next to these
+ * carries the same portrait-only guard (see SearchRail's body).
+ */
+internal class RailWarm(
+    val count: Int,
+    val urlAt: (Int) -> String?
+)
+
 @Composable
 internal fun SearchRail(
     title: String,
     // Hoisted so a rail can be put back on the tile a drill-down was opened
     // from (see SearchReturnFocus); every other rail keeps its own.
     state: LazyListState = rememberIdleLazyListState(),
+    /**
+     * The next [WARM_AHEAD_CELLS] posters, decoded before the D-pad reaches them
+     * (spec 2026-11-18, Warm-ahead F2). Every search rail used to compose cold:
+     * only the Titles rail warmed ahead, so a held D-pad down an add-on, actor,
+     * studio, collection or keyword rail showed blank-then-pop cards while the
+     * rail beside it walked smooth. Null keeps a rail cold, for a caller whose
+     * items have no poster to warm.
+     */
+    warm: RailWarm? = null,
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit
 ) {
+    if (warm != null && warm.count > 0) {
+        // The same guard, window and size the Titles rail uses - that rail's own
+        // warm is what these were missing parity with.
+        val railLandscape = AppPreferences.landscapePostersActive(LocalContext.current)
+        if (!railLandscape) {
+            val railPosterSize = rememberPosterSize()
+            val railDensity = LocalDensity.current
+            WarmRowAhead(
+                state = state,
+                count = warm.count,
+                sizePx = with(railDensity) {
+                    IntSize(
+                        railPosterSize.width.roundToPx(),
+                        railPosterSize.height.roundToPx()
+                    )
+                }
+            ) { index -> warm.urlAt(index) }
+        }
+    }
     Column {
         KBSectionHeader(title = title)
         LazyRow(

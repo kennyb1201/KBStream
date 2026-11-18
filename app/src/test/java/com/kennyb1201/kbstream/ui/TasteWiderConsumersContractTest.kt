@@ -84,11 +84,17 @@ class TasteWiderConsumersContractTest {
             "read once per rebuild, not once per view",
             push.contains("val taste = TasteSignals.snapshot(getApplication())")
         )
+        // One shared builder since Library F2 (spec 2026-11-18): the four views
+        // used to carry four copies of the same chain, and a publish now builds
+        // only the sections whose rows moved - but "every view sorts with the
+        // snapshot" is now true BY CONSTRUCTION, so the pin checks the shape
+        // that guarantees it: one chain, four callers.
         assertTrue(
             "and every one of the four views sorts with it",
-            Regex("sortItems\\(applyYears\\(canonical\\w+, years\\), sort, ratings, ascending, taste\\)")
-                .findAll(push)
-                .count() == 4
+            push.contains(
+                "sortItems(applyYears(rows, years), sort, ratings, ascending, taste)"
+            ) &&
+                Regex("rebuild\\(canonical\\w+\\)").findAll(push).count() == 4
         )
         assertTrue(
             "the sort entry point passes it through with an empty default",

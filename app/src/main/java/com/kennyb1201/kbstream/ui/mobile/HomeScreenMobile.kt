@@ -777,7 +777,10 @@ fun HomeScreenMobile(
                             // handler does the resolving. Nothing here chooses a
                             // stream, an episode or a source (F1).
                             onPlay = { page -> onBillboardPlay(page.preview) },
-                            onDetails = { page -> onItemClick(page.preview) }
+                            onDetails = { page -> onItemClick(page.preview) },
+                            // The billboard's own art warm on every page turn
+                            // (spec 2026-11-18, Billboard Warm F2).
+                            onWarmNextPageArt = viewModel::warmBillboardArt
                         )
                     }
                 }
@@ -1176,6 +1179,32 @@ fun HomeScreenMobile(
                                                 )
                                             }
                                         ) { index -> rail.items.getOrNull(index)?.poster }
+                                    } else {
+                                        // Landscape Posters ON (spec 2026-11-18,
+                                        // Warm-ahead F6): the card draws a resolved
+                                        // backdrop + clearlogo, so the poster warm
+                                        // above would file a bitmap the card never
+                                        // reads. Keyed exactly as this LazyRow keys
+                                        // its cells, so the walk lands on the keys
+                                        // the row actually lays out.
+                                        com.kennyb1201.kbstream.ui.components
+                                            .PrefetchLandscapeAhead(
+                                                state = railRowState,
+                                                entries = rail.items.map { meta ->
+                                                    // The row's OWN key, character for
+                                                    // character: the warm walks the
+                                                    // laid-out keys, so an extra
+                                                    // suffix would match nothing and
+                                                    // warm nothing.
+                                                    "${meta.type}:${meta.id}:${rail.catalogId}" to
+                                                        com.kennyb1201.kbstream.ui.components
+                                                            .LandscapeArtRequest(
+                                                                id = meta.id,
+                                                                type = meta.type,
+                                                                addonBackdrop = meta.background
+                                                            )
+                                                }
+                                            )
                                     }
 
                                     LazyRow(
@@ -2536,7 +2565,22 @@ internal fun MobileBillboard(
      */
     onPillUpPressed: (() -> Unit)? = null,
     onPlay: (BillboardPage) -> Unit,
-    onDetails: (BillboardPage) -> Unit
+    onDetails: (BillboardPage) -> Unit,
+    /**
+     * Warms the NEXT page's art at the size this surface draws (spec 2026-11-18,
+     * Billboard Warm F2).
+     *
+     * Called on every settled page - a cycle tick, a swipe, a chevron or a
+     * segment press all arrive here, because all of them move
+     * `pagerState.settledPage`. The URL handed over is the page's RESOLVED
+     * backdrop, so a page still resolving hands over null and nothing is warmed
+     * (see `HomeViewModel.warmBillboardArt`).
+     *
+     * A callback rather than the view model itself: this composable is drawn by
+     * both surfaces, and the TV one already carries its own view model - the
+     * same shape every other side effect on this surface takes.
+     */
+    onWarmNextPageArt: (String?) -> Unit = {}
 ) {
     if (pages.isEmpty()) return
 
@@ -3074,6 +3118,14 @@ internal fun MobileBillboard(
     // included - is what should NOT be in front of it. Its own effect, so the
     // token warm above is never held behind it.
     val nextPage = pages.getOrNull((pagerState.settledPage + 1) % pages.size.coerceAtLeast(1))
+    // And that page's ART, at the size this surface draws (spec 2026-11-18,
+    // Billboard Warm F2): the turn is what pays the decode today, and it is a
+    // full hero-size one because nothing warmed this bitmap before. Keyed on the
+    // resolved url, so a page whose backdrop lands later warms then - the same
+    // settle effect re-runs when the url changes, which is why it is a key.
+    LaunchedEffect(pagerState.settledPage, nextPage?.backdropUrl) {
+        onWarmNextPageArt(nextPage?.backdropUrl)
+    }
     LaunchedEffect(pagerState.settledPage, nextPage?.imdbId, nextPage?.tmdbId, nextPageWarm) {
         if (!nextPageWarm) return@LaunchedEffect
         runCatchingCancellable {

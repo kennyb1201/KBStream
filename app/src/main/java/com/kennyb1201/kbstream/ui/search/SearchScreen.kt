@@ -946,7 +946,13 @@ fun SearchScreen(
                                 showAddon = showRailAddon,
                                 hiddenByCap = group.hiddenByCap
                             ),
-                            state = addonRailState
+                            state = addonRailState,
+                            // Warm-ahead F2: an add-on rail composes cold
+                            // otherwise - up to 40 tiles, each decoding on first
+                            // sight while the Titles rail above walked warm.
+                            warm = RailWarm(group.results.size) { index ->
+                                group.results.getOrNull(index)?.poster
+                            }
                         ) {
                             itemsIndexed(
                                 items = group.results,
@@ -1133,7 +1139,17 @@ fun SearchScreen(
                                 0
                             }
                     )
-                    SearchRail(title = "Collections", state = collectionsRailState) {
+                    SearchRail(
+                        title = "Collections",
+                        state = collectionsRailState,
+                        // Warm-ahead F2. The tile draws w500, so the warm asks for
+                        // the same bucket - a different width would decode into a
+                        // cache entry the card never reads.
+                        warm = RailWarm(collectionResults.size) { index ->
+                            collectionResults.getOrNull(index)?.posterPath
+                                ?.let { "https://image.tmdb.org/t/p/w500$it" }
+                        }
+                    ) {
                         itemsIndexed(
                             items = collectionResults,
                             key = { _, collection: TmdbSearchCollectionResult ->

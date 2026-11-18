@@ -88,6 +88,23 @@ object UiFrameTrace {
     /** Whether a session is running - the scroll surface's own question. */
     fun isRunning(): Boolean = active != null
 
+    /** Whether the running session (if any) is [label]'s. */
+    fun isRunning(label: String): Boolean = active?.label == label
+
+    /**
+     * Ends the running session only if it is [label]'s.
+     *
+     * A COMPOSABLE'S OWN session ends on its own gesture's stop signal, so it
+     * must not close another surface's - see [
+     * com.kennyb1201.kbstream.ui.components.TrackFocusSteps], whose settle timer
+     * fires after its last step and could otherwise end a scroll that started in
+     * the meantime.
+     */
+    fun endIf(label: String) {
+        if (active?.label != label) return
+        end()
+    }
+
     /** One line per surface that has scrolled this session; empty before that. */
     fun lines(): List<String> = synchronized(entries) { entries.toList() }
 

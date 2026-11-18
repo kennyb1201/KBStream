@@ -34,6 +34,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
+import com.kennyb1201.kbstream.ui.components.TrackFocusSteps
 import com.kennyb1201.kbstream.ui.components.TrackScrollFrames
 import com.kennyb1201.kbstream.ui.components.rememberIdleLazyListState
 import kotlin.math.abs
@@ -5739,6 +5740,14 @@ fun HomeScreen(
     // a paste could not measure (2026-11-17). Same "home" label as the phone, so a
     // paste from either reads the same.
     TrackScrollFrames(label = "home", state = railListState)
+    // ...and the walk (spec 2026-11-18, F1). A D-pad left/right step inside a
+    // rail scrolls THAT rail's own LazyRow, so `railListState` above - the
+    // vertical column - never flips and the meter above never opened a session.
+    // The step is the trigger instead: every card that takes focus publishes its
+    // requester here (see the rails' onFocusedCard), so a walk is one session
+    // held open across its steps. Same label and same line shape as the column's
+    // scroll, which is what makes the two numbers comparable.
+    TrackFocusSteps(label = "home", step = { focusedCardRequester })
 
     // ...and the position is put back into the ViewModel as the viewer scrolls,
     // so the seed above is current. A snapshot flow rather than a state read in
@@ -6457,6 +6466,11 @@ fun HomeScreen(
         focusedFolder = null
         focusedContinueWatchingItem = upNextItem
         focusedBrowseShortcut = null
+        // The near-field warm starts on the focus event here too (spec
+        // 2026-11-18, Warm-ahead F1): this hero was the one surface that never
+        // asked for it, so its stills decoded on arrival - and a held D-pad down
+        // Continue Watching never outran anything, because nothing was warmed.
+        viewModel.warmHeroFocus(item)
     }
 
     // Re-apply rail display settings changed in Settings while we were away

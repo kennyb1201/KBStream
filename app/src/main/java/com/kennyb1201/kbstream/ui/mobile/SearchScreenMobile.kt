@@ -42,9 +42,11 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -818,7 +820,13 @@ fun SearchScreenMobile(
                             isLoadingMore = titlesLoadingMore,
                             onLoadMore = viewModel::loadMoreTitles
                         )
-                        MobileSearchRail(title = "Titles", state = titlesRailState) {
+                        MobileSearchRail(
+                            title = "Titles",
+                            state = titlesRailState,
+                            warm = com.kennyb1201.kbstream.ui.search.RailWarm(results.size) { index ->
+                                results.getOrNull(index)?.poster
+                            }
+                        ) {
                             items(
                                 results,
                                 key = { result: SearchTitleResult ->
@@ -910,7 +918,10 @@ fun SearchScreenMobile(
                                     showType = showRailType,
                                     showAddon = showRailAddon,
                                     hiddenByCap = group.hiddenByCap
-                                )
+                                ),
+                                warm = com.kennyb1201.kbstream.ui.search.RailWarm(
+                                    group.results.size
+                                ) { index -> group.results.getOrNull(index)?.poster }
                             ) {
                                 items(
                                     group.results,
@@ -993,7 +1004,15 @@ fun SearchScreenMobile(
 
                 if (!isLoading && collectionResults.isNotEmpty()) {
                     item(key = "collections_rail") {
-                        MobileSearchRail(title = "Collections") {
+                        MobileSearchRail(
+                            title = "Collections",
+                            warm = com.kennyb1201.kbstream.ui.search.RailWarm(
+                                collectionResults.size
+                            ) { index ->
+                                collectionResults.getOrNull(index)?.posterPath
+                                    ?.let { "https://image.tmdb.org/t/p/w500$it" }
+                            }
+                        ) {
                             items(
                                 collectionResults,
                                 key = { collection: TmdbSearchCollectionResult ->
@@ -1244,8 +1263,31 @@ private fun MobileSearchRail(
     // Hoisted only where the row's end has to be watched (the Titles rail, for
     // its next page); every other rail lets the row make its own.
     state: LazyListState = rememberIdleLazyListState(),
+    /**
+     * The next cards' posters, decoded before the fling reaches them (spec
+     * 2026-11-18, Warm-ahead F3). No rail on this screen warmed at all, so every
+     * fling met blank tiles that filled in a frame later. Null keeps a rail cold
+     * (actors, studios and keywords draw no poster art).
+     */
+    warm: com.kennyb1201.kbstream.ui.search.RailWarm? = null,
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit
 ) {
+    if (warm != null && warm.count > 0) {
+        // Portrait only, matching the TV Titles rail: a landscape tile draws
+        // resolved TMDB art, which a poster decode cannot stand in for.
+        val railLandscape = rememberGlobalLandscape()
+        if (!railLandscape) {
+            val railPoster = rememberTouchPosterSize()
+            val railDensity = LocalDensity.current
+            com.kennyb1201.kbstream.ui.components.WarmRowAhead(
+                state = state,
+                count = warm.count,
+                sizePx = with(railDensity) {
+                    IntSize(railPoster.width.roundToPx(), railPoster.height.roundToPx())
+                }
+            ) { index -> warm.urlAt(index) }
+        }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         MobileSectionHeading(title)
         LazyRow(
