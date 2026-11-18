@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Search
@@ -51,6 +50,7 @@ import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.heroSourceElement
 import com.kennyb1201.kbstream.ui.components.KBTextField
+import com.kennyb1201.kbstream.ui.components.rememberIdleLazyListState
 import com.kennyb1201.kbstream.ui.components.ART_TYPE_COLLECTION
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.rememberLongPressModifier
@@ -366,7 +366,7 @@ internal fun SearchRail(
     title: String,
     // Hoisted so a rail can be put back on the tile a drill-down was opened
     // from (see SearchReturnFocus); every other rail keeps its own.
-    state: LazyListState = rememberLazyListState(),
+    state: LazyListState = rememberIdleLazyListState(),
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit
 ) {
     Column {

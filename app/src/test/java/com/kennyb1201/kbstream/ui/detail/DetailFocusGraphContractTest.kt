@@ -215,7 +215,9 @@ class DetailFocusGraphContractTest {
                 "column happened to be composed",
             detail.contains("fun railStateFor(rowKey: String): LazyListState? = when (rowKey)") &&
                 detail.contains("REVIEWS_ROW_KEY -> reviewsRowState") &&
-                detail.contains("val reviewsRowState = rememberLazyListState()")
+                // Every row state carries the idle pre-composition window now
+                // (spec 2026-11-18, F4); the mapping is what this pin is about.
+                detail.contains("val reviewsRowState = rememberIdleLazyListState()")
         )
         assertTrue(
             "and the review rail itself is scrolled by it",

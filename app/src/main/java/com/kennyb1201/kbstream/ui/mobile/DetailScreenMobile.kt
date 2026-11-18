@@ -27,7 +27,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -137,6 +136,7 @@ import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRail
 import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.rememberIdleLazyListState
 import com.kennyb1201.kbstream.ui.components.touch.TouchChoiceChip
 import com.kennyb1201.kbstream.ui.components.touch.TouchLinkChip
 import com.kennyb1201.kbstream.ui.components.WarmRowAhead
@@ -1739,6 +1739,10 @@ fun DetailScreenMobile(
 
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
+                // The page is the longest list on the phone and had no state at
+                // all, so scrolling into its lower half paid every section's
+                // first composition on the landing frame (spec 2026-11-18, F4).
+                state = rememberIdleLazyListState(),
                 contentPadding = PaddingValues(bottom = 28.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp)
             ) {
@@ -2070,6 +2074,7 @@ fun DetailScreenMobile(
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (tmdbGenres.isNotEmpty()) {
                                 LazyRow(
+                                    state = rememberIdleLazyListState(),
                                     contentPadding = PaddingValues(horizontal = 16.dp),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
@@ -2089,6 +2094,7 @@ fun DetailScreenMobile(
                             }
                             if (keywords.isNotEmpty()) {
                                 LazyRow(
+                                    state = rememberIdleLazyListState(),
                                     contentPadding = PaddingValues(horizontal = 16.dp),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
@@ -2152,6 +2158,7 @@ fun DetailScreenMobile(
                     // menu - the same row the TV page draws, touch-sized.
                     item(key = "seasons") {
                         LazyRow(
+                            state = rememberIdleLazyListState(),
                             contentPadding = PaddingValues(horizontal = 16.dp),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
@@ -2383,7 +2390,7 @@ fun DetailScreenMobile(
                         val castRow = remember(cast) {
                             cast.distinctBy { it.id to it.character.orEmpty() }.take(20)
                         }
-                        val castRowState = rememberLazyListState()
+                        val castRowState = rememberIdleLazyListState()
                         val castDensity = LocalDensity.current
                         WarmRowAhead(
                             state = castRowState,
@@ -2441,6 +2448,7 @@ fun DetailScreenMobile(
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             MobileSectionTitle("Networks")
                             LazyRow(
+                                state = rememberIdleLazyListState(),
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
@@ -2467,6 +2475,7 @@ fun DetailScreenMobile(
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             MobileSectionTitle("Production")
                             LazyRow(
+                                state = rememberIdleLazyListState(),
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
@@ -2513,6 +2522,7 @@ fun DetailScreenMobile(
                                 collection?.name ?: "Collection"
                             )
                             LazyRow(
+                                state = rememberIdleLazyListState(),
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
@@ -2574,6 +2584,7 @@ fun DetailScreenMobile(
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             MobileSectionTitle("More Like This")
                             LazyRow(
+                                state = rememberIdleLazyListState(),
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
@@ -2613,6 +2624,7 @@ fun DetailScreenMobile(
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             MobileSectionTitle("Reviews")
                             LazyRow(
+                                state = rememberIdleLazyListState(),
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
@@ -2639,6 +2651,7 @@ fun DetailScreenMobile(
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             MobileSectionTitle("Media")
                             LazyRow(
+                                state = rememberIdleLazyListState(),
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
@@ -2658,7 +2671,7 @@ fun DetailScreenMobile(
                             // landscape thumb is drawn at. A PORTRAIT card in the
                             // same strip draws at 120x180 instead, so it is
                             // skipped rather than warmed at the wrong size.
-                            val mediaRowState = rememberLazyListState()
+                            val mediaRowState = rememberIdleLazyListState()
                             val mediaDensity = LocalDensity.current
                             WarmRowAhead(
                                 state = mediaRowState,

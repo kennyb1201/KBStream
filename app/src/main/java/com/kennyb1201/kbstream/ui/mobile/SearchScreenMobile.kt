@@ -22,7 +22,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
@@ -64,6 +63,7 @@ import com.kennyb1201.kbstream.ui.components.KBSkeletonRail
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.VoiceSearchChip
+import com.kennyb1201.kbstream.ui.components.rememberIdleLazyListState
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
 import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscape
@@ -159,7 +159,7 @@ fun SearchScreenMobile(
     // Hoisted by MainActivity so Back from a result returns to the same place.
     // The same LazyListState the TV column uses - the two are never on screen
     // together, so one scroll record is enough.
-    listState: LazyListState = rememberLazyListState(),
+    listState: LazyListState = rememberIdleLazyListState(),
     viewModel: SearchViewModel = viewModel()
 ) {
     MobileTheme {
@@ -810,7 +810,7 @@ fun SearchScreenMobile(
                         // A page that failed is not retried by the sentinel -
                         // the tail's TRY AGAIN is the retry - so hasMore is
                         // false to it while the error stands.
-                        val titlesRailState = rememberLazyListState()
+                        val titlesRailState = rememberIdleLazyListState()
                         InfiniteScrollEffect(
                             listState = titlesRailState,
                             itemCount = results.size,
@@ -1243,7 +1243,7 @@ private fun MobileSearchRail(
     title: String,
     // Hoisted only where the row's end has to be watched (the Titles rail, for
     // its next page); every other rail lets the row make its own.
-    state: LazyListState = rememberLazyListState(),
+    state: LazyListState = rememberIdleLazyListState(),
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

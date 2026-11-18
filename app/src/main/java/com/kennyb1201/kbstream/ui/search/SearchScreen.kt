@@ -15,7 +15,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -619,7 +618,7 @@ fun SearchScreen(
                         // tile past the first visible few has no focus node
                         // to hand focus to.
                         val railReturn = SearchReturnFocus.peek()
-                        val titlesRailState = rememberLazyListState(
+                        val titlesRailState = rememberIdleLazyListState(
                             initialFirstVisibleItemIndex =
                                 if (railReturn?.railKey == TITLES_RAIL_FOCUS_KEY) {
                                     railReturn.position
@@ -934,7 +933,7 @@ fun SearchScreen(
                         // composes at offset 0 cannot focus a tile the viewer
                         // had scrolled to.
                         val railReturn = SearchReturnFocus.peek()
-                        val addonRailState = rememberLazyListState(
+                        val addonRailState = rememberIdleLazyListState(
                             initialFirstVisibleItemIndex =
                                 if (railReturn?.railKey == railKey) railReturn.position else 0
                         )
@@ -1031,7 +1030,7 @@ fun SearchScreen(
                     // do (see SearchReturnFocus). This rail used to record
                     // nothing, so Back landed the D-pad on the search field.
                     val railReturn = SearchReturnFocus.peek()
-                    val actorsRailState = rememberLazyListState(
+                    val actorsRailState = rememberIdleLazyListState(
                         initialFirstVisibleItemIndex =
                             if (railReturn?.railKey == ACTORS_RAIL_FOCUS_KEY) {
                                 railReturn.position
@@ -1077,7 +1076,7 @@ fun SearchScreen(
                 item(key = "studios_rail") {
                     // Same return target as the Actors rail above.
                     val railReturn = SearchReturnFocus.peek()
-                    val studiosRailState = rememberLazyListState(
+                    val studiosRailState = rememberIdleLazyListState(
                         initialFirstVisibleItemIndex =
                             if (railReturn?.railKey == STUDIOS_RAIL_FOCUS_KEY) {
                                 railReturn.position
@@ -1126,7 +1125,7 @@ fun SearchScreen(
                 item(key = "collections_rail") {
                     // And again for the collection page.
                     val railReturn = SearchReturnFocus.peek()
-                    val collectionsRailState = rememberLazyListState(
+                    val collectionsRailState = rememberIdleLazyListState(
                         initialFirstVisibleItemIndex =
                             if (railReturn?.railKey == COLLECTIONS_RAIL_FOCUS_KEY) {
                                 railReturn.position
@@ -1174,7 +1173,7 @@ fun SearchScreen(
                 item(key = "keywords_rail") {
                     // And again for the Tag page a keyword opens.
                     val railReturn = SearchReturnFocus.peek()
-                    val keywordsRailState = rememberLazyListState(
+                    val keywordsRailState = rememberIdleLazyListState(
                         initialFirstVisibleItemIndex =
                             if (railReturn?.railKey == KEYWORDS_RAIL_FOCUS_KEY) {
                                 railReturn.position

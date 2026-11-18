@@ -38,7 +38,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
@@ -1337,8 +1336,11 @@ fun DetailScreen(
     // hero's own resolve does; tapping a poster still selects immediately
     // (onSeasonSelected is untouched).
     var pendingSeasonFocus by remember { mutableStateOf<Int?>(null) }
-    val episodesRowState = rememberLazyListState()
-    val seasonRowState = rememberLazyListState()
+    // Every inner row takes the idle window (spec 2026-11-18, F4): the root
+    // column already had it, but a step along a row still paid that card's
+    // first composition on the landing frame.
+    val episodesRowState = rememberIdleLazyListState()
+    val seasonRowState = rememberIdleLazyListState()
     val detailListState = rememberIdleLazyListState()
     // F3 of the 2026-11-17 detail spec: the poster row is kept whole from either
     // neighbour, so it can never be seen cut mid-poster at a viewport edge (see
@@ -1354,19 +1356,19 @@ fun DetailScreen(
     // takes the focus by requester - a rail that is not composing it has
     // nothing for a plain requestFocus to land on. One requester map serves
     // them all: the key a card is filed under names its rail.
-    val genreRowState = rememberLazyListState()
-    val keywordsRowState = rememberLazyListState()
-    val peopleRowState = rememberLazyListState()
-    val networkRowState = rememberLazyListState()
-    val productionRowState = rememberLazyListState()
-    val collectionRowState = rememberLazyListState()
-    val mediaRowState = rememberLazyListState()
-    val recsRowState = rememberLazyListState()
+    val genreRowState = rememberIdleLazyListState()
+    val keywordsRowState = rememberIdleLazyListState()
+    val peopleRowState = rememberIdleLazyListState()
+    val networkRowState = rememberIdleLazyListState()
+    val productionRowState = rememberIdleLazyListState()
+    val collectionRowState = rememberIdleLazyListState()
+    val mediaRowState = rememberIdleLazyListState()
+    val recsRowState = rememberIdleLazyListState()
     // The review rail is a chain row like every other card rail, so it needs
     // its own scroll state for the reveal's rail-scroll step (see
     // [railStateFor]): without one the rail could be entered by column only
     // while the card in that column happened to be composed already.
-    val reviewsRowState = rememberLazyListState()
+    val reviewsRowState = rememberIdleLazyListState()
 
     /**
      * Where a card of the rail keyed [rowKey] sits right now: the record a

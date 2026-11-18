@@ -24,7 +24,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -810,6 +809,11 @@ fun HomeScreenMobile(
                                     item(key = "continueWatching", contentType = "section") {
                                         MobileSection(title = continueWatchingTitle) {
                                             LazyRow(
+                                                // Half a viewport each way, so a
+                                                // fling into this rail lands on
+                                                // cards that are already composed
+                                                // (spec 2026-11-18, F2).
+                                                state = rememberIdleLazyListState(),
                                                 contentPadding =
                                                     PaddingValues(horizontal = 16.dp),
                                                 horizontalArrangement =
@@ -857,6 +861,11 @@ fun HomeScreenMobile(
                                             onClick = onOpenCalendar
                                         ) {
                                             LazyRow(
+                                                // Half a viewport each way, so a
+                                                // fling into this rail lands on
+                                                // cards that are already composed
+                                                // (spec 2026-11-18, F2).
+                                                state = rememberIdleLazyListState(),
                                                 contentPadding =
                                                     PaddingValues(horizontal = 16.dp),
                                                 horizontalArrangement =
@@ -885,6 +894,11 @@ fun HomeScreenMobile(
                                     item(key = "topPicks", contentType = "section") {
                                         MobileSection(title = topPicksTitle) {
                                             LazyRow(
+                                                // Half a viewport each way, so a
+                                                // fling into this rail lands on
+                                                // cards that are already composed
+                                                // (spec 2026-11-18, F2).
+                                                state = rememberIdleLazyListState(),
                                                 contentPadding =
                                                     PaddingValues(horizontal = 16.dp),
                                                 horizontalArrangement =
@@ -1117,7 +1131,7 @@ fun HomeScreenMobile(
                                 ) {
                                     // The row's own scroll state, so the
                                     // sentinel below can watch it.
-                                    val railRowState = rememberLazyListState()
+                                    val railRowState = rememberIdleLazyListState()
 
                                     // Infinite scroll, the television's own
                                     // rule: an add-on catalog is asked for
@@ -1679,6 +1693,7 @@ private fun MobileCollectionSection(
 
     MobileSection(title = collection.title.ifBlank { "Collection" }) {
         LazyRow(
+            state = rememberIdleLazyListState(),
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -1793,6 +1808,7 @@ private fun MobileBrowseShortcutSection(
 
     MobileSection(title = rail.title.ifBlank { "Browse" }) {
         LazyRow(
+            state = rememberIdleLazyListState(),
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -4025,6 +4041,9 @@ private fun MobileLibraryListRail(
         title = rail.pin.name + libraryRailTypeSuffix(rail.items.map { it.type })
     ) {
         LazyRow(
+            // This rail had no state at all, so every fling paid the landing
+            // cards' first composition (spec 2026-11-18, F2).
+            state = rememberIdleLazyListState(),
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {

@@ -32,7 +32,6 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import com.kennyb1201.kbstream.ui.components.TrackScrollFrames
@@ -4088,7 +4087,7 @@ private fun BuiltinContinueWatchingRail(
     // state to itself; the landing below has to be able to put the rail back on
     // its head, so the rail owns it now (the default state was a remembered
     // one either way, so nothing else about the row moves).
-    val railState = rememberLazyListState()
+    val railState = rememberIdleLazyListState()
 
     // Where the head card sits in the window, recorded from the card's own
     // layout and read by the fresh-entry landing's visibility check (see
@@ -4510,7 +4509,7 @@ private fun BuiltinUpcomingRail(
     // reason: a Hide on a card deletes the card (and can empty the whole row),
     // so the hand-back has to come from the rail's own new head rather than
     // from the deleted card's requester, which has nothing to attach to.
-    val railState = rememberLazyListState()
+    val railState = rememberIdleLazyListState()
     val headRequester = remember { FocusRequester() }
     var railHasFocus by remember { mutableStateOf(false) }
     var viewerWalkedRail by remember { mutableStateOf(false) }
@@ -7708,7 +7707,7 @@ fun HomeScreen(
                                                 }
                                             )
 
-                                    val railRowState = rememberLazyListState()
+                                    val railRowState = rememberIdleLazyListState()
 
                                     InfiniteRailPageHandler(
                                         listState = railRowState,
