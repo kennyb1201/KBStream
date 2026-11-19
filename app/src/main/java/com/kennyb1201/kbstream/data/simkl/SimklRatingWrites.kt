@@ -258,7 +258,10 @@ private const val RATE_LIMIT_PEEK_BYTES = 1_024L
  * body still has to be readable by whatever handles the response next.
  */
 private fun rateLimitError(response: retrofit2.Response<*>): String? = runCatching {
-    org.json.JSONObject(response.peekBody(RATE_LIMIT_PEEK_BYTES).string())
+    // `peekBody` is okhttp's, not Retrofit's: the wrapper answers body() and
+    // errorBody() (both consuming on read), and raw() is the response underneath
+    // the interceptor saw.
+    org.json.JSONObject(response.raw().peekBody(RATE_LIMIT_PEEK_BYTES).string())
         .optString("error")
         .takeIf { it.isNotBlank() }
 }.getOrNull()

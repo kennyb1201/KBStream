@@ -213,6 +213,12 @@ class TasteRatingDrainWiringContractTest {
             submission.contains("parkClass = if (tracker == TasteRatingTracker.SIMKL) {") &&
                 submission.contains("simklRatingParkLimitLabel()")
         )
+        assertTrue(
+            "the body is peeked off okhttp's own response - Retrofit's wrapper has no " +
+                "peekBody, which is how 0.9.391 failed to compile - and off a peek, so " +
+                "the response is still readable by whatever handles it next",
+            source(SIMKL_WRITES).contains("response.raw().peekBody(RATE_LIMIT_PEEK_BYTES)")
+        )
     }
 
     // ── Simkl quota F1 (2026-11-19): the park outlives the process ────────
