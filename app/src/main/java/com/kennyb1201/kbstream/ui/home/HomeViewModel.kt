@@ -12843,14 +12843,37 @@ private suspend fun calculateEpisodesRemaining(
                         }
                         .awaitAll()
 
+                    // Where the fan-out's own number ends (field paste
+                    // 2026-11-19). `home.catalogRails` used to include the pinned
+                    // batch's await, so `catalogRails=19938ms` could be a slow
+                    // catalog or a slow pinned refine (`pinnedRefined=12462ms`)
+                    // and the paste could not tell them apart. The fan is the last
+                    // catalog row resolved; the await below is the pinned batch's
+                    // own tail, recorded separately.
+                    PerfTrace.record(
+                        "home.catalogFan",
+                        android.os.SystemClock.elapsedRealtime() - fanOutStartedAtMs
+                    )
+                    val pinnedAwaitStartedAtMs = android.os.SystemClock.elapsedRealtime()
                     pinned = pinnedDeferred.await()
+                    PerfTrace.record(
+                        "home.catalogAwaitPinned",
+                        android.os.SystemClock.elapsedRealtime() - pinnedAwaitStartedAtMs
+                    )
                 }
 
                 // The catalog fan-out, timed from before the pinned rails were
-                // launched to the last rail resolved. It OVERLAPS home.pinned
-                // now, so the two no longer add up to the build - which is the
-                // point: this is the half the viewer waits on, and it starts at
-                // once instead of after the pinned rows.
+                // launched to the point where everything this build publishes is
+                // in hand - which includes the pinned batch's await. It OVERLAPS
+                // home.pinned now, so the two no longer add up to the build -
+                // which is the point: this is the half the viewer waits on, and
+                // it starts at once instead of after the pinned rows.
+                //
+                // The total is kept for every paste that already reads it; what
+                // it is made of is now recorded beside it (home.catalogFan and
+                // home.catalogAwaitPinned), because a 20-second figure that
+                // cannot be attributed to a fetch, a filter or the pinned batch
+                // is a number no fix can be aimed at.
                 PerfTrace.record(
                     "home.catalogRails",
                     android.os.SystemClock.elapsedRealtime() - fanOutStartedAtMs
@@ -13091,6 +13114,17 @@ private suspend fun calculateEpisodesRemaining(
         // size - 20, 50, 100, ...). The rest of the catalog streams in via
         // loadMoreForRail as the user scrolls, so a 1000-item catalog is
         // never fetched up front but is still fully reachable.
+        //
+        // The row's cost, in the two pieces it actually has (field paste
+        // 2026-11-19): `homeload: catalogRails=19938ms` sat beside
+        // `addon.catalog n=2 total=530ms` and `home.artLookup n=9 total=9629ms`,
+        // and those three numbers do not add up to the 20 seconds - so most of a
+        // cold Home load was attributed to nothing. The addon fetch is timed on
+        // its own (it queues behind [catalogRequestSemaphore]), and the filter
+        // pass after it is timed too, because it is not free: the kids-mode
+        // verdict is a TMDB call per row and the availability filter walks all of
+        // them.
+        val fetchStartedAtMs = android.os.SystemClock.elapsedRealtime()
         val metas =
             try {
                 fetchCatalogThrottled(
@@ -13118,8 +13152,21 @@ private suspend fun calculateEpisodesRemaining(
                     failedAddonsThisBuild.add(pending.addonName)
                 }
 
+                // A rail that never appears is exactly the case a fetch timer
+                // has to cover, so this path records too - including the time it
+                // spent queued behind the catalog semaphore.
+                PerfTrace.record(
+                    "home.catalogFetch",
+                    android.os.SystemClock.elapsedRealtime() - fetchStartedAtMs
+                )
+
                 return null
             }
+
+                PerfTrace.record(
+            "home.catalogFetch",
+            android.os.SystemClock.elapsedRealtime() - fetchStartedAtMs
+        )
 
         if (
             metas.isEmpty()
@@ -13127,6 +13174,7 @@ private suspend fun calculateEpisodesRemaining(
             return null
         }
 
+        val filterStartedAtMs = android.os.SystemClock.elapsedRealtime()
         val filtered =
             if (hideUpcoming) {
                 tmdbRepository.kidsFilterMetas(
@@ -13143,6 +13191,10 @@ private suspend fun calculateEpisodesRemaining(
         // first page that repeats one throws on the duplicate key and takes
         // Home down with it - a crash, not a duplicated poster.
         val distinct = filtered.distinctBy { it.id }
+        PerfTrace.record(
+            "home.catalogFilter",
+            android.os.SystemClock.elapsedRealtime() - filterStartedAtMs
+        )
 
         if (
             filtered.isEmpty()
