@@ -42,7 +42,7 @@ class RecompositionTraceTest {
 
         assertEquals(
             "ten items over ten windows: no window holds more than one",
-            "recomp: railItems=10 peak=1 per 16ms busyWindows=10",
+            "recomp: railItems=10 first=0 peak=1 per 16ms busyWindows=10",
             line()
         )
     }
@@ -59,7 +59,7 @@ class RecompositionTraceTest {
 
         assertTrue(
             "the peak is the number that decides F4: ${line()}",
-            line() == "recomp: railItems=120 peak=40 per 16ms busyWindows=3"
+            line() == "recomp: railItems=120 first=0 peak=40 per 16ms busyWindows=3"
         )
     }
 
@@ -73,8 +73,42 @@ class RecompositionTraceTest {
             "two ticks, not 'two ticks spread over 3750 frames': " +
                 "the number is read as cost per step, so empty windows must not " +
                 "appear at all",
-            "recomp: railItems=2 peak=1 per 16ms busyWindows=2",
+            "recomp: railItems=2 first=0 peak=1 per 16ms busyWindows=2",
             line()
+        )
+    }
+
+    @Test
+    fun `a row appearing is counted apart from a row invalidating`() {
+        // The 0.9.393 paste read `railItems=194 peak=14 per 16ms` and could not
+        // say whether fourteen cards were invalidated in one frame (a bug) or
+        // fourteen were composing for the first time (a row streaming in, which
+        // is the design). The call site now says which, and only the difference
+        // is a fix's target.
+        var now = 0L
+        repeat(14) { RecompositionTrace.noteRailItem(nowMs = now, firstComposition = true) }
+        now += RecompositionTrace.WINDOW_MS
+        repeat(3) { RecompositionTrace.noteRailItem(nowMs = now) }
+
+        assertEquals(
+            "the peak still counts both, so it lines up with an older paste; " +
+                "`first` says how much of it was a row arriving",
+            "recomp: railItems=17 first=14 peak=14 per 16ms busyWindows=2",
+            line()
+        )
+    }
+
+    @Test
+    fun `a caller that cannot tell adds to the total as before`() {
+        // The other surfaces (Detail's episode rail, the phone's Home) call the
+        // same counter without the flag; their line must not read as if every
+        // tick were an invalidation.
+        RecompositionTrace.noteItem(RecompositionTrace.SURFACE_DETAIL, 0L)
+
+        assertEquals(
+            "an unflagged tick is not a first composition and not a lie about one",
+            "recomp: detail items=1 first=0 peak=1 per 16ms busyWindows=1",
+            RecompositionTrace.lines().single()
         )
     }
 

@@ -13,15 +13,24 @@ package com.kennyb1201.kbstream.data.reporting
  * What it counts, and what it deliberately leaves as words rather than a
  * number:
  *
- *  - one tick per recomposition of a Home rail ITEM (the item's own composable
+ *  - one tick per composition of a Home rail ITEM (the item's own composable
  *    scope, via a `SideEffect`, so a skipped item does not tick);
  *  - the ticks are bucketed into 16 ms windows, and the report prints the total
  *    and the WORST window. On a 60 Hz box a window is about a frame, so
- *    `peak=7 per 16ms` reads as "seven rail items recomposed in one frame". It
+ *    `peak=7 per 16ms` reads as "seven rail items composed in one frame". It
  *    is stated as a 16 ms window, not as a frame, because at other refresh
  *    rates the two differ and this code cannot see the display.
  *  - only windows that actually saw a tick are counted as busy, so a long idle
  *    stretch does not dilute the number.
+ *  - `first=` is the half the 0.9.393 paste could not separate (0.9.394). A
+ *    `SideEffect` ticks on the item's FIRST composition as well as on every
+ *    invalidation, so `railItems=194 peak=14 per 16ms` was ambiguous: fourteen
+ *    cards being INVALIDATED in one frame is a bug, while fourteen cards being
+ *    composed for the first time in one frame is a row streaming in - which is
+ *    the design, not a defect. The call site passes `firstComposition` for the
+ *    tick it knows is the first, so `peak - first` is the number a fix is owed
+ *    on. `peak` itself still counts both, so it reads the same as it did in
+ *    older pastes and the two can be compared.
  *
  * The clock is passed in rather than read here: the arithmetic is the part worth
  * testing, and it is testable only if it needs no Android.
@@ -68,6 +77,7 @@ internal object RecompositionTrace {
 
     private class Counters {
         var total = 0L
+        var firstCompositions = 0L
         var peakPerWindow = 0
         var busyWindows = 0
         var windowIndex = Long.MIN_VALUE
@@ -77,18 +87,24 @@ internal object RecompositionTrace {
     private fun counters(surface: String): Counters = surfaces.getOrPut(surface) { Counters() }
 
     /**
-     * One recomposition of one rail item, at [nowMs] on a monotonic clock.
+     * One composition of one rail item, at [nowMs] on a monotonic clock.
      *
      * Called from a `SideEffect`, i.e. after the composition it counts has been
      * applied, so a composition that Compose skips is not counted.
+     *
+     * [firstComposition] is the call site's answer to "has this card composed
+     * before", so a row appearing is not read as a row invalidating (see the
+     * class note). It defaults to false: a caller that cannot tell contributes
+     * to the total exactly as it did before the split existed.
      */
-    fun noteRailItem(nowMs: Long) = noteItem(SURFACE_HOME, nowMs)
+    fun noteRailItem(nowMs: Long, firstComposition: Boolean = false) =
+        noteItem(SURFACE_HOME, nowMs, firstComposition)
 
     /**
-     * One recomposition of one item on [surface] at [nowMs] - the same tick,
+     * One composition of one item on [surface] at [nowMs] - the same tick,
      * counted apart from the other surfaces (see the class note).
      */
-    fun noteItem(surface: String, nowMs: Long) {
+    fun noteItem(surface: String, nowMs: Long, firstComposition: Boolean = false) {
         synchronized(lock) {
             val c = counters(surface)
             val index = nowMs / WINDOW_MS
@@ -101,6 +117,7 @@ internal object RecompositionTrace {
             }
             c.windowCount++
             c.total++
+            if (firstComposition) c.firstCompositions++
             if (c.windowCount > c.peakPerWindow) c.peakPerWindow = c.windowCount
         }
     }
@@ -118,7 +135,12 @@ internal object RecompositionTrace {
             // paste read against an older one still lines up; the other surfaces
             // name themselves instead of pretending to be rail items.
             val what = if (surface == SURFACE_HOME) "railItems" else "$surface items"
-            "recomp: $what=${c.total} peak=${c.peakPerWindow} per ${WINDOW_MS}ms " +
+            // `first=` sits between the total and the peak because it is what
+            // makes the peak readable: peak is every composition in the worst
+            // window, first is how many of those were a card composing for the
+            // first time. See the class note.
+            "recomp: $what=${c.total} first=${c.firstCompositions} " +
+                "peak=${c.peakPerWindow} per ${WINDOW_MS}ms " +
                 "busyWindows=$busy"
         }
     }

@@ -3680,14 +3680,24 @@ private fun LibraryListHomeRail(
                     contentType = { _, _ -> "library-list-card" }
                 ) { index, meta ->
                     // F4's measurement (spec 2026-11-16, round three; S1 in
-                    // dig four): one tick per recomposition of a rail ITEM, so
+                    // dig four): one tick per composition of a rail ITEM, so
                     // a held walk has a number to read before anything is
                     // wrapped in `remember`. A `SideEffect` runs after the
                     // composition it belongs to is applied, so an item Compose
                     // skips does not tick.
+                    //
+                    // `first` (0.9.394) is the half the 0.9.393 paste could not
+                    // separate: a SideEffect ticks on the card's first
+                    // composition too, and a row streaming in composes fourteen
+                    // cards in one frame by design. Deliberately NOT snapshot
+                    // state - a `mutableStateOf` write here would invalidate the
+                    // very scope being measured.
+                    val composedBefore =
+                        remember { java.util.concurrent.atomic.AtomicBoolean(false) }
                     SideEffect {
                         RecompositionTrace.noteRailItem(
-                            android.os.SystemClock.elapsedRealtime()
+                            android.os.SystemClock.elapsedRealtime(),
+                            firstComposition = !composedBefore.getAndSet(true)
                         )
                     }
                     val requester = remember { FocusRequester() }
@@ -3912,10 +3922,15 @@ private fun BuiltinTopPicksRail(
 
                     // F4's measurement - the Top Picks row ticks the same
                     // counter as the catalog rails, so a walk across a mixed
-                    // Home produces one number.
+                    // Home produces one number. `first` as everywhere else
+                    // (0.9.394): a card composing for the first time is not a
+                    // card invalidating.
+                    val composedBefore =
+                        remember { java.util.concurrent.atomic.AtomicBoolean(false) }
                     SideEffect {
                         RecompositionTrace.noteRailItem(
-                            android.os.SystemClock.elapsedRealtime()
+                            android.os.SystemClock.elapsedRealtime(),
+                            firstComposition = !composedBefore.getAndSet(true)
                         )
                     }
 
