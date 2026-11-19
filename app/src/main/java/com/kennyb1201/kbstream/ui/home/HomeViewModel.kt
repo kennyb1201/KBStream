@@ -12297,7 +12297,15 @@ private suspend fun calculateEpisodesRemaining(
         tmdbRepository.filterByHomeAvailabilityById(
             items = metas,
             id = { meta -> meta.id },
-            type = { meta -> meta.type }
+            type = { meta -> meta.type },
+            // The catalog already says when a title came out, and a movie
+            // released in an earlier calendar year cannot be "not available at
+            // home yet" - so it is kept without a TMDB detail fetch. That fetch
+            // was the whole cost of this pass: `detailSrc net:436` on the
+            // 0.9.393 paste, against a 150-entry detail cache that cannot hold
+            // a Home screen, so every cold load re-asked about ~440 movies it
+            // had asked about minutes earlier.
+            releasedYear = { meta -> meta.yearOrNull }
         )
 
     /**

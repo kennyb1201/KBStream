@@ -3271,7 +3271,11 @@ class TmdbRepository private constructor(context: Context) :
     suspend fun <T> filterByHomeAvailabilityById(
         items: List<T>,
         id: (T) -> String,
-        type: (T) -> String
+        type: (T) -> String,
+        // The year the ROW already carries, when it has one. Callers that do
+        // not (KB folders, an add-on search page) keep the default and behave
+        // exactly as before: no gate, one fetch per movie, same verdict.
+        releasedYear: (T) -> Int? = { null }
     ): List<T> {
 
         if (items.isEmpty() || !isDigitalFilterEnabled()) return items
@@ -3285,6 +3289,18 @@ class TmdbRepository private constructor(context: Context) :
                 async {
 
                     if (!type(item).equals("movie", ignoreCase = true)) {
+                        return@async item
+                    }
+
+                    // The year answers it for most of a Home screen (see
+                    // [ReleaseAgeGate]): a movie released in an earlier calendar
+                    // year is past the theatrical window this verdict is about,
+                    // so the fetch could only confirm what the row implies. This
+                    // is the single change that takes the verdict pass off the
+                    // 400-plus detail fetches a cold Home used to pay - the
+                    // deferral behind the row did not, it only moved them into
+                    // the pinned batch's window.
+                    if (ReleaseAgeGate.isDefinitelyReleased(releasedYear(item), today.year)) {
                         return@async item
                     }
 
