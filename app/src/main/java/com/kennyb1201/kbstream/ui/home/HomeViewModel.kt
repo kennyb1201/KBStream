@@ -12664,6 +12664,19 @@ private suspend fun calculateEpisodesRemaining(
                             val rails =
                                 mutableListOf<Rail>()
 
+                            // The three legs of the pinned batch, timed apart
+                            // (0.9.394). `home.pinnedRefined` said what the batch
+                            // cost but not what it was made of, and the 17:47
+                            // paste made that the last unattributed number on
+                            // Home: `pinned=10849ms` with `catalogFetch=0ms`,
+                            // `http.toptoday` at 134ms and the rail filter at
+                            // 3.1s, so ~10s belonged to the batch itself and the
+                            // paste could not say which call owned it. A leg with
+                            // nothing to fetch records ~0ms, which is the useful
+                            // answer there too.
+                            val pinnedRailsStartedAtMs =
+                                android.os.SystemClock.elapsedRealtime()
+
                             if (tmdbRepository.kidsMaxAge() != null) {
                                 // Kids profile: the general-audience "Top
                                 // ... Today" rails don't belong here - after
@@ -12706,6 +12719,11 @@ private suspend fun calculateEpisodesRemaining(
                                     landscapeCards
                                 )
                             }
+                            PerfTrace.record(
+                                "home.pinnedTopToday",
+                                android.os.SystemClock.elapsedRealtime() -
+                                    pinnedRailsStartedAtMs
+                            )
 
                             // The viewer's own catalogs (the Catalog Builder's
                             // rule sets) load with the pinned batch. They are
@@ -12713,10 +12731,17 @@ private suspend fun calculateEpisodesRemaining(
                             // and KBHomeSlots places them by their own
                             // arrangement key, so they are appended after the
                             // branches rather than woven into one.
+                            val customCatalogsStartedAtMs =
+                                android.os.SystemClock.elapsedRealtime()
                             loadCustomCatalogRails(
                                 rails,
                                 hideUpcoming,
                                 landscapeCards
+                            )
+                            PerfTrace.record(
+                                "home.pinnedCustomCatalogs",
+                                android.os.SystemClock.elapsedRealtime() -
+                                    customCatalogsStartedAtMs
                             )
 
                             // The refined pinned batch is in hand: publish it in
@@ -12728,6 +12753,8 @@ private suspend fun calculateEpisodesRemaining(
                             //
                             // Stale-profile guard: a batch built for the profile
                             // the viewer just left is never published.
+                            val pinnedPublishStartedAtMs =
+                                android.os.SystemClock.elapsedRealtime()
                             if (buildEpochAtStart == railBuildEpoch) {
                                 publishPinnedInPlace(
                                     pinnedRails = rails,
@@ -12742,6 +12769,16 @@ private suspend fun calculateEpisodesRemaining(
                                     rails
                                 )
                             }
+                            // The publish and the snapshot write are one leg on
+                            // purpose: they are the only two things here that
+                            // touch the screen and the disk, and a snapshot save
+                            // that blocks the landing would read as "the rows
+                            // were slow" in every other number.
+                            PerfTrace.record(
+                                "home.pinnedPublish",
+                                android.os.SystemClock.elapsedRealtime() -
+                                    pinnedPublishStartedAtMs
+                            )
 
                             // With nothing cached there was no paint-first publish
                             // above, so this landing IS the pinned paint: it
