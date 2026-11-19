@@ -6445,9 +6445,11 @@ fun HomeScreen(
         focusedContinueWatchingItem = null
         focusedBrowseShortcut = null
         // The near-field warm starts HERE (spec 2026-11-17, F1) - on the focus
-        // event, before the 150 ms resolve debounce. It used to start inside
-        // the resolve, after that debounce and its own dwell, which a held
-        // D-pad never survives; the walk then outran the warm and landed cold.
+        // event, before the 150 ms resolve debounce. What starts here now is the
+        // RAIL-TILE half: the hero lookahead moved to the resolve's art dwell
+        // (spec 2026-11-19, churn F1), because six ~3.5MB decodes per step filled
+        // a 48MB cache with art the walk never drew - 113 warms, 18 draws, 0
+        // memory hits on the build-386 walk.
         viewModel.warmHeroFocus(item)
     }
 
@@ -6470,6 +6472,8 @@ fun HomeScreen(
         // 2026-11-18, Warm-ahead F1): this hero was the one surface that never
         // asked for it, so its stills decoded on arrival - and a held D-pad down
         // Continue Watching never outran anything, because nothing was warmed.
+        // These rows are not catalog rails, so the hero lookahead has no slot to
+        // warm for them either way (spec 2026-11-19, churn F1).
         viewModel.warmHeroFocus(item)
     }
 

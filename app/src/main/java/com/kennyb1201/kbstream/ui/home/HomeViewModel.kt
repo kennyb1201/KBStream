@@ -1837,6 +1837,25 @@ class HomeViewModel(
                         earlyArt?.logoUrl
                             ?.takeIf { it.isNotBlank() }
                             ?.let { _heroLogoUrl.value = it }
+
+                        // The hero lookahead, moved here from the focus handler
+                        // (spec 2026-11-19, churn F1).
+                        //
+                        // Fired per focus step it was six 1280x720 decodes
+                        // (~21MB) against a 48MB cache, and the build-386 walk
+                        // drew 18 heroes from 113 warms with 0 memory hits - the
+                        // art only publishes after this same dwell, so two steps'
+                        // of warms had already evicted the entry before the hero
+                        // asked for it. Waiting for the dwell makes the near
+                        // field describe the card the viewer actually stopped on
+                        // rather than every card the D-pad passed.
+                        //
+                        // Nothing about WHAT is warmed or what bounds it changes:
+                        // still back, forward and across rails, still at the
+                        // hero's own size, still behind the same semaphore and
+                        // in-flight set, and still a viewModelScope launch of its
+                        // own - so a superseding resolve cannot cancel it.
+                        warmHeroLookahead(item)
                     }
 
                     // The info leg gets the same head start as the art, and
@@ -3052,17 +3071,25 @@ Log.d(
     }
 
     /**
-     * The near-field warm, fired ON FOCUS (spec 2026-11-17, F1).
+     * The near-field warm, fired ON FOCUS (spec 2026-11-17, F1) - now the
+     * rail-size half of it (spec 2026-11-19, churn F1).
      *
-     * This is what the focus handler calls the moment a card takes focus - not
-     * the hero resolve, which waits out the 150 ms debounce and then the dwell.
-     * A held D-pad steps every ~30-100 ms, so that path never reached the warm:
-     * the walk outran it and arrived on cold art, which is exactly when the jank
-     * is felt. Nothing about WHAT is warmed or what bounds it changes - only
-     * when it starts. The dwells still gate the hero's own meta/art publish.
+     * This is what the focus handler calls the moment a card takes focus. A held
+     * D-pad steps every ~30-100 ms, so the resolve path never reached the warm:
+     * the walk outran it and arrived on cold tiles, which is exactly when the
+     * jank is felt. A rail tile is ~0.4MB and its card is on screen either way,
+     * so decoding it ahead of the walk is what this half is for, and it stays.
+     *
+     * The HERO half - six 1280x720 decodes, ~21MB per step against a 48MB cache -
+     * moved to the art dwell in [resolveHeroMeta]. On the build-386 walk it fired
+     * 113 times for 18 hero draws with ZERO memory hits: the art only publishes
+     * after that same 600 ms dwell, so a step's warms were evicting each other
+     * before anything read them. See the call site for the reading in full.
      *
      * The 60-card metadata + disk-byte warm in [prefetchHeroArt] is unchanged,
-     * and [reWarmIfCachesWereReleased] still calls these same two directly.
+     * and [reWarmIfCachesWereReleased] still calls both warms directly - that is
+     * not a walk but a cache released under the card the viewer is on, so both
+     * halves are right to run there.
      */
     /**
      * The card's place, from the index [warmIndex] beside [_rails].
@@ -3113,11 +3140,10 @@ Log.d(
         // viewer actually did rather than against the number of warms.
         ImageLoadTrace.noteHeroFocusArrival()
         // Continue Watching and Upcoming are their own lists, not catalog rails,
-        // so both warms below returned at their first lookup for a card in
+        // so the tile warm below returns at its first lookup for a card in
         // either - which is why a walk down those rows was the one the seam
         // showed on (spec 2026-11-18, Warm-ahead F1).
         if (warmEpisodeRowNeighbours(item)) return
-        warmHeroLookahead(item)
         warmRailTiles(item)
     }
 

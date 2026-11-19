@@ -147,36 +147,42 @@ class ScrollRoundTwoContractTest {
     }
 
     @Test
-    fun `the lookahead fires on focus, not after the resolve dwell`() {
+    fun `the lookahead fires on the settle, not on every focus step`() {
         val vm = source(VIEW_MODEL)
         val focusEntry = vm.substringAfter("fun warmHeroFocus(")
             .substringBefore("private fun warmHeroLookahead(")
         assertTrue(
-            "both halves of the near field are fired from the one focus entry",
-            focusEntry.contains("warmHeroLookahead(item)") &&
-                focusEntry.contains("warmRailTiles(item)")
+            "the focus entry still starts the tile warm",
+            focusEntry.contains("warmRailTiles(item)")
+        )
+        assertFalse(
+            "but not the hero lookahead: 113 warms bought 0 of 18 hero draws, and " +
+                "six ~3.5MB decodes per step turned a 48MB cache over nine times " +
+                "(2026-11-19, churn F1)",
+            focusEntry.contains("warmHeroLookahead(item)")
         )
         assertTrue(
-            "and the hit rate is counted per focus arrival, not per warm",
+            "the hit rate is still counted per focus arrival, not per warm",
             focusEntry.contains("ImageLoadTrace.noteHeroFocusArrival()")
         )
         val resolve = vm.substringAfter("fun resolveHeroMeta(")
             .substringBefore("fun reWarmIfCachesWereReleased()")
-        assertFalse(
-            "the warm must NOT be launched from the resolve job any more: the 150 ms " +
-                "debounce plus the dwell kept a held walk ahead of it",
-            resolve.contains("warmHeroLookahead(item)")
+        val dwellAt = resolve.indexOf("awaitHeroArtDwell(resolveStartedAtMs)")
+        assertTrue(
+            "the warm now starts inside the resolve, after the art dwell: the hero " +
+                "has settled, so the card it warms is the card that gets drawn",
+            dwellAt >= 0 && resolve.indexOf("warmHeroLookahead(item)") > dwellAt
         )
         assertTrue(
             "while the dwells still gate what the resolve PUBLISHES",
             resolve.contains("delay(HERO_RESOLVE_DWELL_MS)")
         )
-        // The focus handler is where it starts, before any debounce.
+        // The focus handler still starts the half that is cheap per step.
         val screen = source(SCREEN)
         val select = screen.substringAfter("fun selectHero(")
             .substringBefore("fun selectContinueWatchingHero(")
         assertTrue(
-            "the card's focus handler asks for the warm directly",
+            "the card's focus handler still asks for the near field",
             select.contains("viewModel.warmHeroFocus(item)")
         )
     }

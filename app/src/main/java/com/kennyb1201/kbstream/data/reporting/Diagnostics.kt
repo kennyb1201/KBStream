@@ -23,6 +23,7 @@ import com.kennyb1201.kbstream.data.iptv.guideMatchSectionLines
 import com.kennyb1201.kbstream.data.iptv.markerMatchesGuideFile
 import com.kennyb1201.kbstream.data.library.TasteRatingSubmission
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.memory.ImageCacheComposition
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.sync.AuthSyncTrace
 import com.kennyb1201.kbstream.data.sync.ProfileManager
@@ -534,17 +535,49 @@ object Diagnostics {
     }
 
     /**
-     * The decoded-bitmap cache against its cap, read from the live loader.
+     * The decoded-bitmap cache against its cap, and WHAT it is holding, read
+     * from the live loader.
      *
      * A cap printed beside its size is the only way to tell a cache that is
      * doing its job from one the trim path kept emptying (see [ImageLoadTrace]
-     * for the decode side of the same question). Null when the loader has not
-     * been built yet, which keeps a cold report as short as it was.
+     * for the decode side of the same question). The composition is the other
+     * half (diagnostics, 2026-11-19): `47MB of 48MB` cannot say whether those
+     * bytes are the rail on screen or hero-size backdrops the walk already
+     * left, and on the build-386 walk that was the open question - 113 hero
+     * warms at ~3.5MB each through a 48MB cache fills it with art no draw will
+     * read. [ImageCacheComposition] buckets the entries by their own pixel
+     * width, so the line is measured rather than inferred from insert counts.
+     *
+     * Enumerating is not free of side effects, so they are named: Coil's `get`
+     * refreshes an entry's LRU position (a report taken mid-walk makes the
+     * probed order the next eviction order) and drops unshareable values
+     * (animated art) as it returns them. Both are acceptable for a deliberate
+     * report and neither changes what the cache holds in any lasting way;
+     * inferring the composition was the alternative, and that is what this
+     * replaces.
+     *
+     * Null when the loader has not been built yet, which keeps a cold report as
+     * short as it was.
      */
     private fun imageCacheLine(context: Context): String? = runCatching {
         val cache = coil3.SingletonImageLoader.get(context.applicationContext)
             .memoryCache ?: return@runCatching null
-        "image cache: ${cache.size / 1_048_576}MB of ${cache.maxSize / 1_048_576}MB"
+        val samples = cache.keys.mapNotNull { key ->
+            val image = cache[key]?.image ?: return@mapNotNull null
+            ImageCacheComposition.Sample(
+                widthPx = image.width,
+                sizeBytes = image.size
+            )
+        }
+        // `size` is read AFTER the walk, so the total and the buckets describe
+        // the same cache even if probing dropped an unshareable entry.
+        ImageCacheComposition.line(
+            ImageCacheComposition.read(
+                totalBytes = cache.size,
+                maxBytes = cache.maxSize,
+                samples = samples
+            )
+        )
     }.getOrNull()
 
     /**

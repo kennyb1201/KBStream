@@ -164,16 +164,29 @@ class WarmDispatchCostContractTest {
     }
 
     @Test
-    fun `S3 - the trigger path is the same two calls on focus`() {
+    fun `S3 - focus triggers the tiles, the settled hero triggers the lookahead`() {
         val focus = block(model, "fun warmHeroFocus(")
         assertTrue(
             "episode rows still return early",
             focus.contains("if (warmEpisodeRowNeighbours(item)) return")
         )
         assertTrue(
-            "then the two warms, unchanged in order",
-            focus.indexOf("warmHeroLookahead(item)") in
-                1 until focus.indexOf("warmRailTiles(item)")
+            "the tile warm still starts on the focus event",
+            focus.contains("warmRailTiles(item)")
+        )
+        assertFalse(
+            "and the hero lookahead no longer does: six ~3.5MB decodes per D-pad " +
+                "step filled the cache with art the walk never drew (113 warms, " +
+                "18 draws, 0 memory hits on the build-386 walk; 2026-11-19 churn F1)",
+            focus.contains("warmHeroLookahead(item)")
+        )
+        assertTrue(
+            "it starts after the art dwell instead, so it describes the card the " +
+                "viewer stopped on",
+            block(model, "fun resolveHeroMeta(").let { resolve ->
+                val dwell = resolve.indexOf("awaitHeroArtDwell(resolveStartedAtMs)")
+                dwell in 1 until resolve.indexOf("warmHeroLookahead(item)")
+            }
         )
         assertTrue(
             "the arrival counter the paste reads is still noted",

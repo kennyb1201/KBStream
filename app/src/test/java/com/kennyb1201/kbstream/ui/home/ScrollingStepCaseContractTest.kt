@@ -97,11 +97,12 @@ class ScrollingStepCaseContractTest {
             .substringAfter("private fun warmRailTiles(")
             .substringBefore("private suspend fun warmRailTile(")
         assertTrue(
-            "the warm is called from the focus entry, beside the hero lookahead",
+            "the tile warm is still called from the focus entry; the hero lookahead " +
+                "starts at the art dwell instead (2026-11-19, churn F1)",
             viewModel.contains("warmHeroLookahead(item)") &&
-                viewModel.contains("warmRailTiles(item)") &&
-                viewModel.indexOf("warmHeroLookahead(item)") <
-                viewModel.indexOf("warmRailTiles(item)")
+                viewModel.substringAfter("fun warmHeroFocus(")
+                    .substringBefore("private fun warmHeroLookahead(")
+                    .contains("warmRailTiles(item)")
         )
         assertTrue(
             "both directions along the rail",

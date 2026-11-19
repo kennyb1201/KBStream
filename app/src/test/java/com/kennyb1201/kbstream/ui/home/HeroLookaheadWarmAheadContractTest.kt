@@ -6,18 +6,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The hero lookahead, warm-ahead spec (2026-11-17).
+ * The hero lookahead, warm-ahead spec (2026-11-17), as amended 2026-11-19.
  *
- * The lookahead warmed the right things but always arrived behind the walk:
- * it fired from inside the hero resolve after the dwell (which a held D-pad
- * never survives), it warmed its cards one at a time, and it only ever looked
- * forward in the same rail. On a fast walk - exactly when the jank is felt -
- * every card was cold.
+ * The lookahead warmed the right things but arrived behind the walk: it warmed
+ * its cards one at a time and only ever looked forward in the same rail, so on a
+ * fast walk - exactly when the jank is felt - every card was cold. F2/F3 fixed
+ * the SHAPE of the warm (parallel, back and across rails) and those pins hold.
  *
- * This pins the three repairs where a JVM test can see them: the warm starts on
- * the FOCUS event, the cards are warmed in parallel behind the same bounds, and
- * the near field now covers back and across rails at hero size. The numbers on
- * a device (the hit rate) are F5's job, not this class's.
+ * F1 moved the trigger onto the focus event; the 2026-11-19 churn reading
+ * reversed that half. Firing per focus step put six ~3.5MB decodes against a 48MB
+ * cache for every card the D-pad passed, and the build-386 walk drew 18 heroes
+ * from 113 warms with ZERO memory hits - the art publishes only after the same
+ * 600 ms dwell, so the warms had evicted each other before anything read them.
+ * The warm now fires at that dwell, so it describes the card the viewer stopped
+ * on. Nothing about the warm itself changed - bounds, sizes, parallelism,
+ * semaphore, in-flight set - which is what the rest of this class pins.
  */
 class HeroLookaheadWarmAheadContractTest {
 
@@ -28,26 +31,31 @@ class HeroLookaheadWarmAheadContractTest {
     // ── F1: fired on focus, before the debounce ──────────────────────────
 
     @Test
-    fun `the warm starts in the focus handler, not in the resolve job`() {
+    fun `the warm starts on the settled hero, and the tiles still start on focus`() {
         val select = home.substringAfter("fun selectHero(")
             .substringBefore("fun selectContinueWatchingHero(")
         assertTrue(
-            "the card's own focus handler asks for the near field",
+            "the card's own focus handler still asks for the near field",
             select.contains("viewModel.warmHeroFocus(item)")
         )
         val entry = vm.substringAfter("fun warmHeroFocus(")
             .substringBefore("private fun warmHeroLookahead(")
         assertTrue(
-            "one entry for both warms, so the focus path cannot fire only half",
-            entry.contains("warmHeroLookahead(item)") &&
-                entry.contains("warmRailTiles(item)")
+            "which starts the tile warm",
+            entry.contains("warmRailTiles(item)")
+        )
+        assertFalse(
+            "and NOT the hero lookahead: per focus step it was six 3.5MB decodes " +
+                "the walk never drew (2026-11-19, churn F1)",
+            entry.contains("warmHeroLookahead(item)")
         )
         val resolve = vm.substringAfter("fun resolveHeroMeta(")
             .substringBefore("fun reWarmIfCachesWereReleased()")
-        assertFalse(
-            "and it is gone from the resolve job, where the 150 ms debounce and the " +
-                "dwell kept the warm behind the walk",
-            resolve.contains("warmHeroLookahead(item)")
+        val dwellAt = resolve.indexOf("awaitHeroArtDwell(resolveStartedAtMs)")
+        assertTrue(
+            "the lookahead now starts after the art dwell, where the hero has " +
+                "settled and the art actually publishes",
+            dwellAt >= 0 && resolve.indexOf("warmHeroLookahead(item)") > dwellAt
         )
         assertTrue(
             "the dwells themselves still gate what the resolve publishes",
