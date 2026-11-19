@@ -199,7 +199,9 @@ object UiFrameTrace {
         val stats = FrameHistogram.of(session.deltas, session.count) ?: return
         val line = FrameHistogram.line(session.label, stats) +
             FrameHistogram.decodeSplit(
-                FrameHistogram.of(session.decodeDeltas, session.decodeCount)
+                FrameHistogram.of(session.decodeDeltas, session.decodeCount),
+                decodeFrames = session.decodeCount,
+                sessionFrames = stats.frames
             )
         synchronized(entries) {
             // Longest wins for a label. The report is read after the gesture, on

@@ -103,15 +103,30 @@ object FrameHistogram {
      * against each other: `decodeP50=16ms` beside `p50=33ms` clears the loader and
      * points at the draw; `decodeP50=48ms` does the opposite.
      *
-     * Empty when no decode landed in the session, so a paste that never decodes
-     * carries the line it always did.
+     * A session with no decodes at all says so (`decodeFrames=0`) rather than
+     * going quiet, and a session that never sampled a frame carries nothing.
+     *
+     * The distinction is not pedantry: the 15:52 paste printed no split on either
+     * `frame:` line while `image: decode:` reported 470 decodes, which read as an
+     * instrument that had failed. It had not - those decodes landed in the walk's
+     * two-second tail, after the last sampled frame, so no frame could carry one.
+     * `decodeFrames=0` says that in the line itself.
+     *
+     * [decodeFrames] is the session's own count, which can be above zero while
+     * [stats] is null: a session with a decode or two but too few frames to
+     * print percentiles over still reports the count.
      */
-    fun decodeSplit(stats: FrameStats?): String =
-        if (stats == null) {
-            ""
-        } else {
-            " decodeFrames=${stats.frames} decodeP50=${stats.p50Ms}ms " +
-                "decodeP95=${stats.p95Ms}ms decode>33=${stats.over33Ms}"
+    fun decodeSplit(
+        stats: FrameStats?,
+        decodeFrames: Int,
+        sessionFrames: Int
+    ): String =
+        when {
+            sessionFrames <= 0 -> ""
+            stats == null -> " decodeFrames=$decodeFrames"
+            else ->
+                " decodeFrames=${stats.frames} decodeP50=${stats.p50Ms}ms " +
+                    "decodeP95=${stats.p95Ms}ms decode>33=${stats.over33Ms}"
         }
 
     /** Nearest-rank percentile over an ascending list. */

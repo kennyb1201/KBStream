@@ -343,12 +343,22 @@ class FrameMeterWalkContractTest {
         assertTrue(
             "and it is summarised with the same budgets as the session, so the two " +
                 "halves are read against each other",
-            histogram.contains("fun decodeSplit(stats: FrameStats?): String")
+            histogram.contains("fun decodeSplit(") &&
+                histogram.contains("decodeFrames: Int,") &&
+                histogram.contains("sessionFrames: Int")
+        )
+        assertTrue(
+            "a session that sampled frames but decoded nothing prints " +
+                "decodeFrames=0 rather than nothing, which is what made the 15:52 " +
+                "paste read as a broken instrument",
+            histogram.contains("sessionFrames <= 0 -> \"\"") &&
+                histogram.contains("stats == null -> \" decodeFrames=\$decodeFrames\"")
         )
         assertTrue(
             "a session with no decode keeps the line shape every older paste is read " +
                 "against",
-            trace.contains("FrameHistogram.line(session.label, stats) +")
+            trace.contains("FrameHistogram.line(session.label, stats) +") &&
+                trace.contains("sessionFrames = stats.frames")
         )
     }
 

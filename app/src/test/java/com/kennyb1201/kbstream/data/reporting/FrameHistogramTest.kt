@@ -96,12 +96,24 @@ class FrameHistogramTest {
     // ── F4 (2026-11-19, churn): the frames a decode landed in ────────────
 
     @Test
-    fun `a session with no decode keeps the line it always had`() {
+    fun `a session with no decode says so, and a session with no frames says nothing`() {
         assertEquals(
-            "an untouched suffix must not change the line every older paste is " +
-                "read against",
+            "the 15:52 paste printed no split on either frame line while " +
+                "image: decode: reported 470 decodes, which read as a broken " +
+                "instrument - it was not (those decodes landed in the walk's tail), " +
+                "and the line now says which of the two happened",
+            " decodeFrames=0",
+            FrameHistogram.decodeSplit(null, decodeFrames = 0, sessionFrames = 31)
+        )
+        assertEquals(
+            "a session that sampled nothing has nothing to add",
             "",
-            FrameHistogram.decodeSplit(null)
+            FrameHistogram.decodeSplit(null, decodeFrames = 0, sessionFrames = 0)
+        )
+        assertEquals(
+            "and a decode or two under the percentile floor still reports the count",
+            " decodeFrames=2",
+            FrameHistogram.decodeSplit(null, decodeFrames = 2, sessionFrames = 4)
         )
     }
 
@@ -113,7 +125,8 @@ class FrameHistogramTest {
         val decode = FrameStats(
             frames = 61, p50Ms = 83, p95Ms = 150, maxMs = 183, over16Ms = 61, over33Ms = 61
         )
-        val line = FrameHistogram.line("home-walk", all) + FrameHistogram.decodeSplit(decode)
+        val line = FrameHistogram.line("home-walk", all) +
+            FrameHistogram.decodeSplit(decode, decodeFrames = 61, sessionFrames = 177)
         assertEquals(
             "the build-390 walk: 177 frames at p50=33ms with the decoded ones at " +
                 "83ms says the loader is the stop frame; the same numbers with the " +
