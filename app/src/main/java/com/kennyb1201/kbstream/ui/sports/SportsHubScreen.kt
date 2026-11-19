@@ -47,6 +47,12 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Leaderboard
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SportsScore
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -74,12 +80,14 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
@@ -93,6 +101,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.tv.material3.Icon
 import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
@@ -487,6 +496,21 @@ fun SportsHubScreen(
     // Hung on the field to end its editing session when this screen decides a
     // Back belonged to the keyboard rather than to the field (see KBTextField).
     var searchEndEditingSignal by remember { mutableStateOf(0) }
+    // Whether the field is on screen at all.
+    //
+    // The header carries icons rather than words now (spec 2026-11-18, "Sports
+    // Hub header goes icon-only"), so search is a magnifier in that row and the
+    // field expands in its own place below the tabs when it is pressed. A
+    // collapsed field filters nothing: its query is blank, and
+    // [SportsSearchRules.isActive] answers false for blank.
+    var searchExpanded by remember { mutableStateOf(false) }
+    // A press of the magnifier asks for the field and, if the field already is
+    // on screen, asks again - which is why the ask is counted rather than read
+    // off [searchExpanded]: a repeat press must re-focus a field the D-pad has
+    // since walked away from.
+    var searchFocusRequests by remember { mutableStateOf(0) }
+    val searchFieldFocus = remember { FocusRequester() }
+    val searchIconFocus = remember { FocusRequester() }
 
     // The game whose detail sheet is raised. A tap on a card opens this rather
     // than playing it: the sheet carries the matchup, and its Watch button is
@@ -594,14 +618,14 @@ fun SportsHubScreen(
 
     // The field's own Back ladder, in the order the spec asks for: the first
     // Back gives up the FIELD (its editing session if it still has one, then its
-    // focus), and only a Back with nothing of the field's left to give up clears
-    // the query. That ordering is what stops a Back meant for the keyboard from
-    // throwing away what the viewer typed.
+    // focus), the next clears the query, and the last collapses the field back
+    // to the magnifier it came from. That ordering is what stops a Back meant
+    // for the keyboard from throwing away what the viewer typed.
     //
     // Registered before the overlays below, so an open panel keeps its own Back
     // (the last enabled handler wins): a Back inside the leagues panel closes
     // the panel, as it always did.
-    BackHandler(enabled = searchEditing || searchFocused || searchQuery.isNotEmpty()) {
+    BackHandler(enabled = searchExpanded) {
         when {
             // On Fire OS the IME closes and hands the press on, so the session
             // can still be open when the press arrives here: end it and keep the
@@ -613,7 +637,31 @@ fun SportsHubScreen(
             // Nothing of the field's left: the query goes, and the hub is back on
             // the exact view it had before - no re-fetch, see
             // [SportsSearchRules].
-            else -> searchQuery = ""
+            searchQuery.isNotEmpty() -> searchQuery = ""
+            // The ladder's appended step: the field itself goes, and focus
+            // returns to the icon that opened it rather than being stranded on
+            // a field that has just been disposed.
+            else -> {
+                searchExpanded = false
+                searchIconFocus.requestFocus()
+            }
+        }
+    }
+
+    // Expanding the field claims focus for it, for the same reason the hub's
+    // entry claim retries its frames: the field's node attaches a frame after
+    // it is composed, and a field that appears with nothing on it would leave
+    // the viewer's press looking like it did nothing (on TV, OK on the field is
+    // what raises the keyboard - see SportsSearchField).
+    LaunchedEffect(searchExpanded, searchFocusRequests) {
+        if (!searchExpanded) return@LaunchedEffect
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < HUB_ENTRY_FOCUS_ATTEMPTS) {
+            landed = runCatching { searchFieldFocus.requestFocus() }
+                .getOrDefault(false)
+            if (!landed) awaitFrame()
+            attempts++
         }
     }
 
@@ -662,8 +710,14 @@ fun SportsHubScreen(
                 }
         ) {
             SportsHeader(
+                onSearchClick = {
+                    searchExpanded = true
+                    searchFocusRequests++
+                },
+                searchActive = searchQuery.isNotEmpty(),
                 onLeaguesClick = { showLeagues = true },
                 onRefreshClick = { viewModel.refresh() },
+                searchFocusRequester = searchIconFocus,
             )
 
             Spacer(modifier = Modifier.height(14.dp))
@@ -718,18 +772,22 @@ fun SportsHubScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // One search field, below the tabs: it filters the cards under it
-            // rather than opening a surface of its own, so what it searches
-            // stays visible behind it.
-            SportsSearchField(
-                query = searchQuery,
-                onQueryChanged = { searchQuery = it },
-                onFocusChanged = { searchFocused = it },
-                onEditingChanged = { searchEditing = it },
-                endEditingSignal = searchEndEditingSignal,
-            )
+            // One search field, below the tabs, and only while the magnifier in
+            // the header says it is open: it filters the cards under it rather
+            // than opening a surface of its own, so what it searches stays
+            // visible behind it.
+            if (searchExpanded) {
+                SportsSearchField(
+                    query = searchQuery,
+                    onQueryChanged = { searchQuery = it },
+                    onFocusChanged = { searchFocused = it },
+                    onEditingChanged = { searchEditing = it },
+                    endEditingSignal = searchEndEditingSignal,
+                    focusRequester = searchFieldFocus,
+                )
 
-            Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(16.dp))
+            }
 
             // Said once, at the top, when the hub has no lineup at all: every
             // card below would otherwise repeat the same sentence twenty times
@@ -1092,11 +1150,30 @@ fun SportsHubScreen(
 
 // ── Header and tabs ─────────────────────────────────────────────────────
 
+/**
+ * The hub's header: the title block on the left, and the three controls on the
+ * right as glyphs rather than words (spec 2026-11-18, "Sports Hub header goes
+ * icon-only": REFRESH and LEAGUES become icons, and search moves behind a
+ * search icon).
+ *
+ * The order - search, refresh, leagues - is the order the spec lays them in, and
+ * the order the D-pad crosses them. Each control is still a [KBCard], so the
+ * focus ring, the glow and the focus scale are exactly the ones the two word
+ * buttons had; only what is inside changed. The content description is the
+ * TalkBack name the word used to provide - an icon-only button without one is
+ * silent.
+ *
+ * [searchActive] tints the magnifier with the accent while a query is non-empty,
+ * so a filtered hub is never silent about why the cards changed.
+ */
 @Composable
 private fun SportsHeader(
+    onSearchClick: () -> Unit,
+    searchActive: Boolean,
     onLeaguesClick: () -> Unit,
     onRefreshClick: () -> Unit,
     modifier: Modifier = Modifier,
+    searchFocusRequester: FocusRequester? = null,
 ) {
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -1114,8 +1191,60 @@ private fun SportsHeader(
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            KBButton(label = "REFRESH", onClick = onRefreshClick)
-            KBButton(label = "LEAGUES", onClick = onLeaguesClick)
+            HeaderIconButton(
+                icon = Icons.Filled.Search,
+                contentDescription = "Search",
+                onClick = onSearchClick,
+                tint = if (searchActive) KBAccent else KBTextHi,
+                focusRequester = searchFocusRequester,
+            )
+            HeaderIconButton(
+                icon = Icons.Filled.Refresh,
+                contentDescription = "Refresh",
+                onClick = onRefreshClick,
+            )
+            HeaderIconButton(
+                icon = Icons.AutoMirrored.Filled.List,
+                contentDescription = "Leagues",
+                onClick = onLeaguesClick,
+            )
+        }
+    }
+}
+
+/**
+ * One header control: the word buttons' [KBCard] with a glyph in place of the
+ * label.
+ *
+ * The 20dp mark and the 16x9 padding are the text button's own footprint - a
+ * labelLarge line is 20sp - so the header row keeps the exact height it had and
+ * the three marks sit on one baseline.
+ */
+@Composable
+private fun HeaderIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    tint: Color = KBTextHi,
+    focusRequester: FocusRequester? = null,
+) {
+    KBCard(
+        onClick = onClick,
+        modifier = modifier.then(
+            if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier
+        ),
+    ) {
+        Box(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = tint,
+                modifier = Modifier.size(20.dp)
+            )
         }
     }
 }
@@ -1231,12 +1360,15 @@ private fun SportsSearchField(
     onEditingChanged: (Boolean) -> Unit,
     endEditingSignal: Int,
     modifier: Modifier = Modifier,
+    // Claimed by the header's magnifier when it expands the field.
+    focusRequester: FocusRequester? = null,
 ) {
     KBTextField(
         value = query,
         onValueChange = onQueryChanged,
         placeholder = "Search teams or events…",
         modifier = modifier.width(SEARCH_FIELD_WIDTH_DP.dp),
+        focusRequester = focusRequester,
         openKeyboardOnFocus = false,
         closeKeyboardOnBlur = true,
         onFocusChanged = onFocusChanged,
@@ -3297,10 +3429,56 @@ private fun LeagueViewToggle(
     selected: LeagueView,
     onSelect: (LeagueView) -> Unit,
 ) {
+    // Icon chips, both of them (spec 2026-11-18): a word chip beside an icon
+    // chip would read as a mistake, so the pair changed together. Same pill,
+    // same size, same selected styling, same setter - only the faces changed.
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        LeagueViewChip("GAMES", selected == LeagueView.GAMES) { onSelect(LeagueView.GAMES) }
-        LeagueViewChip("STANDINGS", selected == LeagueView.STANDINGS) {
-            onSelect(LeagueView.STANDINGS)
+        LeagueViewIconChip(
+            icon = Icons.Filled.SportsScore,
+            contentDescription = "Games",
+            isSelected = selected == LeagueView.GAMES,
+        ) { onSelect(LeagueView.GAMES) }
+        LeagueViewIconChip(
+            icon = Icons.Filled.Leaderboard,
+            contentDescription = "Standings",
+            isSelected = selected == LeagueView.STANDINGS,
+        ) { onSelect(LeagueView.STANDINGS) }
+    }
+}
+
+/**
+ * One half of the GAMES / STANDINGS switch, as a glyph.
+ *
+ * The pill, the 14x8 padding and the selected fill are the word chip's own, so
+ * the pair keeps its height (a 20dp mark against a labelLarge line) and its
+ * accent-while-selected look. The selected state is exposed to accessibility as
+ * well as drawn: an accent background says nothing to a screen reader.
+ */
+@Composable
+private fun LeagueViewIconChip(
+    icon: ImageVector,
+    contentDescription: String,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+) {
+    KBCard(
+        onClick = onClick,
+        focusedScale = KBFocusChip,
+        shape = KBShapePill,
+        modifier = Modifier.semantics { selected = isSelected },
+    ) {
+        Box(
+            modifier = Modifier
+                .background(if (isSelected) KBAccent else KBSurfaceRaised, KBShapePill)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = if (isSelected) KBVoid else KBTextHi,
+                modifier = Modifier.size(20.dp)
+            )
         }
     }
 }

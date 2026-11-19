@@ -113,15 +113,41 @@ class SportsSearchContractTest {
     fun `back gives up the field before it gives up the query`() {
         val handler = slice(
             hub,
-            "BackHandler(enabled = searchEditing || searchFocused",
+            "BackHandler(enabled = searchExpanded)",
             "Box("
         )
         val editing = handler.indexOf("searchEditing -> searchEndEditingSignal++")
         val focus = handler.indexOf("searchFocused -> focusManager.clearFocus()")
-        val query = handler.indexOf("else -> searchQuery = \"\"")
+        val query = handler.indexOf("searchQuery.isNotEmpty() -> searchQuery = \"\"")
+        val collapse = handler.indexOf("searchExpanded = false")
         assertTrue(
-            "the editing session is offered first, then focus, then the query",
-            editing >= 0 && editing < focus && focus < query
+            "the editing session is offered first, then focus, then the query, " +
+                "and only then does the field collapse back to its icon",
+            editing >= 0 && editing < focus && focus < query && query < collapse
+        )
+        assertTrue(
+            "and the collapse hands focus to the search icon, not to a field it just disposed",
+            collapse >= 0 && handler.indexOf("searchIconFocus.requestFocus()") > collapse
+        )
+    }
+
+    @Test
+    fun `the field exists only while the header's magnifier says it does`() {
+        assertTrue(
+            "the field is the search icon's, not an always-on row",
+            hub.contains("var searchExpanded by remember { mutableStateOf(false) }") &&
+                hub.contains("if (searchExpanded) { SportsSearchField(")
+        )
+        assertTrue(
+            "the icon opens it and asks for focus, which is what raises the keyboard on OK",
+            hub.contains("searchExpanded = true") &&
+                hub.contains("searchFocusRequests++") &&
+                hub.contains("searchFieldFocus.requestFocus()")
+        )
+        assertTrue(
+            "the same field, placeholder and width as before - only its visibility changed",
+            hub.contains("placeholder = \"Search teams or events…\"") &&
+                hub.contains("private fun SportsSearchField(")
         )
     }
 

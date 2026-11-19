@@ -97,8 +97,17 @@ class SportsHubScreenMobileContractTest {
             mobile.contains("androidx.tv.material3")
         )
         assertFalse(
-            "and no D-pad focus plumbing",
-            mobile.contains("FocusRequester") || mobile.contains("onPreviewKeyEvent")
+            "and no D-pad key plumbing",
+            mobile.contains("onPreviewKeyEvent") || mobile.contains("focusProperties")
+        )
+        assertFalse(
+            "nor the TV page's entry-focus claim, which has no D-pad walk to place here",
+            mobile.contains("selectedTabFocus")
+        )
+        assertTrue(
+            "the one focus request is the expanded search field's own, so the magnifier " +
+                "can move focus into it and raise the keyboard",
+            mobile.contains("val searchFieldFocus = remember { FocusRequester() }")
         )
         assertTrue(
             "the phone page must drive the shared SportsHubViewModel",

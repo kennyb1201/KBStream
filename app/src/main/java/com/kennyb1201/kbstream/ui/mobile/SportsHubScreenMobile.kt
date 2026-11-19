@@ -33,6 +33,14 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Leaderboard
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SportsScore
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -47,8 +55,14 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -109,6 +123,10 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.MobileTheme
 import com.kennyb1201.kbstream.ui.theme.InterFamily
+import kotlinx.coroutines.android.awaitFrame
+
+/** Frames the expanded search field's focus claim will wait for its node. */
+private const val SEARCH_FOCUS_ATTEMPTS = 12
 
 /*
  * The sports hub, for a finger.
@@ -223,6 +241,12 @@ fun SportsHubScreenMobile(
     }
 
     var searchQuery by remember { mutableStateOf("") }
+    // The field is behind the header's magnifier (spec 2026-11-18, "Sports Hub
+    // header goes icon-only"), exactly as on TV: collapsed, it takes no room and
+    // filters nothing.
+    var searchExpanded by remember { mutableStateOf(false) }
+    val searchFieldFocus = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
     var detailGame by remember { mutableStateOf<SportsGame?>(null) }
     var detailTournament by remember { mutableStateOf<TournamentEvent?>(null) }
     var favoriteEditor by remember { mutableStateOf<SportsGame?>(null) }
@@ -271,9 +295,29 @@ fun SportsHubScreenMobile(
     }
 
     // The phone's Back ladder inside the search: a query is a view of the hub,
-    // so Back returns to the full slate before it leaves the screen. The dialogs
-    // handle their own dismissal (a Dialog consumes Back).
-    BackHandler(enabled = searchQuery.isNotEmpty()) { searchQuery = "" }
+    // so Back returns to the full slate, and a field with no query collapses
+    // back to the magnifier before Back leaves the screen. The dialogs handle
+    // their own dismissal (a Dialog consumes Back).
+    BackHandler(enabled = searchExpanded) {
+        if (searchQuery.isNotEmpty()) searchQuery = "" else searchExpanded = false
+    }
+
+    // Expanding the field moves focus into it and raises the keyboard: the
+    // press that revealed it should be the press that starts typing. The claim
+    // is retried across frames because the field's node attaches a frame after
+    // it is composed (the same retry the TV hub makes for its expanded field).
+    LaunchedEffect(searchExpanded) {
+        if (!searchExpanded) return@LaunchedEffect
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < SEARCH_FOCUS_ATTEMPTS) {
+            landed = runCatching { searchFieldFocus.requestFocus() }
+                .getOrDefault(false)
+            if (!landed) awaitFrame()
+            attempts++
+        }
+        if (landed) keyboardController?.show()
+    }
 
     MobileTheme {
         Box(
@@ -284,6 +328,8 @@ fun SportsHubScreenMobile(
             Column(modifier = Modifier.fillMaxSize()) {
                 SportsHeaderMobile(
                     onBack = onBack,
+                    onSearchClick = { searchExpanded = true },
+                    searchActive = searchQuery.isNotEmpty(),
                     onLeaguesClick = { showLeagues = true },
                     onRefreshClick = viewModel::refresh
                 )
@@ -326,17 +372,25 @@ fun SportsHubScreenMobile(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                KBTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    placeholder = "Search teams or events…",
-                    onClear = { searchQuery = "" },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
-                )
+                if (searchExpanded) {
+                    KBTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        placeholder = "Search teams or events…",
+                        // The field's own clear action collapses it too: an
+                        // empty field has nothing left to show.
+                        onClear = {
+                            searchQuery = ""
+                            searchExpanded = false
+                        },
+                        focusRequester = searchFieldFocus,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                    )
 
-                Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
 
                 if (lineupMissing) {
                     LineupMissingNoticeMobile(
@@ -638,10 +692,22 @@ fun SportsHubScreenMobile(
 
 // ── Header, tabs, search ───────────────────────────────────────────────
 
+/**
+ * The phone's header, with the three controls as glyphs rather than words
+ * (spec 2026-11-18, "Sports Hub header goes icon-only"). Same glyphs, same
+ * order and same names as the television's, so the two forms say their controls
+ * the same way. [searchActive] tints the magnifier while a query is non-empty.
+ *
+ * The row keeps the footprint the REFRESH/LEAGUES pair had: three 48dp touch
+ * targets on one line, so the title and subtitle above keep their width and the
+ * header does not grow.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SportsHeaderMobile(
     onBack: () -> Unit,
+    onSearchClick: () -> Unit,
+    searchActive: Boolean,
     onLeaguesClick: () -> Unit,
     onRefreshClick: () -> Unit
 ) {
@@ -669,10 +735,47 @@ private fun SportsHeaderMobile(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.padding(top = 10.dp)
         ) {
-            KBButton(label = "REFRESH", onClick = onRefreshClick)
-            KBButton(label = "LEAGUES", onClick = onLeaguesClick)
+            HeaderIconButtonMobile(
+                icon = Icons.Filled.Search,
+                contentDescription = "Search",
+                onClick = onSearchClick,
+                tint = if (searchActive) KBAccent else KBTextHi
+            )
+            HeaderIconButtonMobile(
+                icon = Icons.Filled.Refresh,
+                contentDescription = "Refresh",
+                onClick = onRefreshClick
+            )
+            HeaderIconButtonMobile(
+                icon = Icons.AutoMirrored.Filled.List,
+                contentDescription = "Leagues",
+                onClick = onLeaguesClick
+            )
         }
         Spacer(modifier = Modifier.height(12.dp))
+    }
+}
+
+/**
+ * One header control on the phone: the standard [IconButton] touch target
+ * around the shared glyph, so the tap area is the 48dp every other icon button
+ * in the app uses.
+ */
+@Composable
+private fun HeaderIconButtonMobile(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    tint: Color = KBTextHi
+) {
+    IconButton(onClick = onClick, modifier = modifier) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = tint,
+            modifier = Modifier.size(24.dp)
+        )
     }
 }
 
@@ -770,15 +873,57 @@ private fun LeagueViewToggleMobile(
     onSelect: (LeagueView) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Both chips became icons together (spec 2026-11-18): same pill, same size,
+    // same selected fill, same setter - only the faces changed.
     Row(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         modifier = modifier
     ) {
-        LeagueViewChipMobile("GAMES", selected == LeagueView.GAMES) {
+        LeagueViewIconChipMobile(
+            icon = Icons.Filled.SportsScore,
+            contentDescription = "Games",
+            isSelected = selected == LeagueView.GAMES
+        ) {
             onSelect(LeagueView.GAMES)
         }
-        LeagueViewChipMobile("STANDINGS", selected == LeagueView.STANDINGS) {
+        LeagueViewIconChipMobile(
+            icon = Icons.Filled.Leaderboard,
+            contentDescription = "Standings",
+            isSelected = selected == LeagueView.STANDINGS
+        ) {
             onSelect(LeagueView.STANDINGS)
+        }
+    }
+}
+
+/**
+ * One half of the phone's GAMES / STANDINGS switch, as a glyph, with its
+ * selected state exposed to a screen reader as well as drawn.
+ */
+@Composable
+private fun LeagueViewIconChipMobile(
+    icon: ImageVector,
+    contentDescription: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    KBCard(
+        onClick = onClick,
+        shape = KBShapePill,
+        modifier = Modifier.semantics { selected = isSelected }
+    ) {
+        Box(
+            modifier = Modifier
+                .background(if (isSelected) KBAccent else KBSurfaceRaised, KBShapePill)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = if (isSelected) KBVoid else KBTextHi,
+                modifier = Modifier.size(20.dp)
+            )
         }
     }
 }

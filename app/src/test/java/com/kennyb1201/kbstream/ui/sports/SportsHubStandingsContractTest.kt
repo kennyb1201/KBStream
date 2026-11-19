@@ -41,8 +41,14 @@ class SportsHubStandingsContractTest {
             hub.contains("LeagueViewToggle(selected = leagueView, onSelect = viewModel::setView)")
         )
         assertTrue(
-            "the toggle offers both bodies",
-            hub.contains("LeagueViewChip(\"GAMES\"") && hub.contains("LeagueViewChip(\"STANDINGS\"")
+            "the toggle offers both bodies, as a matched pair of icon chips",
+            hub.contains("LeagueViewIconChip(") &&
+                hub.contains("contentDescription = \"Games\"") &&
+                hub.contains("contentDescription = \"Standings\"")
+        )
+        assertTrue(
+            "and the selected half says so to a screen reader as well as in accent",
+            hub.contains("modifier = Modifier.semantics { selected = isSelected }")
         )
     }
 
