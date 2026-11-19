@@ -93,6 +93,37 @@ class FrameHistogramTest {
         assertTrue(FrameHistogram.supersedes(frames = 6, keptFrames = null))
     }
 
+    // ── F4 (2026-11-19, churn): the frames a decode landed in ────────────
+
+    @Test
+    fun `a session with no decode keeps the line it always had`() {
+        assertEquals(
+            "an untouched suffix must not change the line every older paste is " +
+                "read against",
+            "",
+            FrameHistogram.decodeSplit(null)
+        )
+    }
+
+    @Test
+    fun `the decode half carries its own percentiles beside the whole`() {
+        val all = FrameStats(
+            frames = 177, p50Ms = 33, p95Ms = 83, maxMs = 183, over16Ms = 118, over33Ms = 78
+        )
+        val decode = FrameStats(
+            frames = 61, p50Ms = 83, p95Ms = 150, maxMs = 183, over16Ms = 61, over33Ms = 61
+        )
+        val line = FrameHistogram.line("home-walk", all) + FrameHistogram.decodeSplit(decode)
+        assertEquals(
+            "the build-390 walk: 177 frames at p50=33ms with the decoded ones at " +
+                "83ms says the loader is the stop frame; the same numbers with the " +
+                "decoded ones at 16ms says it is the draw and the loader is cleared",
+            "frame: home-walk frames=177 p50=33ms p95=83ms max=183ms >16=118 >33=78 " +
+                "decodeFrames=61 decodeP50=83ms decodeP95=150ms decode>33=61",
+            line
+        )
+    }
+
     @Test
     fun `the line names the surface and carries every number`() {
         val line = FrameHistogram.line(

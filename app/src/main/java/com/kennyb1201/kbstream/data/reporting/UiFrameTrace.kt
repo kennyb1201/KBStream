@@ -56,6 +56,17 @@ object UiFrameTrace {
     private class Session(val label: String) {
         val deltas = IntArray(MAX_FRAMES)
         var count = 0
+
+        /**
+         * The session's frames that had an image decode land inside them.
+         *
+         * The same deltas, filed twice: one population for the gesture, one for
+         * the frames a bitmap was completed in. A frame is put here at most once
+         * however many decodes landed in it, because the question is whether the
+         * frame carried one, not how many (see [FrameHistogram.decodeSplit]).
+         */
+        val decodeDeltas = IntArray(MAX_FRAMES)
+        var decodeCount = 0
         var lastFrameNs = 0L
         var callback: Choreographer.FrameCallback? = null
     }
@@ -113,7 +124,17 @@ object UiFrameTrace {
                     session.lastFrameNs = frameTimeNanos
                     if (previous != 0L && session.count < MAX_FRAMES) {
                         val deltaMs = ((frameTimeNanos - previous) / 1_000_000L).toInt()
-                        if (deltaMs > 0) session.deltas[session.count++] = deltaMs
+                        if (deltaMs > 0) {
+                            session.deltas[session.count++] = deltaMs
+                            // The same clock ImageLoadTrace stamps with, so this
+                            // is not a comparison across two time bases.
+                            val decodeEndNs = ImageLoadTrace.lastDecodeEndNanos()
+                            if (decodeEndNs > previous && decodeEndNs <= frameTimeNanos &&
+                                session.decodeCount < MAX_FRAMES
+                            ) {
+                                session.decodeDeltas[session.decodeCount++] = deltaMs
+                            }
+                        }
                     }
                     choreographer.postFrameCallback(this)
                 }
@@ -176,7 +197,10 @@ object UiFrameTrace {
         // the moment a gesture ended, which is what the tail is measured from.
         lastEndedAtMs = SystemClock.elapsedRealtime()
         val stats = FrameHistogram.of(session.deltas, session.count) ?: return
-        val line = FrameHistogram.line(session.label, stats)
+        val line = FrameHistogram.line(session.label, stats) +
+            FrameHistogram.decodeSplit(
+                FrameHistogram.of(session.decodeDeltas, session.decodeCount)
+            )
         synchronized(entries) {
             // Longest wins for a label. The report is read after the gesture, on
             // the way to Settings, so a short stray session taken on that trip

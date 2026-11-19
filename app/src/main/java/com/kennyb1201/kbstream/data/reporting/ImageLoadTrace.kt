@@ -145,6 +145,25 @@ internal object ImageLoadTrace {
     private val trims = LinkedHashMap<String, Int>()
 
     /**
+     * `System.nanoTime()` when the last real decode finished; 0 before any.
+     *
+     * The frame meter's missing half (spec 2026-11-19, churn F4): `duringFrame`
+     * says a decode landed inside a metered gesture, but not whether the FRAMES
+     * it landed in were the slow ones. The build-390 walk left that open -
+     * p50=33ms over 177 frames with 85 image decodes inside the window - so the
+     * next paste has to be able to read the walk's frames as two populations.
+     *
+     * Written on loader threads, read on the main thread by
+     * [UiFrameTrace]'s frame callback, which is why it is volatile and outside
+     * the trace's lock. Same clock as `frameTimeNanos` by construction.
+     */
+    @Volatile
+    private var lastDecodeEndNanos = 0L
+
+    /** When the last decode finished, on [System.nanoTime]'s clock. */
+    fun lastDecodeEndNanos(): Long = lastDecodeEndNanos
+
+    /**
      * One completed request. [width]/[height] are the DECODED pixels.
      *
      * [durationMs] is the request's end-to-end latency (start to bitmap, so it
@@ -170,6 +189,11 @@ internal object ImageLoadTrace {
         duringFrame: Boolean = false,
         walkActive: Boolean = false
     ) {
+        // The frame meter's other half (spec 2026-11-19, churn F4): WHEN a decode
+        // landed, on the clock Choreographer's frameTimeNanos uses
+        // (System.nanoTime), outside the lock because it is one store and the
+        // frame callback must never wait on this object.
+        if (source != Source.MEMORY) lastDecodeEndNanos = System.nanoTime()
         synchronized(lock) {
             when (source) {
                 Source.MEMORY -> memoryHits++
@@ -367,6 +391,7 @@ internal object ImageLoadTrace {
 
     /** Clears the counters (tests). */
     fun reset() {
+        lastDecodeEndNanos = 0L
         synchronized(lock) {
             memoryHits = 0
             diskDecodes = 0

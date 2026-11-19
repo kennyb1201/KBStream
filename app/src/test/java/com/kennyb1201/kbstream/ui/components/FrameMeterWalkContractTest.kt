@@ -321,6 +321,37 @@ class FrameMeterWalkContractTest {
     // ── helpers ──────────────────────────────────────────────────────────
 
     /** One function's source, by matching its declaration and balancing braces. */
+    // ── F4 (2026-11-19, churn): the walk's frames as two populations ──────
+
+    @Test
+    fun `the walk's line splits the frames an image decode landed in`() {
+        assertTrue(
+            "the frame callback asks WHEN the last decode finished, on " +
+                "Choreographer's own clock",
+            trace.contains("val decodeEndNs = ImageLoadTrace.lastDecodeEndNanos()")
+        )
+        assertTrue(
+            "and files that frame beside the session's total, once per frame " +
+                "however many decodes landed in it",
+            trace.contains("session.decodeDeltas[session.decodeCount++] = deltaMs")
+        )
+        assertTrue(
+            "the line carries the second histogram, or the number never reaches a paste",
+            trace.contains("FrameHistogram.decodeSplit(") &&
+                trace.contains("FrameHistogram.of(session.decodeDeltas, session.decodeCount)")
+        )
+        assertTrue(
+            "and it is summarised with the same budgets as the session, so the two " +
+                "halves are read against each other",
+            histogram.contains("fun decodeSplit(stats: FrameStats?): String")
+        )
+        assertTrue(
+            "a session with no decode keeps the line shape every older paste is read " +
+                "against",
+            trace.contains("FrameHistogram.line(session.label, stats) +")
+        )
+    }
+
     private fun block(source: String, declaration: String): String {
         val at = source.indexOf(declaration)
         require(at >= 0) { "missing: $declaration" }

@@ -120,6 +120,23 @@ class ImageLoadTraceTest {
         )
     }
 
+    // ── F4 (2026-11-19, churn): when a decode landed ─────────────────
+
+    @Test
+    fun `a decode stamps the frame meter's clock, a memory hit does not`() {
+        ImageLoadTrace.noteImage(ImageLoadTrace.Source.MEMORY, 342, 192)
+        assertEquals(
+            "a hit decodes nothing, so it must not mark a frame as decoded",
+            0L,
+            ImageLoadTrace.lastDecodeEndNanos()
+        )
+        ImageLoadTrace.noteImage(ImageLoadTrace.Source.DISK, 342, 192)
+        assertTrue(
+            "the disk decode is what the frame meter has to attribute",
+            ImageLoadTrace.lastDecodeEndNanos() > 0L
+        )
+    }
+
     @Test
     fun `reset clears both halves`() {
         ImageLoadTrace.noteImage(ImageLoadTrace.Source.MEMORY, 1, 1)

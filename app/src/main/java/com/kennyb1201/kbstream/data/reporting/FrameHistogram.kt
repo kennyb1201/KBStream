@@ -92,6 +92,28 @@ object FrameHistogram {
             "p95=${stats.p95Ms}ms max=${stats.maxMs}ms " +
             ">16=${stats.over16Ms} >33=${stats.over33Ms}"
 
+    /**
+     * The decode half of a walk's line: the frames an image decode landed in,
+     * summarised the way the whole session is.
+     *
+     * One `frame:` line cannot say whether the slow frames were the ones carrying
+     * new bitmaps - the build-390 walk reported p50=33ms with 85 image decodes
+     * inside its window, and the next fix depends on whether those frames are the
+     * p95 or the p50. Same budgets, same percentiles, so the two halves are read
+     * against each other: `decodeP50=16ms` beside `p50=33ms` clears the loader and
+     * points at the draw; `decodeP50=48ms` does the opposite.
+     *
+     * Empty when no decode landed in the session, so a paste that never decodes
+     * carries the line it always did.
+     */
+    fun decodeSplit(stats: FrameStats?): String =
+        if (stats == null) {
+            ""
+        } else {
+            " decodeFrames=${stats.frames} decodeP50=${stats.p50Ms}ms " +
+                "decodeP95=${stats.p95Ms}ms decode>33=${stats.over33Ms}"
+        }
+
     /** Nearest-rank percentile over an ascending list. */
     private fun percentile(sorted: List<Int>, percent: Int): Int {
         val rank = (percent / 100.0 * sorted.size).let { kotlin.math.ceil(it).toInt() }
