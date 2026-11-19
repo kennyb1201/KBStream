@@ -24,6 +24,21 @@ package com.kennyb1201.kbstream.data.reporting
  * is 3840) rather than what the source was shaped like, which is what the
  * full-resolution hero bug was.
  *
+ * The DECODE TIMES are here for the 2026-11-18 diagnosis (§1, §7). Every other
+ * count on this object says what the loader did, not what it cost: a session
+ * that decoded 400 bitmaps reads the same whether each took 3 ms or 40. The
+ * frame meter cannot attribute a slow frame to anything either, so the two
+ * lines together are the only way a paste can answer "did the decode land on
+ * the frame". `ge16`/`ge33` are a decode that cost one or two 60 Hz budgets;
+ * `duringFrame` says how many of them finished while a metered gesture was
+ * running, which is the correlation itself.
+ *
+ * The ASKED sizes are the other half of the warm question: `decoded at:` shows
+ * what came out of the decoder, which a warm also writes. `asked at:` shows what
+ * the surfaces asked the loader FOR - including memory hits, where a warm that
+ * matches shows up as the same size. Two different lists for one asset is a
+ * warm that writes beside the entry the card reads.
+ *
  * Counts and pixel sizes only - never a URL, a title or an id, the same rule
  * [DetailTrace] follows. Kept free of Android and Coil types on purpose: the
  * naming and the arithmetic are the parts worth testing, and they are testable
@@ -64,6 +79,12 @@ internal object ImageLoadTrace {
     /** Trim levels kept, newest last. Levels repeat, so this counts. */
     private const val MAX_TRIMS = 4
 
+    /** One 60 Hz frame budget in ms: a decode at or over it lost a frame. */
+    private const val FRAME_BUDGET_MS = 16
+
+    /** Two budgets: the median frame the 2026-11-18 tap walk measured. */
+    private const val TWO_FRAME_BUDGET_MS = 33
+
     private val lock = Any()
 
     private var memoryHits = 0
@@ -99,20 +120,67 @@ internal object ImageLoadTrace {
     private var heroDrawHits = 0
     private var heroDrawMisses = 0
 
+    // The cost side (diagnosis 2026-11-18, §1/§7). Counts, not samples: a paste
+    // needs "how many decodes were slow", never the list itself.
+    private var timedDecodes = 0
+    private var decodesOverBudget = 0
+    private var decodesOverTwoBudgets = 0
+    private var slowestDecodeMs = 0
+    private var decodesDuringFrame = 0
+
     /** "WxH" -> count, first-seen order kept (LinkedHashMap). */
     private val sizes = LinkedHashMap<String, Int>()
+
+    /** "WxH" -> count of what the surfaces ASKED for, hits included. */
+    private val askedSizes = LinkedHashMap<String, Int>()
 
     /** "LEVEL xN" per distinct level, oldest first. */
     private val trims = LinkedHashMap<String, Int>()
 
-    /** One completed request. [width]/[height] are the DECODED pixels. */
-    fun noteImage(source: Source, width: Int, height: Int) {
+    /**
+     * One completed request. [width]/[height] are the DECODED pixels.
+     *
+     * [durationMs] is the request's end-to-end latency (start to bitmap, so it
+     * includes the disk read), 0 when the caller did not time it. [askedWidth]/
+     * [askedHeight] are the size the layout resolved the request to, 0 when Coil
+     * left a dimension undefined. [duringFrame] says a frame-metered gesture was
+     * running as this completed - the number that ties a decode to a frame.
+     */
+    fun noteImage(
+        source: Source,
+        width: Int,
+        height: Int,
+        durationMs: Int = 0,
+        askedWidth: Int = 0,
+        askedHeight: Int = 0,
+        duringFrame: Boolean = false
+    ) {
         synchronized(lock) {
             when (source) {
                 Source.MEMORY -> memoryHits++
                 Source.DISK -> diskDecodes++
                 Source.NETWORK -> networkDecodes++
                 Source.OTHER -> otherDecodes++
+            }
+            // The ask, hits included: a memory hit whose asked size equals a
+            // warm's size is the proof the warm entry was the one the card
+            // reads, and a hit at a size no warm wrote is the proof it was not.
+            if (askedWidth > 0 && askedHeight > 0) {
+                val asked = "${askedWidth}x$askedHeight"
+                askedSizes[asked] = (askedSizes[asked] ?: 0) + 1
+                while (askedSizes.size > MAX_SIZES) {
+                    askedSizes.remove(askedSizes.keys.first())
+                }
+            }
+            // Timing is decode-only: a memory hit has no decode to time, and
+            // counting its latency would mix the frame's own work into the
+            // number a fix is supposed to bring down.
+            if (source != Source.MEMORY && durationMs > 0) {
+                timedDecodes++
+                if (durationMs >= FRAME_BUDGET_MS) decodesOverBudget++
+                if (durationMs >= TWO_FRAME_BUDGET_MS) decodesOverTwoBudgets++
+                if (durationMs > slowestDecodeMs) slowestDecodeMs = durationMs
+                if (duringFrame) decodesDuringFrame++
             }
             // A cache hit is not a decode: counting its size would drown the
             // six slots in one tile's dimensions and hide the surfaces that
@@ -203,7 +271,8 @@ internal object ImageLoadTrace {
     fun lines(): List<String> = synchronized(lock) {
         val loads = memoryHits + diskDecodes + networkDecodes + otherDecodes
         if (loads == 0 && trims.isEmpty() && heroDraws == 0 &&
-            heroWarms == 0 && tileWarms == 0 && heroFocusArrivals == 0
+            heroWarms == 0 && tileWarms == 0 && heroFocusArrivals == 0 &&
+            timedDecodes == 0 && askedSizes.isEmpty()
         ) {
             return emptyList()
         }
@@ -220,6 +289,15 @@ internal object ImageLoadTrace {
         // why they are counts rather than sizes.
         if (heroDecodes > 0 || railDiskDecodes > 0) {
             out += "scroll: heroDecodes=$heroDecodes cardDiskDecodes=$railDiskDecodes"
+        }
+        // What the decodes COST (diagnosis 2026-11-18, §1/§7): the counts above
+        // cannot tell a 3 ms tile from a 40 ms one, and the frame meter has no
+        // per-frame attribution. `duringFrame` is the correlation: decodes that
+        // finished while a metered gesture was open.
+        if (timedDecodes > 0) {
+            out += "decode: n=$timedDecodes ge16=$decodesOverBudget " +
+                "ge33=$decodesOverTwoBudgets max=${slowestDecodeMs}ms " +
+                "duringFrame=$decodesDuringFrame"
         }
         // Where the hero-size decodes came from (dig four §1c). Printed beside
         // the counts above so a paste can be read as "warms are working" rather
@@ -238,6 +316,11 @@ internal object ImageLoadTrace {
         if (sizes.isNotEmpty()) {
             out += "decoded at: " +
                 sizes.entries.joinToString(", ") { "${it.key} x${it.value}" }
+        }
+        // What the surfaces asked FOR, hits included - the warm's own audit.
+        if (askedSizes.isNotEmpty()) {
+            out += "asked at: " +
+                askedSizes.entries.joinToString(", ") { "${it.key} x${it.value}" }
         }
         if (trims.isNotEmpty()) {
             out += "trim: " +
@@ -273,7 +356,13 @@ internal object ImageLoadTrace {
             heroFocusArrivals = 0
             heroDrawHits = 0
             heroDrawMisses = 0
+            timedDecodes = 0
+            decodesOverBudget = 0
+            decodesOverTwoBudgets = 0
+            slowestDecodeMs = 0
+            decodesDuringFrame = 0
             sizes.clear()
+            askedSizes.clear()
             trims.clear()
         }
     }

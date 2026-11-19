@@ -44,6 +44,13 @@ object UiFrameTrace {
     }
 
     private val entries = ArrayDeque<String>()
+
+    /**
+     * Written on the main thread; also READ from loader threads, by
+     * [ImageLoadTrace]'s caller asking whether a decode landed inside a metered
+     * gesture. Volatile so that answer is not stale.
+     */
+    @Volatile
     private var active: Session? = null
 
     /**

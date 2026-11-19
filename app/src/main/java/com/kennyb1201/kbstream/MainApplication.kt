@@ -573,10 +573,62 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             // per frame.
             .eventListener(
                 object : coil3.EventListener() {
+                    /**
+                     * When a request started, and what size the layout
+                     * resolved it to - by request identity, because Coil hands
+                     * the same instance to `onStart`, `resolveSizeEnd` and the
+                     * result that reaches `onSuccess`.
+                     *
+                     * The 2026-11-18 diagnosis (§1, §7) had counts and sizes
+                     * but no durations: nothing could tie a decode to the 33 ms
+                     * frame the walk measured. One map entry per in-flight
+                     * request, removed on every terminal callback.
+                     */
+                    class Start(val atNs: Long) {
+                        var askedWidth = 0
+                        var askedHeight = 0
+                    }
+
+                    private val inFlight =
+                        java.util.IdentityHashMap<coil3.request.ImageRequest, Start>()
+
+                    override fun onStart(request: coil3.request.ImageRequest) {
+                        synchronized(inFlight) {
+                            inFlight[request] = Start(System.nanoTime())
+                        }
+                    }
+
+                    override fun resolveSizeEnd(
+                        request: coil3.request.ImageRequest,
+                        size: coil3.size.Size
+                    ) {
+                        synchronized(inFlight) {
+                            inFlight[request]?.let { start ->
+                                start.askedWidth = size.width.pixelsOrZero()
+                                start.askedHeight = size.height.pixelsOrZero()
+                            }
+                        }
+                    }
+
+                    override fun onCancel(request: coil3.request.ImageRequest) {
+                        synchronized(inFlight) { inFlight.remove(request) }
+                    }
+
+                    override fun onError(
+                        request: coil3.request.ImageRequest,
+                        result: coil3.request.ErrorResult
+                    ) {
+                        synchronized(inFlight) { inFlight.remove(request) }
+                    }
+
                     override fun onSuccess(
                         request: coil3.request.ImageRequest,
                         result: coil3.request.SuccessResult
                     ) {
+                        val start = synchronized(inFlight) { inFlight.remove(request) }
+                        val durationMs = start?.let {
+                            ((System.nanoTime() - it.atNs) / 1_000_000L).toInt()
+                        } ?: 0
                         // F1 of the 2026-11-17 dynamic-colour fix: the tint
                         // samples the DISK cache, so a load that reached the
                         // disk is the moment its answer became readable. The
@@ -600,7 +652,13 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                                 else -> ImageLoadTrace.Source.OTHER
                             },
                             width = result.image.width,
-                            height = result.image.height
+                            height = result.image.height,
+                            durationMs = durationMs,
+                            askedWidth = start?.askedWidth ?: 0,
+                            askedHeight = start?.askedHeight ?: 0,
+                            duringFrame =
+                                com.kennyb1201.kbstream.data.reporting.UiFrameTrace
+                                    .isRunning()
                         )
                     }
                 }
@@ -843,3 +901,10 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         const val ADDON_REFRESH_WORK_NAME = "addon_manifest_refresh"
     }
 }
+
+/**
+ * A resolved Coil dimension in pixels, or 0 when Coil left it undefined
+ * (`Size.ORIGINAL`: no size was requested, so there is nothing to record).
+ */
+private fun coil3.size.Dimension.pixelsOrZero(): Int =
+    if (this is coil3.size.Dimension.Pixels) px else 0

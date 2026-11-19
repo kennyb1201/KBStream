@@ -72,11 +72,13 @@ import com.kennyb1201.kbstream.data.watched.LocalSeriesProgress
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.watched.WatchStateBus
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
+import com.kennyb1201.kbstream.ui.components.ArtWarm
 import com.kennyb1201.kbstream.ui.components.LandscapeArtRequest
 import com.kennyb1201.kbstream.ui.components.landscapeArtFor
 import com.kennyb1201.kbstream.ui.components.landscapeArtKey
 import com.kennyb1201.kbstream.ui.components.landscapeArtUrls
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.data.tmdb.alternatePosterPath
 import com.kennyb1201.kbstream.data.tmdb.tmdbImage
 import com.kennyb1201.kbstream.data.tmdb.director
@@ -546,6 +548,81 @@ class HomeViewModel(
      */
     private var warmIndexSource: List<List<MetaPreview>> = emptyList()
     private var warmIndex: Map<String, WarmSlot> = emptyMap()
+
+    /** A card's place in one of the two episode rows. */
+    private class EpisodeRowPosition(
+        val row: Int,
+        val itemIndex: Int
+    )
+
+    /**
+     * A row's card and its art, so the warm knows WHICH size to ask for.
+     *
+     * The two rows draw different widths (see [CONTINUE_WATCHING_ART_WIDTH_DP]),
+     * so their warms cannot share one size and one list.
+     */
+    private class EpisodeRowArt(
+        val row: Int,
+        val url: String
+    )
+
+    /**
+     * A hit in one of the episode rows: the rows the index was built from, and
+     * the position in one of them.
+     */
+    private class EpisodeRowSlot(
+        val upNext: List<UpNextItem>,
+        val upcoming: List<UpcomingEpisode>,
+        val row: Int,
+        val itemIndex: Int
+    )
+
+    /**
+     * `id` -> position in the Continue Watching / Upcoming rows.
+     *
+     * The focus-path warm's second index, and the same shape as the rails' one
+     * (spec 2026-11-18, warm dispatch cost; the diagnosis of the same date found
+     * this call site still scanning). [warmEpisodeRowNeighbours] ran
+     * `upNext.indexOfFirst { it.id == item.id }` and then the same on
+     * `upcoming` on every focus step - main-thread work before the indexed rail
+     * warms got a chance to run. The rows only change when their flows publish,
+     * so the index is rebuilt once per publish, by IDENTITY of the two lists.
+     */
+    private var episodeRowIndexSource: Pair<List<UpNextItem>, List<UpcomingEpisode>>? = null
+    private var episodeRowIndex: Map<String, EpisodeRowPosition> = emptyMap()
+
+    /**
+     * Where [item] sits in the episode rows, or null when it is in neither.
+     *
+     * FIRST wins, exactly like the two `indexOfFirst` calls this replaces: the
+     * Continue Watching row before the Upcoming row, and the first copy of a
+     * card in its own row. The rows ride along in the answer so the caller reads
+     * the instances the index describes - the flows can publish between a
+     * lookup and a second `.value` read.
+     */
+    @Synchronized
+    private fun episodeRowSlotOf(item: MetaPreview): EpisodeRowSlot? {
+        val upNext = _upNext.value
+        val upcoming = _upcomingSchedule.value
+        val source = episodeRowIndexSource
+        if (source == null || source.first !== upNext || source.second !== upcoming) {
+            val built = HashMap<String, EpisodeRowPosition>(upNext.size + upcoming.size)
+            upNext.forEachIndexed { index, candidate ->
+                if (candidate.id.isNotBlank() && candidate.id !in built) {
+                    built[candidate.id] = EpisodeRowPosition(EPISODE_ROW_UP_NEXT, index)
+                }
+            }
+            upcoming.forEachIndexed { index, candidate ->
+                if (candidate.id.isNotBlank() && candidate.id !in built) {
+                    built[candidate.id] = EpisodeRowPosition(EPISODE_ROW_UPCOMING, index)
+                }
+            }
+            episodeRowIndexSource = upNext to upcoming
+            episodeRowIndex = built
+        }
+        val position = episodeRowIndex[item.id] ?: return null
+        return EpisodeRowSlot(upNext, upcoming, position.row, position.itemIndex)
+    }
 
     /**
      * Profile id the current [rails] content was built for. Home renders the
@@ -3045,73 +3122,133 @@ Log.d(
     }
 
     /**
-     * The Continue Watching / Upcoming near field, at HERO size.
+     * The Continue Watching / Upcoming near field, at the size those cards draw.
      *
      * Those rows draw episode stills the list already holds as urls, so there is
      * nothing to resolve - only a bitmap to decode before the walk lands on it.
      * The near field is the same one the rails use: the cards either side and the
-     * head of the adjacent row, capped, deduped, and warmed through the shared
-     * limiter so a focus burst cannot stack decodes.
+     * head of the adjacent row, capped and deduped.
+     *
+     * Two things were wrong with the warm this replaces (diagnosis 2026-11-18,
+     * §6, and the `asked at:` line it commissioned proves both):
+     *
+     * 1. It warmed the POSTER at 1280x720. A CW card draws
+     *    `episodeThumbnail ?: backdrop ?: poster` and an Upcoming card draws
+     *    `backdrop ?: poster`, so the URL it warmed was one those cards never
+     *    ask for - a decode that could not be a hit for the row the walk was
+     *    on. [upNextCardArt] and [upcomingCardArt] mirror the cards' own order
+     *    (HomeScreen's `CompactUpNextCard` / `UpcomingEpisodeCard`).
+     * 2. 1280x720 is the hero's size. Coil's memory cache is keyed
+     *    by requested size as well as url, so a 1280x720 entry could never
+     *    answer a card asking for its 212x146 (or 200x146) dp box. The warm now
+     *    writes the entry the card reads; the hero pays its own decode behind
+     *    the 600 ms dwell, as it does for every other rail card.
+     *
+     * The lookup is indexed for the same reason the rail warms are (warm
+     * dispatch cost): this runs on the main thread on every focus step, and it
+     * used to scan both rows first.
      *
      * Answers whether [item] was one of those rows' cards; false means the caller
      * should run the rail warms it always ran.
      */
     private fun warmEpisodeRowNeighbours(item: MetaPreview): Boolean {
-        val upNext = _upNext.value
-        val upcoming = _upcomingSchedule.value
-        val cwIndex = upNext.indexOfFirst { it.id == item.id }
-        val upIndex = if (cwIndex < 0) {
-            upcoming.indexOfFirst { it.id == item.id }
-        } else {
-            -1
-        }
-        if (cwIndex < 0 && upIndex < 0) return false
-
-        val art: List<String?> = if (cwIndex >= 0) {
-            val index = cwIndex
-            buildList {
-                if (index > 0) add(upNext[index - 1].poster)
-                addAll(upNext.drop(index + 1).take(HERO_LOOKAHEAD_CARDS).map { it.poster })
-                addAll(upcoming.take(HERO_LOOKAHEAD_RAIL_HEAD).map { it.poster ?: it.backdrop })
-            }
-        } else {
-            val index = upIndex
-            buildList {
-                if (index > 0) add(upcoming[index - 1].poster ?: upcoming[index - 1].backdrop)
-                addAll(
-                    upcoming.drop(index + 1).take(HERO_LOOKAHEAD_CARDS)
-                        .map { it.poster ?: it.backdrop }
-                )
-                addAll(upNext.take(HERO_LOOKAHEAD_RAIL_HEAD).map { it.poster })
-            }
-        }
-
-        val urls = art.filterNotNull().filter { it.isNotBlank() }
-            .distinct()
-            .take(HERO_LOOKAHEAD_MAX_CARDS)
-        if (urls.isEmpty()) return true
+        val slot = episodeRowSlotOf(item) ?: return false
+        val upNext = slot.upNext
+        val upcoming = slot.upcoming
         val context = getApplication<android.app.Application>()
-        viewModelScope.launch {
-            urls.map { url ->
-                async {
-                    if (!heroArtPrefetchInFlight.add(url)) return@async
-                    try {
-                        heroArtPrefetchSemaphore.withPermit {
-                            com.kennyb1201.kbstream.ui.components.ArtWarm
-                                .warmAll(context, listOf(url), EPISODE_STILL_W, EPISODE_STILL_H)
-                        }
-                    } catch (e: kotlinx.coroutines.CancellationException) {
-                        throw e
-                    } catch (_: Exception) {
-                        // Best-effort: the card decodes on first sight, as before.
-                    } finally {
-                        heroArtPrefetchInFlight.remove(url)
+        val spoilerFree = AppPreferences.getSpoilerFree(context)
+
+        val art = if (slot.row == EPISODE_ROW_UP_NEXT) {
+            val index = slot.itemIndex
+            buildList<EpisodeRowArt> {
+                if (index > 0) {
+                    upNextCardArt(upNext[index - 1], spoilerFree)?.let {
+                        add(EpisodeRowArt(EPISODE_ROW_UP_NEXT, it))
                     }
                 }
-            }.awaitAll()
+                upNext.drop(index + 1).take(HERO_LOOKAHEAD_CARDS).forEach { next ->
+                    upNextCardArt(next, spoilerFree)?.let {
+                        add(EpisodeRowArt(EPISODE_ROW_UP_NEXT, it))
+                    }
+                }
+                upcoming.take(HERO_LOOKAHEAD_RAIL_HEAD).forEach { next ->
+                    upcomingCardArt(next)?.let {
+                        add(EpisodeRowArt(EPISODE_ROW_UPCOMING, it))
+                    }
+                }
+            }
+        } else {
+            val index = slot.itemIndex
+            buildList<EpisodeRowArt> {
+                if (index > 0) {
+                    upcomingCardArt(upcoming[index - 1])?.let {
+                        add(EpisodeRowArt(EPISODE_ROW_UPCOMING, it))
+                    }
+                }
+                upcoming.drop(index + 1).take(HERO_LOOKAHEAD_CARDS).forEach { next ->
+                    upcomingCardArt(next)?.let {
+                        add(EpisodeRowArt(EPISODE_ROW_UPCOMING, it))
+                    }
+                }
+                upNext.take(HERO_LOOKAHEAD_RAIL_HEAD).forEach { next ->
+                    upNextCardArt(next, spoilerFree)?.let {
+                        add(EpisodeRowArt(EPISODE_ROW_UP_NEXT, it))
+                    }
+                }
+            }
+        }
+            .filter { it.url.isNotBlank() }
+            .distinctBy { it.url }
+            .take(HERO_LOOKAHEAD_MAX_CARDS)
+
+        if (art.isEmpty()) return true
+        val density = context.resources.displayMetrics.density
+        val heightPx = (EPISODE_ROW_ART_HEIGHT_DP * density).roundToInt()
+        val cwWidthPx = (CONTINUE_WATCHING_ART_WIDTH_DP * density).roundToInt()
+        val upWidthPx = (UPCOMING_ART_WIDTH_DP * density).roundToInt()
+        if (heightPx <= 0 || cwWidthPx <= 0 || upWidthPx <= 0) return true
+
+        val cwUrls = art.filter { it.row == EPISODE_ROW_UP_NEXT }.map { it.url }
+        val upUrls = art.filter { it.row == EPISODE_ROW_UPCOMING }.map { it.url }
+        viewModelScope.launch {
+            // ArtWarm bounds parallelism and dedupes by url+size itself, so a
+            // burst of focus steps cannot stack the same decode (see [ArtWarm]).
+            if (cwUrls.isNotEmpty()) {
+                ArtWarm.warmAll(context, cwUrls, cwWidthPx, heightPx)
+            }
+            if (upUrls.isNotEmpty()) {
+                ArtWarm.warmAll(context, upUrls, upWidthPx, heightPx)
+            }
         }
         return true
     }
+
+    /**
+     * The art a Continue Watching card draws, in the card's own order.
+     *
+     * Mirrors HomeScreen's `CompactUpNextCard`: the episode still unless the
+     * spoiler-free mode hides it, in which case the show's backdrop, then its
+     * poster. A warm must ask for the URL the card asks for, or it is a decode
+     * nothing reads (diagnosis 2026-11-18, §6).
+     */
+    private fun upNextCardArt(item: UpNextItem, spoilerFree: Boolean): String? {
+        val hidesIdentity = SpoilerFree.hidesIdentity(
+            enabled = spoilerFree,
+            watched = false,
+            // Only a resume card is about the episode the viewer is INSIDE,
+            // which the mode never hides - the same rule the card applies.
+            started = item.badge == UpNextBadge.CONTINUE_WATCHING
+        )
+        return if (hidesIdentity) {
+            item.backdrop ?: item.poster
+        } else {
+            item.episodeThumbnail ?: item.backdrop ?: item.poster
+        }
+    }
+
+    /** The art an Upcoming card draws (HomeScreen's `UpcomingEpisodeCard`). */
+    private fun upcomingCardArt(item: UpcomingEpisode): String? =
+        item.backdrop ?: item.poster
 
     /**
      * Warms the near field around [item] at HERO size, into the memory cache
@@ -14409,14 +14546,27 @@ private suspend fun calculateEpisodesRemaining(
         private const val HERO_LOOKAHEAD_BITMAP_WIDTH = 1280
         private const val HERO_LOOKAHEAD_BITMAP_HEIGHT = 720
 
+        /** The two rows the episode warm covers, as the index names them. */
+        private const val EPISODE_ROW_UP_NEXT = 0
+        private const val EPISODE_ROW_UPCOMING = 1
+
         /**
-         * The Continue Watching / Upcoming stills' warm size (spec 2026-11-18,
-         * Warm-ahead F1). Their hero art IS an episode still, drawn in the same
-         * hero box as a backdrop, so it is the hero's own decode - the same
-         * entry [HeroBackdropArt] reads for a card in either of those rows.
+         * The art size the Continue Watching and Upcoming cards draw, in dp.
+         *
+         * Both rows lay a card in a 224 dp slot with HomeScreen's 12 dp end gap,
+         * so their art is 212 dp wide - and the Upcoming row insets the slot
+         * itself as well as the card, which is the second 12 dp: its art is
+         * 200 dp. 146 dp is the card height in both rows.
+         *
+         * These are the numbers Coil keys its memory cache by, so they are the
+         * numbers the warm must ask for ([ArtWarm]): a 1280x720 entry answered
+         * no card in either row (diagnosis 2026-11-18, §6). The paste's
+         * `asked at:` line reports what the cards really ask for - if it ever
+         * disagrees with these, this is the constant that is wrong.
          */
-        private const val EPISODE_STILL_W = HERO_LOOKAHEAD_BITMAP_WIDTH
-        private const val EPISODE_STILL_H = HERO_LOOKAHEAD_BITMAP_HEIGHT
+        private const val CONTINUE_WATCHING_ART_WIDTH_DP = 212f
+        private const val UPCOMING_ART_WIDTH_DP = 200f
+        private const val EPISODE_ROW_ART_HEIGHT_DP = 146f
 
         /**
          * The size the BILLBOARD draws at (spec 2026-11-18, Billboard Warm F1).

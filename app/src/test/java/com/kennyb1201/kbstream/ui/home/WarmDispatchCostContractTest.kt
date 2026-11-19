@@ -181,6 +181,91 @@ class WarmDispatchCostContractTest {
         )
     }
 
+    // ── the episode rows: the scan the first fix missed (diagnosis 2026-11-18, §4)
+
+    @Test
+    fun `the episode rows are looked up, not scanned`() {
+        val warm = block(model, "private fun warmEpisodeRowNeighbours(")
+        assertFalse(
+            "no `indexOfFirst` over either row is left on the focus path",
+            warm.contains("indexOfFirst")
+        )
+        assertTrue(
+            "the position comes from the episode index",
+            warm.contains("val slot = episodeRowSlotOf(item) ?: return false") &&
+                warm.contains("slot.itemIndex")
+        )
+    }
+
+    @Test
+    fun `the episode index rebuilds only when a row publishes`() {
+        val index = block(model, "private fun episodeRowSlotOf(")
+        assertTrue(
+            "both rows by identity, so a publish invalidates it and nothing else",
+            index.contains(
+                "if (source == null || source.first !== upNext || source.second !== upcoming) {"
+            )
+        )
+        assertTrue(
+            "the check precedes the build - that ordering is the whole saving",
+            index.indexOf("if (source == null ||") < index.indexOf("val built = HashMap")
+        )
+        assertTrue(
+            "first wins, which is what the two indexOfFirst calls answered with",
+            index.contains("episodeRowIndexSource = upNext to upcoming") &&
+                index.contains("if (candidate.id.isNotBlank() && candidate.id !in built)")
+        )
+        assertTrue(
+            "replaced, never mutated, so the lock covers a swap and a read",
+            model.contains("@Synchronized\n    private fun episodeRowSlotOf(")
+        )
+    }
+
+    @Test
+    fun `the episode warm asks for the art its cards draw`() {
+        val warm = block(model, "private fun warmEpisodeRowNeighbours(")
+        assertTrue(
+            "the URL per row comes from the card's own rule, not from `poster`",
+            warm.contains("upNextCardArt(") && warm.contains("upcomingCardArt(")
+        )
+        val cw = block(model, "private fun upNextCardArt(")
+        assertTrue(
+            "Continue Watching: the episode still unless spoiler-free hides it",
+            cw.contains("item.episodeThumbnail ?: item.backdrop ?: item.poster") &&
+                cw.contains("item.backdrop ?: item.poster") &&
+                cw.contains("SpoilerFree.hidesIdentity(") &&
+                cw.contains("started = item.badge == UpNextBadge.CONTINUE_WATCHING")
+        )
+        val up = model.substringAfter("private fun upcomingCardArt(")
+            .substringBefore("\n\n")
+        assertTrue(
+            "Upcoming: the backdrop first, as its card draws it",
+            up.contains("item.backdrop ?: item.poster")
+        )
+    }
+
+    @Test
+    fun `the episode warm asks for the size its cards draw`() {
+        val warm = block(model, "private fun warmEpisodeRowNeighbours(")
+        assertTrue(
+            "each row warms at its own card's size - Coil keys the memory cache by " +
+                "requested size, so one size cannot answer both rows",
+            warm.contains("ArtWarm.warmAll(context, cwUrls, cwWidthPx, heightPx)") &&
+                warm.contains("ArtWarm.warmAll(context, upUrls, upWidthPx, heightPx)")
+        )
+        assertTrue(
+            "the sizes are the slot minus the row's gap inset, and the card height",
+            model.contains("CONTINUE_WATCHING_ART_WIDTH_DP = 212f") &&
+                model.contains("UPCOMING_ART_WIDTH_DP = 200f") &&
+                model.contains("EPISODE_ROW_ART_HEIGHT_DP = 146f")
+        )
+        assertFalse(
+            "the 1280x720 hero-size episode warm is gone: no card in either row " +
+                "asks for that entry",
+            model.contains("EPISODE_STILL_W")
+        )
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     /** One function's source, by matching its declaration and balancing braces. */
