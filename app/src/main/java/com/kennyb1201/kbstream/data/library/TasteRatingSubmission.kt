@@ -20,6 +20,7 @@ import com.kennyb1201.kbstream.data.mdblist.submitRatingImpl as submitMdbListRat
 import com.kennyb1201.kbstream.data.simkl.SIMKL_RATINGS_ENABLED
 import com.kennyb1201.kbstream.data.simkl.SimklRatingOutcome
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
+import com.kennyb1201.kbstream.data.simkl.simklRatingParkLimitLabel
 import com.kennyb1201.kbstream.data.simkl.simklRatingPauseMs
 import com.kennyb1201.kbstream.data.simkl.submitRatingImpl as submitSimklRating
 import com.kennyb1201.kbstream.data.sync.ProfileManager
@@ -317,7 +318,22 @@ object TasteRatingSubmission {
                     // never why nothing was moving. The line now also says
                     // whether a wake is coming (F4), because "next trigger"
                     // was a lie for a 60 s park.
-                    notePausedPark(app, tracker, now, waitMs, longPark)
+                    notePausedPark(
+                        app = app,
+                        tracker = tracker,
+                        now = now,
+                        waitMs = waitMs,
+                        wakeScheduled = longPark,
+                        // F2 (spec 2026-11-19, Simkl quota): the class of the
+                        // quota that was spent, for the leg that has one to name.
+                        // Read here, not carried on the queue entry: it describes
+                        // the park in force, which is the guard's own fact.
+                        parkClass = if (tracker == TasteRatingTracker.SIMKL) {
+                            simklRatingParkLimitLabel()
+                        } else {
+                            null
+                        }
+                    )
                     if (waitMs in 1..FOLLOW_UP_MAX_WAIT_MS) scheduleFollowUp(app, waitMs)
                 }
             }
@@ -352,7 +368,9 @@ object TasteRatingSubmission {
         waitMs: Long,
         // Whether this park scheduled the deferred wake, which decides what the
         // paste line may promise (F4).
-        wakeScheduled: Boolean
+        wakeScheduled: Boolean,
+        // The quota class the park names, when the leg has one (F2).
+        parkClass: String? = null
     ) {
         val last = pausedNotedAt[tracker] ?: 0L
         if (now - last < PAUSED_NOTE_INTERVAL_MS) return
@@ -371,11 +389,17 @@ object TasteRatingSubmission {
         } else {
             "retried on the next trigger"
         }
+        // The class is the field instrument for the quota question (F2): a
+        // `user_limit_exceeded` park means this account's traffic is the lever, an
+        // `app_limit_exceeded` one means every KBStream user is waiting on the same
+        // reset - and a park recorded before a restart names no class rather than
+        // inventing one.
+        val parkText = parkClass?.let { "(429 $it)" } ?: "(429)"
         TasteRatingQueue.noteFailure(
             app,
             tracker,
             now,
-            "${tracker.label} parked rating writes for $waitText (429) - $tail"
+            "${tracker.label} parked rating writes for $waitText $parkText - $tail"
         )
     }
 

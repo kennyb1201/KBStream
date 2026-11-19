@@ -53,6 +53,10 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         // so every mobile branch reads this rather than a build variant. It
         // only drives orientation today; the TV composables are untouched.
         FormFactor.init(this)
+        // The two Simkl 429 parks, read back before anything can trigger a drain
+        // (spec 2026-11-19, Simkl quota F1): a TV that updates or reboots during
+        // a 16-hour park must not spend a quota call re-learning it.
+        com.kennyb1201.kbstream.data.simkl.installSimklParkStores(this)
         // Build fingerprint, logged before anything that can fail. The question
         // every device test turns on is "which build is this?": a logcat full of
         // behavior from a stale APK wastes the whole session, and a suppression

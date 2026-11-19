@@ -188,7 +188,62 @@ class TasteRatingDrainWiringContractTest {
         )
         assertTrue(
             "the line keeps the shape the paste parses",
-            note.contains("\"\${tracker.label} parked rating writes for \$waitText (429) - \$tail\"")
+            note.contains(
+                "\"\${tracker.label} parked rating writes for \$waitText \$parkText - \$tail\""
+            )
+        )
+    }
+
+    // ── Simkl quota F2 (2026-11-19): the park line names the class ─────────
+
+    @Test
+    fun `the park line names the quota class the 429 carried`() {
+        val note = block(submission, "private fun notePausedPark(")
+        assertTrue(
+            "the class is a parameter the caller supplies",
+            note.contains("parkClass: String? = null")
+        )
+        assertTrue(
+            "and it is rendered with the 429 still in front of it, so an " +
+                "unclassified park reads exactly as it always did",
+            note.contains("parkClass?.let { \"(429 \$it)\" } ?: \"(429)\"")
+        )
+        assertTrue(
+            "only the Simkl leg has a quota class to read, and it is the guard's own",
+            submission.contains("parkClass = if (tracker == TasteRatingTracker.SIMKL) {") &&
+                submission.contains("simklRatingParkLimitLabel()")
+        )
+    }
+
+    // ── Simkl quota F1 (2026-11-19): the park outlives the process ────────
+
+    @Test
+    fun `both Simkl parks persist, and neither is the spacing floor`() {
+        val writes = source(SIMKL_WRITES)
+        assertTrue(
+            "the two guards get separate stores, because their parks must not merge",
+            writes.contains(
+                "simklRatingGuard.attachParkStore(prefsParkStore(prefs, KEY_PARK_RATINGS))"
+            ) && writes.contains(
+                "simklPlaybackGuard.attachParkStore(prefsParkStore(prefs, KEY_PARK_PLAYBACK))"
+            )
+        )
+        assertTrue(
+            "installed from the application, before anything can trigger a drain",
+            source(APPLICATION).contains("installSimklParkStores(this)")
+        )
+        val guard = source(PARK_GUARD)
+        assertTrue(
+            "the park is read back on construction and written once per 429",
+            guard.contains("private var blockedUntilMs = parkStore.readParkUntilMs()") &&
+                guard.contains("parkStore.writeParkUntilMs(blockedUntilMs)")
+        )
+        assertFalse(
+            "the spacing floor never reaches the store: a burst floor that survives a " +
+                "restart holds back a leg that is not bursting",
+            guard.contains("writeParkUntilMs(lastCallAtMs") ||
+                guard.contains("lastCallAtMs = parkStore") ||
+                guard.contains("writeParkUntilMs(clock") 
         )
     }
 
@@ -256,6 +311,9 @@ class TasteRatingDrainWiringContractTest {
         const val QUEUE = "data/library/TasteRatingQueue.kt"
         const val HOME_VM = "ui/home/HomeViewModel.kt"
         const val WORKER = "work/TasteRatingDrainWorker.kt"
+        const val SIMKL_WRITES = "data/simkl/SimklRatingWrites.kt"
+        const val PARK_GUARD = "data/simkl/SimklParkGuard.kt"
+        const val APPLICATION = "MainApplication.kt"
         const val WORKER_PATTERN = "work/OutboxFlushWorker.kt"
         const val SYNC_PAYLOAD = "data/sync/SyncPrefsPayload.kt"
     }

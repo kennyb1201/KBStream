@@ -1,5 +1,7 @@
 package com.kennyb1201.kbstream.data.simkl
 
+import android.content.Context
+import android.content.SharedPreferences
 import android.util.Log
 
 /*
@@ -66,85 +68,6 @@ internal enum class SimklRatingOutcome {
 }
 
 /**
- * Simkl's politeness and 429 guard, local to the ratings leg.
- *
- * Trakt has a budget object because its authenticated limit was known; no such
- * documented limit was verified for Simkl, so this is deliberately NOT a budget
- * claim - it is a floor that keeps a burst of thumbs from becoming a burst of
- * requests (one call per [minSpacingMs] at most), plus the same
- * `Retry-After` rule Trakt gets, defaulting to a minute when the header is
- * absent. It lives here rather than in [SimklRepository] so that no existing
- * Simkl path (history, watchlist, scrobbles) changes its timing.
- *
- * No Android types and a replaceable clock, so its arithmetic is pinned by a
- * plain JVM test - the same shape as TraktRateGuard.
- */
-internal class SimklRatingGuard(
-    private val minSpacingMs: Long = 2_000L,
-    private val clock: () -> Long = System::currentTimeMillis
-) {
-
-    private var lastCallAtMs = 0L
-
-    @Volatile
-    private var blockedUntilMs = 0L
-
-    /** True when a call may be made now. A refusal spends nothing. */
-    @Synchronized
-    fun tryAcquire(): Boolean {
-        val now = clock()
-        if (now < blockedUntilMs) return false
-        if (lastCallAtMs != 0L && now - lastCallAtMs < minSpacingMs) return false
-        lastCallAtMs = now
-        return true
-    }
-
-    /** Honor a 429's `Retry-After` (seconds), or [DEFAULT_RETRY_AFTER_SECONDS]. */
-    @Synchronized
-    fun noteRetryAfter(seconds: Long?) {
-        val waitMs = (seconds ?: DEFAULT_RETRY_AFTER_SECONDS).coerceAtLeast(1L) * 1_000L
-        blockedUntilMs = maxOf(blockedUntilMs, clock() + waitMs)
-    }
-
-    /** True while the leg is parked (a 429) or inside its spacing window. */
-    @Synchronized
-    fun isBlocked(): Boolean = blockedForMs() > 0L
-
-    /**
-     * Just the 429 park, without the spacing window.
-     *
-     * The playback/history legs use this one: a scrobble or a completion is an
-     * event, not a burst, so suppressing it inside the ratings leg's two-second
-     * spacing would drop events the viewer actually produced - while a 429's
-     * park is exactly the instruction to stop sending.
-     */
-    @Synchronized
-    fun parkedForMs(): Long = (blockedUntilMs - clock()).coerceAtLeast(0L)
-
-    /**
-     * How long the leg is held back for: the longer of a 429's park and the
-     * spacing window, in milliseconds, 0 when a call may go now.
-     *
-     * The caller uses this to tell a pause worth waiting out (a second or two of
-     * spacing) from one that is not (a 429's Retry-After), which is the whole
-     * difference between a prompt retry and a coroutine idling for an hour.
-     */
-    @Synchronized
-    fun blockedForMs(): Long {
-        val now = clock()
-        val parked = (blockedUntilMs - now).coerceAtLeast(0L)
-        val spacing = if (lastCallAtMs == 0L) 0L
-        else (lastCallAtMs + minSpacingMs - now).coerceAtLeast(0L)
-        return maxOf(parked, spacing)
-    }
-
-    companion object {
-        /** What a 429 without a usable `Retry-After` means (the Trakt default). */
-        const val DEFAULT_RETRY_AFTER_SECONDS = 60L
-    }
-}
-
-/**
  * The leg's single guard instance.
  *
  * Process-wide and deliberately NOT a field on [SimklRepository]: the
@@ -155,6 +78,16 @@ private val simklRatingGuard = SimklRatingGuard()
 
 /** How long the Simkl ratings leg is held back for; 0 when a call may go now. */
 internal fun simklRatingPauseMs(): Long = simklRatingGuard.blockedForMs()
+
+/**
+ * The quota class of the ratings park in force, or null when the leg is not
+ * parked (spec 2026-11-19, Simkl quota F2).
+ *
+ * Read by the drain's park line: `user_limit_exceeded` means this account's
+ * Simkl traffic is the lever, `app_limit_exceeded` means the V1 app's daily quota
+ * is spent for every KBStream user and the only honest response is to wait.
+ */
+internal fun simklRatingParkLimitLabel(): String? = simklRatingGuard.parkLimitLabel()
 
 /**
  * The PLAYBACK/history leg's own guard.
@@ -170,7 +103,40 @@ private val simklPlaybackGuard = SimklRatingGuard()
 internal fun simklPlaybackParkMs(): Long = simklPlaybackGuard.parkedForMs()
 
 /**
- * Applies the ratings leg's 429 rule to a playback/history response: park for
+ * Gives both legs a park that survives process death (spec 2026-11-19, F1).
+ *
+ * Called once at app start. Two separate keys, because the two guards are
+ * separate on purpose and their parks must never merge; a SharedPreferences read
+ * is cheap, and the only write is one per 429.
+ *
+ * Nothing here touches the spacing floor: that stays in memory (see
+ * [SimklRatingGuard]).
+ */
+internal fun installSimklParkStores(context: Context) {
+    val prefs = context.applicationContext
+        .getSharedPreferences(SIMKL_PARK_PREFS, Context.MODE_PRIVATE)
+    simklRatingGuard.attachParkStore(prefsParkStore(prefs, KEY_PARK_RATINGS))
+    simklPlaybackGuard.attachParkStore(prefsParkStore(prefs, KEY_PARK_PLAYBACK))
+}
+
+/** One precedence key as a [SimklParkStore]. */
+private fun prefsParkStore(prefs: SharedPreferences, key: String): SimklParkStore =
+    object : SimklParkStore {
+        override fun readParkUntilMs(): Long = prefs.getLong(key, 0L)
+
+        // apply(), not commit(): a 429 lands on a loader thread and nothing waits
+        // on this value - the next read is the next process's.
+        override fun writeParkUntilMs(untilMs: Long) {
+            prefs.edit().putLong(key, untilMs).apply()
+        }
+    }
+
+private const val SIMKL_PARK_PREFS = "kbstream_simkl_park"
+private const val KEY_PARK_RATINGS = "ratings_until"
+private const val KEY_PARK_PLAYBACK = "playback_until"
+
+/**
+ * Applies the playback leg's 429 rule to a playback/history response: park for
  * `Retry-After` (a minute when the header is absent), log the park, and answer
  * true so the caller returns its ordinary `false` - but with the park recorded
  * and the next write suppressed.
@@ -234,7 +200,22 @@ internal suspend fun SimklRepository.submitRatingImpl(
 
         when {
             response.code() == 429 -> {
-                simklRatingGuard.noteRetryAfter(response.headers()["Retry-After"]?.toLongOrNull())
+                // F2: name the quota that was spent. The classifier already
+                // exists and the interceptor already reads the body this way -
+                // the park line was the only place that threw the class away, so
+                // a paste could not tell this account's daily quota from the
+                // app's (spec 2026-11-19, Simkl quota F2).
+                val bodyError = rateLimitError(response)
+                val limit = SimklAuthV2Rules.rateLimit(response.code(), bodyError)
+                simklRatingGuard.noteRetryAfter(
+                    seconds = response.headers()["Retry-After"]?.toLongOrNull(),
+                    limitLabel = parkLabel(limit, bodyError)
+                )
+                Log.w(
+                    TAG,
+                    "rating ${verb(removal)} parked: 429 class=${limit.name} " +
+                        "retry-after=" + (response.headers()["Retry-After"] ?: "none")
+                )
                 SimklRatingOutcome.PAUSED
             }
             response.code() == 401 || response.code() == 403 -> SimklRatingOutcome.AUTH
@@ -266,6 +247,38 @@ internal suspend fun SimklRepository.submitRatingImpl(
         SimklRatingOutcome.NO_ANSWER
     }
 }
+
+/** How many bytes of a 429 body are read to classify it (the interceptor's cap). */
+private const val RATE_LIMIT_PEEK_BYTES = 1_024L
+
+/**
+ * The `error` field of a 429 body, read WITHOUT consuming the response.
+ *
+ * The same peek the rate-limit interceptor makes, and for the same reason: the
+ * body still has to be readable by whatever handles the response next.
+ */
+private fun rateLimitError(response: retrofit2.Response<*>): String? = runCatching {
+    org.json.JSONObject(response.peekBody(RATE_LIMIT_PEEK_BYTES).string())
+        .optString("error")
+        .takeIf { it.isNotBlank() }
+}.getOrNull()
+
+/**
+ * The word the park line records for [limit].
+ *
+ * The server's own spellings for the two daily quotas, so the paste and Simkl's
+ * docs use the same words; [SimklAuthV2Rules.RateLimit.BURST] covers both a real
+ * `rate_limit` and a body the classifier could not read, which is why an
+ * unreadable body reads `burst` rather than inventing a class (F2).
+ */
+private fun parkLabel(limit: SimklAuthV2Rules.RateLimit, bodyError: String?): String =
+    when (limit) {
+        SimklAuthV2Rules.RateLimit.USER_DAILY -> "user_limit_exceeded"
+        SimklAuthV2Rules.RateLimit.APP_DAILY -> "app_limit_exceeded"
+        SimklAuthV2Rules.RateLimit.BURST ->
+            bodyError?.trim()?.lowercase()?.takeIf { it == "rate_limit" } ?: "burst"
+        SimklAuthV2Rules.RateLimit.NONE -> "none"
+    }
 
 /** The one word the log lines use for a write versus a take-back. */
 private fun verb(removal: Boolean): String = if (removal) "remove" else "submit"

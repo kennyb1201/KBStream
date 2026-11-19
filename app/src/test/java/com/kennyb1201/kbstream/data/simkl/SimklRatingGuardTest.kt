@@ -24,6 +24,18 @@ class SimklRatingGuardTest {
 
     private fun guard() = SimklRatingGuard(minSpacingMs = 2_000L, clock = { now })
 
+    /** A store with one Long in it, the shape the prefs-backed one has. */
+    private class FakeParkStore(var untilMs: Long = 0L) : SimklParkStore {
+        var writes = 0
+
+        override fun readParkUntilMs(): Long = untilMs
+
+        override fun writeParkUntilMs(untilMs: Long) {
+            this.untilMs = untilMs
+            writes++
+        }
+    }
+
     @Test
     fun `the first call goes and the next waits out the spacing floor`() {
         val guard = guard()
@@ -90,6 +102,92 @@ class SimklRatingGuardTest {
         guard.noteRetryAfter(120)
         guard.noteRetryAfter(5)
         assertEquals(120_000L, guard.blockedForMs())
+    }
+
+    // ── F1 (2026-11-19, Simkl quota): the park outlives the process ─────
+
+    @Test
+    fun `a park recorded on one guard holds the next one over the same store`() {
+        val store = FakeParkStore()
+        val before = SimklRatingGuard(minSpacingMs = 2_000L, clock = { now }, parkStore = store)
+        before.noteRetryAfter(965 * 60)
+
+        val restored = SimklRatingGuard(minSpacingMs = 2_000L, clock = { now }, parkStore = store)
+        assertTrue(
+            "a restart during a 16-hour park must not spend a quota call re-learning it",
+            restored.isBlocked()
+        )
+        assertEquals(965 * 60_000L, restored.parkedForMs())
+        assertFalse(restored.tryAcquire())
+    }
+
+    @Test
+    fun `a persisted park in the past is no park`() {
+        val store = FakeParkStore(untilMs = now + 10_000L)
+        val guard = SimklRatingGuard(minSpacingMs = 2_000L, clock = { now }, parkStore = store)
+        assertEquals(10_000L, guard.parkedForMs())
+
+        now += 10_000L
+        assertFalse("the store is not rewritten just because time passed", guard.isBlocked())
+        assertTrue(guard.tryAcquire())
+    }
+
+    @Test
+    fun `the spacing floor does not persist`() {
+        val store = FakeParkStore()
+        val first = SimklRatingGuard(minSpacingMs = 2_000L, clock = { now }, parkStore = store)
+        assertTrue(first.tryAcquire())
+        assertFalse("inside the floor", first.tryAcquire())
+
+        val next = SimklRatingGuard(minSpacingMs = 2_000L, clock = { now }, parkStore = store)
+        assertTrue(
+            "a fresh process is not inside a burst window it never opened - a floor " +
+                "that survives a restart holds back a leg that is not bursting",
+            next.tryAcquire()
+        )
+        assertEquals("and no park was ever stored by a plain call", 0, store.writes)
+    }
+
+    @Test
+    fun `the write happens once per 429, not once per call`() {
+        val store = FakeParkStore()
+        val guard = SimklRatingGuard(minSpacingMs = 2_000L, clock = { now }, parkStore = store)
+        guard.tryAcquire()
+        guard.tryAcquire()
+        assertEquals("a call is not a park", 0, store.writes)
+
+        guard.noteRetryAfter(60)
+        assertEquals(1, store.writes)
+        assertEquals(now + 60_000L, store.untilMs)
+    }
+
+    @Test
+    fun `a store attached later still honours a park already in it`() {
+        val store = FakeParkStore(untilMs = now + 30_000L)
+        val guard = guard()
+        assertFalse("nothing installed yet", guard.isBlocked())
+
+        guard.attachParkStore(store)
+        assertEquals(30_000L, guard.parkedForMs())
+    }
+
+    @Test
+    fun `the park names its quota class, and the longer park keeps its own`() {
+        val guard = guard()
+        assertEquals("no park, no class", null, guard.parkLimitLabel())
+
+        guard.noteRetryAfter(965 * 60, limitLabel = "user_limit_exceeded")
+        assertEquals("user_limit_exceeded", guard.parkLimitLabel())
+
+        guard.noteRetryAfter(5, limitLabel = "app_limit_exceeded")
+        assertEquals(
+            "a shorter park cannot relabel the one that is actually holding the leg",
+            "user_limit_exceeded",
+            guard.parkLimitLabel()
+        )
+
+        now += 965 * 60_000L
+        assertEquals("an expired park names nothing", null, guard.parkLimitLabel())
     }
 
     @Test

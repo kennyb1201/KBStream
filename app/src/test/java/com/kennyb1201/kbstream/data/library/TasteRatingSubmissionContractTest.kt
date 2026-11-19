@@ -147,6 +147,11 @@ class TasteRatingSubmissionContractTest {
     @Test
     fun `the Simkl leg reuses its own helpers and carries its own small guard`() {
         val src = source(SIMKL_WRITES)
+        // The guard itself lives in its own Android-free file since spec
+        // 2026-11-19 (Simkl quota F1), so the persisted-park arithmetic is
+        // pinned by a plain JVM test; its two constants stay the ones this leg
+        // was pinned for.
+        val guard = source(SIMKL_PARK_GUARD)
 
         assertTrue("the repository's own id resolution, not a second grammar",
             src.contains("parsePlaybackIds(parentId, tmdbId)"))
@@ -155,9 +160,9 @@ class TasteRatingSubmissionContractTest {
         assertTrue("unconfigured or unauthenticated is a pause, never a failure",
             src.contains("if (!isConfigured() || !hasToken()) return SimklRatingOutcome.PAUSED"))
         assertTrue("a politeness floor, local to this leg",
-            src.contains("minSpacingMs: Long = 2_000L"))
+            guard.contains("minSpacingMs: Long = 2_000L"))
         assertTrue("a 429 without a header waits the Trakt default",
-            src.contains("DEFAULT_RETRY_AFTER_SECONDS = 60L"))
+            guard.contains("DEFAULT_RETRY_AFTER_SECONDS = 60L"))
         // Same for Simkl: enabled by the owner, not by a probe verdict.
         assertTrue("the landing gate is the only switch, and it is open",
             src.contains("SIMKL_RATINGS_ENABLED = true"))
@@ -403,6 +408,7 @@ class TasteRatingSubmissionContractTest {
         const val TRAKT_MODELS = "com/kennyb1201/kbstream/data/trakt/TraktModels.kt"
         const val TRAKT_WRITES = "com/kennyb1201/kbstream/data/trakt/TraktRatingWrites.kt"
         const val SIMKL_WRITES = "com/kennyb1201/kbstream/data/simkl/SimklRatingWrites.kt"
+        const val SIMKL_PARK_GUARD = "com/kennyb1201/kbstream/data/simkl/SimklParkGuard.kt"
         const val SUBMISSION = "com/kennyb1201/kbstream/data/library/TasteRatingSubmission.kt"
         const val QUEUE = "com/kennyb1201/kbstream/data/library/TasteRatingQueue.kt"
         const val TASTE_SIGNALS = "com/kennyb1201/kbstream/data/library/TasteSignals.kt"
