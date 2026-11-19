@@ -29,7 +29,12 @@ class ImageLoadTraceScrollCountTest {
             ImageLoadTrace.noteImage(ImageLoadTrace.Source.MEMORY, 1280, 720)
         }
         repeat(4) {
-            ImageLoadTrace.noteImage(ImageLoadTrace.Source.DISK, 1280, 720)
+            ImageLoadTrace.noteImage(
+                ImageLoadTrace.Source.DISK,
+                1280,
+                720,
+                walkActive = true
+            )
         }
 
         assertEquals(
@@ -41,9 +46,14 @@ class ImageLoadTraceScrollCountTest {
 
     @Test
     fun `a rail tile decoded from the disk is counted separately`() {
-        ImageLoadTrace.noteImage(ImageLoadTrace.Source.DISK, 342, 192)
-        ImageLoadTrace.noteImage(ImageLoadTrace.Source.DISK, 420, 236)
-        ImageLoadTrace.noteImage(ImageLoadTrace.Source.NETWORK, 342, 192)
+        ImageLoadTrace.noteImage(ImageLoadTrace.Source.DISK, 342, 192, walkActive = true)
+        ImageLoadTrace.noteImage(ImageLoadTrace.Source.DISK, 420, 236, walkActive = true)
+        ImageLoadTrace.noteImage(
+            ImageLoadTrace.Source.NETWORK,
+            342,
+            192,
+            walkActive = true
+        )
 
         assertEquals(
             "disk tiles are the wipe's cost; a network tile is a cold card, not a re-decode",
@@ -62,6 +72,27 @@ class ImageLoadTraceScrollCountTest {
             "nothing decoded, nothing to report - the paste stays short",
             null,
             scrollLine()
+        )
+    }
+
+    @Test
+    fun `a decode outside a walk window is not the walk's cost`() {
+        // The build-387 paste printed a 30-minute session's decodes under
+        // "scroll:" - Detail pages, the credits panel, the settings trip - and
+        // 306 could not be read as the walk at all. Only a decode that lands in
+        // a gesture or its tail is counted now; the size audit stays session-wide,
+        // because it answers a different question (which size did we warm).
+        ImageLoadTrace.noteImage(ImageLoadTrace.Source.DISK, 420, 236)
+        ImageLoadTrace.noteImage(ImageLoadTrace.Source.DISK, 1280, 720)
+
+        assertEquals(
+            "no gesture, no scroll line",
+            null,
+            scrollLine()
+        )
+        assertTrue(
+            "but the sizes are still recorded for the warm's audit",
+            ImageLoadTrace.lines().any { it.startsWith("decoded at:") }
         )
     }
 

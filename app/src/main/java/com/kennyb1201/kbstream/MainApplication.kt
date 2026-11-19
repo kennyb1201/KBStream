@@ -649,7 +649,15 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                             askedHeight = start?.askedHeight ?: 0,
                             duringFrame =
                                 com.kennyb1201.kbstream.data.reporting.UiFrameTrace
-                                    .isRunning()
+                                    .isRunning(),
+                            // Wider than duringFrame on purpose: the art a step
+                            // asks for is decoded after the frame session closes
+                            // (600 ms dwell, 350 ms settle), so the walk's own
+                            // counts have to outlive the gesture. See
+                            // ImageLoadTrace.noteImage.
+                            walkActive =
+                                com.kennyb1201.kbstream.data.reporting.UiFrameTrace
+                                    .inWalkWindow()
                         )
                     }
                 }

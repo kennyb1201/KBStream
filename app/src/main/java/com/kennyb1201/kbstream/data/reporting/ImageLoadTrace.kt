@@ -96,6 +96,13 @@ internal object ImageLoadTrace {
     // carry. A hero decode is the 1280x720 re-decode a rail walk pays per card;
     // a rail disk decode is a newly-visible card's tile coming off the disk
     // because the memory cache no longer had it.
+    //
+    // WALK-SCOPED (2026-11-19): both count only decodes that landed inside a
+    // metered gesture or its short tail (see [noteImage]'s walkActive and
+    // UiFrameTrace.inWalkWindow). They used to be app-wide, which made a whole
+    // session's Detail-page decodes print as "the scroll's" - the build-387
+    // paste's `cardDiskDecodes=306` was a 30-minute total that included the 137
+    // tile warms themselves and could not be read as the walk's cost.
     private var heroDecodes = 0
     private var railDiskDecodes = 0
 
@@ -145,6 +152,13 @@ internal object ImageLoadTrace {
      * [askedHeight] are the size the layout resolved the request to, 0 when Coil
      * left a dimension undefined. [duringFrame] says a frame-metered gesture was
      * running as this completed - the number that ties a decode to a frame.
+     *
+     * [walkActive] says a metered gesture was open **or had just closed** (see
+     * UiFrameTrace.inWalkWindow), and it is what scopes the two `scroll:` counts.
+     * It is deliberately wider than [duringFrame]: the art a step asks for is
+     * decoded after the frame session closes - the hero's dwell alone is 600 ms
+     * against a 350 ms settle - so a strict `duringFrame` gate would drop exactly
+     * the warms those counts exist to subtract.
      */
     fun noteImage(
         source: Source,
@@ -153,7 +167,8 @@ internal object ImageLoadTrace {
         durationMs: Int = 0,
         askedWidth: Int = 0,
         askedHeight: Int = 0,
-        duringFrame: Boolean = false
+        duringFrame: Boolean = false,
+        walkActive: Boolean = false
     ) {
         synchronized(lock) {
             when (source) {
@@ -189,10 +204,17 @@ internal object ImageLoadTrace {
             // The two counts the size list cannot carry (spec 2026-11-15, F1).
             // Classified by DECODED width, not by URL or call site, so it costs
             // no call-site plumbing and counts what was actually decoded.
-            if (width >= HERO_DECODE_MIN_WIDTH) {
-                heroDecodes++
-            } else if (source == Source.DISK) {
-                railDiskDecodes++
+            //
+            // Only inside a walk window (2026-11-19): the line says "scroll", and
+            // these were the session's totals instead. `asked at`/`decoded at`
+            // below stay session-wide on purpose - they are the warm's size audit,
+            // not a claim about what the walk cost.
+            if (walkActive) {
+                if (width >= HERO_DECODE_MIN_WIDTH) {
+                    heroDecodes++
+                } else if (source == Source.DISK) {
+                    railDiskDecodes++
+                }
             }
             val key = "${width}x$height"
             sizes[key] = (sizes[key] ?: 0) + 1
@@ -286,7 +308,9 @@ internal object ImageLoadTrace {
         // The scroll session's two counts (spec 2026-11-15, F1): how many hero
         // decodes the walk paid, and how many rail cards had to be decoded off
         // the disk. Both are read as "the fix must bring this down", which is
-        // why they are counts rather than sizes.
+        // why they are counts rather than sizes - and why they are scoped to the
+        // walk window: an app-wide count answered a different question (see the
+        // field's own note above).
         if (heroDecodes > 0 || railDiskDecodes > 0) {
             out += "scroll: heroDecodes=$heroDecodes cardDiskDecodes=$railDiskDecodes"
         }

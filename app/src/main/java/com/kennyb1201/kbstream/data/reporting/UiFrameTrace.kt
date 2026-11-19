@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.data.reporting
 
+import android.os.SystemClock
 import android.view.Choreographer
 
 /**
@@ -43,6 +44,15 @@ object UiFrameTrace {
     /** Surfaces remembered at once - one line each in the report. */
     private const val MAX_LABELS = 8
 
+    /**
+     * How long after a session closes its decodes still count as its own.
+     *
+     * Long enough to cover the hero's 600 ms art dwell and the tile warms queued
+     * behind the 3-permit semaphore on a slow box, short enough that touching the
+     * D-pad on the way to Settings cannot re-open a walk's accounting.
+     */
+    private const val WALK_TAIL_MS = 2_000L
+
     private class Session(val label: String) {
         val deltas = IntArray(MAX_FRAMES)
         var count = 0
@@ -67,6 +77,18 @@ object UiFrameTrace {
      */
     @Volatile
     private var active: Session? = null
+
+    /**
+     * `SystemClock.elapsedRealtime()` when the last session closed, 0 before any.
+     *
+     * The session closes 350 ms after the last step (ScrollFrameMeter's settle),
+     * and the work that step asked for finishes later than that: the
+     * hero's art dwell is 600 ms and the tile warms queue behind their semaphore.
+     * [inWalkWindow] uses this so a count of "what the walk cost" still includes
+     * those decodes instead of losing precisely the ones the walk asked for.
+     */
+    @Volatile
+    private var lastEndedAtMs = 0L
 
     /**
      * Starts (or restarts) the session for [label].
@@ -110,6 +132,21 @@ object UiFrameTrace {
     /** Whether a session is running - the scroll surface's own question. */
     fun isRunning(): Boolean = active != null
 
+    /**
+     * Whether a metered gesture is open, or closed within [WALK_TAIL_MS].
+     *
+     * The image trace's question, not the scroll surface's: a decode belongs to
+     * the walk if it lands while the walk is open OR in the short tail after it,
+     * because the art a step asks for is decoded after the last step - the hero's
+     * dwell alone is 600 ms against a 350 ms settle. Gating on [isRunning] alone
+     * drops exactly those decodes (build-387 note, [ImageLoadTrace]).
+     */
+    fun inWalkWindow(): Boolean {
+        val since = lastEndedAtMs
+        return active != null ||
+            (since != 0L && SystemClock.elapsedRealtime() - since <= WALK_TAIL_MS)
+    }
+
     /** Whether the running session (if any) is [label]'s. */
     fun isRunning(label: String): Boolean = active?.label == label
 
@@ -135,6 +172,9 @@ object UiFrameTrace {
             runCatching { Choreographer.getInstance().removeFrameCallback(callback) }
         }
         session.callback = null
+        // Before the length check: even a session too short to print still marks
+        // the moment a gesture ended, which is what the tail is measured from.
+        lastEndedAtMs = SystemClock.elapsedRealtime()
         val stats = FrameHistogram.of(session.deltas, session.count) ?: return
         val line = FrameHistogram.line(session.label, stats)
         synchronized(entries) {

@@ -295,6 +295,29 @@ class FrameMeterWalkContractTest {
         )
     }
 
+    @Test
+    fun `the walk's own counters span the art the step asked for`() {
+        // 2026-11-19: the two `scroll:` counts were app-wide, so a 30-minute
+        // session's Detail-page decodes printed as "the scroll's" (build-387
+        // `cardDiskDecodes=306`, 137 of them the tile warms themselves). They are
+        // scoped to a walk WINDOW now - open, or closed within a tail - because a
+        // strict isRunning() gate would drop exactly the decodes a step starts:
+        // the hero's dwell is 600 ms and the frame session settles at 350 ms.
+        val app = source("MainApplication.kt").replace(Regex("\\s+"), " ")
+        val trace = source(TRACE)
+        assertTrue(
+            "the loader tells the trace whether a walk is open (or just closed)",
+            app.contains("walkActive =") &&
+                app.contains("UiFrameTrace .inWalkWindow()")
+        )
+        assertTrue(
+            "and that window is a session plus a tail, not the settle alone",
+            trace.contains("fun inWalkWindow(): Boolean") &&
+                trace.contains("private const val WALK_TAIL_MS = 2_000L") &&
+                trace.contains("lastEndedAtMs = SystemClock.elapsedRealtime()")
+        )
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     /** One function's source, by matching its declaration and balancing braces. */
