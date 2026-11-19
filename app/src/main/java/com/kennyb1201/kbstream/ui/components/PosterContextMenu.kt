@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -34,7 +35,6 @@ import kotlinx.coroutines.launch
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -43,7 +43,6 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -693,10 +692,6 @@ fun PosterContextMenu(
 ) {
     val context = LocalContext.current
 
-    // The overlay's key handler moves focus itself (mechanism 3 in the header),
-    // bounded by the enclosing focusGroup.
-    val focusManager = LocalFocusManager.current
-
     // Every screen's poster menu shares this one channel, so the confirmation
     // for a destructive action lands in the same place app-wide.
     val feedback = rememberKBFeedback()
@@ -730,18 +725,14 @@ fun PosterContextMenu(
         )
     }
 
-    val firstRowFocusRequester = remember {
-        FocusRequester()
-    }
-
     // Focus anchor for the overlay itself: a plain 1x1 focusable spacer that
     // is composed in the same frame as the scrim, so requesting focus on it
     // reliably pulls focus off the poster behind the overlay while the
-    // action rows are still attaching. While it (or any row) holds focus,
-    // the enclosing focusGroup bounds every directional press to the menu,
-    // so the D-pad can never reach the dimmed rails behind it. Once the
-    // first row reports focus the anchor stops being focusable so it cannot
-    // trap edge navigation itself.
+    // action rows are still attaching. It is a landing spot, not a fence: the
+    // overlay's key handler owns every vertical press by addressing a row
+    // directly (spec 2026-11-19, F1), and the enclosing focusGroup still bounds
+    // whatever the framework itself navigates. Once the first row reports focus
+    // the anchor stops being focusable so it cannot become an extra stop.
     val overlayFocusRequester = remember {
         FocusRequester()
     }
@@ -994,6 +985,39 @@ fun PosterContextMenu(
         }
     }.sortedBy { contextMenuSectionRank(it) }
 
+    // One requester per row, indexed exactly like the rows loop below (spec
+    // 2026-11-19, F1). The menu used to move focus by SEARCH
+    // (`FocusManager.moveFocus`) and trust the focusGroup to bound it; at the
+    // first and last rows there is no next row inside the group, so the search
+    // landed on the background card below the panel (and above it) - the
+    // field's "long press menu on detail page loses focus to the background".
+    // Consuming the press afterwards cannot undo a move that already happened,
+    // so the handler addresses a row directly. Rebuilt when the row count
+    // changes, so element N is always the requester attached to row N; the
+    // Phase 2 take lands on row 0's.
+    val rowFocusRequesters = remember(rows.size) {
+        List(rows.size) { FocusRequester() }
+    }
+
+    // Which row last reported focus. -1 means none yet: focus is on the anchor
+    // while the take runs. Read only to CHOOSE a target, never to judge an
+    // edge, and the target is clamped - so a report that lags a fast key repeat
+    // costs at most a duplicate press (see [menuMoveTarget]).
+    var focusedActionIndex by remember {
+        mutableIntStateOf(-1)
+    }
+
+    // Requests one of this menu's own rows. `getOrNull` is the empty-menu
+    // guard: [menuMoveTarget] answers -1 when there are no rows, and -1 names
+    // nothing. The answer is discarded, exactly as the old move's was - a row
+    // that is not attached leaves focus where it is, never searching for
+    // somewhere else.
+    val moveToRow: (Int) -> Unit = { index ->
+        rowFocusRequesters.getOrNull(index)?.let { requester ->
+            runCatching { requester.requestFocus() }
+        }
+    }
+
     val dialogShape = KBShapePanel
 
     // Dismiss on system Back. BackHandler is used instead of key-event
@@ -1031,7 +1055,10 @@ fun PosterContextMenu(
         // right after opening can never escape the overlay.
         repeat(40) {
             runCatching {
-                firstRowFocusRequester.requestFocus()
+                // Row 0's own requester, the same one its row is attached to,
+                // so the take and the key handler cannot address different
+                // nodes (spec 2026-11-19, F1).
+                rowFocusRequesters.first().requestFocus()
             }
             if (firstActionFocused) {
                 return@LaunchedEffect
@@ -1096,18 +1123,30 @@ fun PosterContextMenu(
                         // rails scrolled while this menu scrolled too (spec
                         // 2026-11-18, F1).
                         //
-                        // So the move happens here instead: the focusGroup
-                        // bounds it to this menu, so it can go no further than
-                        // the first/last row, and the press is consumed either
-                        // way. Every vertical press therefore ends at this
-                        // handler, at any row, at any press speed, and nothing
-                        // depends on which row has reported focus.
+                        // So the move happens here instead, and the press is
+                        // consumed either way - but moving by SEARCH still
+                        // trusted the group to bound it, and the group does not
+                        // have an edge. From the last row Down there is no next
+                        // row inside the menu, so the search landed on the
+                        // background card below the panel; from the first row Up
+                        // it landed on the card above. That is the field's "long
+                        // press menu on detail page loses focus to the
+                        // background" (spec 2026-11-19, F1), and consuming the
+                        // press afterwards cannot undo a move that already
+                        // happened.
+                        //
+                        // So the handler addresses a row DIRECTLY: the target is
+                        // computed from the last reported row and clamped to a
+                        // real row index, then that row's own focusRequester is
+                        // asked. No code path here can name a node outside the
+                        // menu, at any press speed, with any reported index - a
+                        // stale index costs a duplicate press, never an escape.
                         Key.DirectionUp -> {
-                            focusManager.moveFocus(FocusDirection.Up)
+                            moveToRow(menuMoveTarget(focusedActionIndex, -1, rows.lastIndex))
                             true
                         }
                         Key.DirectionDown -> {
-                            focusManager.moveFocus(FocusDirection.Down)
+                            moveToRow(menuMoveTarget(focusedActionIndex, 1, rows.lastIndex))
                             true
                         }
 
@@ -1248,12 +1287,14 @@ fun PosterContextMenu(
                     ContextMenuActionRow(
                         label = action.label,
                         isDestructive = action.isDestructive,
-                        focusRequester = if (index == 0) {
-                            firstRowFocusRequester
-                        } else {
-                            null
-                        },
+                        // EVERY row, not only row 0: the key handler addresses a
+                        // row by index, so each one owns the requester that
+                        // index names (spec 2026-11-19, F1).
+                        focusRequester = rowFocusRequesters[index],
                         onFocused = {
+                            // Only REPORTED, never trusted as an edge decision:
+                            // the handler clamps whatever this says.
+                            focusedActionIndex = index
                             if (index == 0) {
                                 firstActionFocused = true
                             }
@@ -1455,4 +1496,23 @@ private fun ContextMenuActionRow(
             )
         }
     }
+}
+
+/**
+ * The row a vertical press moves to (spec 2026-11-19, F1).
+ *
+ * The clamp is the whole safety, and it is deliberately independent of how
+ * fresh [currentIndex] is: whatever row last REPORTED focus - including one
+ * that is a frame behind a fast key repeat - the answer is a real row of this
+ * menu, or -1 for an empty one. The handler consumes the press in every case,
+ * so a stale index costs a duplicate press and can never name a node outside
+ * the menu's rows.
+ *
+ * `-1` for `currentIndex` means no row has reported focus yet (the overlay
+ * anchor holds it during the take): both directions then land on row 0, the
+ * only sensible target.
+ */
+internal fun menuMoveTarget(currentIndex: Int, delta: Int, lastIndex: Int): Int {
+    if (lastIndex < 0) return -1
+    return (currentIndex + delta).coerceIn(0, lastIndex)
 }

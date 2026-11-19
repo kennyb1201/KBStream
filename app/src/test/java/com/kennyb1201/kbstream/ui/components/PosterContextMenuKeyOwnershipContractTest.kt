@@ -6,25 +6,32 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The long-press menu owns every directional press while it is open.
+ * The long-press menu owns every directional press while it is open, and never
+ * hands focus to the page behind the scrim.
  *
- * The field report (Kenny, 2026-11-18 10:37): "sometimes on long press on home
- * the posters on home will scroll in the background while the long press menu
- * also scrolls."
+ * Two field reports, one component.
  *
- * The mechanism, verified in this file's own target at the tip: the overlay
- * swallowed Up/Down only at the menu's vertical EDGES, and decided "edge" from
- * the index of the row that had last REPORTED focus. The panel scrolls to follow
- * focus and its rows compose lazily, so navigating to an off-screen row is
- * exactly when that report lags behind the real focus - and a stale index meant
- * the next edge press was not consumed. The event fell through to the screen
- * behind the scrim (the focusGroup bounds focus *search*, not a key nothing
- * consumed), whose rails scrolled while this menu scrolled to follow focus.
+ * The first (Kenny, 2026-11-18 10:37): "sometimes on long press on home the
+ * posters on home will scroll in the background while the long press menu also
+ * scrolls." The overlay swallowed Up/Down only at the menu's vertical EDGES,
+ * judged from the index of the row that had last REPORTED focus. The panel
+ * scrolls to follow focus, so that report lags exactly when the next press
+ * arrives - and a stale index meant the edge press was not consumed. The event
+ * fell through to the screen behind the scrim, whose rails scrolled while this
+ * menu scrolled too. Fix: consume unconditionally and move focus here.
  *
- * So the handler no longer judges anything: it moves focus itself, bounded by
- * the group, and consumes the press either way. These pins are about that
- * ownership, because it is invisible in review and a "tidy-up" back to edge
- * clamping would silently restore the bug (spec 2026-11-18, F1).
+ * The second (Kenny, 2026-11-18 23:17 and 2026-11-19 00:22): "long press menu on
+ * detail page loses focus to the background" - Down from the last row, Up from
+ * the first. The move was a focus SEARCH, and a focusGroup bounds where a search
+ * can FIND something, not where it lands when there is nothing left inside the
+ * group: at the edge the search took the background card below (or above) the
+ * panel. Consuming the press afterwards cannot undo a move that already
+ * happened. Fix (spec 2026-11-19, F1): address a row's own requester, with the
+ * target clamped to a real row index.
+ *
+ * These pins are about the ownership and the clamp, because both are invisible
+ * in review and a "tidy-up" back to either edge judgement or focus search would
+ * silently restore a field bug.
  */
 class PosterContextMenuKeyOwnershipContractTest {
 
@@ -51,7 +58,7 @@ class PosterContextMenuKeyOwnershipContractTest {
     // ── F1: the press is ours ────────────────────────────────────────────
 
     @Test
-    fun `both vertical directions are consumed and moved by the handler`() {
+    fun `both vertical directions are consumed and addressed, never searched`() {
         listOf("Up", "Down").forEach { direction ->
             assertTrue(
                 "Direction$direction must be handled here, not left to Compose's " +
@@ -59,33 +66,61 @@ class PosterContextMenuKeyOwnershipContractTest {
                 handler.contains("Key.Direction$direction -> {")
             )
             assertTrue(
-                "and the handler moves focus itself, bounded by the focusGroup",
-                handler.contains("focusManager.moveFocus(FocusDirection.$direction)")
+                "and the arm names a row of THIS menu instead of searching for " +
+                    "one - the search is what found the card behind the scrim",
+                handler.substringAfter("Key.Direction$direction -> {")
+                    .substringBefore("true")
+                    .contains("moveToRow(menuMoveTarget(focusedActionIndex,")
             )
         }
         assertTrue(
-            "the move's answer is discarded: a press at the last row still consumes, " +
-                "which is the clamp",
-            handler.contains("moveFocus(FocusDirection.Up)\n                            true") &&
-                handler.contains("moveFocus(FocusDirection.Down)\n                            true")
+            "the target is bounded by the rows list, and the clamp lives in " +
+                "menuMoveTarget - so no reported index can leave the menu",
+            handler.contains(", rows.lastIndex)") &&
+                menu.contains("coerceIn(0, lastIndex)")
         )
         assertTrue(
-            "the focus manager used is the overlay's own, not a passed-in one",
-            menu.contains("val focusManager = LocalFocusManager.current")
+            "the press is consumed after the request, exactly as the discarded " +
+                "move answer used to be",
+            handler.contains(
+                "moveToRow(menuMoveTarget(focusedActionIndex, -1, rows.lastIndex))"
+            ) && handler.contains(
+                "moveToRow(menuMoveTarget(focusedActionIndex, 1, rows.lastIndex))"
+            )
+        )
+        assertFalse(
+            "and the search is gone for EVERY direction, not just the edges",
+            menu.contains("moveFocus(")
         )
     }
 
     @Test
-    fun `nothing about the press depends on which row reported focus last`() {
-        // The stale index WAS the bug. If a future change reintroduces an
-        // index-based decision here, this fails before the field does.
+    fun `the reported row picks a target, and the clamp keeps it in the menu`() {
+        // The index that decided "is this an edge?" WAS the first field bug, and
+        // the search that ignored it was the second. The index is allowed back
+        // only because it can CHOOSE which row to ask - and that choice is
+        // clamped, so a stale report costs a duplicate press, never an escape.
         assertFalse(
-            "the overlay must not carry a focused-row index at all",
-            menu.contains("focusedActionIndex")
+            "no unclamped indexing of the requesters by the reported row",
+            menu.contains("rowFocusRequesters[focusedActionIndex]")
         )
         assertFalse(
-            "nor judge a vertical edge from the rows list inside the handler",
-            handler.contains("rows.lastIndex")
+            "and no edge decision is made from it: the clamp decides, not the index",
+            handler.contains("focusedActionIndex >= ") ||
+                handler.contains("focusedActionIndex >") ||
+                handler.contains("focusedActionIndex ==")
+        )
+        assertTrue(
+            "every row carries a requester, indexed by position, so a clamped " +
+                "target always has a node to land on",
+            menu.contains("List(rows.size) { FocusRequester() }") &&
+                menu.contains("focusRequester = rowFocusRequesters[index]") &&
+                menu.contains("rowFocusRequesters.getOrNull(index)")
+        )
+        assertTrue(
+            "and the Phase 2 take asks row 0's own requester, not a second one " +
+                "attached to the same row",
+            menu.contains("rowFocusRequesters.first().requestFocus()")
         )
     }
 
@@ -96,7 +131,7 @@ class PosterContextMenuKeyOwnershipContractTest {
         val groupAt = chain.lastIndexOf(".focusGroup()")
         assertTrue(
             "the focusGroup is applied to the overlay the handler sits on, before " +
-                "the handler itself, so moveFocus cannot leave it",
+                "the handler itself, so whatever Compose navigates cannot leave it",
             boxAt >= 0 && groupAt > boxAt
         )
         assertTrue(
