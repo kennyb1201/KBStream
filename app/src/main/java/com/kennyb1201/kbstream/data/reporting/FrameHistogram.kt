@@ -69,6 +69,17 @@ object FrameHistogram {
     }
 
     /**
+     * Whether a session of [frames] frames replaces the line kept for its label.
+     *
+     * Longest wins, and a tie goes to the newer line. The report is copied AFTER
+     * the gesture - by walking to Settings - so the short stray step taken on
+     * that trip must not displace the walk the report is about. A second full
+     * walk still refreshes the numbers, because equal length is replaced.
+     */
+    fun supersedes(frames: Int, keptFrames: Int?): Boolean =
+        keptFrames == null || frames >= keptFrames
+
+    /**
      * The diagnostics line for one surface's last scroll session.
      *
      * One line, the same shape the other traces use (`label: a=N b=N`), and

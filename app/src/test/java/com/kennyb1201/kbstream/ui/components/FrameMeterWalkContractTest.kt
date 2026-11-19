@@ -29,7 +29,7 @@ class FrameMeterWalkContractTest {
     // ── the meter's existing trigger is untouched ────────────────────────
 
     @Test
-    fun `S4 - the vertical scroll session opens and closes exactly as before`() {
+    fun `S4 - the vertical scroll opens on the flag and closes only its own session`() {
         val scroll = block(meter, "fun TrackScrollFrames(")
         assertTrue(
             "still one snapshotFlow on the state's own flag",
@@ -40,8 +40,11 @@ class FrameMeterWalkContractTest {
             scroll.contains(".distinctUntilChanged()")
         )
         assertTrue(
-            "and the flips still map to the same pair of calls",
-            scroll.contains("if (scrolling) UiFrameTrace.begin(label) else UiFrameTrace.end()")
+            "the flips still open and close a session - and the close is endIf, so a " +
+                "scroll stopping cannot cut short a walk that began while it ran",
+            scroll.contains(
+                "if (scrolling) UiFrameTrace.begin(label) else UiFrameTrace.endIf(label)"
+            )
         )
         assertTrue(
             "Home's column call is unchanged",
@@ -74,7 +77,7 @@ class FrameMeterWalkContractTest {
             "the walk remembers whether the running session is its own, across the " +
                 "steps' cancellations",
             walk.contains("var ownsSession = false") &&
-                walk.contains("UiFrameTrace.begin(label)") &&
+                walk.contains("UiFrameTrace.begin(walkLabel)") &&
                 walk.contains("ownsSession = true")
         )
         assertTrue(
@@ -83,7 +86,7 @@ class FrameMeterWalkContractTest {
                 "by this walk's timer",
             walk.contains("if (UiFrameTrace.isRunning(label)) return@collectLatest") &&
                 walk.contains("ownsSession = false") &&
-                walk.contains("UiFrameTrace.endIf(label)")
+                walk.contains("UiFrameTrace.endIf(walkLabel)")
         )
         assertTrue(
             "the window clears the meter's own floor: a walk must not be dropped as " +
@@ -116,9 +119,35 @@ class FrameMeterWalkContractTest {
     }
 
     @Test
-    fun `Home metres the walk with the SAME label and the card that took focus`() {
+    fun `the walk files under its own label, derived where the session opens`() {
+        val walk = block(meter, "fun TrackFocusSteps(")
         assertTrue(
-            "the walk rides the home label, so its line reads beside the column's",
+            "the walk's label is its surface's, with -walk after it",
+            meter.contains("private fun walkLabel(label: String): String = \"\$label-walk\"")
+        )
+        assertTrue(
+            "derived inside the composable: both the begin and the settle-close use it",
+            walk.contains("val walkLabel = walkLabel(label)") &&
+                walk.contains("UiFrameTrace.begin(walkLabel)") &&
+                walk.contains("UiFrameTrace.endIf(walkLabel)")
+        )
+        assertTrue(
+            "the yield guard still asks the BASE label, so only a scroll is yielded to",
+            walk.contains("UiFrameTrace.isRunning(label)") &&
+                !walk.contains("isRunning(walkLabel)")
+        )
+        assertTrue(
+            "and the call sites keep naming surfaces: the suffix lives in one place",
+            home.contains("TrackFocusSteps(label = \"home\", step = { focusedCardRequester })") &&
+                block(library, "private fun ItemGrid(")
+                    .contains("TrackFocusSteps(label = \"library\", step = { walkStep })")
+        )
+    }
+
+    @Test
+    fun `Home metres the walk through the same call site and the card that took focus`() {
+        assertTrue(
+            "the same call the phone's Home makes, with no walk-specific label at the site",
             home.contains("TrackFocusSteps(label = \"home\", step = { focusedCardRequester })")
         )
         assertTrue(
@@ -204,14 +233,65 @@ class FrameMeterWalkContractTest {
             histogram.contains("\"frame: \$label frames=\${stats.frames} p50=\${stats.p50Ms}ms \"")
         )
         assertTrue(
-            "the ring sizes are unchanged too",
-            trace.contains("private const val MAX_FRAMES = 600") &&
-                trace.contains("private const val MAX_LABELS = 6")
+            "the per-session cap is unchanged",
+            trace.contains("private const val MAX_FRAMES = 600")
+        )
+        assertTrue(
+            "the ring holds both lines of both TV surfaces, with room for another",
+            trace.contains("private const val MAX_LABELS = 8")
         )
         assertFalse(
             "and the walk did not become a second line format: the meter emits no " +
                 "line of its own",
             block(meter, "fun TrackFocusSteps(").contains("FrameHistogram")
+        )
+    }
+
+    // ── F2: the kept line is decided by frame count ──────────────────────
+
+    @Test
+    fun `the kept line is decided by frame count, not by arrival order`() {
+        assertTrue(
+            "the trace keeps a count per label beside the rendered lines",
+            trace.contains("private val keptFrames = HashMap<String, Int>()") &&
+                trace.contains(
+                    "if (!FrameHistogram.supersedes(stats.frames, keptFrames[session.label])) " +
+                        "return"
+                ) &&
+                trace.contains("keptFrames[session.label] = stats.frames")
+        )
+        assertTrue(
+            "the comparison is the histogram's own rule, not an inline one",
+            histogram.contains("fun supersedes(frames: Int, keptFrames: Int?): Boolean =")
+        )
+        assertTrue(
+            "a replacing line refreshes its slot, so the paste keeps the surface's order",
+            trace.contains("entries[slot] = line")
+        )
+        assertFalse(
+            "the count is never recovered by parsing a rendered line",
+            trace.contains("substringAfter(\"frames=\")") ||
+                trace.contains("split(\" \")")
+        )
+        assertTrue(
+            "a label pushed out of the ring loses its count with it, or it would veto " +
+                "the next line for a label nothing displays",
+            trace.contains("keptFrames.remove(label)")
+        )
+    }
+
+    // ── S4: attribution stays label-free ─────────────────────────────────
+
+    @Test
+    fun `decode attribution still counts any metered session, walk included`() {
+        val app = source("MainApplication.kt").replace(Regex("\\s+"), " ")
+        assertTrue(
+            "the loader still derives duringFrame from the trace's no-arg question",
+            app.contains("duringFrame =") && app.contains("UiFrameTrace .isRunning()")
+        )
+        assertFalse(
+            "and not from a label: a decode that lands inside a walk counts too",
+            app.contains(".isRunning(\"")
         )
     }
 

@@ -202,8 +202,10 @@ class ScrollingDigFiveContractTest {
                 trace.contains("postFrameCallback")
         )
         assertTrue(
-            "and it is scoped per surface, last session wins",
-            trace.contains("startsWith(\"frame: \${session.label} \")")
+            "and it is scoped per surface: one slot per label, refreshed in place, " +
+                "with the longest sample winning (2026-11-18 meter spec)",
+            trace.contains("startsWith(\"frame: \${session.label} \")") &&
+                trace.contains("FrameHistogram.supersedes(stats.frames, keptFrames[session.label])")
         )
         val helper = source("com/kennyb1201/kbstream/ui/components/ScrollFrameMeter.kt")
         assertTrue(

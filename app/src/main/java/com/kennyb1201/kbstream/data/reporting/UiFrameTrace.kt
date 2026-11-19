@@ -17,14 +17,21 @@ import android.view.Choreographer
  *  - **Per surface.** A session belongs to the label that started it (`home`,
  *    `guide`, `library`, `catalog`), so a paste says WHICH screen stuttered. A
  *    session-global average cannot (the same defect dig four proved about the
- *    hero decode counter).
+ *    hero decode counter). A D-pad walk reports under `<label>-walk`: the walk
+ *    across a rail and the scroll that got the viewer to it are different
+ *    gestures, and one paste can carry both instead of the newer displacing the
+ *    older.
  *  - **Per scroll session.** Sampling starts when scrolling starts and ends when
  *    it stops. Nothing is sampled while a screen sits still, so the instrument
  *    costs nothing at rest, and the number describes the gesture the viewer
  *    actually made rather than a whole app session's mix.
  *
- * The ring is small and last-wins: the report is about the most recent scroll of
- * each surface, which is what a field report is taken after. Everything here
+ * The ring is small and LONGEST-WINS per label: one line per surface, and a
+ * later session replaces it only when it measured at least as many frames. The
+ * report is copied AFTER the gesture, by walking to Settings to copy it - so a
+ * 7-frame stray step on that trip must not displace the 64-frame walk the report
+ * is about. A tie keeps the newer line, because its numbers are as long and
+ * fresher, so a second full walk still refreshes the sample. Everything here
  * must run on the main thread (Choreographer's own rule); Compose effects and
  * the diagnostics builder both do.
  */
@@ -34,7 +41,7 @@ object UiFrameTrace {
     private const val MAX_FRAMES = 600
 
     /** Surfaces remembered at once - one line each in the report. */
-    private const val MAX_LABELS = 6
+    private const val MAX_LABELS = 8
 
     private class Session(val label: String) {
         val deltas = IntArray(MAX_FRAMES)
@@ -44,6 +51,14 @@ object UiFrameTrace {
     }
 
     private val entries = ArrayDeque<String>()
+
+    /**
+     * Frames measured by the line kept for each label: the longest-wins guard.
+     *
+     * A number beside [entries] rather than a parse of the rendered line - the
+     * comparison must not depend on the text it renders.
+     */
+    private val keptFrames = HashMap<String, Int>()
 
     /**
      * Written on the main thread; also READ from loader threads, by
@@ -123,13 +138,29 @@ object UiFrameTrace {
         val stats = FrameHistogram.of(session.deltas, session.count) ?: return
         val line = FrameHistogram.line(session.label, stats)
         synchronized(entries) {
-            // Last wins for a label: the report is about the most recent scroll
-            // of that surface, not a growing list of every one.
-            val kept = entries.filterNot { it.startsWith("frame: ${session.label} ") }
-            entries.clear()
-            entries.addAll(kept)
-            entries.addLast(line)
-            while (entries.size > MAX_LABELS) entries.removeFirst()
+            // Longest wins for a label. The report is read after the gesture, on
+            // the way to Settings, so a short stray session taken on that trip
+            // must not displace the walk the paste is about; a tie keeps the
+            // newer numbers (FrameHistogram.supersedes).
+            if (!FrameHistogram.supersedes(stats.frames, keptFrames[session.label])) return
+            keptFrames[session.label] = stats.frames
+            // The prefix finds the label's SLOT to refresh in place. The count
+            // above came from the map, never from parsing a rendered line.
+            val slot = entries.indexOfFirst { it.startsWith("frame: ${session.label} ") }
+            if (slot >= 0) {
+                entries[slot] = line
+            } else {
+                entries.addLast(line)
+                while (entries.size > MAX_LABELS) {
+                    val dropped = entries.removeFirst()
+                    // A label that fell out of the ring loses its count with it,
+                    // or a number nothing displays would still veto a shorter
+                    // line that is now the only one there is.
+                    keptFrames.keys.toList().forEach { label ->
+                        if (dropped.startsWith("frame: $label ")) keptFrames.remove(label)
+                    }
+                }
+            }
         }
     }
 }

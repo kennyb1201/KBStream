@@ -36,7 +36,10 @@ fun TrackScrollFrames(label: String, state: ScrollableState) {
         snapshotFlow { state.isScrollInProgress }
             .distinctUntilChanged()
             .collect { scrolling ->
-                if (scrolling) UiFrameTrace.begin(label) else UiFrameTrace.end()
+                // endIf, not end: a WALK can open its own session while a scroll
+                // is still running (the walk label is its own), and that walk's
+                // sample must not be cut short by the scroll stopping.
+                if (scrolling) UiFrameTrace.begin(label) else UiFrameTrace.endIf(label)
             }
     }
 }
@@ -70,10 +73,18 @@ fun TrackScrollFrames(label: String, state: ScrollableState) {
  * scroll that starts mid-walk displaces the walk's (one session at a time, newest
  * wins) while this one's settle timer can no longer end it - so a vertical scroll
  * that begins during a walk is still sampled to its own end.
+ *
+ * The walk reports under `<label>-walk`, while the scroll keeps the bare label -
+ * so a paste carries the scroll that reached the rail AND the walk across it,
+ * and neither displaces the other's line. The suffix is applied here, not at the
+ * call sites: a screen still says `TrackFocusSteps(label = "home", ...)`.
  */
 @Composable
 fun TrackFocusSteps(label: String, step: () -> Any?) {
     LaunchedEffect(label) {
+        // What this walk's sessions are filed under. The guard below still asks
+        // about the BASE label: only a scroll is yielded to, never another walk.
+        val walkLabel = walkLabel(label)
         // Whether the running session is this walk's. Survives the steps'
         // cancellations, so a step arriving mid-walk does not open (and the
         // walk's close does not forget) a second session.
@@ -87,7 +98,7 @@ fun TrackFocusSteps(label: String, step: () -> Any?) {
                     // Someone else's session - a scroll - is running: it wins,
                     // and its own stop signal is what closes it.
                     if (UiFrameTrace.isRunning(label)) return@collectLatest
-                    UiFrameTrace.begin(label)
+                    UiFrameTrace.begin(walkLabel)
                     ownsSession = true
                 }
                 // Each step restarts the wait, not the session (collectLatest
@@ -95,10 +106,19 @@ fun TrackFocusSteps(label: String, step: () -> Any?) {
                 // keep coming, and closes once they stop.
                 delay(WALK_SETTLE_MS)
                 ownsSession = false
-                UiFrameTrace.endIf(label)
+                UiFrameTrace.endIf(walkLabel)
             }
     }
 }
+
+/**
+ * The label one walk reports under: its surface's, with `-walk` after it.
+ *
+ * Derived here so the call sites keep naming surfaces, and so the walk and the
+ * scroll of the same surface are two entries in the report rather than one
+ * overwriting the other.
+ */
+private fun walkLabel(label: String): String = "$label-walk"
 
 /**
  * How long a walk's session is held open after its last focus step.

@@ -99,9 +99,12 @@ class TvScrollFrameMeterContractTest {
     @Test
     fun `it is the same meter the phone calls, and it still samples only while scrolling`() {
         assertTrue(
-            "one implementation, one session per surface",
+            "one implementation, one session per surface - and the close is the " +
+                "per-label endIf, so stopping a scroll does not end a walk's session",
             meter.contains("snapshotFlow { state.isScrollInProgress }") &&
-                meter.contains("if (scrolling) UiFrameTrace.begin(label) else UiFrameTrace.end()")
+                meter.contains(
+                    "if (scrolling) UiFrameTrace.begin(label) else UiFrameTrace.endIf(label)"
+                )
         )
         assertTrue(
             "read inside a flow, so the meter adds no recomposition of its own",

@@ -60,6 +60,39 @@ class FrameHistogramTest {
         assertEquals(1, stats.over33Ms)
     }
 
+    // ── 2026-11-18 meter spec F2: longest wins per label ─────────────────
+
+    @Test
+    fun `a session just under the floor still prints nothing`() {
+        // The stray step on the way to Settings is the case: five frames is a tap
+        // and must not enter the ring at all, so it cannot displace a walk by
+        // being the only thing there.
+        assertNull(FrameHistogram.of(IntArray(FrameHistogram.MIN_FRAMES - 1) { 16 }))
+    }
+
+    @Test
+    fun `a shorter session does not displace a longer kept one`() {
+        // 7-frame tail versus the 64-frame walk it would have overwritten.
+        assertTrue(!FrameHistogram.supersedes(frames = 7, keptFrames = 64))
+    }
+
+    @Test
+    fun `a longer session replaces the kept one`() {
+        assertTrue(FrameHistogram.supersedes(frames = 64, keptFrames = 7))
+    }
+
+    @Test
+    fun `a tie keeps the newer line`() {
+        // Equal length is replaced: a second full walk refreshes the numbers
+        // instead of leaving the first one's on screen forever.
+        assertTrue(FrameHistogram.supersedes(frames = 64, keptFrames = 64))
+    }
+
+    @Test
+    fun `the first session for a label is always kept`() {
+        assertTrue(FrameHistogram.supersedes(frames = 6, keptFrames = null))
+    }
+
     @Test
     fun `the line names the surface and carries every number`() {
         val line = FrameHistogram.line(
