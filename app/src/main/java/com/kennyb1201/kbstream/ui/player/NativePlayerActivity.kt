@@ -13866,6 +13866,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             runCatching { exoPlayer?.currentPosition ?: 0L }.getOrDefault(0L) > 0L
 
     private fun onPlaybackEnded() {
+        // The episode-finished fact, and the only gate that makes this
+        // idempotent. [playbackEndedHandled] cannot do it: a seek clears that
+        // one so a viewer can rewind and watch the ending again. This flag
+        // never clears, so a second caller is a repeat, not a second ending -
+        // and the stall fallback now fires one to two seconds BEFORE the file's
+        // real end, after which ENDED arrives and its listener calls straight
+        // back in here. Without this line the completion ran twice per episode
+        // (two stop scrobbles, two Kitsu/AniList writes, two "ended" saves,
+        // two routeAfterCompletedEnd calls).
+        if (playbackEndReached) return
         // Nothing was watched, so nothing is completed and no end-of-episode
         // card is raised. A source that never produced a frame (or moved the
         // playhead) can still report ENDED - an empty timeline, a container
@@ -15321,8 +15331,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      *   two consecutive ticks (2s) — a frozen tail, not a buffering pause
      *   (rebuffers flip isPlaying off, which resets the stall counter).
      *
-     * Stops the clock and routes through onPlaybackEnded so the Up Next popup
-     * and auto-next chain run exactly as they would after a real ENDED event.
+     * Latches the session ended and routes through onPlaybackEnded so the Up
+     * Next popup and auto-next chain run exactly as they would after a real
+     * ENDED event. It deliberately does NOT pause the player - see the end
+     * branch for the deadlock that pause caused (field report 2026-11-19:
+     * "Paused - playing next when you resume" with Play doing nothing).
      */
     private fun detectStallEndedFallback(
         player: Player,
@@ -15361,14 +15374,22 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
         // A frozen playhead only means "the file ended" once the session has
         // actually played: before that it is a source that never came up, and
-        // latching it ended here (plus pausing it) would strand the session as
-        // finished instead of leaving it to the retry/error path. The real
-        // ENDED branch above is unaffected; onPlaybackEnded guards itself too.
+        // latching it ended here would strand the session as finished instead
+        // of leaving it to the retry/error path. The real ENDED branch above is
+        // unaffected; onPlaybackEnded guards itself too.
         if (sessionHasPlayed() && (reachedDuration || posStallTicks >= 2)) {
             playbackEndedHandled = true
-            // Freeze the clock: without this the counter keeps climbing on a
-            // black frame while ENDED never arrives.
-            player.pause()
+            // The LATCH is what stops this re-firing - the early return above
+            // answers every later tick - so the clock needs no freezing and the
+            // player must not be paused here. Two things make that pause wrong:
+            // the ended latch refuses every play press, so a pause taken at the
+            // tail is unresumable; and the Up Next countdown HOLDS while
+            // playWhenReady is false, so the pause parked the card on "Paused -
+            // playing next when you resume" with no way to resume (build 386,
+            // TCL). Left alone, the last second runs out with playWhenReady
+            // still true - which is exactly what the countdown requires to tick
+            // and hand off. The real ENDED that follows is a no-op now that
+            // onPlaybackEnded latches on playbackEndReached.
             onPlaybackEnded()
         }
     }
