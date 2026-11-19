@@ -987,11 +987,86 @@ class SimklRepository(
 
     /** The `error` code out of a non-2xx body, which Retrofit leaves unparsed. */
     private fun errorCodeOf(response: retrofit2.Response<*>): String? =
+        errorFieldOf(
+            runCatching {
+                response.errorBody()?.string()
+            }.getOrNull()
+        )
+
+    /**
+     * The `error` field of an error body that has already been read into a
+     * string.
+     *
+     * The same field the rate-limit interceptor reads, and the one that says
+     * WHICH limit a 429 spent (F1, 2026-11-19). An unreadable body answers null,
+     * which the classifier treats as a burst - never as a daily quota, because
+     * the cheap mistake is a short park and the expensive one is sleeping
+     * through an afternoon on a bad guess.
+     */
+    private fun errorFieldOf(body: String?): String? =
         runCatching {
-            val raw = response.errorBody()?.string()?.takeIf { it.isNotBlank() }
-                ?: return@runCatching null
+            val raw = body?.takeIf { it.isNotBlank() } ?: return@runCatching null
             org.json.JSONObject(raw).optString("error").takeIf { it.isNotBlank() }
         }.getOrNull()
+
+    /**
+     * Parks a read that failed with an exception, for what the failure says
+     * (F1, 2026-11-19).
+     *
+     * The success-typed endpoints (the CW feed, the activities poll) surface a
+     * non-2xx as a Retrofit `HttpException`, so the 429's header and body are on
+     * its `response()`. A daily-quota 429 has to park for the whole header here
+     * too, or this leg keeps polling through the spent quota while the
+     * all-shows read sits out the reset.
+     */
+    private fun parkAfterReadFailure(error: Throwable) {
+        val response =
+            (error as? retrofit2.HttpException)
+                ?.response()
+
+        if (response == null) {
+            parkReads(code = null, retryAfter = null)
+            return
+        }
+
+        parkReads(
+            code = response.code(),
+            retryAfter = response.headers()["Retry-After"],
+            bodyError = errorFieldOf(
+                runCatching {
+                    response.errorBody()?.string()
+                }.getOrNull()
+            )
+        )
+    }
+
+    /**
+     * F2 (2026-11-19): the activities poll parks on a 429 like every other read.
+     *
+     * It was 41 of the last 100 requests in the rate-limited debug log, because
+     * it caught the failure, answered "unchanged", and re-fired on the next
+     * cycle - nothing recorded that the last attempt had been refused. Only a
+     * 429 parks: any other failure stays answered as unchanged exactly as
+     * before, and a 500 must not delay the next poll.
+     */
+    private fun parkAfterActivitiesFailure(error: Throwable) {
+        val response =
+            (error as? retrofit2.HttpException)
+                ?.response()
+                ?: return
+
+        if (response.code() != 429) return
+
+        parkReads(
+            code = response.code(),
+            retryAfter = response.headers()["Retry-After"],
+            bodyError = errorFieldOf(
+                runCatching {
+                    response.errorBody()?.string()
+                }.getOrNull()
+            )
+        )
+    }
 
     suspend fun getActivities(
         accessToken: String =
@@ -1024,6 +1099,10 @@ class SimklRepository(
             return false
         }
 
+        // F2 (2026-11-19): the activities poll answers "unchanged" from the park
+        // instead of spending the call - the same gate the other read paths use.
+        if (readsAreParked()) return false
+
         val activities =
             runCatchingCancellable {
                 getActivities(
@@ -1037,6 +1116,9 @@ class SimklRepository(
                             it.message,
                         it
                     )
+                    // F2: a 429 here is a read refusal like any other, and the
+                    // poll must not re-fire through it.
+                    parkAfterActivitiesFailure(it)
                 }
                 .getOrNull()
                 ?: return false
@@ -1098,6 +1180,9 @@ class SimklRepository(
         val ownerAtStart =
             activeOwner()
 
+        // F2 (2026-11-19): nothing to stamp from a park - the call is not made.
+        if (readsAreParked()) return
+
         val activities =
             runCatchingCancellable {
                 getActivities(
@@ -1112,6 +1197,9 @@ class SimklRepository(
                             it.message,
                         it
                     )
+                    // F2: the stamp is best-effort, but the 429 is not - park on
+                    // it so the next cycle's reads stop re-firing.
+                    parkAfterActivitiesFailure(it)
                 }
                 .getOrNull()
                 ?: return
@@ -1676,7 +1764,14 @@ class SimklRepository(
         // to ten pages again (see [readsAreParked]). The same token check the
         // failure exits use ([cachedForThisAccount] below): a snapshot minted for
         // another Simkl account must never answer this one's read.
-        if (!forceRefresh && readsAreParked()) {
+        //
+        // F4 (2026-11-19): the gate is UNCONDITIONAL - `forceRefresh` included.
+        // With a daily park lasting the header's ~16 hours, letting a forced
+        // caller through meant one call straight into a quota that is spent, and
+        // the answer to it is another 429. forceRefresh is a caller's wish for a
+        // coherent, fresh snapshot; it is not a licence to ignore a 429, the same
+        // reading [getWatchedCountsImpl] already states.
+        if (readsAreParked()) {
             return cachedAllShowItems?.takeIf { cachedAllShowItemsToken == accessToken }
         }
 
@@ -1838,9 +1933,13 @@ class SimklRepository(
 
                 // m23: a 429 parks for its Retry-After; anything else backs off
                 // briefly. Either way the next Home pass stops re-firing this.
+                // The body's `error` says which limit the 429 spent (F1,
+                // 2026-11-19): a daily quota parks for the whole header, a burst
+                // for the clamp.
                 parkReads(
                     code = response.code(),
-                    retryAfter = response.headers()["Retry-After"]
+                    retryAfter = response.headers()["Retry-After"],
+                    bodyError = errorFieldOf(errorText)
                 )
                 return@withLock cachedForThisAccount()
             }
@@ -2520,18 +2619,62 @@ class SimklRepository(
      *
      * Shared by the CW feed and the all-shows read: both are what a Home pass
      * fires, and a 429 from either is equally an instruction about the account.
+     *
+     * Restored from prefs on first use (F3, 2026-11-19). A daily-quota 429 now
+     * parks for the header's ~16 hours, and an in-memory deadline would be
+     * forgotten by any update, force-stop or reboot - the next Home pass would
+     * spend calls re-learning the same 429 (and a drain could spend two).
      */
     @Volatile
     private var readsParkedUntilMs: Long = 0L
 
-    internal fun readsAreParked(): Boolean =
-        System.currentTimeMillis() < readsParkedUntilMs
+    /** Whether the persisted park has been read once (F3, 2026-11-19). */
+    @Volatile
+    private var readParkRestored: Boolean = false
 
     /**
-     * Parks the read legs for a 429's `Retry-After`, or for [READ_FAILURE_BACKOFF_MS]
-     * on a plain failure. @Synchronized so two failing legs cannot race the
-     * park's deadline backwards.
+     * The app-private file the read park survives in (F3).
+     *
+     * Deliberately NOT profile-scoped, unlike the auth store: the park is one
+     * process-wide deadline over reads that are shared, and a rate limit is an
+     * instruction about the account and the app, not about which profile is on
+     * screen. Per-account keying is out of scope for this change.
      */
+    private val readParkPrefs
+        get() = context
+            ?.applicationContext
+            ?.getSharedPreferences(READ_PARK_PREFS, Context.MODE_PRIVATE)
+
+    internal fun readsAreParked(): Boolean {
+        restoreReadParkOnce()
+        return System.currentTimeMillis() < readsParkedUntilMs
+    }
+
+    /**
+     * Reads the persisted deadline - and the deletes waiting on it - once.
+     *
+     * A persisted deadline in the past is no park: [readsAreParked] already
+     * answers false for it, and clearing it here would only turn a stale value
+     * into an extra write on the next start.
+     */
+    @Synchronized
+    private fun restoreReadParkOnce() {
+        if (readParkRestored) return
+        readParkRestored = true
+
+        val prefs = readParkPrefs ?: return
+        val persisted = prefs.getLong(KEY_READ_PARK_UNTIL_MS, 0L)
+        if (persisted > readsParkedUntilMs) readsParkedUntilMs = persisted
+
+        val waiting = decodePendingPlaybackDeletes(prefs.getString(KEY_PENDING_PLAYBACK_DELETES, null))
+        if (waiting.isNotEmpty()) {
+            // Oldest first, and the bound still applies: a blob written by a
+            // future build cannot make the working set larger than this one
+            // knows how to replay.
+            pendingPlaybackDeletes.addAll(waiting.takeLast(MAX_PENDING_PLAYBACK_DELETES))
+        }
+    }
+
     /**
      * Playback-session deletes that could not run because the read leg was
      * parked (F1, 2026-11-11), in the order they were recorded.
@@ -2544,52 +2687,103 @@ class SimklRepository(
      * mark-watched for that title to retry on, which is why the delete is
      * recorded rather than just skipped.
      *
-     * In memory on purpose, unlike the Trakt scrobble queue: the park is a
-     * DEADLINE of at most [READ_PARK_MAX_MS] (ten minutes), and the cost of
-     * losing a record to process death is exactly today's behaviour - the
-     * session lingers until that title is marked again - not a new failure.
-     * A Room table and a migration for a ten-minute window would be worse than
-     * the bug. Bounded, because a pathological run of parked marks must not grow
-     * it without limit; the OLDEST entry is dropped first, so the most recent
-     * intent (the title just completed) is the one that survives.
+     * Persisted with the park since 2026-11-19 (F3), and that is a consequence
+     * of F1 rather than a preference: these were in memory on the rationale that
+     * the park was a deadline of at most ten minutes, so losing a record to
+     * process death cost exactly what not having the mechanism cost. A spent
+     * daily quota parks for the header's ~16 hours, and a delete recorded in
+     * hour 1 of that park MUST still replay when it lifts - otherwise a restart
+     * leaves the completed episode's pre-completion session to resurface in
+     * Continue Watching at its old progress, the exact bug this exists to
+     * prevent. Still bounded, because a pathological run of parked marks must
+     * not grow it without limit; the OLDEST entry is dropped first, so the most
+     * recent intent (the title just completed) is the one that survives.
      */
     private val pendingPlaybackDeletes = LinkedHashSet<PendingPlaybackDelete>()
 
     /** Records a delete the parked read leg could not act on. */
     @Synchronized
     internal fun notePendingPlaybackDelete(delete: PendingPlaybackDelete) {
+        restoreReadParkOnce()
         if (!pendingPlaybackDeletes.add(delete)) return
         while (pendingPlaybackDeletes.size > MAX_PENDING_PLAYBACK_DELETES) {
             pendingPlaybackDeletes.remove(pendingPlaybackDeletes.first())
         }
+        persistPendingPlaybackDeletes()
     }
 
     /** A snapshot of what is waiting, for the replay (see [replayPendingPlaybackDeletes]). */
     @Synchronized
-    internal fun pendingPlaybackDeleteSnapshot(): List<PendingPlaybackDelete> =
-        pendingPlaybackDeletes.toList()
+    internal fun pendingPlaybackDeleteSnapshot(): List<PendingPlaybackDelete> {
+        restoreReadParkOnce()
+        return pendingPlaybackDeletes.toList()
+    }
 
     /** Drops the entries that have been acted on, keeping any that failed. */
     @Synchronized
     internal fun forgetPendingPlaybackDeletes(applied: Collection<PendingPlaybackDelete>) {
         if (applied.isEmpty()) return
+        restoreReadParkOnce()
         pendingPlaybackDeletes.removeAll(applied.toSet())
+        persistPendingPlaybackDeletes()
     }
 
+    /**
+     * The deletes as one prefs string. Written on record/forget only - never per
+     * read, which is what makes persisting them safe next to a read path that
+     * runs on every Home build.
+     */
+    private fun persistPendingPlaybackDeletes() {
+        readParkPrefs
+            ?.edit()
+            ?.putString(
+                KEY_PENDING_PLAYBACK_DELETES,
+                encodePendingPlaybackDeletes(pendingPlaybackDeletes)
+            )
+            ?.apply()
+    }
+
+    /**
+     * Parks the read legs for a 429's `Retry-After`, or for half a minute on a
+     * plain failure. @Synchronized so two failing legs cannot race the park's
+     * deadline backwards.
+     *
+     * [bodyError] is the 429 body's `error` field when the caller could read it
+     * (F1, 2026-11-19): it decides whether the header is the whole wait - a
+     * spent daily quota answers again after its reset and not before - or is
+     * clamped like a burst. See [SimklReadPark], which owns that arithmetic.
+     */
     @Synchronized
-    internal fun parkReads(code: Int?, retryAfter: String?) {
+    internal fun parkReads(
+        code: Int?,
+        retryAfter: String?,
+        bodyError: String? = null
+    ) {
+        restoreReadParkOnce()
+
+        val quota =
+            SimklAuthV2Rules.rateLimit(
+                statusCode = code ?: 0,
+                bodyError = bodyError
+            )
         val now = System.currentTimeMillis()
-        val parkMs = when {
-            code == 429 -> retryAfter
-                ?.trim()
-                ?.toLongOrNull()
-                ?.times(1_000L)
-                ?.coerceIn(READ_PARK_MIN_MS, READ_PARK_MAX_MS)
-                ?: READ_PARK_DEFAULT_MS
-            else -> READ_FAILURE_BACKOFF_MS
+        val until = now + SimklReadPark.durationMs(code, retryAfter, quota)
+
+        // Only forward: a short park arriving behind a long one must never cut
+        // the long one short.
+        if (until > readsParkedUntilMs) {
+            readsParkedUntilMs = until
+            readParkPrefs
+                ?.edit()
+                ?.putLong(KEY_READ_PARK_UNTIL_MS, until)
+                ?.apply()
+            Log.i(
+                "SIMKL_REPO",
+                "reads parked for ${(until - now) / 1_000}s " +
+                    "(code=${code ?: "none"} limit=$quota " +
+                    "header-daily=${SimklReadPark.headerOutlastsBurst(retryAfter)})"
+            )
         }
-        val until = now + parkMs
-        if (until > readsParkedUntilMs) readsParkedUntilMs = until
     }
 
     suspend fun getContinueWatching(
@@ -3219,7 +3413,10 @@ class SimklRepository(
             )
 
             // m23: a failed read backs off before the next Home pass asks again.
-            parkReads(code = null, retryAfter = null)
+            // F1 (2026-11-19): when the failure IS the 429, park for what it
+            // says - this feed is a Home leg, and clamped to ten minutes it was
+            // the leg that kept polling through the spent daily quota.
+            parkAfterReadFailure(e)
             return cachedContinueWatching
                 .orEmpty()
         }
@@ -3265,6 +3462,30 @@ class SimklRepository(
 
                 errorMessage =
                     "Simkl is not authenticated"
+            )
+        }
+
+        /*
+         * F2 (2026-11-19), the third activities reader: this one is called from
+         * [com.kennyb1201.kbstream.work.SimklSyncWorker]'s periodic tick, so on a
+         * spent daily quota it spent a request per tick AND answered
+         * `attempted = true, success = false` - which WorkPolicies maps to
+         * Retry, so the worker kept backing off into the same 429.
+         *
+         * `attempted = false` is this class's existing answer for "nothing to do
+         * this round" (no account, nothing to refresh), and WorkPolicies treats
+         * it as Done. That is the honest shape for a park too: the round is
+         * finished, the account said when to ask again, and retrying would ask
+         * early. The alternative - a third Outcome meaning "deferred" - buys the
+         * same result for more machinery in the worker's policy.
+         */
+        if (readsAreParked()) {
+            return WatchedActivityRefreshResult(
+                attempted =
+                    false,
+
+                changed =
+                    false
             )
         }
 
@@ -3314,6 +3535,12 @@ class SimklRepository(
             )
 
         } catch (e: Exception) {
+
+            // F2: the first 429 from this leg records the park like the other
+            // two pollers do - which is what makes the gate above hold on the
+            // ticks that follow, instead of depending on another leg to have
+            // parked first.
+            parkAfterActivitiesFailure(e)
 
             WatchedActivityRefreshResult(
                 attempted =
@@ -4102,21 +4329,21 @@ class SimklRepository(
         private const val CONTINUE_WATCHING_TTL_MS =
             3L * 60L * 1000L
 
-        /**
-         * How long the READ legs hold off after Simkl refuses or fails (m23).
+        /*
+         * How long the READ legs hold off after Simkl refuses or fails (m23) now
+         * lives in [SimklReadPark], because the answer depends on the 429's class
+         * and that arithmetic is worth pinning by test rather than by reading
+         * this file. Its bounds: a minute without a usable header, a five-second
+         * floor, a ten-minute ceiling for BURST only, half a minute for a plain
+         * failure.
          *
-         * The write legs already park on a 429 honouring `Retry-After`; the
-         * reads did not, so a rate-limited Simkl was asked the whole read set on
-         * every Home/Continue-Watching build. The park honours `Retry-After`
-         * when it is a sane number of seconds, defaults to a minute when it is
-         * absent or unparseable, and a plain failure backs off for half a minute
-         * - long enough that a retry is a new question, short enough that a
-         * transient blip does not freeze the rail until the next cold start.
+         * The keys below are where the park's deadline and its waiting deletes
+         * survive (F3, 2026-11-19): app-private prefs, not the auth store,
+         * because the park is process-wide and not per-profile or per-account.
          */
-        private const val READ_PARK_DEFAULT_MS = 60_000L
-        private const val READ_PARK_MIN_MS = 5_000L
-        private const val READ_PARK_MAX_MS = 10L * 60L * 1000L
-        private const val READ_FAILURE_BACKOFF_MS = 30_000L
+        private const val READ_PARK_PREFS = "kbstream_simkl_read_park"
+        private const val KEY_READ_PARK_UNTIL_MS = "read_park_until_ms"
+        private const val KEY_PENDING_PLAYBACK_DELETES = "pending_playback_deletes"
 
         /** Cap on [pendingPlaybackDeletes]: see the field for why it is bounded. */
         private const val MAX_PENDING_PLAYBACK_DELETES = 32

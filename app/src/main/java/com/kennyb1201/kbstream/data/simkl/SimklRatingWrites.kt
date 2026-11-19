@@ -270,16 +270,22 @@ private fun rateLimitError(response: retrofit2.Response<*>): String? = runCatchi
  * The word the park line records for [limit].
  *
  * The server's own spellings for the two daily quotas, so the paste and Simkl's
- * docs use the same words; [SimklAuthV2Rules.RateLimit.BURST] covers both a real
- * `rate_limit` and a body the classifier could not read, which is why an
- * unreadable body reads `burst` rather than inventing a class (F2).
+ * docs use the same words.
+ *
+ * [SimklAuthV2Rules.RateLimit.BURST] is two different findings that used to read
+ * as one word: the server saying `rate_limit`, and a body the classifier could
+ * not read at all. The 15:52 paste parked on `Retry-After: 29460` (491 min) and
+ * printed `burst`, which left no way to tell whether Simkl calls a daily reset a
+ * burst or whether the body was simply unreadable - and that decides whether the
+ * daily-quota path can ever fire. They are separate words now: `rate_limit` when
+ * the server said it, `burst/no-body` when it did not (or could not be read).
  */
 private fun parkLabel(limit: SimklAuthV2Rules.RateLimit, bodyError: String?): String =
     when (limit) {
         SimklAuthV2Rules.RateLimit.USER_DAILY -> "user_limit_exceeded"
         SimklAuthV2Rules.RateLimit.APP_DAILY -> "app_limit_exceeded"
         SimklAuthV2Rules.RateLimit.BURST ->
-            bodyError?.trim()?.lowercase()?.takeIf { it == "rate_limit" } ?: "burst"
+            bodyError?.trim()?.lowercase()?.takeIf { it == "rate_limit" } ?: "burst/no-body"
         SimklAuthV2Rules.RateLimit.NONE -> "none"
     }
 

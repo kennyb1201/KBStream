@@ -157,6 +157,98 @@ internal data class PendingPlaybackDelete(
 }
 
 /**
+ * The pending deletes as one prefs string (F3, 2026-11-19).
+ *
+ * They became persistent with the read park: a spent daily quota parks for the
+ * header's ~16 hours, and a delete recorded in hour 1 of that park has to still
+ * replay when it lifts, across the update/force-stop/reboot in between. Written
+ * only on record and forget - never per read. JSON rather than a Room table: it
+ * is one small bounded list, and a table would owe a migration for it.
+ */
+internal fun encodePendingPlaybackDeletes(deletes: Collection<PendingPlaybackDelete>): String {
+    val array = org.json.JSONArray()
+    for (delete in deletes) {
+        val row = org.json.JSONObject()
+        row.put("parentId", delete.parentId)
+        delete.tmdbId?.let { row.put("tmdbId", it) }
+        delete.title?.let { row.put("title", it) }
+        delete.seasonsEpisodes?.let { pairs ->
+            row.put(
+                "seasonsEpisodes",
+                org.json.JSONArray(pairs.map { (season, episode) -> "$season:$episode" })
+            )
+        }
+        delete.season?.let { row.put("season", it) }
+        delete.episode?.let { row.put("episode", it) }
+        delete.episodes?.let { row.put("episodes", org.json.JSONArray(it)) }
+        row.put("minProgress", delete.minProgress.toDouble())
+        row.put("kind", delete.kind.name)
+        array.put(row)
+    }
+    return array.toString()
+}
+
+/**
+ * The pending deletes back, skipping anything unreadable.
+ *
+ * A record that cannot be addressed (no parent id) or a blob this build cannot
+ * parse costs the record, never the app: the worst case is today's behaviour -
+ * the session lingers until that title is marked again.
+ */
+internal fun decodePendingPlaybackDeletes(raw: String?): List<PendingPlaybackDelete> {
+    if (raw.isNullOrBlank()) return emptyList()
+
+    val parsed = runCatching { org.json.JSONArray(raw) }.getOrNull() ?: return emptyList()
+    val deletes = ArrayList<PendingPlaybackDelete>(parsed.length())
+
+    for (index in 0 until parsed.length()) {
+        val row = parsed.optJSONObject(index) ?: continue
+        val parentId = row.optString("parentId").takeIf { it.isNotBlank() } ?: continue
+
+        val seasonsRaw = row.optJSONArray("seasonsEpisodes")
+        val seasonsEpisodes =
+            seasonsRaw?.let { pairs ->
+                buildSet {
+                    for (pairIndex in 0 until pairs.length()) {
+                        val parts = pairs.optString(pairIndex).split(":")
+                        if (parts.size != 2) continue
+                        val season = parts[0].toIntOrNull() ?: continue
+                        val episode = parts[1].toIntOrNull() ?: continue
+                        add(season to episode)
+                    }
+                }
+            }
+
+        val episodesRaw = row.optJSONArray("episodes")
+        val episodes =
+            episodesRaw?.let { list ->
+                (0 until list.length()).mapNotNull { episodeIndex ->
+                    list.optInt(episodeIndex, -1).takeIf { it >= 0 }
+                }
+            }
+
+        deletes += PendingPlaybackDelete(
+            parentId = parentId,
+            tmdbId = if (row.has("tmdbId")) row.optInt("tmdbId") else null,
+            title = if (row.has("title")) row.optString("title") else null,
+            seasonsEpisodes = seasonsEpisodes,
+            season = if (row.has("season")) row.optInt("season") else null,
+            episode = if (row.has("episode")) row.optInt("episode") else null,
+            episodes = episodes,
+            minProgress = row.optDouble("minProgress", 95.0).toFloat(),
+            kind =
+                if (row.optString("kind") == PendingPlaybackDelete.Kind.PARENT.name) {
+                    PendingPlaybackDelete.Kind.PARENT
+                } else {
+                    PendingPlaybackDelete.Kind.WATCHED
+                }
+        )
+    }
+
+    return deletes
+}
+
+/**
  * Replays the deletes recorded while the read leg was parked (F1).
  *
  * Called from `getPlaybackItemsImpl` - the one place a SUCCESSFUL session fetch
