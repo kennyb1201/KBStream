@@ -573,28 +573,19 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             // per frame.
             .eventListener(
                 object : coil3.EventListener() {
-                    /**
-                     * When a request started, and what size the layout
-                     * resolved it to - by request identity, because Coil hands
-                     * the same instance to `onStart`, `resolveSizeEnd` and the
-                     * result that reaches `onSuccess`.
-                     *
-                     * The 2026-11-18 diagnosis (§1, §7) had counts and sizes
-                     * but no durations: nothing could tie a decode to the 33 ms
-                     * frame the walk measured. One map entry per in-flight
-                     * request, removed on every terminal callback.
-                     */
-                    class Start(val atNs: Long) {
-                        var askedWidth = 0
-                        var askedHeight = 0
-                    }
-
+                    // One map entry per in-flight request, kept by request
+                    // IDENTITY: Coil hands the same instance to `onStart`,
+                    // `resolveSizeEnd` and the result that reaches `onSuccess`.
+                    // Removed on every terminal callback.
                     private val inFlight =
-                        java.util.IdentityHashMap<coil3.request.ImageRequest, Start>()
+                        java.util.IdentityHashMap<
+                            coil3.request.ImageRequest,
+                            CoilRequestTiming
+                            >()
 
                     override fun onStart(request: coil3.request.ImageRequest) {
                         synchronized(inFlight) {
-                            inFlight[request] = Start(System.nanoTime())
+                            inFlight[request] = CoilRequestTiming(System.nanoTime())
                         }
                     }
 
@@ -900,6 +891,20 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         const val SIMKL_SYNC_WORK_NAME = "simkl_periodic_sync"
         const val ADDON_REFRESH_WORK_NAME = "addon_manifest_refresh"
     }
+}
+
+/**
+ * When one image request started, and what size the layout resolved it to.
+ *
+ * The 2026-11-18 diagnosis (§1, §7) had counts and sizes but no durations:
+ * nothing could tie a decode to the 33 ms frame the walk measured.
+ *
+ * A top-level class, not a nested one: Kotlin forbids a class declaration
+ * inside the anonymous `EventListener` that owns the map.
+ */
+private class CoilRequestTiming(val atNs: Long) {
+    var askedWidth = 0
+    var askedHeight = 0
 }
 
 /**
