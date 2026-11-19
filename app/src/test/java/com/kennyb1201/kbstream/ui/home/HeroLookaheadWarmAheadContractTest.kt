@@ -165,6 +165,39 @@ class HeroLookaheadWarmAheadContractTest {
         )
     }
 
+    // ── F2 (2026-11-19, churn): the warm waits for the hero's own draw ──
+
+    @Test
+    fun `the hero warm waits for the hero's own art to publish and decode`() {
+        val lookahead = lookaheadBlock()
+        val launchAt = lookahead.indexOf("viewModelScope.launch {")
+        val delayAt = lookahead.indexOf("delay(HERO_WARM_AFTER_ART_MS)")
+        val firstWarmAt = lookahead.indexOf("warmHeroArtBitmap(")
+
+        assertTrue(
+            "the wait is 250ms: four of the 66ms settle frames the meter reports, " +
+                "and still inside the 600ms of stillness the next art publish needs",
+            vm.contains("private const val HERO_WARM_AFTER_ART_MS = 250L")
+        )
+        assertTrue(
+            "the wait belongs to the lookahead's OWN launch, so a superseding focus " +
+                "step cannot cancel the warm it just delayed",
+            launchAt >= 0 && delayAt > launchAt
+        )
+        assertTrue(
+            "and it must come before the first decode, or the two settle frames the " +
+                "hero draws on are still sharing a CPU with two 3.5MB warms",
+            firstWarmAt > delayAt
+        )
+        assertFalse(
+            "the rail-tile warm is not delayed with it: it fires on the focus event, " +
+                "a rail of card-size decodes ahead of the art publish",
+            vm.substringAfter("fun warmHeroFocus(")
+                .substringBefore("private fun warmHeroLookahead(")
+                .contains("HERO_WARM_AFTER_ART_MS")
+        )
+    }
+
     // ── F5: the hit rate reaches the paste ───────────────────────────────
 
     @Test

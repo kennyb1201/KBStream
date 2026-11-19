@@ -3328,6 +3328,23 @@ Log.d(
         if (targets.isEmpty()) return
 
         viewModelScope.launch {
+            // Give the hero's own art the box first (spec 2026-11-19, churn F2).
+            //
+            // [resolveHeroMeta] publishes the backdrop URL and calls this in the
+            // SAME coroutine resumption, so the hero's decode/upload and these
+            // warms used to start within a frame of each other - a settle frame
+            // carrying the swap plus two 3.5MB decodes plus the rail's tiles. The
+            // build-389 walk measured the result: 462 of 643 decodes landing
+            // during a metered gesture, and the same 66ms p50 settle frame the
+            // build before it. Nothing here is worth a dropped frame when the
+            // hero is the one image the screen is built around.
+            //
+            // 250ms, and inside this function's own launch rather than the
+            // resolve's: a superseding focus step must still not cancel the warm
+            // (see this function's note), and the next step's art cannot publish
+            // for another 600ms of stillness - so a warm delayed to here still
+            // lands before the card it is for.
+            delay(HERO_WARM_AFTER_ART_MS)
             targets.map { next ->
                 async {
                     val key = "${next.type}:${next.id}"
@@ -14559,6 +14576,23 @@ private suspend fun calculateEpisodesRemaining(
          * warm, which covers the same cards at a ninth of the bytes.
          */
         private const val HERO_BITMAP_LOOKAHEAD_CARDS = 1
+
+        /**
+         * How long the hero-size warm waits after the hero's own art publishes
+         * (spec 2026-11-19, churn F2).
+         *
+         * The art publish and the warm are one coroutine resumption apart, so the
+         * hero's 1280x720 decode/upload - the frame the viewer is looking at - was
+         * competing with two more of the same plus the rail's tiles. The walk's
+         * own meter puts a settle frame at 66ms p50 (four vsyncs) in every build
+         * measured, and 462 of 643 decodes landed inside a metered gesture.
+         *
+         * Four of those settle frames is enough for a disk-backed hero decode and
+         * its texture upload to be out of the way, and it is still well inside the
+         * [HERO_ART_DWELL_MS] of stillness the next card's art needs before it can
+         * publish - so the warm keeps its hit and the swap stops paying for it.
+         */
+        private const val HERO_WARM_AFTER_ART_MS = 250L
 
         /**
          * The card BEFORE the focused one, warmed at hero size (spec
