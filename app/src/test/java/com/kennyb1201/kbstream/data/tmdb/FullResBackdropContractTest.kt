@@ -166,24 +166,53 @@ class FullResBackdropContractTest {
     }
 
     @Test
-    fun `the hero's own url is still resolved and stored at w1280`() {
-        // The upgrade happens at the display site so the URL the hero art is
-        // resolved to - which rail cards and the Coil cache are keyed on - is
-        // untouched, and the ViewModel never learns about a second size.
-        listOf(
-            "the hero artwork repository" to HERO_ARTWORK_REPO,
-            "the home view model" to HOME_VIEW_MODEL
-        ).forEach { (what, path) ->
-            val src = readSource(path)
-            assertTrue(
-                "$what must keep resolving w1280",
-                src.contains("TmdbRepository.BACKDROP_BASE + it")
+    fun `the hero artwork resolver still stores w1280`() {
+        // The upgrade happens at the request, not in the resolved art: this URL
+        // is what the rail cards and the Coil cache are keyed on, and the
+        // resolver feeds both. 0.9.394 moved the hero's warm onto the display
+        // size, which is a request size - it still does not rewrite what is
+        // stored.
+        val src = readSource(HERO_ARTWORK_REPO)
+        assertTrue(
+            "the hero artwork repository must keep resolving w1280",
+            src.contains("TmdbRepository.BACKDROP_BASE + it")
+        )
+        assertFalse(
+            "the stored hero URL is what everything else is keyed on",
+            src.contains("fullResBackdropUrl")
+        )
+    }
+
+    @Test
+    fun `the home view model warms at the size it draws and still stores w1280`() {
+        val src = readSource(HOME_VIEW_MODEL)
+        assertTrue(
+            "the view model still resolves the hero's own art at w1280",
+            src.contains("TmdbRepository.BACKDROP_BASE + it")
+        )
+        // Exactly one place. A second call site is a URL that escaped the
+        // display path and dragged a card surface up with it, which is the
+        // thing this file exists to prevent.
+        assertEquals(
+            "the upgrade belongs at the one request that draws full-screen",
+            1,
+            src.windowed("TmdbRepository.fullResBackdropUrl(".length)
+                .count { it == "TmdbRepository.fullResBackdropUrl(" }
+        )
+        assertTrue(
+            "and that request is the hero warm, asking for the URL the hero " +
+                "draws: warming w1280 wrote an entry no draw could read (the " +
+                "0.9.393 paste measured hits=0 of 25 draws), because Coil keys " +
+                "on the URL and the size together",
+            src.contains(
+                "val url = TmdbRepository.fullResBackdropUrl(artwork?.backdropUrl) ?: return"
             )
-            assertFalse(
-                "$what must not know about the full-resolution size",
-                src.contains("fullResBackdropUrl")
-            )
-        }
+        )
+        assertFalse(
+            "the upgrade is never written back into stored art - the value the " +
+                "lookup copy holds has to stay the URL everything else is keyed on",
+            src.contains("backdropUrl = TmdbRepository.fullResBackdropUrl")
+        )
     }
 
     private companion object {
