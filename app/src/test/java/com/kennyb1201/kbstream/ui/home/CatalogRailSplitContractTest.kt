@@ -50,12 +50,65 @@ class CatalogRailSplitContractTest {
             fetch.substringBefore("home.catalogFetch").contains("return null")
         )
         assertTrue(
-            "the filter pass is timed on the other side of the fetch",
-            fetch.contains("val filtered =") && fetch.contains("home.catalogFilter")
+            "the row publishes on the local filters only",
+            fetch.contains("val distinct =") &&
+                fetch.contains("filterUpcoming(metas)")
+        )
+        assertFalse(
+            "and NOT on the verdicts: the availability check is one TMDB detail " +
+                "fetch per movie and measured 27757ms inside a 28347ms cold load, " +
+                "while the first row was on screen in 409ms",
+            fetch.contains("applyDigitalAvailabilityFilter") ||
+                fetch.contains("kidsFilterMetas")
+        )
+    }
+
+    @Test
+    fun `the verdicts land behind the row, and only a pass that hid something rewrites it`() {
+        val behind = vm.substringAfter("private fun filterCatalogRowBehind(")
+            .substringBefore("private suspend fun fetchCatalogThrottled(")
+
+        assertTrue(
+            "the pass is the same chain - nothing it decides is weakened, only " +
+                "its position moved",
+            behind.contains("applyDigitalAvailabilityFilter(") &&
+                behind.contains("kidsFilterMetas(")
         )
         assertTrue(
-            "and it covers the kids verdict, which is the call in it",
-            fetch.indexOf("home.catalogFilter") > fetch.indexOf("kidsFilterMetas")
+            "its cost is still recorded under the same label, so the next paste " +
+                "says what the verdicts cost even though they no longer gate the row",
+            behind.contains("home.catalogFilter")
+        )
+        assertTrue(
+            "a pass that resolves for the profile the viewer has left never lands",
+            behind.indexOf("buildEpoch != railBuildEpoch") in
+                0 until behind.indexOf("_rails.update")
+        )
+        assertTrue(
+            "the ids it hid are recorded BEFORE the screen is touched: the build " +
+                "streams this row as it resolves and then replaces the whole list, " +
+                "so a verdict that landed mid-build would otherwise be undone by " +
+                "the build's own last write",
+            behind.indexOf("catalogHiddenIds.compute(railKey)") in
+                0 until behind.indexOf("_rails.update") &&
+                behind.contains("withCatalogVerdicts(railKey, rail.items)")
+        )
+        assertTrue(
+            "and both publish paths re-apply them - a rebuilt row is filtered " +
+                "before it is drawn, and the final list is filtered again",
+            vm.contains("val visible = withCatalogVerdicts(railKey, distinct)") &&
+                vm.contains("val items = withCatalogVerdicts(railKeyOf(rail), rail.items)")
+        )
+        assertTrue(
+            "a row every title was filtered out of is removed here and dropped " +
+                "from the final list, exactly as the blocking version never " +
+                "published it",
+            behind.contains("current.filterNot { rail -> railKeyOf(rail) == railKey }") &&
+                vm.contains("if (items.isEmpty()) null else rail.copy(items = items)")
+        )
+        assertTrue(
+            "and nothing is recorded or rewritten when nothing was hidden",
+            behind.contains("if (hidden.isEmpty()) return@launch")
         )
     }
 

@@ -12746,7 +12746,8 @@ private suspend fun calculateEpisodesRemaining(
                                 loadCatalogRail(
                                     pending,
                                     hideUpcoming,
-                                    landscapeCards
+                                    landscapeCards,
+                                    buildEpochAtStart
                                 )?.let { rail ->
 
                                     // No wait on the pinned batch any more: it
@@ -12905,8 +12906,17 @@ private suspend fun calculateEpisodesRemaining(
                 // this list is what Home lays the unarranged rails out by
                 // (see KBHomeSlots.buildMergedEntries: the rail list IS the
                 // default order).
+                // Re-applied here because this assignment REPLACES the whole
+                // rail list: a verdict pass that landed while the build was still
+                // collecting would otherwise be overwritten by the rail the
+                // build collected before it. A row the pass emptied is dropped,
+                // the same end state the blocking filter produced.
                 val finalRails =
-                    pinned + orderCatalogRails(collected, catalogOrder)
+                    (pinned + orderCatalogRails(collected, catalogOrder))
+                        .mapNotNull { rail ->
+                            val items = withCatalogVerdicts(railKeyOf(rail), rail.items)
+                            if (items.isEmpty()) null else rail.copy(items = items)
+                        }
 
                 // Stale-profile guard: the profile changed while this build
                 // was in flight, so these rows belong to the profile the user
@@ -13107,7 +13117,8 @@ private suspend fun calculateEpisodesRemaining(
     private suspend fun loadCatalogRail(
         pending: PendingCatalogLoad,
         hideUpcoming: Boolean,
-        landscapeCards: Boolean
+        landscapeCards: Boolean,
+        buildEpoch: Long
     ): Rail? {
 
         // First page: whatever the addon returns for skip=0 (its own page
@@ -13174,30 +13185,41 @@ private suspend fun calculateEpisodesRemaining(
             return null
         }
 
-        val filterStartedAtMs = android.os.SystemClock.elapsedRealtime()
-        val filtered =
-            if (hideUpcoming) {
-                tmdbRepository.kidsFilterMetas(
-                    applyDigitalAvailabilityFilter(
-                        filterUpcoming(metas)
-                    )
-                )
-            } else {
-                tmdbRepository.kidsFilterMetas(metas)
-            }
-
+        // The row publishes on the LOCAL filters only.
+        //
+        // `filterUpcoming` is a date comparison and the distinct-by is a set.
+        // The verdicts behind them are neither: the digital-release check is one
+        // TMDB detail fetch per MOVIE, six at a time, and the 15:52 paste
+        // measured exactly that - `home.catalogFilter=27757ms` inside
+        // `catalogRails=28347ms`, with the addon fetch at 0ms (snapshots) and the
+        // art at 327ms. Six catalogs' first pages were ~600 movies whose release
+        // date TMDB had never been asked for.
+        //
+        // A row does not need a verdict to be DRAWN, so the verdicts now land
+        // behind the row, the shape the landscape art already uses
+        // ([applyLandscapeArt]): publish with what is known, then replace the
+        // rail's items in place when the pass answers - if the rail is still on
+        // screen and still this profile's ([filterCatalogRowBehind]).
+        //
+        // What that costs: a title that is not out yet can sit in a row for the
+        // seconds until its verdict lands. It is always a row the viewer has not
+        // reached yet (the first row is on screen in ~0.4s), the END state is
+        // identical to the blocking version, and the alternative is what this
+        // paste says is too expensive: six concurrent TMDB fetches per movie
+        // standing between the viewer and every row on Home.
+        //
         // One card per title, as the paging append and the pinned-rail path
         // already guarantee. The LazyRow keys its cards by `type:id`, so a
         // first page that repeats one throws on the duplicate key and takes
         // Home down with it - a crash, not a duplicated poster.
-        val distinct = filtered.distinctBy { it.id }
-        PerfTrace.record(
-            "home.catalogFilter",
-            android.os.SystemClock.elapsedRealtime() - filterStartedAtMs
-        )
+        val distinct =
+            (if (hideUpcoming) filterUpcoming(metas) else metas).distinctBy { it.id }
+
+        val railKey = railKeyOf(pending.addonName, pending.catalogId, pending.catalogType)
+        val visible = withCatalogVerdicts(railKey, distinct)
 
         if (
-            filtered.isEmpty()
+            visible.isEmpty()
         ) {
             return null
         }
@@ -13210,7 +13232,7 @@ private suspend fun calculateEpisodesRemaining(
                     pending.catalogUserNamed
                 ),
                 type = pending.catalogType,
-                items = distinct,
+                items = visible,
                 catalogId = pending.catalogId,
                 baseUrl = pending.baseUrl,
                 // Inherited from the rail this replaces, and filled in behind
@@ -13240,7 +13262,141 @@ private suspend fun calculateEpisodesRemaining(
         // empty (see loadMoreForRail).
         railSourceOffset[railKeyOf(rail)] = metas.size
 
+        // The verdicts, off the row's critical path (see the comment above).
+        filterCatalogRowBehind(
+            railKey = railKey,
+            metas = metas,
+            hideUpcoming = hideUpcoming,
+            buildEpoch = buildEpoch
+        )
+
         return rail
+    }
+
+    /**
+     * Resolves a published catalog row's verdicts - upcoming, digital
+     * availability, kids ceiling - and replaces the row's items if any of them
+     * hid something.
+     *
+     * The pass is unchanged; only its position moved. It used to run inside
+     * [loadCatalogRail], so every row waited for a TMDB detail fetch per movie in
+     * it: `home.catalogFilter=27757ms` of a `catalogRails=28347ms` cold load, on a
+     * box where the first row itself was on screen in 409ms.
+     *
+     * Three guards:
+     *
+     *  - the profile this build belonged to is still active ([railBuildEpoch]), or
+     *    a previous profile's verdicts could hide titles on the new one's row;
+     *  - the hides are recorded by rail KEY before the screen is touched, so the
+     *    row may not exist yet and the build's own publishes still honour them
+     *    ([withCatalogVerdicts]);
+     *  - only a pass that actually hid something records or rewrites anything, so
+     *    the ordinary case (nothing un-released, no ceiling) publishes once and
+     *    stays put.
+     *
+     * A failure is not a failure to show: an unavailable-or-unresolvable title is
+     * kept by the filter itself, and a pass that throws leaves the row exactly as
+     * published.
+     */
+    private fun filterCatalogRowBehind(
+        railKey: String,
+        metas: List<MetaPreview>,
+        hideUpcoming: Boolean,
+        buildEpoch: Long
+    ) {
+        viewModelScope.launch {
+            val startedAtMs = android.os.SystemClock.elapsedRealtime()
+
+            val verdicts =
+                try {
+                    if (hideUpcoming) {
+                        tmdbRepository.kidsFilterMetas(
+                            applyDigitalAvailabilityFilter(
+                                filterUpcoming(metas)
+                            )
+                        )
+                    } else {
+                        tmdbRepository.kidsFilterMetas(metas)
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e(
+                        "HOME_RAILS",
+                        "catalog verdicts failed for $railKey: " +
+                            e.message, e
+                    )
+                    return@launch
+                }
+
+            PerfTrace.record(
+                "home.catalogFilter",
+                android.os.SystemClock.elapsedRealtime() - startedAtMs
+            )
+
+            if (buildEpoch != railBuildEpoch) return@launch
+
+            val kept = verdicts.distinctBy { it.id }
+            val asked =
+                (if (hideUpcoming) filterUpcoming(metas) else metas).distinctBy { it.id }
+            val hidden =
+                asked.map { meta -> meta.id }.toSet() - kept.map { meta -> meta.id }.toSet()
+
+            // The filters only ever remove, so nothing hidden means the row is
+            // already what this pass would publish.
+            if (hidden.isEmpty()) return@launch
+
+            /*
+             * Recorded BEFORE the screen is consulted, because the row may not
+             * have been inserted yet: the build streams each rail as it resolves
+             * and publishes the whole list at the end, and either of those would
+             * otherwise put back a title this pass just hid. The map is what
+             * [withCatalogVerdicts] reads in both places.
+             */
+            catalogHiddenIds.compute(railKey) { _, existing ->
+                existing.orEmpty() + hidden
+            }
+
+            _rails.update { current ->
+                if (kept.isEmpty()) {
+                    // Every title was filtered: the blocking version never
+                    // published this row at all, so neither does this one.
+                    current.filterNot { rail -> railKeyOf(rail) == railKey }
+                } else {
+                    current.map { rail ->
+                        if (railKeyOf(rail) == railKey) {
+                            rail.copy(items = withCatalogVerdicts(railKey, rail.items))
+                        } else {
+                            rail
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Titles a behind-row verdict pass has hidden, by rail key.
+     *
+     * Only the IDS the pass removed, never a replacement item list, because ids
+     * compose with everything else that touches a row: a page appended later
+     * keeps its own items, and a rebuild of the same catalog publishes the row
+     * already filtered instead of resurrecting a title the pass hid. The final
+     * publish replaces the whole rail list (`_rails.value = finalRails`), so
+     * without this a verdict that landed mid-build would be undone by the build's
+     * own last write.
+     */
+    private val catalogHiddenIds =
+        java.util.concurrent.ConcurrentHashMap<String, Set<String>>()
+
+    /** [items] with the verdict pass's hides applied, when it has any for [railKey]. */
+    private fun withCatalogVerdicts(
+        railKey: String,
+        items: List<MetaPreview>
+    ): List<MetaPreview> {
+        val hidden = catalogHiddenIds[railKey] ?: return items
+        if (hidden.isEmpty()) return items
+        return items.filterNot { meta -> meta.id in hidden }
     }
 
     private suspend fun fetchCatalogThrottled(
