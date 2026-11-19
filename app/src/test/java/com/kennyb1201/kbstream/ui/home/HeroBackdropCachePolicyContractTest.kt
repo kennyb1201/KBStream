@@ -108,6 +108,14 @@ class HeroBackdropCachePolicyContractTest {
                 "one the hero can never read",
             bitmap.contains(".size(HERO_LOOKAHEAD_BITMAP_WIDTH, HERO_LOOKAHEAD_BITMAP_HEIGHT)")
         )
+        assertTrue(
+            "and at the URL the hero can read, not just the size: the hero upgrades " +
+                "the w1280 artwork url through fullResBackdropUrl before asking Coil, " +
+                "and Coil's memory cache is keyed by url AND size - so a warm on the " +
+                "raw backdropUrl wrote an entry the draw could never hit. That is the " +
+                "0.9.393 paste's `heroWarms=6` with `hits=0` out of 25 draws.",
+            bitmap.contains("TmdbRepository.fullResBackdropUrl(")
+        )
         assertFalse(
             "the warm's whole job is the write: a read-only or disabled warm is the " +
                 "disk prefetch this one was added to replace",

@@ -3004,9 +3004,27 @@ Log.d(
      * Memory-only, one size, no HTML/network policy games: the request is the
      * hero's own (`Size(1280, 720)`), so the cache entry it writes is the entry the
      * hero reads. A title with no backdrop warms nothing.
+     *
+     * THE URL IS THE HERO'S TOO (0.9.394). [HeroArtwork.backdropUrl] is TMDB's
+     * w1280 URL, and the hero does not draw it: [HeroBackdropArt] upgrades it
+     * through [TmdbRepository.fullResBackdropUrl] before asking Coil, because a
+     * backdrop has to fill a 1920x1080 frame. Coil's memory cache is keyed by
+     * URL *and* size, so warming the w1280 URL wrote an entry the hero never
+     * reads - which is exactly what the 0.9.393 pastes measured: `image: hero:
+     * hits=0 misses=25 rate=0%` in the cold session, then `hits=1 misses=50`
+     * beside `scroll: heroDecodes=60` in a 348-frame warm walk. The size was
+     * right and the URL never could be.
+     *
+     * This is the same rule [heroArtWarmTargets] already states for the disk
+     * warm ("warming the resolved w1280 would download bytes the hero never asks
+     * for"); the memory warm was the half that had not applied it.
+     *
+     * A hero backdrop the viewer overrode ([ImageOverrides]) is a different URL
+     * again and is not known here, so an overridden hero still pays its own
+     * decode. That is the pre-existing behaviour, not a regression.
      */
     private suspend fun warmHeroArtBitmap(artwork: HeroArtwork?) {
-        val url = artwork?.backdropUrl?.takeIf { it.isNotBlank() } ?: return
+        val url = TmdbRepository.fullResBackdropUrl(artwork?.backdropUrl) ?: return
         val application = getApplication<Application>()
         runCatchingCancellable {
             val result = coil3.SingletonImageLoader.get(application).execute(
