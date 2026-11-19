@@ -1850,11 +1850,13 @@ class HomeViewModel(
                         // field describe the card the viewer actually stopped on
                         // rather than every card the D-pad passed.
                         //
-                        // Nothing about WHAT is warmed or what bounds it changes:
-                        // still back, forward and across rails, still at the
-                        // hero's own size, still behind the same semaphore and
-                        // in-flight set, and still a viewModelScope launch of its
-                        // own - so a superseding resolve cannot cancel it.
+                        // The SHAPE of the warm is unchanged - the hero's own
+                        // size, the same semaphore and in-flight set, and still a
+                        // viewModelScope launch of its own, so a superseding
+                        // resolve cannot cancel it. Its BUDGET was cut by the
+                        // walk that followed this one: one card ahead and one
+                        // back, no neighbouring rail heads (see
+                        // HERO_BITMAP_LOOKAHEAD_CARDS for the measurement).
                         warmHeroLookahead(item)
                     }
 
@@ -3278,22 +3280,22 @@ Log.d(
 
     /**
      * Warms the near field around [item] at HERO size, into the memory cache
-     * (spec 2026-11-15 F3, widened by 2026-11-17 F2/F3).
+     * (spec 2026-11-15 F3, widened 2026-11-17 F2/F3, narrowed 2026-11-19).
      *
-     * The near field is the same one [warmRailTiles] covers at rail size - the
-     * card BEFORE the focused one (a walk back), the [HERO_LOOKAHEAD_CARDS]
-     * after it, and the head card of the rail above and the rail below (a
-     * vertical move's landing card) - capped at [HERO_LOOKAHEAD_MAX_CARDS].
-     * Forward-only warming left a walk back or a vertical move paying a fresh
-     * 1280x720 decode on arrival while the rail-size tile beside it was warm.
+     * The near field is the card BEFORE the focused one (a walk back) and
+     * [HERO_BITMAP_LOOKAHEAD_CARDS] after it, still capped at
+     * [HERO_LOOKAHEAD_MAX_CARDS]. The head cards of the rails above and below
+     * used to be warmed here as well; they are left to [warmRailTiles] now, at
+     * the size those cards actually draw. The reason is measured, not stylistic -
+     * see [HERO_BITMAP_LOOKAHEAD_CARDS].
      *
      * ONE `async` per card, joined, not the sequential loop this used to run: a
      * card's cost used to be paid per card, so three cards cost three cards'
      * latency. They now share [heroArtPrefetchSemaphore] (2 permits) - at most
      * two run at once, the rest queue - and [heroArtPrefetchInFlight], so the
      * same card is never warmed twice. The permit covers the decode as well as
-     * the resolve, so a focus burst cannot put six 1280x720 bitmaps in flight at
-     * once on a box with little memory to spare.
+     * the resolve, so a focus burst cannot put more than two 1280x720 decodes in
+     * flight at once on a box with little memory to spare.
      *
      * It is a `viewModelScope` launch of its own, not a child of the hero
      * resolve: a walk step that cancels the resolve must not cancel the warm
@@ -3307,12 +3309,11 @@ Log.d(
         // Handed the same list the neighbours below are read from, so the two
         // cannot disagree if a publish lands mid-step.
         val slot = warmSlotOf(rails, item) ?: return
-        val railIndex = slot.railIndex
         val rail = slot.rail
         val index = slot.itemIndex
 
         val targets = buildList {
-            addAll(rail.items.drop(index + 1).take(HERO_LOOKAHEAD_CARDS))
+            addAll(rail.items.drop(index + 1).take(HERO_BITMAP_LOOKAHEAD_CARDS))
             if (index > 0) {
                 addAll(
                     rail.items
@@ -3320,12 +3321,6 @@ Log.d(
                         .asReversed()
                 )
             }
-            rails.getOrNull(railIndex - 1)?.items
-                ?.take(HERO_LOOKAHEAD_RAIL_HEAD)
-                ?.let { addAll(it) }
-            rails.getOrNull(railIndex + 1)?.items
-                ?.take(HERO_LOOKAHEAD_RAIL_HEAD)
-                ?.let { addAll(it) }
         }
             .filter { it.id.isNotBlank() }
             .distinctBy { "${it.type}:${it.id}" }
@@ -14534,8 +14529,36 @@ private suspend fun calculateEpisodesRemaining(
          */
         private const val HERO_ART_DWELL_MS = 600L
 
-        /** Cards after the focused one whose hero art the lookahead warms (F3). */
+        /**
+         * Cards after the focused one that the EPISODE-ROW warm covers (F3).
+         *
+         * Card-size art only, since 2026-11-19: the hero-size bitmap warm has its
+         * own, smaller budget in [HERO_BITMAP_LOOKAHEAD_CARDS], because a rail
+         * tile and a 1280x720 hero entry are not the same purchase.
+         */
         private const val HERO_LOOKAHEAD_CARDS = 3
+
+        /**
+         * Cards after the focused one whose HERO-SIZE bitmap is warmed into the
+         * memory cache (TCL walk, build 387).
+         *
+         * Separate from [HERO_LOOKAHEAD_CARDS] on purpose: that number is the
+         * width of the EPISODE-ROW warm, which writes card-size art (~0.1MB) and
+         * can afford three. This one pays 1280x720 ARGB_8888 - 3.5MB, nine rail
+         * tiles - and a cache that also has to hold the rail cannot afford six of
+         * them per step, which is what the lookahead was writing.
+         *
+         * The build-387 walk measured the result: nine hero entries held 31MB of a
+         * 47/48MB cache, and 37 hero warms bought seven hero-draw hits (22%). The
+         * rail's own 115 tiles are ~43MB at 0.38MB each - it does not fit beside
+         * that much speculation, so every walk back re-decoded what it had already
+         * drawn (`cardDiskDecodes=306`, 137 of which were the tile warms).
+         *
+         * One ahead and one back keeps the card the walk is heading to and the one
+         * it came from; the neighbouring rails' head cards are left to the tile
+         * warm, which covers the same cards at a ninth of the bytes.
+         */
+        private const val HERO_BITMAP_LOOKAHEAD_CARDS = 1
 
         /**
          * The card BEFORE the focused one, warmed at hero size (spec
@@ -14545,15 +14568,22 @@ private suspend fun calculateEpisodesRemaining(
         private const val HERO_LOOKAHEAD_BACK = 1
 
         /**
-         * The head card of the rail above and of the rail below: the card a
+         * The head card of the row above and of the row below: the card a
          * vertical move lands on (F3). One each, as the rail-tile warm does.
+         *
+         * Used by the episode-row warm only since 2026-11-19 - the hero-size
+         * bitmap warm left the neighbouring rails to [warmRailTiles], which warms
+         * the same head cards at the size those cards draw.
          */
         private const val HERO_LOOKAHEAD_RAIL_HEAD = 1
 
         /**
-         * At most this many hero warms per focus event (F3): three forward,
-         * one back and one head card of each neighbouring rail. A cap rather
-         * than a coincidence - the directions add up to it.
+         * At most this many cards warmed per focus event, for either warm (F3).
+         *
+         * The episode-row warm fills it - three forward, one back and one head
+         * card of the neighbouring row - because its art is card-size. The
+         * hero-size bitmap warm uses two of the six since 2026-11-19; the cap
+         * still bounds it if those numbers ever grow again.
          */
         private const val HERO_LOOKAHEAD_MAX_CARDS = 6
 

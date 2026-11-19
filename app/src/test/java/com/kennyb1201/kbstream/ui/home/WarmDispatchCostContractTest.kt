@@ -45,10 +45,16 @@ class WarmDispatchCostContractTest {
             assertTrue(
                 "$name: the position comes from the index",
                 warm.contains("val slot = warmSlotOf(rails, item) ?: return") &&
-                    warm.contains("val railIndex = slot.railIndex") &&
                     warm.contains("val rail = slot.rail") &&
                     warm.contains("val index = slot.itemIndex")
             )
+            if (name == "tiles") {
+                assertTrue(
+                    "tiles: it also reads the rail's number, because its warm " +
+                        "reaches across rails; the hero warm no longer does",
+                    warm.contains("val railIndex = slot.railIndex")
+                )
+            }
         }
     }
 
@@ -98,12 +104,14 @@ class WarmDispatchCostContractTest {
     // ── F2: coverage, trigger and sizes unchanged ────────────────────────
 
     @Test
-    fun `S2 - the near field is the same cards it was`() {
+    fun `S2 - the hero bitmap warm is one card each way, and the rail heads are the tile warm's`() {
         val hero = block(model, "private fun warmHeroLookahead(")
         assertTrue(
-            "hero: 3 forward",
-            hero.contains(".take(HERO_LOOKAHEAD_CARDS)") &&
-                model.contains("private const val HERO_LOOKAHEAD_CARDS = 3")
+            "hero: one forward - a hero entry is nine rail tiles, so a cache that " +
+                "also holds the rail cannot carry six (build 387: 31MB of 47MB was " +
+                "hero art, hits 22%)",
+            hero.contains(".take(HERO_BITMAP_LOOKAHEAD_CARDS)") &&
+                model.contains("private const val HERO_BITMAP_LOOKAHEAD_CARDS = 1")
         )
         assertTrue(
             "hero: 1 back, reversed so the nearest is warmed first",
@@ -111,11 +119,11 @@ class WarmDispatchCostContractTest {
                 hero.contains(".asReversed()") &&
                 model.contains("private const val HERO_LOOKAHEAD_BACK = 1")
         )
-        assertTrue(
-            "hero: the rail above and below, head card each",
-            hero.contains("rails.getOrNull(railIndex - 1)?.items") &&
-                hero.contains("rails.getOrNull(railIndex + 1)?.items") &&
-                model.contains("private const val HERO_LOOKAHEAD_RAIL_HEAD = 1")
+        assertFalse(
+            "hero: the rails above and below are no longer warmed at HERO size - " +
+                "the tile warm below covers those head cards at a ninth of the bytes",
+            hero.contains("rails.getOrNull(railIndex - 1)?.items") ||
+                hero.contains("rails.getOrNull(railIndex + 1)?.items")
         )
         assertTrue(
             "hero: deduped and capped at 6",
@@ -125,7 +133,8 @@ class WarmDispatchCostContractTest {
         )
         val tiles = block(model, "private fun warmRailTiles(")
         assertTrue(
-            "tiles: 4 forward, 2 back, 2 rail-head cards - its own numbers",
+            "tiles: 4 forward, 2 back, 2 rail-head cards - its own numbers, and " +
+                "the only warm that reaches across rails now",
             tiles.contains(".take(RAIL_TILE_LOOKAHEAD_FORWARD)") &&
                 tiles.contains("maxOf(0, index - RAIL_TILE_LOOKAHEAD_BACK)") &&
                 tiles.contains("rails.getOrNull(railIndex - 1)?.items") &&

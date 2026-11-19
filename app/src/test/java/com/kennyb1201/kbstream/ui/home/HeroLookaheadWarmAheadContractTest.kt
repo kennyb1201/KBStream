@@ -19,8 +19,16 @@ import org.junit.Test
  * from 113 warms with ZERO memory hits - the art publishes only after the same
  * 600 ms dwell, so the warms had evicted each other before anything read them.
  * The warm now fires at that dwell, so it describes the card the viewer stopped
- * on. Nothing about the warm itself changed - bounds, sizes, parallelism,
- * semaphore, in-flight set - which is what the rest of this class pins.
+ * on. Sizes, parallelism, semaphore and in-flight set are unchanged, which is
+ * what the rest of this class pins.
+ *
+ * The build-387 walk then measured what those warms cost the cache: nine hero
+ * entries held 31MB of a 47/48MB cap, and 37 warms bought seven hero-draw hits
+ * (22%), while the walk's own 115 rail tiles (~43MB) could not stay resident -
+ * so a walk back re-decoded what it had already drawn. The hero-size forward
+ * lookahead is one card now and the neighbouring rails' head cards are left to
+ * the tile warm, which writes a ninth of the bytes for the same card. One
+ * method below pins that narrowing; the rest still pin F2/F3's shape.
  */
 class HeroLookaheadWarmAheadContractTest {
 
@@ -94,30 +102,34 @@ class HeroLookaheadWarmAheadContractTest {
     // ── F3: the near field is no longer forward-only ─────────────────────
 
     @Test
-    fun `back, forward and both neighbouring rail heads are warmed at hero size`() {
+    fun `one card forward and one back are warmed at hero size, and the rail heads are not`() {
         val lookahead = lookaheadBlock()
         assertTrue(
-            "forward is unchanged",
-            lookahead.contains("rail.items.drop(index + 1).take(HERO_LOOKAHEAD_CARDS)")
+            "forward is the next landing only - a hero entry is nine rail tiles",
+            lookahead.contains("rail.items.drop(index + 1).take(HERO_BITMAP_LOOKAHEAD_CARDS)")
         )
         assertTrue(
             "back: the card a walk back lands on",
             lookahead.contains("subList(maxOf(0, index - HERO_LOOKAHEAD_BACK), index)")
         )
-        assertTrue(
-            "and the head card of the rail above and below - a vertical move's landing",
-            lookahead.contains("rails.getOrNull(railIndex - 1)?.items") &&
-                lookahead.contains("rails.getOrNull(railIndex + 1)?.items") &&
-                lookahead.contains("?.take(HERO_LOOKAHEAD_RAIL_HEAD)")
+        assertFalse(
+            "the neighbouring rails' head cards are NOT warmed at hero size: the tile " +
+                "warm covers the same cards at a ninth of the bytes, and two 3.5MB " +
+                "entries per step is what kept the walk's own rail out of the cache " +
+                "(build 387: 31MB of a 47MB cache held hero art, hits 22%)",
+            lookahead.contains("rails.getOrNull(railIndex - 1)?.items") ||
+                lookahead.contains("rails.getOrNull(railIndex + 1)?.items")
         )
         assertTrue(
-            "at most six per focus event, and no duplicate cards",
-            lookahead.contains(".take(HERO_LOOKAHEAD_MAX_CARDS)") &&
-                lookahead.contains(".distinctBy { \"\${it.type}:\${it.id}\" }")
+            "no duplicate cards, and the cap still bounds it",
+            lookahead.contains(".distinctBy { \"\${it.type}:\${it.id}\" }") &&
+                lookahead.contains(".take(HERO_LOOKAHEAD_MAX_CARDS)")
         )
         assertTrue(
-            "the constants say what they cover",
-            vm.contains("HERO_LOOKAHEAD_CARDS = 3") &&
+            "the hero bitmap budget is its own number, so the episode-row warm keeps " +
+                "its three",
+            vm.contains("HERO_BITMAP_LOOKAHEAD_CARDS = 1") &&
+                vm.contains("HERO_LOOKAHEAD_CARDS = 3") &&
                 vm.contains("HERO_LOOKAHEAD_BACK = 1") &&
                 vm.contains("HERO_LOOKAHEAD_RAIL_HEAD = 1") &&
                 vm.contains("HERO_LOOKAHEAD_MAX_CARDS = 6")
