@@ -2099,6 +2099,32 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 // 3. Build merged keys *before* evaluating target episodes or seasons
                 publishWatchedEpisodeKeys(id, localCompletedEntries)
 
+                // 3b. Episodes start HERE, not behind the add-on probes.
+                //
+                // The 14:29 paste on 0.9.405: `detailload: addons=0ms tmdb=31ms
+                // firstPaint=32ms simkl=1ms load=3479ms tail=3447ms` - the page
+                // was up in 32 ms and the episode row sat empty for the other
+                // 3.4 s, while `http.addon.penguplay=2253ms` ran as one of the
+                // META PROBES this load awaits below. The episode list needs
+                // none of those: its inputs are the TMDB season list, the local
+                // watch state, the resume row and the tracker sets, and every
+                // one of them is in hand at step 3. Starting it here takes the
+                // probes off its critical path - the row fills ~2 s sooner on a
+                // show whose add-ons are slow - and the probes still refine the
+                // page when they answer.
+                //
+                // The SYNTHETIC case is deliberately not here: a title with no
+                // TMDB record builds its episodes out of the add-on meta's
+                // videos, so it cannot start until the probe below has answered
+                // (see step 5).
+                if (normalizedType == "series" && tmdbDetailResult.getOrNull() != null) {
+                    autoLoadRelevantSeason(
+                        detail = tmdbDetailResult.getOrNull(),
+                        localCompletedEntries = localCompletedEntries,
+                        initialSeason = initialSeason
+                    )
+                }
+
                 // 4. Handle Meta addon loading asynchronously in background
                 val addons = addonsDeferred.await()
 
@@ -2437,10 +2463,15 @@ for ((metaAddon, response, error) in probeResults) {
                     fetchTraktComments(normalizedType)
                 }
 
-                // 5. Trigger season selection strictly after history states are fully loaded
-                if (normalizedType == "series") {
+                // 5. The synthetic fallback only. A TMDB-backed series already
+                // started at step 3b, on the strength of the season list it had
+                // then; this path is the one that could not - TMDB has no record
+                // for the id, so the episode list comes from the add-on meta's
+                // videos, which the probe above has now resolved into
+                // `_isSyntheticDetail` + `_meta.videos`.
+                if (normalizedType == "series" && tmdbDetailResult.getOrNull() == null) {
                     autoLoadRelevantSeason(
-                        detail = tmdbDetailResult.getOrNull() ?: _tmdbDetail.value,
+                        detail = _tmdbDetail.value,
                         localCompletedEntries = localCompletedEntries,
                         initialSeason = initialSeason
                     )
