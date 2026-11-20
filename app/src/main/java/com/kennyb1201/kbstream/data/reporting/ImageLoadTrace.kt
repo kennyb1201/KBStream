@@ -127,6 +127,17 @@ internal object ImageLoadTrace {
     private var heroDrawHits = 0
     private var heroDrawMisses = 0
 
+    // Why a warm never happened (0.9.402). `heroWarms` counts decodes, so the
+    // pastes could not say whether the misses were "the warm was cancelled by the
+    // next step" or "there was no artwork to warm" - and both look identical in
+    // `heroWarms=6` beside `heroDraws=17`. Split so the next reading decides.
+    //
+    // `skippedWalk` is the debounce doing its job (the walk moved on before the
+    // delay expired). `skippedNoArt` is the one to chase: a card whose art never
+    // resolves cannot be warmed at all, and no timing change can fix it.
+    private var heroWarmSkippedWalk = 0
+    private var heroWarmSkippedNoArt = 0
+
     // The cost side (diagnosis 2026-11-18, §1/§7). Counts, not samples: a paste
     // needs "how many decodes were slow", never the list itself.
     private var timedDecodes = 0
@@ -308,6 +319,16 @@ internal object ImageLoadTrace {
         synchronized(lock) { heroWarms++ }
     }
 
+    /** A hero-size warm the walk cancelled before its delay expired. */
+    fun noteHeroWarmSkippedWalk() {
+        synchronized(lock) { heroWarmSkippedWalk++ }
+    }
+
+    /** A hero-size warm that had no resolved artwork to ask Coil for. */
+    fun noteHeroWarmSkippedNoArt() {
+        synchronized(lock) { heroWarmSkippedNoArt++ }
+    }
+
     /**
      * The rail-tile warm decoded a card's tile ahead of the walk - the same
      * decode the card would otherwise have paid on the frame it appeared, which
@@ -417,7 +438,8 @@ internal object ImageLoadTrace {
         val draws = heroDrawHits + heroDrawMisses
         val rate = if (draws == 0) 0 else heroDrawHits * 100 / draws
         return "hero: lookahead arrivals=$heroFocusArrivals " +
-            "hits=$heroDrawHits misses=$heroDrawMisses rate=$rate%"
+            "hits=$heroDrawHits misses=$heroDrawMisses rate=$rate% " +
+            "skippedWalk=$heroWarmSkippedWalk skippedNoArt=$heroWarmSkippedNoArt"
     }
 
     /** Clears the counters (tests). */
@@ -436,6 +458,8 @@ internal object ImageLoadTrace {
             heroFocusArrivals = 0
             heroDrawHits = 0
             heroDrawMisses = 0
+            heroWarmSkippedWalk = 0
+            heroWarmSkippedNoArt = 0
             timedDecodes = 0
             decodesOverBudget = 0
             decodesOverTwoBudgets = 0

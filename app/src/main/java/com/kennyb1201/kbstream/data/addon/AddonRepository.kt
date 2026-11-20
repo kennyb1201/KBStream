@@ -61,6 +61,71 @@ private val sharedAddonLogging =
  */
 internal const val ADDON_MAX_REQUESTS_PER_HOST = 12
 
+/**
+ * Add-on hosts that answered a catalog request with 429, and until when they are
+ * not asked again.
+ *
+ * Every other rate-limited service in this app already answers a 429 by parking
+ * its leg for the window the server named (Trakt, Simkl, MAL, Kitsu, AniList,
+ * MDBList, TVDB, TheSportsDB). Add-on hosts were the exception, and the 10:35
+ * paste shows the cost: 32 catalog requests to one host in a cold start, `429`
+ * recorded against it, and the blocked requests sitting on Home's catalog
+ * permits while the first row waited (`pinnedTopToday=4030ms` against 122ms of
+ * actual fetch).
+ *
+ * Catalog-scoped on purpose. A 429 on catalogs is a statement about the burst the
+ * screen makes; it must not park the meta or stream calls a viewer needs to open
+ * a title.
+ */
+internal object AddonHostRateLimit {
+
+    /** The park when a 429 names no usable `Retry-After`. */
+    internal const val DEFAULT_PARK_MS = 60_000L
+
+    /** The longest a `Retry-After` may park a host, however large it is. */
+    internal const val MAX_PARK_MS = 15L * 60_000L
+
+    private val parkedUntilMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** Whether [host] is still inside a 429's window. */
+    fun isParked(
+        host: String,
+        nowMs: Long = System.currentTimeMillis()
+    ): Boolean {
+        val until = parkedUntilMs[host] ?: return false
+        if (until <= nowMs) {
+            parkedUntilMs.remove(host, until)
+            return false
+        }
+        return true
+    }
+
+    /**
+     * Parks [host] for its `Retry-After` (seconds), or [DEFAULT_PARK_MS].
+     *
+     * The value is capped at [MAX_PARK_MS]: a header is server input, and one
+     * that says "a day" must not take an add-on out of Home for a day.
+     */
+    fun noteRateLimited(
+        host: String,
+        retryAfterSeconds: Long?,
+        nowMs: Long = System.currentTimeMillis()
+    ) {
+        val parkMs =
+            retryAfterSeconds
+                ?.takeIf { seconds -> seconds > 0L }
+                ?.times(1_000L)
+                ?.coerceAtMost(MAX_PARK_MS)
+                ?: DEFAULT_PARK_MS
+        parkedUntilMs[host] = nowMs + parkMs
+    }
+
+    /** Clears every park (tests). */
+    fun clear() {
+        parkedUntilMs.clear()
+    }
+}
+
 private val sharedAddonClient: OkHttpClient by lazy {
     BaseHttpClient.derived {
         dispatcher(
@@ -508,6 +573,27 @@ class AddonRepository private constructor() {
         skip: Int,
         request: CompletableDeferred<List<MetaPreview>>
     ): List<MetaPreview> {
+        val host =
+            runCatching { java.net.URI(base).host }
+                .getOrNull()
+                ?.lowercase()
+                .orEmpty()
+
+        // A host inside a 429's window is not asked again (see
+        // [AddonHostRateLimit]): the request it would spend is one Home's
+        // permits wait on, and the add-on would only say no again.
+        if (host.isNotEmpty() && AddonHostRateLimit.isParked(host)) {
+            val parked =
+                java.io.IOException("add-on host parked after a 429: $host")
+            catalogMutex.withLock {
+                pendingCatalogRequests.remove(
+                    cacheKey
+                )
+            }
+            request.completeExceptionally(parked)
+            throw parked
+        }
+
         try {
             val url =
                 buildCatalogUrl(
@@ -576,6 +662,20 @@ class AddonRepository private constructor() {
 
             return filed
         } catch (throwable: Throwable) {
+            // A 429 is the host's instruction, not a plain failure: park it for
+            // the window it named so the rest of the fan-out does not spend its
+            // permits re-earning the same answer.
+            if (host.isNotEmpty() && throwable is HttpException && throwable.code() == 429) {
+                AddonHostRateLimit.noteRateLimited(
+                    host = host,
+                    retryAfterSeconds = throwable.response()
+                        ?.headers()
+                        ?.get("Retry-After")
+                        ?.trim()
+                        ?.toLongOrNull()
+                )
+            }
+
             catalogMutex.withLock {
                 pendingCatalogRequests.remove(
                     cacheKey

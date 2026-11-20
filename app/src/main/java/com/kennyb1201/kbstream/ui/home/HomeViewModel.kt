@@ -233,9 +233,37 @@ class HomeViewModel(
     @Volatile
     private var railBuildEpoch = 0L
 
+    /**
+     * The catalog fan-out's permits - the total less the pinned batch's reserve.
+     *
+     * See [pinnedCatalogSemaphore]: the two add up to the same ceiling as before,
+     * so nothing about this box's concurrency changed; what changed is that the
+     * first row on screen can no longer be the one that waits.
+     */
     private val catalogRequestSemaphore =
         Semaphore(
-            MAX_CONCURRENT_CATALOG_REQUESTS
+            MAX_CONCURRENT_CATALOG_REQUESTS - PINNED_CATALOG_RESERVED_REQUESTS
+        )
+
+    /**
+     * The permits only the pinned "Top ... Today" batch may spend.
+     *
+     * They were SHARED until 0.9.402, and the 10:35 paste shows what that cost:
+     * `pinnedTopToday=4030ms` with `http.toptoday` at 122ms and `firstRail=2733ms`
+     * - four seconds of waiting, not fetching, on the one row the viewer sees
+     * first. The wait was this semaphore: the fan-out launches a wave of catalog
+     * fetches, the 429ing add-on (32 requests to one host that session) held its
+     * permits for the length of its retries, and the pinned batch's two requests
+     * queued behind all of it.
+     *
+     * A reserve rather than a second pool: the fan-out's ceiling drops by the same
+     * two permits, so the device still has the same number of add-on requests in
+     * flight. The pinned batch is always first on screen and always two requests,
+     * which is exactly the shape a reserve fits.
+     */
+    private val pinnedCatalogSemaphore =
+        Semaphore(
+            PINNED_CATALOG_RESERVED_REQUESTS
         )
 
     // Caps parallel TMDB artwork lookups for landscape cards.
@@ -3331,13 +3359,32 @@ Log.d(
             // what the focus step asked for - the meta resolve and the tiles -
             // goes ahead of this decode, and a step that is still moving takes
             // the slot back before it is spent.
-            delay(HERO_WARM_AFTER_ART_MS)
+            try {
+                delay(HERO_WARM_AFTER_ART_MS)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                // The next step took the slot back before it was spent - the
+                // debounce working, not a warm lost. Counted apart from a card
+                // with no art, because only the second is unfixable by timing
+                // (`skippedWalk`/`skippedNoArt` on the hero line).
+                ImageLoadTrace.noteHeroWarmSkippedWalk()
+                throw cancelled
+            }
             if (!heroArtPrefetchInFlight.add(key)) return@launch
             try {
                 // The permit covers the bitmap decode as well as the resolve:
                 // two hero warms at a time is the memory ceiling.
                 heroArtPrefetchSemaphore.withPermit {
-                    warmHeroArtBitmap(resolveHeroArtworkForPrefetch(item))
+                    val artwork = resolveHeroArtworkForPrefetch(item)
+                    // A title with no backdrop warms nothing
+                    // ([warmHeroArtBitmap] returns at its first line), and a
+                    // paste that cannot tell that from a cancelled warm has no
+                    // next move: the 0.9.401 walk showed `heroWarms=6` beside
+                    // `heroDraws=17` and both causes read the same.
+                    if (artwork?.backdropUrl.isNullOrBlank()) {
+                        ImageLoadTrace.noteHeroWarmSkippedNoArt()
+                    } else {
+                        warmHeroArtBitmap(artwork)
+                    }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -13489,10 +13536,15 @@ private suspend fun calculateEpisodesRemaining(
         type: String,
         catalogId: String,
         skip: Int = 0,
-        maxItems: Int = Int.MAX_VALUE
+        maxItems: Int = Int.MAX_VALUE,
+        // The pinned batch spends its own reserved permits (see
+        // [pinnedCatalogSemaphore]); every other caller shares the fan-out's.
+        pinned: Boolean = false
     ): List<MetaPreview> {
 
-        return catalogRequestSemaphore
+        val permits = if (pinned) pinnedCatalogSemaphore else catalogRequestSemaphore
+
+        return permits
             .withPermit {
 
                 repository.getCatalog(
@@ -14334,7 +14386,8 @@ private suspend fun calculateEpisodesRemaining(
                                     baseUrl = baseUrl,
                                     type = type,
                                     catalogId = catalogId,
-                                    skip = 0
+                                    skip = 0,
+                                    pinned = true
                                 )
 
                             if (
@@ -15084,11 +15137,29 @@ private suspend fun calculateEpisodesRemaining(
          * catalog fetches as the app would ever hand it, so the build - not the
          * network - was the queue: on a field report addon.catalog averaged
          * 603ms over 117 calls, and 23 catalogs per Home six at a time is four
-         * waves where two will do. The pinned rails share this semaphore
-         * through fetchCatalogThrottled, so it covers pagination too.
+         * waves where two will do. It covers pagination too.
+         *
+         * This is the TOTAL in flight. Two of these permits belong to the pinned
+         * batch and are not the fan-out's to spend (see
+         * [PINNED_CATALOG_RESERVED_REQUESTS]).
          */
         internal const val MAX_CONCURRENT_CATALOG_REQUESTS =
             12
+
+        /**
+         * Permits held back from the fan-out for the pinned "Top ... Today" batch.
+         *
+         * Two, because that batch is exactly two catalogs (movies and series) and
+         * it is the first row on screen. Reserving them costs the fan-out nothing
+         * it was not already losing: the fan-out's own ceiling is
+         * [MAX_CONCURRENT_CATALOG_REQUESTS] minus these, so the device's total
+         * add-on concurrency is unchanged - it is only no longer possible for a
+         * wave of background catalogs to stand in front of the row the viewer is
+         * looking at (`pinnedTopToday=4030ms` against 122ms of actual fetch on the
+         * 10:35 paste).
+         */
+        internal const val PINNED_CATALOG_RESERVED_REQUESTS =
+            2
 
         // How many items an app-built TMDB rail (the kids and guest picks)
         // aims to KEEP once its filters have run, and how many TMDB pages it

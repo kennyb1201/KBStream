@@ -104,7 +104,9 @@ class HeroLookaheadWarmAheadContractTest {
         assertTrue(
             "the permit covers the decode too: 1280x720 bitmaps are never in " +
                 "flight at once on a small box",
-            Regex("withPermit \\{\\s*warmHeroArtBitmap\\(").containsMatchIn(lookahead)
+            lookahead.contains("heroArtPrefetchSemaphore.withPermit") &&
+                lookahead.indexOf("heroArtPrefetchSemaphore.withPermit") <
+                lookahead.indexOf("warmHeroArtBitmap(")
         )
     }
 

@@ -28,7 +28,8 @@ class HeroLookaheadTraceTest {
         val line = ImageLoadTrace.lines().single()
         assertEquals(
             "the warm fired, so the paste says so - a 0/0 rate is honest, not absent",
-            "hero: lookahead arrivals=1 hits=0 misses=0 rate=0%",
+            "hero: lookahead arrivals=1 hits=0 misses=0 rate=0% " +
+                "skippedWalk=0 skippedNoArt=0",
             line
         )
     }
