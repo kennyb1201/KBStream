@@ -316,6 +316,108 @@ class EspnSportsRepositoryTest {
         assertNull(game.away.logoUrl)
     }
 
+    // ── The two shapes of a score ───────────────────────────────────
+
+    /**
+     * The team schedule endpoint, in the shape ESPN actually sends it: the
+     * scoreboard feed carries `score` as a string, and this feed carries the
+     * same number as an object. Taken from the reported Buccaneers page (build
+     * 387), where every finished game printed
+     * `Final • {"value":26,"displayValue":"26"} - {"value":19,...}`.
+     */
+    private val teamSchedule = """
+        {
+          "events": [
+            {
+              "id": "401547417",
+              "name": "Tampa Bay Buccaneers at New Orleans Saints",
+              "date": "2023-10-01T17:00Z",
+              "status": { "type": { "state": "post", "shortDetail": "Final" } },
+              "competitions": [
+                {
+                  "competitors": [
+                    {
+                      "homeAway": "away",
+                      "score": {"value":26,"displayValue":"26"},
+                      "team": {
+                        "abbreviation": "TB",
+                        "displayName": "Tampa Bay Buccaneers"
+                      }
+                    },
+                    {
+                      "homeAway": "home",
+                      "score": {"value":19,"displayValue":"19"},
+                      "team": {
+                        "abbreviation": "NO",
+                        "displayName": "New Orleans Saints"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+    """.trimIndent()
+
+    /** This schedule with the away side's `score` value swapped for [score]. */
+    private fun String.withAwayScore(score: String): String =
+        replace("""{"value":26,"displayValue":"26"}""", score)
+
+    /** This schedule with the home side's `score` value swapped for [score]. */
+    private fun String.withHomeScore(score: String): String =
+        replace("""{"value":19,"displayValue":"19"}""", score)
+
+    @Test
+    fun `a schedule's score object parses to the number a card prints`() {
+        val game = parseScoreboard(teamSchedule, "football/nfl").single()
+
+        assertEquals(GameState.FINAL, game.state)
+        assertEquals("26", game.away.score)
+        assertEquals("19", game.home.score)
+        // The winner compare is `score.trim().toIntOrNull()`, so a stored
+        // score that is not a number also kills the bolding. Both numbers here
+        // have to survive as numbers, not as JSON text.
+        assertEquals(26L, game.away.score?.toLongOrNull() ?: -1L)
+    }
+
+    @Test
+    fun `a score object's raw value is read where ESPN omits the display`() {
+        assertEquals(
+            "26",
+            parseScoreboard(teamSchedule.withAwayScore("""{"value":26}"""), "football/nfl")
+                .single().away.score
+        )
+    }
+
+    @Test
+    fun `the scoreboard's own string score is unchanged by that read`() {
+        assertEquals(
+            "26",
+            parseScoreboard(teamSchedule.withAwayScore("\"26\""), "football/nfl")
+                .single().away.score
+        )
+    }
+
+    @Test
+    fun `a schedule entry whose score is empty has none`() {
+        // ESPN sends a blank string for a game it has not posted a score for,
+        // and the object form with nothing usable inside it must answer the
+        // same way - never the object's own JSON text, which is the bug.
+        val blank = teamSchedule.withAwayScore("\"\"").withHomeScore("{}")
+        val game = parseScoreboard(blank, "football/nfl").single()
+
+        assertNull(game.away.score)
+        assertNull(game.home.score)
+
+        // ...and a side carrying no score key at all reads the same way, which
+        // is the state a schedule entry is in for most of the season.
+        val absent = teamSchedule.lines()
+            .filterNot { it.contains("\"score\": {\"value\":26") }
+            .joinToString("\n")
+        assertNull(parseScoreboard(absent, "football/nfl").single().away.score)
+    }
+
     @Test
     fun `a game whose networks live only in geoBroadcasts still names them`() {
         // A number of leagues ship the per-market geo listing INSTEAD of

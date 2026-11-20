@@ -1173,6 +1173,35 @@ internal fun espnSeries(series: JSONObject?): String? =
     series?.optString("summary", "")?.trim()?.takeIf { it.isNotBlank() }
 
 /**
+ * A competitor's score, in either of the two shapes ESPN publishes it in.
+ *
+ * The scoreboard feed sends a string (`"26"`) and the team schedule endpoint
+ * sends an object (`{"value":26,"displayValue":"26"}`). `optString` reads the
+ * first correctly and returns the object's own JSON text for the second, which
+ * is what a finished Buccaneers game was printing: `Final • {"value":26,...} -
+ * {"value":19,...}`. Every consumer downstream reads [SportsTeam.score] as a
+ * number - the winner compare included - so the shape has to be settled here,
+ * at the one place it is parsed, rather than at each of the three places it is
+ * drawn.
+ *
+ * A score that is not an object is read as the string it is, so the scoreboard
+ * path answers exactly what it answered before. Missing or blank stays null,
+ * which is how a game that has not kicked off reads.
+ */
+private fun espnScoreOf(row: JSONObject): String? {
+    val score = row.opt("score")
+    if (score is JSONObject) {
+        // `displayValue` first - ESPN's own formatting, the same preference
+        // [espnStatText] makes - and the raw value only where a feed omits it.
+        // Null for an object with neither field is deliberate: the string read
+        // below would hand back `{}`, which is the fault this removes.
+        return score.optString("displayValue", "").takeIf { it.isNotBlank() }
+            ?: score.optString("value", "").takeIf { it.isNotBlank() && it != "null" }
+    }
+    return row.optString("score", "").takeIf { it.isNotBlank() }
+}
+
+/**
  * One side of a card, whether the feed calls it a team or an athlete.
  *
  * Tennis and MMA publish a competitor with `athlete` where the ball sports
@@ -1223,7 +1252,7 @@ private fun espnTeamOf(row: JSONObject, homeAway: String, leaguePath: String): S
         abbreviation = abbreviation,
         displayName = displayName,
         logoUrl = mark,
-        score = row.optString("score", "").takeIf { it.isNotBlank() },
+        score = espnScoreOf(row),
         isHome = homeAway.equals("home", ignoreCase = true),
         record = row.optJSONArray("records")?.optJSONObject(0)?.optString("summary", "")
             ?.takeIf { it.isNotBlank() },
