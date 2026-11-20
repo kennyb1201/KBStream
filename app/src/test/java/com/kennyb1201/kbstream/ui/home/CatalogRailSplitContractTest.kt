@@ -169,7 +169,11 @@ class CatalogRailSplitContractTest {
                 "next cold start paints - before any verdict exists",
             defer.contains("answers.mapNotNull { (key, kept) -> kept?.let { key to it } }") &&
                 defer.contains("val items = rail.items.filter { meta -> meta.id in kept }") &&
-                defer.contains("pinnedSnapshotScope,\n                snapshot")
+                defer.contains("snapshotScope,\n                snapshot") &&
+                // The key is handed in, never re-derived: the write must land on
+                // the file this profile's paint-first load read.
+                defer.contains("snapshotScope: String") &&
+                vm.contains("snapshotScope = pinnedSnapshotScope")
         )
         assertTrue(
             "the batch saves the snapshot itself only when nothing is owed",

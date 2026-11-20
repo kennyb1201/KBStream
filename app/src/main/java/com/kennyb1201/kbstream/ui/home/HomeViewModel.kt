@@ -12811,7 +12811,8 @@ private suspend fun calculateEpisodesRemaining(
                                 rails = rails,
                                 owed = verdictsBehind.toList(),
                                 hideUpcoming = hideUpcoming,
-                                buildEpochAtStart = buildEpochAtStart
+                                buildEpochAtStart = buildEpochAtStart,
+                                snapshotScope = pinnedSnapshotScope
                             )
 
                             // With nothing cached there was no paint-first publish
@@ -13625,7 +13626,11 @@ private suspend fun calculateEpisodesRemaining(
         rails: List<Rail>,
         owed: List<PinnedVerdictsBehind>,
         hideUpcoming: Boolean,
-        buildEpochAtStart: Long
+        buildEpochAtStart: Long,
+        // The snapshot key this build resolved (HomePinnedSnapshot.scopeOf) -
+        // the same one the paint-first load came from, so the pass writes the
+        // file this profile reads.
+        snapshotScope: String
     ) {
         if (owed.isEmpty()) return
         viewModelScope.launch {
@@ -13667,7 +13672,7 @@ private suspend fun calculateEpisodesRemaining(
 
             HomePinnedSnapshot.save(
                 getApplication<Application>(),
-                pinnedSnapshotScope,
+                snapshotScope,
                 snapshot
             )
         }
