@@ -256,7 +256,11 @@ class SpuriousPauseAndFocusResumeContractTest {
         assertTrue(
             "MPV still holds its own count and says so",
             mpv.contains("nextUpCountdown?.text = \"Paused - playing next when you resume\"") &&
-                mpv.contains("if (surface?.isPaused() != false) {")
+                // The one exemption added since is the DECLARED END (mpv pauses
+                // itself at EOF, see MpvNextUpEndDeclaredContractTest); the flag
+                // is the player's own state, not the session pause guard this
+                // test is about.
+                mpv.contains("if (surface?.isPaused() != false && !endDeclared) {")
         )
         assertTrue(
             "so does Exo",

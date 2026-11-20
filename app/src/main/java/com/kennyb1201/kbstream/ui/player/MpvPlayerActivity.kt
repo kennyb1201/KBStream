@@ -743,6 +743,26 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private var nextUpCountdownHeld = false
 
     /**
+     * True once the END OF THIS FILE has been declared, by either end path (see
+     * [routeAfterCompletedEnd]).
+     *
+     * Why the countdown needs it (2026-11-20, tt7678620 S01E28 on mpv):
+     * `keep-open=yes` makes mpv hold the last frame with a pause of its OWN, the
+     * view mirrors that into `pauseState`, and [nextUpCountdownRunnable]'s
+     * viewer-pause protection read that as the viewer having paused - so after a
+     * decoder handoff the card sat on "Paused - playing next when you resume"
+     * forever. At end-of-file there is nothing to resume: the file is over, and
+     * the pause belongs to the engine, not to a person. Declared, the EOF pause
+     * stops holding the countdown and the handoff happens.
+     *
+     * Declared, not inferred from `pauseState`: that flag also drives the
+     * play/pause icon and the pause-save, so the distinction between "the viewer
+     * paused" and "mpv paused at EOF" is made here, at the one consumer that
+     * needs it, rather than by changing what `pauseState` means everywhere.
+     */
+    private var endDeclared = false
+
+    /**
      * Latched the first time this session hands playback to the next episode,
      * so the card's PLAY NEXT and the auto-advance countdown - both of which
      * run through [launchNextEpisode] - cannot chain out twice and start the
@@ -770,7 +790,14 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             // re-posts, and a resume continues from the remaining count. The
             // surface's paused flag is this engine's playWhenReady equivalent
             // (the same one isPlaybackActive reads).
-            if (surface?.isPaused() != false) {
+            //
+            // ...unless the end has been declared. mpv pauses ITSELF at EOF
+            // (keep-open holds the last frame), and that pause is not a viewer's:
+            // there is no remaining playback for a resume to return to, so
+            // holding on it deadlocks the handoff (2026-11-20 field report). Mid-
+            // episode `endDeclared` is false and the protection is exactly what
+            // it always was.
+            if (surface?.isPaused() != false && !endDeclared) {
                 if (nextUpCountdownRemaining > 0) {
                     nextUpCountdown?.text = "Paused - playing next when you resume"
                     nextUpCountdownBar?.progress = nextUpCountdownRemaining
@@ -4316,6 +4343,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // is safe; onProgress repopulates it with the new source's position.
         positionMs = 0L
         endedHandled = false
+        // The replacement file has not ended, so the countdown's EOF exemption
+        // dies with the source that earned it: inherited, it would stop a real
+        // viewer pause on the NEW file from holding the countdown, which is the
+        // protection the hold exists for.
+        endDeclared = false
         // [completionFiled] deliberately SURVIVES a source switch, unlike
         // [endedHandled] beside it. The switch replaces the FILE being read, not
         // the episode: the session's history id, parent id and episode identity
@@ -6301,6 +6333,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private fun routeAfterCompletedEnd() {
         runOnUiThread {
             hideMpvBuffering()
+            // The end of this FILE is declared here, at the chokepoint both end
+            // paths pass through, and deliberately not off `endedHandled`: the
+            // error-tail path files a completion without ever setting that latch,
+            // so a flag keyed to it would miss exactly the case this exists for.
+            // Set before the sleep-timer return below - the end is a fact either
+            // way, and that path leaves the session anyway.
+            endDeclared = true
             // A sleep timer armed to stop at the end of this episode is honored
             // here, where the episode really is over: no card, no auto-advance,
             // just out. The completion write already made is what the history
@@ -7504,6 +7543,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         positionMs = 0L
         startPositionMs = resumeAt
         endedHandled = false
+        // Same as a source switch: this file starts again, and the previous
+        // end no longer exempts the countdown from a viewer pause.
+        endDeclared = false
         showLoading("Reconnecting to this source")
         surface?.load(
             MpvPlayerView.LoadRequest(

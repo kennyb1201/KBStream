@@ -190,7 +190,9 @@ class PlayerMinorsContractTest {
     fun `the MPV twin holds on its own paused flag`() {
         val runnable = mpvCountdown()
         val sleep = runnable.indexOf("sleepTimerBlocksAutoAdvance(SleepTimer.state.value)")
-        val pause = runnable.indexOf("if (surface?.isPaused() != false) {")
+        // The hold now carries the declared-end exemption: mpv's OWN EOF pause is
+        // not a viewer pause, and holding on it deadlocked the handoff (2026-11-20).
+        val pause = runnable.indexOf("if (surface?.isPaused() != false && !endDeclared) {")
         val decrement = runnable.indexOf("nextUpCountdownRemaining--")
         assertTrue("F3: the MPV pause guard exists", pause >= 0)
         assertTrue("F3: after the sleep-timer block", sleep in 0 until pause)
