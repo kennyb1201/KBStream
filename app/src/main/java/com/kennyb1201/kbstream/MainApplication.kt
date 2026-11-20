@@ -605,6 +605,42 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                         }
                     }
 
+                    // The DECODER's own window (0.9.399): Coil brackets the
+                    // decoder, not the whole request, so this is the only place
+                    // that can say how long decoding an image costs on this box.
+                    // `onStart`..bitmap was doing that job and could not: it
+                    // includes the disk read and the network, which is why the
+                    // field's `decode:` line read `ge16 == ge33 == n` on every
+                    // build.
+                    override fun decodeStart(
+                        request: coil3.request.ImageRequest,
+                        decoder: coil3.decode.Decoder,
+                        options: coil3.request.Options
+                    ) {
+                        synchronized(inFlight) {
+                            inFlight[request]?.let { start ->
+                                start.decodeStartNs = System.nanoTime()
+                            }
+                        }
+                    }
+
+                    override fun decodeEnd(
+                        request: coil3.request.ImageRequest,
+                        decoder: coil3.decode.Decoder,
+                        options: coil3.request.Options,
+                        result: coil3.decode.DecodeResult?
+                    ) {
+                        synchronized(inFlight) {
+                            inFlight[request]?.let { start ->
+                                if (start.decodeStartNs > 0L) {
+                                    start.decodeMs =
+                                        ((System.nanoTime() - start.decodeStartNs) /
+                                            1_000_000L).toInt()
+                                }
+                            }
+                        }
+                    }
+
                     override fun onCancel(request: coil3.request.ImageRequest) {
                         synchronized(inFlight) { inFlight.remove(request) }
                     }
@@ -649,6 +685,7 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                             width = result.image.width,
                             height = result.image.height,
                             durationMs = durationMs,
+                            decodeMs = start?.decodeMs ?: 0,
                             askedWidth = start?.askedWidth ?: 0,
                             askedHeight = start?.askedHeight ?: 0,
                             duringFrame =
@@ -917,6 +954,12 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
 private class CoilRequestTiming(val atNs: Long) {
     var askedWidth = 0
     var askedHeight = 0
+
+    /** `System.nanoTime()` at Coil's `decodeStart`; 0 if it never fired. */
+    var decodeStartNs = 0L
+
+    /** The decoder's own cost, 0 until `decodeEnd` has run. */
+    var decodeMs = 0
 }
 
 /**

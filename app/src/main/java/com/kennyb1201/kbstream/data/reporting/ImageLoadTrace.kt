@@ -135,6 +135,19 @@ internal object ImageLoadTrace {
     private var slowestDecodeMs = 0
     private var decodesDuringFrame = 0
 
+    // The request's own end-to-end latency, kept apart from the decode (0.9.399).
+    //
+    // Until then `decode:` WAS this number - `onStart` to the bitmap, so it
+    // included the disk read and the network. The 2026-11-19 paste printed
+    // `decode: n=514 ge16=514 ge33=514`, which reads as "every decode is over
+    // two frame budgets" and is really "every load took a round trip". Two
+    // different fixes hang off those two readings, so they are two lines now:
+    // `decode:` is the decoder's own time, `request:` is the wait the card paid.
+    private var timedRequests = 0
+    private var requestsOverBudget = 0
+    private var requestsOverTwoBudgets = 0
+    private var slowestRequestMs = 0
+
     /** "WxH" -> count, first-seen order kept (LinkedHashMap). */
     private val sizes = LinkedHashMap<String, Int>()
 
@@ -167,10 +180,14 @@ internal object ImageLoadTrace {
      * One completed request. [width]/[height] are the DECODED pixels.
      *
      * [durationMs] is the request's end-to-end latency (start to bitmap, so it
-     * includes the disk read), 0 when the caller did not time it. [askedWidth]/
-     * [askedHeight] are the size the layout resolved the request to, 0 when Coil
-     * left a dimension undefined. [duringFrame] says a frame-metered gesture was
-     * running as this completed - the number that ties a decode to a frame.
+     * includes the disk read and the network), 0 when the caller did not time it.
+     * [decodeMs] is the DECODER's own time, from Coil's `decodeStart` to its
+     * `decodeEnd`, 0 when the caller did not time it - the number that answers
+     * "is decoding slow on this box", which [durationMs] cannot answer.
+     * [askedWidth]/[askedHeight] are the size the layout resolved the request to,
+     * 0 when Coil left a dimension undefined. [duringFrame] says a frame-metered
+     * gesture was running as this completed - the number that ties a decode to a
+     * frame.
      *
      * [walkActive] says a metered gesture was open **or had just closed** (see
      * UiFrameTrace.inWalkWindow), and it is what scopes the two `scroll:` counts.
@@ -184,6 +201,7 @@ internal object ImageLoadTrace {
         width: Int,
         height: Int,
         durationMs: Int = 0,
+        decodeMs: Int = 0,
         askedWidth: Int = 0,
         askedHeight: Int = 0,
         duringFrame: Boolean = false,
@@ -211,15 +229,24 @@ internal object ImageLoadTrace {
                     askedSizes.remove(askedSizes.keys.first())
                 }
             }
-            // Timing is decode-only: a memory hit has no decode to time, and
+            // The decoder's own cost: a memory hit has no decode to time, and
             // counting its latency would mix the frame's own work into the
             // number a fix is supposed to bring down.
-            if (source != Source.MEMORY && durationMs > 0) {
+            if (source != Source.MEMORY && decodeMs > 0) {
                 timedDecodes++
-                if (durationMs >= FRAME_BUDGET_MS) decodesOverBudget++
-                if (durationMs >= TWO_FRAME_BUDGET_MS) decodesOverTwoBudgets++
-                if (durationMs > slowestDecodeMs) slowestDecodeMs = durationMs
+                if (decodeMs >= FRAME_BUDGET_MS) decodesOverBudget++
+                if (decodeMs >= TWO_FRAME_BUDGET_MS) decodesOverTwoBudgets++
+                if (decodeMs > slowestDecodeMs) slowestDecodeMs = decodeMs
                 if (duringFrame) decodesDuringFrame++
+            }
+            // ...and the wait around it, which is a different question with a
+            // different fix (a bigger fetch, a smaller ask, a warm) and is what
+            // this trace used to print under `decode:`.
+            if (source != Source.MEMORY && durationMs > 0) {
+                timedRequests++
+                if (durationMs >= FRAME_BUDGET_MS) requestsOverBudget++
+                if (durationMs >= TWO_FRAME_BUDGET_MS) requestsOverTwoBudgets++
+                if (durationMs > slowestRequestMs) slowestRequestMs = durationMs
             }
             // A cache hit is not a decode: counting its size would drown the
             // six slots in one tile's dimensions and hide the surfaces that
@@ -318,7 +345,7 @@ internal object ImageLoadTrace {
         val loads = memoryHits + diskDecodes + networkDecodes + otherDecodes
         if (loads == 0 && trims.isEmpty() && heroDraws == 0 &&
             heroWarms == 0 && tileWarms == 0 && heroFocusArrivals == 0 &&
-            timedDecodes == 0 && askedSizes.isEmpty()
+            timedDecodes == 0 && timedRequests == 0 && askedSizes.isEmpty()
         ) {
             return emptyList()
         }
@@ -346,6 +373,10 @@ internal object ImageLoadTrace {
             out += "decode: n=$timedDecodes ge16=$decodesOverBudget " +
                 "ge33=$decodesOverTwoBudgets max=${slowestDecodeMs}ms " +
                 "duringFrame=$decodesDuringFrame"
+        }
+        if (timedRequests > 0) {
+            out += "request: n=$timedRequests ge16=$requestsOverBudget " +
+                "ge33=$requestsOverTwoBudgets max=${slowestRequestMs}ms"
         }
         // Where the hero-size decodes came from (dig four §1c). Printed beside
         // the counts above so a paste can be read as "warms are working" rather
@@ -410,6 +441,10 @@ internal object ImageLoadTrace {
             decodesOverTwoBudgets = 0
             slowestDecodeMs = 0
             decodesDuringFrame = 0
+            timedRequests = 0
+            requestsOverBudget = 0
+            requestsOverTwoBudgets = 0
+            slowestRequestMs = 0
             sizes.clear()
             askedSizes.clear()
             trims.clear()

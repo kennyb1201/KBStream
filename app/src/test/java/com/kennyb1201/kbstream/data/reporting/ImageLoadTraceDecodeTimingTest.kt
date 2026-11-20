@@ -14,6 +14,13 @@ import org.junit.Test
  * that close it: `decode:` (how long, over how many frame budgets, and how many
  * finished inside a metered gesture) and `asked at:` (what the surfaces asked
  * the loader for, hits included - the warm's own audit).
+ *
+ * `decode:` is the DECODER's time only (0.9.399). It used to be the request's
+ * end-to-end latency, which is why the 2026-11-19 walk printed `n=514 ge16=514
+ * ge33=514` - every load of that session took a network or disk round trip, and
+ * nothing in the line said the decoding itself was fine. The wait it used to
+ * report is still printed, under `request:`, because it answers the other half
+ * of "why did that card take a moment".
  */
 class ImageLoadTraceDecodeTimingTest {
 
@@ -27,9 +34,9 @@ class ImageLoadTraceDecodeTimingTest {
 
     @Test
     fun `decode durations are bucketed against the frame budgets`() {
-        ImageLoadTrace.noteImage(ImageLoadTrace.Source.DISK, 420, 236, durationMs = 5)
-        ImageLoadTrace.noteImage(ImageLoadTrace.Source.DISK, 420, 236, durationMs = 16)
-        ImageLoadTrace.noteImage(ImageLoadTrace.Source.NETWORK, 1280, 720, durationMs = 40)
+        ImageLoadTrace.noteImage(ImageLoadTrace.Source.DISK, 420, 236, decodeMs = 5)
+        ImageLoadTrace.noteImage(ImageLoadTrace.Source.DISK, 420, 236, decodeMs = 16)
+        ImageLoadTrace.noteImage(ImageLoadTrace.Source.NETWORK, 1280, 720, decodeMs = 40)
 
         assertEquals(
             "one 16 ms decode lost a budget, one 40 ms decode lost two, and the " +
@@ -41,7 +48,7 @@ class ImageLoadTraceDecodeTimingTest {
 
     @Test
     fun `a memory hit is not a timed decode`() {
-        ImageLoadTrace.noteImage(ImageLoadTrace.Source.MEMORY, 420, 236, durationMs = 2)
+        ImageLoadTrace.noteImage(ImageLoadTrace.Source.MEMORY, 420, 236, decodeMs = 2)
 
         assertEquals(
             "there is no decode to time on a hit, and counting its latency would " +
@@ -57,10 +64,10 @@ class ImageLoadTraceDecodeTimingTest {
             ImageLoadTrace.Source.DISK,
             420,
             236,
-            durationMs = 34,
+            decodeMs = 34,
             duringFrame = true
         )
-        ImageLoadTrace.noteImage(ImageLoadTrace.Source.DISK, 420, 236, durationMs = 7)
+        ImageLoadTrace.noteImage(ImageLoadTrace.Source.DISK, 420, 236, decodeMs = 7)
 
         assertEquals(
             "the correlation the paste needs: one of the two landed inside the walk",
@@ -77,6 +84,34 @@ class ImageLoadTraceDecodeTimingTest {
             "a caller that did not time its requests must not read as 0 ms decodes",
             null,
             line("decode:")
+        )
+        assertEquals(
+            "nor as a 0 ms request",
+            null,
+            line("request:")
+        )
+    }
+
+    @Test
+    fun `the wait and the decode are two lines, because they are two problems`() {
+        ImageLoadTrace.noteImage(
+            ImageLoadTrace.Source.NETWORK,
+            1280,
+            720,
+            durationMs = 340,
+            decodeMs = 12
+        )
+
+        assertEquals(
+            "an original backdrop over the wire: 340 ms of request, 12 ms of decoding - " +
+                "the reading `decode: max=340ms` would have sent a fix at the decoder",
+            "decode: n=1 ge16=0 ge33=0 max=12ms duringFrame=0",
+            line("decode:")
+        )
+        assertEquals(
+            "and the wait keeps its own breakdown",
+            "request: n=1 ge16=1 ge33=1 max=340ms",
+            line("request:")
         )
     }
 
@@ -146,6 +181,7 @@ class ImageLoadTraceDecodeTimingTest {
             420,
             236,
             durationMs = 20,
+            decodeMs = 9,
             askedWidth = 424,
             askedHeight = 292,
             duringFrame = true
