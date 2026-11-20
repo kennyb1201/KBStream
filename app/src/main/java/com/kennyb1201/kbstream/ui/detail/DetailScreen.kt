@@ -105,6 +105,7 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.allowHardware
+import coil3.request.allowRgb565
 import coil3.request.crossfade
 import coil3.size.Size
 import com.kennyb1201.kbstream.FormFactor
@@ -5426,6 +5427,8 @@ fun DetailScreen(
                     // looking at, not a tile in a rail, so the handover
                     // reads as intentional rather than as flicker.
                     .crossfade(true)
+                    // Hero-class: stays 8888 (see newImageLoader).
+                    .allowRgb565(false)
                     .build()
             },
                     contentDescription = displayName,
@@ -5496,6 +5499,8 @@ fun DetailScreen(
                                     // with the art behind it rather than
                                     // popping onto a finished hero.
                                     .crossfade(true)
+                                    // Hero-class: stays 8888 (see newImageLoader).
+                                    .allowRgb565(false)
                                     .build(),
                                 contentDescription = displayName,
                                 contentScale = ContentScale.Fit,

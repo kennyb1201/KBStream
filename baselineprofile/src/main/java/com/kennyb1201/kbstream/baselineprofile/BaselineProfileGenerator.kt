@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.baselineprofile
 
+import android.view.KeyEvent
 import androidx.benchmark.macro.junit4.BaselineProfileRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.uiautomator.By
@@ -55,6 +56,28 @@ class BaselineProfileGenerator {
             // worth most where the second of user-visible work happens.
             device.wait(Until.hasObject(By.pkg(PACKAGE)), TIMEOUT_MS)
             device.waitForIdle(IDLE_MS)
+
+            // The first scroll (F2, 2026-11-20). Idling on a settled Home
+            // captures the rail BUILD and nothing of the rail WALK, and the
+            // walk is what the frame meter measures: focus moving card to
+            // card, each step composing the newly visible tiles and decoding
+            // the art behind them. One DOWN leaves the hero and lands in the
+            // first rail; the RIGHT presses are the walk itself.
+            device.pressKeyCode(KeyEvent.KEYCODE_DPAD_DOWN)
+            device.waitForIdle(STEP_IDLE_MS)
+            repeat(RAIL_STEPS) {
+                device.pressKeyCode(KeyEvent.KEYCODE_DPAD_RIGHT)
+                device.waitForIdle(STEP_IDLE_MS)
+            }
+
+            // The first Detail open and the way back. A rail card's CENTER is
+            // the Detail screen - playback starts from there, not from Home -
+            // so this reaches the load path without a player session, which a
+            // profile capture must never start (it would outlive the test).
+            device.pressKeyCode(KeyEvent.KEYCODE_DPAD_CENTER)
+            device.waitForIdle(DETAIL_IDLE_MS)
+            device.pressKeyCode(KeyEvent.KEYCODE_BACK)
+            device.waitForIdle(STEP_IDLE_MS)
         }
     }
 
@@ -62,5 +85,10 @@ class BaselineProfileGenerator {
         const val PACKAGE = "com.kennyb1201.kbstream"
         const val TIMEOUT_MS = 10_000L
         const val IDLE_MS = 2_000L
+        /** What one D-pad step needs to settle: a focus move and its art. */
+        const val STEP_IDLE_MS = 400L
+        /** The Detail page's first paint, which is the part worth profiling. */
+        const val DETAIL_IDLE_MS = 2_500L
+        const val RAIL_STEPS = 6
     }
 }

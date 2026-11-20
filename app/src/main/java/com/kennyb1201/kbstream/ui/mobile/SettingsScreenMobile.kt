@@ -3177,6 +3177,26 @@ private fun InterfacePaneMobile() {
         // Renamed from "Posters & Browsing" (settings reorg §8.6): the browsing
         // rows have their own section below, so this one names what is left.
         SettingsSectionMobile("Posters")
+        // The TV row's twin (F6 experiment, 2026-11-20): software bitmaps off by
+        // default. Read when the image loader is built, so it applies from the
+        // next launch.
+        var softwareImageBitmaps by remember {
+            mutableStateOf(AppPreferences.getSoftwareImageBitmaps(context))
+        }
+        SettingsToggleMobile(
+            label = "Software image decoding",
+            description = if (softwareImageBitmaps) {
+                "Art is decoded in software. Applies from the next launch."
+            } else {
+                "Art is decoded as hardware bitmaps. Turn on if this device " +
+                    "stutters while posters and backdrops load."
+            },
+            checked = softwareImageBitmaps,
+            onChange = { enabled ->
+                softwareImageBitmaps = enabled
+                AppPreferences.setSoftwareImageBitmaps(context, enabled)
+            }
+        )
         SettingsToggleMobile(
             label = "Poster titles",
             description = "Draw each poster's title under it.",

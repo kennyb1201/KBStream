@@ -1,0 +1,66 @@
+# Baseline profile generation (F2, spec 2026-11-20).
+#
+# The profile is INPUT to the release build, not a build product: without it the
+# app still works, it just runs its first frames interpreted. The generator lives
+# in :baselineprofile and writes
+# app/src/release/generated/baselineProfiles/baseline-prof.txt
+# (see `baselineProfile { saveInSrc = true }` in app/build.gradle.kts), which is
+# committed.
+#
+# This job is how that file gets refreshed without a PC: it boots an Android
+# emulator on the runner, runs the generator against :app, and hands the file
+# back as an artifact. Download it and commit it - the release build picks it up
+# from the source tree, so the next tag ships it inside
+# assets/dexopt/baseline.prof.
+#
+# Dispatch only, deliberately: generating a profile is not part of every build,
+# and a release must not depend on an emulator being available. A TV box still
+# produces a more faithful traversal (D-pad focus is part of what is captured),
+# so with one attached `./gradlew :app:generateBaselineProfile` remains the
+# better path.
+name: Baseline profile
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # KVM on the runner is what makes an x86_64 emulator usable rather than
+      # unusably slow; without it the emulator boots in software rendering and
+      # the capture times out.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Generate the profile
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 31
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: ./gradlew :app:generateBaselineProfile --stacktrace
+
+      - name: Upload the profile
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseline-profile
+          path: app/src/release/generated/baselineProfiles/baseline-prof.txt
+          if-no-files-found: error

@@ -39,6 +39,7 @@ import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.request.allowRgb565
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.history.TopShow
 import com.kennyb1201.kbstream.data.history.ViewingStats
@@ -341,6 +342,8 @@ private fun TopShowRow(show: TopShow) {
                             ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
                                 .data(url)
                                 .crossfade(true)
+                                // Hero-class: stays 8888 (see newImageLoader).
+                                .allowRgb565(false)
                                 .build()
                         },
                     contentDescription = show.name,

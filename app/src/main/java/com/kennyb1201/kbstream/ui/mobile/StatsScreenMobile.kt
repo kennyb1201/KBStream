@@ -32,6 +32,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.request.allowRgb565
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.history.TopShow
 import com.kennyb1201.kbstream.data.history.ViewingStats
@@ -307,6 +308,8 @@ private fun TopShowRowMobile(show: TopShow) {
                     model = ImageRequest.Builder(context)
                         .data(poster)
                         .crossfade(true)
+                        // Hero-class: stays 8888 (see newImageLoader).
+                        .allowRgb565(false)
                         .build(),
                     contentDescription = show.name,
                     contentScale = ContentScale.Crop,

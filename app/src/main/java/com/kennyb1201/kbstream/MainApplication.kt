@@ -11,8 +11,11 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
+import coil3.bitmapFactoryMaxParallelism
 import coil3.disk.directory
 import coil3.svg.SvgDecoder
+import coil3.request.allowHardware
+import coil3.request.allowRgb565
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.memory.ImageCacheTrim
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
@@ -582,6 +585,33 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             // Coil applies a request's own crossfade over this default, so
             // opting in is a one-liner at the call site.
             .crossfade(false)
+            // F1 (2026-11-20): RGB_565 for every image that has no alpha.
+            //
+            // The walk-median diagnosis put the TCL's remaining jank on decode
+            // VOLUME against a 48 MB cache that turns over mid-scroll: the same
+            // posters were decoded, evicted and decoded again. 565 halves the
+            // bytes per bitmap, so the same cache holds roughly twice the tiles
+            // (fewer evictions, fewer re-decodes) and each decode copies half
+            // as much memory on a weak SoC.
+            //
+            // The hero-class surfaces opt back OUT per request (see the
+            // crossfade note above: they are exactly the requests that ask for
+            // a fade). Banding is what 565 costs on a smooth gradient, and a
+            // full-bleed backdrop is the one place it would be visible at ten
+            // feet. Posters and tiles have neither the gradient nor the size.
+            .allowRgb565(true)
+            // F3 (2026-11-20): cap parallel decodes at four. Unbounded
+            // parallelism lets a rail's worth of decodes compete with the main
+            // thread on this class of hardware; four keeps a fill moving while
+            // leaving the frame alone.
+            .bitmapFactoryMaxParallelism(4)
+            // F6 experiment (2026-11-20): software bitmaps, OFF by default.
+            //
+            // Hardware bitmaps are normally the faster thing to draw, so this
+            // is not borrowed blind - the setting exists so one build can A/B it
+            // on the TCL. If the walk paste does not improve with it on, the
+            // setting and this line go away together (see AppPreferences).
+            .allowHardware(!AppPreferences.getSoftwareImageBitmaps(context))
             // TV browsing shows hundreds of posters/backdrops; a generous
             // memory cache keeps tiles resident so re-scrolling a rail never
             // re-decodes (the default is a small fraction of free RAM).
@@ -608,7 +638,20 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             )
             // KB badge packs commonly ship .svg chip art; without this
             // decoder those badges silently fail to render (blank chips).
-            .components { add(SvgDecoder.Factory()) }
+            .components {
+                add(SvgDecoder.Factory())
+                // F4 (2026-11-20): art gets its own HTTP client - wide
+                // dispatcher, IPv4-first DNS, TCP_NODELAY, 4/5/8s timeouts and
+                // one tighter retry - instead of the shared default one sized
+                // for API calls. See ImageHttp for why each part is there.
+                add(
+                    coil3.network.okhttp.OkHttpNetworkFetcherFactory(
+                        callFactory = {
+                            com.kennyb1201.kbstream.data.image.imageHttpClient
+                        }
+                    )
+                )
+            }
             // F1 of the 2026-11-14 scrolling spec: one count per completed
             // request, by where its pixels came from and how big the bitmap
             // actually was. A session's paste can then tell a warm scroll (hits

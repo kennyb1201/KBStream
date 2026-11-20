@@ -63,6 +63,7 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.request.allowRgb565
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.library.HiddenTitles
@@ -710,6 +711,8 @@ fun ActorScreen(
                                     .data(backdropUrl)
                                     .size(1280, 720)
                                     .crossfade(true)
+                                    // Hero-class: stays 8888 (see newImageLoader).
+                                    .allowRgb565(false)
                                     .build()
                             },
                             contentDescription = topWorkCredit?.title ?: topWorkCredit?.name ?: p.name,

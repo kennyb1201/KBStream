@@ -73,6 +73,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.request.allowRgb565
 import coil3.request.crossfade
 import android.widget.Toast
 import com.kennyb1201.kbstream.R
@@ -3245,6 +3246,8 @@ private fun MobileDetailHeader(
             ImageRequest.Builder(context)
                 .data(backdropUrl)
                 .crossfade(true)
+                // Hero-class: stays 8888 (see newImageLoader).
+                .allowRgb565(false)
                 .build()
         }
         AsyncImage(

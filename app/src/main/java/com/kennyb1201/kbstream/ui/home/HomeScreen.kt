@@ -127,6 +127,7 @@ import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
 import coil3.memory.MemoryCache
 import coil3.request.ImageRequest
+import coil3.request.allowRgb565
 import coil3.request.crossfade
 import coil3.size.Size
 import coil3.toBitmap
@@ -1461,6 +1462,8 @@ internal fun HeroClearLogo(
                 // too), so it fades in with it rather than popping onto
                 // finished art. This is the hero, not a rail tile.
                 .crossfade(true)
+                // Hero-class: stays 8888 (see newImageLoader).
+                .allowRgb565(false)
                 .build(),
             contentDescription = name,
             contentScale = ContentScale.Fit,

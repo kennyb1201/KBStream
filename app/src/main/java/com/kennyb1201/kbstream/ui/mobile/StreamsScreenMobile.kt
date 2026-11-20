@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.request.allowRgb565
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.debrid.TorBoxCloudPicker
@@ -835,6 +836,8 @@ private fun MobileStreamsHeader(
                     model = ImageRequest.Builder(context)
                         .data(backdropUrl)
                         .crossfade(true)
+                        // Hero-class: stays 8888 (see newImageLoader).
+                        .allowRgb565(false)
                         .build(),
                     contentDescription = displayName,
                     contentScale = ContentScale.Crop,
@@ -871,6 +874,8 @@ private fun MobileStreamsHeader(
                         model = ImageRequest.Builder(context)
                             .data(clearLogoUrl)
                             .crossfade(true)
+                            // Hero-class: stays 8888 (see newImageLoader).
+                            .allowRgb565(false)
                             .build(),
                         contentDescription = displayName,
                         contentScale = ContentScale.Fit,

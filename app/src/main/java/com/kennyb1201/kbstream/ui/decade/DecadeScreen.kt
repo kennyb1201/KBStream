@@ -45,6 +45,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.request.allowRgb565
 import coil3.request.crossfade
 import coil3.size.Size
 import com.kennyb1201.kbstream.data.tmdb.StudioItem
@@ -769,6 +770,8 @@ private fun DecadeHeader(
                             // for this screen's top titles, not a scrolling
                             // grid, so the stagger reads as designed.
                             .crossfade(true)
+                            // Hero-class: stays 8888 (see newImageLoader).
+                            .allowRgb565(false)
                             .build(),
                         contentDescription = null,
                         contentScale = ContentScale.Crop,

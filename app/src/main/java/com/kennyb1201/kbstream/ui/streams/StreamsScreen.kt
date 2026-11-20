@@ -66,6 +66,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.request.allowRgb565
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.addon.Stream
@@ -725,6 +726,8 @@ fun StreamsScreen(
                     // Full-screen hero backdrop: the one image on the
                     // full-bleed backdrop.
                     .crossfade(true)
+                    // Hero-class: stays 8888 (see newImageLoader).
+                    .allowRgb565(false)
                     .build(),
                 contentDescription = displayName,
                 contentScale = ContentScale.Crop,
@@ -1032,6 +1035,8 @@ private fun StreamsHeader(
                     .data(clearLogoUrl)
                     // The title logo over that backdrop, fading in with it.
                     .crossfade(true)
+                    // Hero-class: stays 8888 (see newImageLoader).
+                    .allowRgb565(false)
                     .build(),
                 contentDescription = displayName,
                 contentScale = ContentScale.Fit,

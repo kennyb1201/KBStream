@@ -234,6 +234,9 @@ object AppPreferences {
     // exactly the two who disagree about it.
     private const val KEY_SPOILER_FREE = "spoiler_free"
     private const val KEY_HIDE_UPCOMING = "home_rail_hide_upcoming"
+
+    /** F6 experiment: decode art in software instead of as hardware bitmaps. */
+    private const val KEY_SOFTWARE_IMAGE_BITMAPS = "software_image_bitmaps"
     // Hide finished titles from every Home rail (not from Up Next or the
     // Library). Synced like the digital filter beside it: it is a statement
     // about what the viewer wants offered to them, and the other TV in the
@@ -2655,6 +2658,23 @@ object AppPreferences {
     fun setHomeRailHideUpcoming(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_HIDE_UPCOMING, enabled).apply()
         syncDisplayPrefsBlob(context)
+    }
+
+    // ── Art: software bitmaps (F6 experiment, 2026-11-20) ────────────
+    //
+    // OFF is the current behaviour: hardware bitmaps are normally the faster
+    // thing to draw, and the theory that they are not on a weak TV SoC (GPU
+    // upload stalls, the copy-back dynamic colour needs) is unproven here. The
+    // switch exists so one build can A/B it on the TCL; if the walk paste does
+    // not improve with it on, the switch is deleted rather than kept.
+    //
+    // Read once, when the image loader is built, so a change applies on the next
+    // launch - which is exactly how an A/B is measured.
+    fun getSoftwareImageBitmaps(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_SOFTWARE_IMAGE_BITMAPS, false)
+
+    fun setSoftwareImageBitmaps(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_SOFTWARE_IMAGE_BITMAPS, enabled).apply()
     }
 
     // ── Home rails: hide titles this profile has finished ────────────
