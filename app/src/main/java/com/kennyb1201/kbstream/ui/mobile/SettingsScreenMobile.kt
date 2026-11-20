@@ -3184,7 +3184,8 @@ private fun InterfacePaneMobile() {
             mutableStateOf(AppPreferences.getSoftwareImageBitmaps(context))
         }
         SettingsToggleMobile(
-            label = "Software image decoding",
+            // Same spelling as the TV row: the search index is keyed on it.
+            label = "Software Image Decoding",
             description = if (softwareImageBitmaps) {
                 "Art is decoded in software. Applies from the next launch."
             } else {

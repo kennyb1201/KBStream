@@ -641,6 +641,15 @@ internal object SettingsSearchIndex {
             "search rail addon name label show"
         ),
         SettingSearchEntry(
+            // F6 experiment (2026-11-20): the software-bitmap switch. Indexed
+            // because the row is drawn like any other - a settings row nobody
+            // can search for is a row that does not exist (SE-2).
+            "interface.software-image-decoding",
+            SettingsPane.INTERFACE,
+            "Software Image Decoding",
+            "image bitmaps decode decoding performance stutter hardware software art"
+        ),
+        SettingSearchEntry(
             "interface.poster-titles",
             SettingsPane.INTERFACE,
             "Poster Titles",
