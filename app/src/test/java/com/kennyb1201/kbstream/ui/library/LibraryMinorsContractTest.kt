@@ -286,8 +286,17 @@ class LibraryMinorsContractTest {
         val body = publicScreen.substringAfter("is PublicListTitlesState.Titles -> {")
         val note = body.indexOf("if (titles.droppedCount > 0) {")
         val empty = body.indexOf("if (titles.rows.isEmpty()) {")
-        val rows = body.indexOf("titles.rows.forEach { row ->")
+        // 2026-11-20: the rows are LAZY - the page used to draw them from a
+        // `titles.rows.forEach`, and composing a whole directory in one pass is
+        // what killed the app on a 1.7 GB TCL. The order this test is about is
+        // unchanged; only the emission it points at moved.
+        val rows = body.indexOf("items(openable.size)")
         assertTrue("F6: the note is drawn when anything was dropped", note >= 0)
+        assertTrue(
+            "F6: and the rows are still composed lazily, not in one pass",
+            body.contains("val openable = titles.rows.mapNotNull") &&
+                !body.contains("titles.rows.forEach")
+        )
         assertTrue(
             "F6: before the rows, so it explains the list rather than trailing it",
             note < rows
