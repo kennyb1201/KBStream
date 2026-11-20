@@ -147,31 +147,35 @@ class ScrollRoundTwoContractTest {
     }
 
     @Test
-    fun `the lookahead fires on the settle, not on every focus step`() {
+    fun `the lookahead is the walk's to aim, one card at a time`() {
         val vm = source(VIEW_MODEL)
         val focusEntry = vm.substringAfter("fun warmHeroFocus(")
-            .substringBefore("private fun warmHeroLookahead(")
+            .substringBefore("private var heroLookaheadJob")
         assertTrue(
             "the focus entry still starts the tile warm",
             focusEntry.contains("warmRailTiles(item)")
         )
-        assertFalse(
-            "but not the hero lookahead: 113 warms bought 0 of 18 hero draws, and " +
-                "six ~3.5MB decodes per step turned a 48MB cache over nine times " +
-                "(2026-11-19, churn F1)",
+        assertTrue(
+            "and the hero warm starts there too: the settle frame is the hero's own " +
+                "draw, so a warm fired there can only duplicate it (0.9.399: " +
+                "heroWarms=10, heroDraws=14, hits=2 misses=12)",
             focusEntry.contains("warmHeroLookahead(item)")
         )
         assertTrue(
             "the hit rate is still counted per focus arrival, not per warm",
             focusEntry.contains("ImageLoadTrace.noteHeroFocusArrival()")
         )
+        assertTrue(
+            "every step cancels the pending warm, so the card that survives the " +
+                "delay is the one the walk STOPPED on",
+            vm.substringAfter("private fun warmHeroLookahead(")
+                .contains("heroLookaheadJob?.cancel()")
+        )
         val resolve = vm.substringAfter("fun resolveHeroMeta(")
             .substringBefore("fun reWarmIfCachesWereReleased()")
-        val dwellAt = resolve.indexOf("awaitHeroArtDwell(resolveStartedAtMs)")
-        assertTrue(
-            "the warm now starts inside the resolve, after the art dwell: the hero " +
-                "has settled, so the card it warms is the card that gets drawn",
-            dwellAt >= 0 && resolve.indexOf("warmHeroLookahead(item)") > dwellAt
+        assertFalse(
+            "the resolve must not start it any more",
+            resolve.contains("warmHeroLookahead(item)")
         )
         assertTrue(
             "while the dwells still gate what the resolve PUBLISHES",
