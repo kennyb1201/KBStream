@@ -101,6 +101,38 @@ class GuideFetchBudgetContractTest {
             "one source must not be allowed to spend the whole pass",
             WorkPolicies.GUIDE_SOURCE_BUDGET_MS < passWindowMs
         )
+        assertTrue(
+            "...and neither may the single-source budget, which only buys back " +
+                "the room the job already has",
+            WorkPolicies.GUIDE_SINGLE_SOURCE_BUDGET_MS < passWindowMs
+        )
+    }
+
+    @Test
+    fun `a lone source gets the job's window, several keep their turn`() {
+        // The budget exists to leave later sources their turn. With one source
+        // there is no turn to protect, and the eight minutes only guaranteed the
+        // cut: the 2026-11-20 paste was abandoned at 8:00 on every attempt for
+        // seventeen hours while the same import landed by hand.
+        assertEquals(
+            "one source: the larger budget",
+            WorkPolicies.GUIDE_SINGLE_SOURCE_BUDGET_MS,
+            WorkPolicies.guideSourceBudgetMs(1)
+        )
+        assertEquals(
+            "no source configured is the same case",
+            WorkPolicies.GUIDE_SINGLE_SOURCE_BUDGET_MS,
+            WorkPolicies.guideSourceBudgetMs(0)
+        )
+        assertEquals(
+            "two sources: each keeps the shared budget",
+            WorkPolicies.GUIDE_SOURCE_BUDGET_MS,
+            WorkPolicies.guideSourceBudgetMs(2)
+        )
+        assertTrue(
+            "and the single-source budget is strictly the larger one",
+            WorkPolicies.GUIDE_SINGLE_SOURCE_BUDGET_MS > WorkPolicies.GUIDE_SOURCE_BUDGET_MS
+        )
     }
 
     // ── the wiring ──────────────────────────────────────────────────────
@@ -113,7 +145,12 @@ class GuideFetchBudgetContractTest {
         val worker = readSource(WORKER)
         assertTrue(
             "the pass must run each source under the budget",
-            worker.contains("withTimeout(WorkPolicies.GUIDE_SOURCE_BUDGET_MS)")
+            worker.contains("withTimeout(budgetMs)")
+        )
+        assertTrue(
+            "and the budget it passes is the one for THIS many sources, so a lone " +
+                "source is not cut at the share-out figure",
+            worker.contains("WorkPolicies.guideSourceBudgetMs(epgUrls.size)")
         )
         assertTrue(
             "only the source's own timeout may be absorbed here",

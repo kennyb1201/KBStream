@@ -117,8 +117,7 @@ class GuideStampingOutcomeTest {
         assertTrue(
             "the outcome is no longer thrown away: the budget helper returns it",
             worker.contains("): GuideImportOutcome? = try {") &&
-                worker.contains("withTimeout(WorkPolicies.GUIDE_SOURCE_BUDGET_MS) { " +
-                    "repository.importGuide(url) }")
+                worker.contains("withTimeout(budgetMs) { repository.importGuide(url) }")
         )
         assertTrue(
             "a timeout is still \"did not import\" - null, not a landed outcome",

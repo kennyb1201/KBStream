@@ -19,8 +19,9 @@ class EpgRefreshDiagnosticsTest {
     private fun source(
         index: Int,
         outcome: EpgRefreshDiagnostics.SourceOutcome,
-        errorClass: String? = null
-    ) = EpgRefreshDiagnostics.SourceResult(index, outcome, errorClass)
+        errorClass: String? = null,
+        detail: String? = null
+    ) = EpgRefreshDiagnostics.SourceResult(index, outcome, errorClass, detail)
 
     @Test
     fun `each outcome has its own word`() {
@@ -31,6 +32,30 @@ class EpgRefreshDiagnosticsTest {
             "1:threw SocketTimeoutException",
             EpgRefreshDiagnostics.sourceToken(
                 source(1, EpgRefreshDiagnostics.SourceOutcome.FAILED, "SocketTimeoutException")
+            )
+        )
+    }
+
+    @Test
+    fun `a cut says where it landed, and the rest keep their exact token`() {
+        assertEquals(
+            "a timeout carries the importer's own phase and counters, because " +
+                "\"1:timeout\" alone cannot say whether the pass was a minute short " +
+                "or needs a window no worker has",
+            "1:timeout (saving,103622 rows,48MB)",
+            EpgRefreshDiagnostics.sourceToken(
+                source(
+                    1,
+                    EpgRefreshDiagnostics.SourceOutcome.TIMEOUT,
+                    detail = "saving,103622 rows,48MB"
+                )
+            )
+        )
+        assertEquals(
+            "and an outcome with nothing to add renders exactly as before",
+            "1:timeout",
+            EpgRefreshDiagnostics.sourceToken(
+                source(1, EpgRefreshDiagnostics.SourceOutcome.TIMEOUT)
             )
         )
     }

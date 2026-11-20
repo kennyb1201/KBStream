@@ -76,7 +76,18 @@ internal object EpgRefreshDiagnostics {
         /** 1-based, in the order the pass asked - never the URL. */
         val index: Int,
         val outcome: SourceOutcome,
-        val errorClass: String? = null
+        val errorClass: String? = null,
+        /**
+         * Where a cut landed, when the outcome is a cut: the importer's own
+         * phase and counters at the moment the budget expired
+         * (`saving,103622 rows,48MB`).
+         *
+         * Recorded because "1:timeout" cannot be acted on: the same token covers
+         * a download that is a minute short and a guide that needs a window no
+         * worker has. Null for every other outcome, so the line's grammar is
+         * unchanged where nothing was cut.
+         */
+        val detail: String? = null
     )
 
     /** One pass, as recorded. */
@@ -103,7 +114,8 @@ internal object EpgRefreshDiagnostics {
             SourceOutcome.STOPPED -> "stopped"
             SourceOutcome.FAILED -> "threw " + (result.errorClass ?: "unknown")
         }
-        return "${result.index}:$what"
+        val detail = result.detail?.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+        return "${result.index}:$what$detail"
     }
 
     /**

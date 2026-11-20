@@ -225,6 +225,11 @@ class EpgRefreshWorker(
         // F1c). Collected as the loop runs, so a pass WorkManager stops still
         // reports how far it got (onStopped reads the copy below).
         val results = mutableListOf<EpgRefreshDiagnostics.SourceResult>()
+        // What one source may spend. A single configured source gets the job's
+        // own window rather than the eight minutes that exist to share it (see
+        // WorkPolicies.guideSourceBudgetMs): this feed was cut at 8:00 on every
+        // attempt for seventeen hours with nothing else in the pass to protect.
+        val perSourceBudgetMs = WorkPolicies.guideSourceBudgetMs(epgUrls.size)
         epgUrls.forEachIndexed { index, url ->
             val sourceIndex = index + 1
             // Bounded per source, so one wedged source cannot spend the pass's
@@ -233,7 +238,7 @@ class EpgRefreshWorker(
             // budget is not a success - it must not write the freshness marker
             // for a guide it never stored - but it is not the run's failure
             // either: the sources after it still import.
-            runCatchingCancellable { importWithinBudget(repository, url) }
+            runCatchingCancellable { importWithinBudget(repository, url, perSourceBudgetMs) }
                 .onSuccess { outcome ->
                     // LANDED only: a `304`, a refused empty feed and a
                     // zero-program promote all complete without throwing, and
@@ -279,7 +284,13 @@ class EpgRefreshWorker(
                         // the paste to expose.
                         results += EpgRefreshDiagnostics.SourceResult(
                             sourceIndex,
-                            EpgRefreshDiagnostics.SourceOutcome.TIMEOUT
+                            EpgRefreshDiagnostics.SourceOutcome.TIMEOUT,
+                            // Where the cut landed. `saving` is the single
+                            // re-key transaction (a minute or more on a guide
+                            // this size) and `reading` is the download plus
+                            // parse - the difference between "one minute
+                            // short" and "needs a window no worker has".
+                            detail = guideCutDetail()
                         )
                     }
                 }
@@ -398,18 +409,37 @@ class EpgRefreshWorker(
      */
     private suspend fun importWithinBudget(
         repository: IptvRepository,
-        url: String
+        url: String,
+        budgetMs: Long
     ): GuideImportOutcome? = try {
-        withTimeout(WorkPolicies.GUIDE_SOURCE_BUDGET_MS) {
+        withTimeout(budgetMs) {
             repository.importGuide(url)
         }
     } catch (timeout: TimeoutCancellationException) {
         Log.w(
             TAG,
             "GUIDE REFRESH ABANDONED source=${Redaction.url(url)} after " +
-                "${WorkPolicies.GUIDE_SOURCE_BUDGET_MS / 60_000}min"
+                "${budgetMs / 60_000}min (${guideCutDetail() ?: "no progress"})"
         )
         null
+    }
+
+    /**
+     * Where the budget cut landed, as one short token: `saving,103622 rows,48MB`.
+     *
+     * The counters are the importer's own published progress (the ones the
+     * watchdog already reads as a heartbeat), so this costs nothing to collect
+     * and answers the only question a timeout leaves: did the time go into the
+     * download and parse, or into the one re-key that promotes what was parsed.
+     */
+    private fun guideCutDetail(): String? {
+        val state = com.kennyb1201.kbstream.data.iptv.GuideImportProgress.state.value
+            ?: return null
+        val phase = when (state.phase) {
+            com.kennyb1201.kbstream.data.iptv.GuideImportPhase.SAVING -> "saving"
+            com.kennyb1201.kbstream.data.iptv.GuideImportPhase.READING -> "reading"
+        }
+        return "$phase,${state.rowsParsed} rows,${state.bytesRead / (1024 * 1024)}MB"
     }
 
     /**

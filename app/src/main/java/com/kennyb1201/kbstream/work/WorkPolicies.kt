@@ -142,6 +142,37 @@ internal object WorkPolicies {
     const val GUIDE_SOURCE_BUDGET_MS = 8L * 60L * 1000L
 
     /**
+     * The budget for a source that is the ONLY source of the pass.
+     *
+     * [GUIDE_SOURCE_BUDGET_MS] exists for one job: a wedged source must not spend
+     * the whole pass while the sources after it wait their turn. With a single
+     * configured source there is no turn to protect, and the eight minutes only
+     * guaranteed the cut. The 2026-11-20 paste is exactly that: one source
+     * (15359 channels, 103k programs in window, a 174MB guide database) abandoned
+     * at 8:00 on every attempt for seventeen hours - `emptyRuns=8 aborts=8
+     * outcome=import 1:timeout landed=0 failing=yes` - while the same import
+     * landed whenever the viewer ran it by hand, because the in-app path has no
+     * budget at all.
+     *
+     * Nine and a half minutes, not more: WorkManager stops a worker that has not
+     * gone foreground at ten, so this only buys the import the room the job
+     * already had. A single source that needs longer than the job window is a
+     * different fix (the in-app import, or a resumable one); this one stops the
+     * POLICY from cutting a pass the job would have let finish.
+     */
+    const val GUIDE_SINGLE_SOURCE_BUDGET_MS = 9L * 60L * 1000L + 30_000L
+
+    /**
+     * The per-source budget for a pass with [sourceCount] configured sources.
+     *
+     * One source gets [GUIDE_SINGLE_SOURCE_BUDGET_MS]; two or more keep
+     * [GUIDE_SOURCE_BUDGET_MS] each, because there the budget is doing the job it
+     * was written for - leaving the later sources their turn.
+     */
+    fun guideSourceBudgetMs(sourceCount: Int): Long =
+        if (sourceCount <= 1) GUIDE_SINGLE_SOURCE_BUDGET_MS else GUIDE_SOURCE_BUDGET_MS
+
+    /**
      * The guide refresh's two pre-flight gates, in the order they matter.
      *
      * Freshness first: it is the answer that ends the attempt, and a guide
