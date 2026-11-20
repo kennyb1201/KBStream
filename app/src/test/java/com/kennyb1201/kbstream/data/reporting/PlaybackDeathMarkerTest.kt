@@ -177,6 +177,40 @@ class PlaybackDeathMarkerTest {
     }
 
     @Test
+    fun `a death the crash reporter already has is not reported twice`() {
+        val application = read("com/kennyb1201/kbstream/MainApplication.kt")
+
+        assertTrue(
+            "a Java crash, native signal or ANR arrives with a stack of its own, so the " +
+                "marker must not file a second issue for the same death",
+            application.contains("exit?.alreadyReported == true")
+        )
+        assertTrue(
+            "but the session facts no crash event carries still belong in the export",
+            application.contains("\"playback_process_death_reported\"")
+        )
+    }
+
+    @Test
+    fun `the three deaths the reporter captures are marked, and a kill is not`() {
+        val record = read("com/kennyb1201/kbstream/data/reporting/ProcessExitRecord.kt")
+
+        listOf("REASON_CRASH_NATIVE", "REASON_CRASH", "REASON_ANR").forEach { reason ->
+            assertTrue(
+                "$reason is a death Sentry captures with a stack; the marker only duplicates it",
+                Regex("ApplicationExitInfo\\.$reason\\s*->[\\s\\S]{0,160}?alreadyReported = true")
+                    .containsMatchIn(record)
+            )
+        }
+        assertEquals(
+            "a kill by the system (signal, low memory, AM) leaves nothing behind, so the " +
+                "marker is its only report and must not be suppressed",
+            3,
+            record.split("alreadyReported = true").size - 1
+        )
+    }
+
+    @Test
     fun `the next launch reports the surviving marker and only for a death on screen`() {
         val application = read("com/kennyb1201/kbstream/MainApplication.kt")
 

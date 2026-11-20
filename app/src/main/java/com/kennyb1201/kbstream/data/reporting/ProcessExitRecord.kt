@@ -28,12 +28,22 @@ import androidx.annotation.RequiresApi
  * the installer replaced mid-session, leaves the same marker a crash does, and
  * reporting those as playback deaths is how a crash feed fills with events
  * nobody can act on.
+ *
+ * [alreadyReported] is the third: a Java crash, a native signal and an ANR are
+ * the deaths this app's crash reporting DOES capture, with a stack, before (or
+ * as) the process goes down. The marker exists for the deaths that leave
+ * nothing at all (see [PlaybackDeathMarker]), so filing a marker event for one
+ * of those three puts a second issue on the feed for a death that already has
+ * one - which is exactly what happened to Sentry ANDROID-1J, whose only content
+ * was "signal 11" against the crash-only issue ANDROID-1K.
  */
 internal data class ProcessExit(
     /** Reads at the end of the death sentence, e.g. "killed for memory". */
     val label: String,
     /** True when the exit was performed on purpose, so it is no death at all. */
-    val deliberate: Boolean
+    val deliberate: Boolean,
+    /** True when the process's own crash event already carries this death. */
+    val alreadyReported: Boolean = false
 )
 
 /**
@@ -92,9 +102,11 @@ internal object ProcessExitRecord {
      */
     @RequiresApi(Build.VERSION_CODES.R)
     private fun describe(reason: Int, status: Int, description: String?): ProcessExit = when (reason) {
-        ApplicationExitInfo.REASON_CRASH_NATIVE -> ProcessExit("native crash${signal(status)}", false)
-        ApplicationExitInfo.REASON_CRASH -> ProcessExit("crash", false)
-        ApplicationExitInfo.REASON_ANR -> ProcessExit("not responding (ANR)", false)
+        ApplicationExitInfo.REASON_CRASH_NATIVE ->
+            ProcessExit("native crash${signal(status)}", false, alreadyReported = true)
+        ApplicationExitInfo.REASON_CRASH -> ProcessExit("crash", false, alreadyReported = true)
+        ApplicationExitInfo.REASON_ANR ->
+            ProcessExit("not responding (ANR)", false, alreadyReported = true)
         ApplicationExitInfo.REASON_LOW_MEMORY -> ProcessExit("killed for memory", false)
         ApplicationExitInfo.REASON_SIGNALED -> ProcessExit("killed by signal${signal(status)}", false)
         ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE ->

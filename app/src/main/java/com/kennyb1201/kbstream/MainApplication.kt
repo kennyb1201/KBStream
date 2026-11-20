@@ -193,6 +193,18 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                             "playback_process_death_deliberate",
                             death.sentence(exit)
                         )
+                        exit?.alreadyReported == true -> CrashReporter.recordEvent(
+                            // A Java crash, a native signal or an ANR is a death
+                            // the crash reporter already sent, with a stack; the
+                            // marker only owes the diagnostics export the facts
+                            // that stack cannot carry (which session, how far in).
+                            // Reporting it as a non-fatal too is how one death
+                            // became two issues (Sentry ANDROID-1J, whose entire
+                            // content was the signal recorded against ANDROID-1K),
+                            // so the sentence is retained here and not sent.
+                            "playback_process_death_reported",
+                            death.sentence(exit)
+                        )
                         death.wasOnScreen -> CrashReporter.recordNonFatal(
                             PlaybackDeathMarker.DeathReport(death.sentence(exit)),
                             mapOf(
