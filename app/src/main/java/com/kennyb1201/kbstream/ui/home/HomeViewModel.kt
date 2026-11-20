@@ -1838,26 +1838,13 @@ class HomeViewModel(
                             ?.takeIf { it.isNotBlank() }
                             ?.let { _heroLogoUrl.value = it }
 
-                        // The hero lookahead, moved here from the focus handler
-                        // (spec 2026-11-19, churn F1).
-                        //
-                        // Fired per focus step it was six 1280x720 decodes
-                        // (~21MB) against a 48MB cache, and the build-386 walk
-                        // drew 18 heroes from 113 warms with 0 memory hits - the
-                        // art only publishes after this same dwell, so two steps'
-                        // of warms had already evicted the entry before the hero
-                        // asked for it. Waiting for the dwell makes the near
-                        // field describe the card the viewer actually stopped on
-                        // rather than every card the D-pad passed.
-                        //
-                        // The SHAPE of the warm is unchanged - the hero's own
-                        // size, the same semaphore and in-flight set, and still a
-                        // viewModelScope launch of its own, so a superseding
-                        // resolve cannot cancel it. Its BUDGET was cut by the
-                        // walk that followed this one: one card ahead and one
-                        // back, no neighbouring rail heads (see
-                        // HERO_BITMAP_LOOKAHEAD_CARDS for the measurement).
-                        warmHeroLookahead(item)
+                        // The hero-size warm is NOT fired here any more
+                        // (0.9.400): this is the frame the hero draws in, so a
+                        // warm started here could only decode the same bitmap a
+                        // second time - which is what the 0.9.399 walk measured
+                        // (`heroWarms=10` beside `hits=2 misses=12`). It runs
+                        // from the focus arrival instead, debounced to the card
+                        // the walk settles on ([warmHeroLookahead]).
                     }
 
                     // The info leg gets the same head start as the art, and
@@ -3159,6 +3146,11 @@ Log.d(
         // F5: one arrival, so the paste's hit rate is read against the walk the
         // viewer actually did rather than against the number of warms.
         ImageLoadTrace.noteHeroFocusArrival()
+        // The hero-size half, debounced to the card the walk stops on
+        // (0.9.400). Fired HERE, not from the art dwell: the dwell is the frame
+        // the hero draws in, and a warm that starts beside a draw cannot be a
+        // hit for it.
+        warmHeroLookahead(item)
         // Continue Watching and Upcoming are their own lists, not catalog rails,
         // so the tile warm below returns at its first lookup for a card in
         // either - which is why a walk down those rows was the one the seam
@@ -3297,92 +3289,63 @@ Log.d(
         item.backdrop ?: item.poster
 
     /**
-     * Warms the near field around [item] at HERO size, into the memory cache
-     * (spec 2026-11-15 F3, widened 2026-11-17 F2/F3, narrowed 2026-11-19).
+     * The pending hero-size warm: one card, restarted by every focus step.
      *
-     * The near field is the card BEFORE the focused one (a walk back) and
-     * [HERO_BITMAP_LOOKAHEAD_CARDS] after it, still capped at
-     * [HERO_LOOKAHEAD_MAX_CARDS]. The head cards of the rails above and below
-     * used to be warmed here as well; they are left to [warmRailTiles] now, at
-     * the size those cards actually draw. The reason is measured, not stylistic -
-     * see [HERO_BITMAP_LOOKAHEAD_CARDS].
+     * Cancelled, not joined: the walk's own cadence decides what is warmed, and
+     * only the step it stops on survives ([warmHeroLookahead]).
+     */
+    private var heroLookaheadJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Warms the HERO bitmap of the card focus settled on, into the memory cache
+     * (spec 2026-11-15 F3, re-shaped 0.9.400 by what the walk measured).
      *
-     * ONE `async` per card, joined, not the sequential loop this used to run: a
-     * card's cost used to be paid per card, so three cards cost three cards'
-     * latency. They now share [heroArtPrefetchSemaphore] (2 permits) - at most
-     * two run at once, the rest queue - and [heroArtPrefetchInFlight], so the
-     * same card is never warmed twice. The permit covers the decode as well as
-     * the resolve, so a focus burst cannot put more than two 1280x720 decodes in
-     * flight at once on a box with little memory to spare.
+     * What it replaces warmed the near field - one card back and one ahead -
+     * from the ART DWELL, i.e. in the same frame the hero draws. The 0.9.399
+     * walk says that could never be a hit for the draw it ran beside, and that
+     * the neighbours it wrote were never drawn at all: `heroWarms=10` beside
+     * `heroDraws=14`, `hits=2 misses=12`, with `hero=24MB/7` of a 44/48MB cache
+     * held by entries the hero had not read. 117 focus arrivals for 14 draws is
+     * the other half of it - the walk crosses roughly eight cards per settle, so
+     * art warmed for the cards it passed is 3.5MB of speculation each time.
      *
-     * It is a `viewModelScope` launch of its own, not a child of the hero
-     * resolve: a walk step that cancels the resolve must not cancel the warm
-     * (that warm is for the card the walk is heading to). It touches TMDB
+     * So the settle is the unit, not the step: every arrival cancels the pending
+     * warm and restarts the delay, and the only card that survives is the one the
+     * walk stopped on - which is also the only card the hero will publish, after
+     * [HERO_ART_DWELL_MS] of stillness. [HERO_WARM_AFTER_ART_MS] of the dwell is
+     * enough for the resolve and a decode, and leaves the warm about a third of
+     * a second of lead on the draw it is for. A cancelled warm is not a lost one:
+     * the next settle asks again, and the cancelled job's own `finally` releases
+     * [heroArtPrefetchInFlight] so a card is never left wedged in it.
+     *
+     * Still a `viewModelScope` launch of its own, at the hero's own size, through
+     * [heroArtPrefetchSemaphore] and [heroArtPrefetchInFlight]. It touches TMDB
      * artwork only - never MDBList, never a tracker.
      */
     private fun warmHeroLookahead(item: MetaPreview) {
-        val rails = _rails.value
-        if (rails.isEmpty()) return
-        // O(1) instead of the four scans this used to run per focus step (F1).
-        // Handed the same list the neighbours below are read from, so the two
-        // cannot disagree if a publish lands mid-step.
-        val slot = warmSlotOf(rails, item) ?: return
-        val rail = slot.rail
-        val index = slot.itemIndex
-
-        val targets = buildList {
-            addAll(rail.items.drop(index + 1).take(HERO_BITMAP_LOOKAHEAD_CARDS))
-            if (index > 0) {
-                addAll(
-                    rail.items
-                        .subList(maxOf(0, index - HERO_LOOKAHEAD_BACK), index)
-                        .asReversed()
-                )
-            }
-        }
-            .filter { it.id.isNotBlank() }
-            .distinctBy { "${it.type}:${it.id}" }
-            .take(HERO_LOOKAHEAD_MAX_CARDS)
-        if (targets.isEmpty()) return
-
-        viewModelScope.launch {
-            // Give the hero's own art the box first (spec 2026-11-19, churn F2).
-            //
-            // [resolveHeroMeta] publishes the backdrop URL and calls this in the
-            // SAME coroutine resumption, so the hero's decode/upload and these
-            // warms used to start within a frame of each other - a settle frame
-            // carrying the swap plus two 3.5MB decodes plus the rail's tiles. The
-            // build-389 walk measured the result: 462 of 643 decodes landing
-            // during a metered gesture, and the same 66ms p50 settle frame the
-            // build before it. Nothing here is worth a dropped frame when the
-            // hero is the one image the screen is built around.
-            //
-            // 250ms, and inside this function's own launch rather than the
-            // resolve's: a superseding focus step must still not cancel the warm
-            // (see this function's note), and the next step's art cannot publish
-            // for another 600ms of stillness - so a warm delayed to here still
-            // lands before the card it is for.
+        if (item.id.isBlank()) return
+        val key = warmKeyOf(item)
+        heroLookaheadJob?.cancel()
+        heroLookaheadJob = viewModelScope.launch {
+            // Give the hero's own art the box first (spec 2026-11-19, churn F2):
+            // what the focus step asked for - the meta resolve and the tiles -
+            // goes ahead of this decode, and a step that is still moving takes
+            // the slot back before it is spent.
             delay(HERO_WARM_AFTER_ART_MS)
-            targets.map { next ->
-                async {
-                    val key = "${next.type}:${next.id}"
-                    if (!heroArtPrefetchInFlight.add(key)) return@async
-                    try {
-                        // The permit covers the bitmap decode too (see above):
-                        // two warms at a time is the memory ceiling, not just
-                        // the network one.
-                        heroArtPrefetchSemaphore.withPermit {
-                            warmHeroArtBitmap(resolveHeroArtworkForPrefetch(next))
-                        }
-                    } catch (e: kotlinx.coroutines.CancellationException) {
-                        throw e
-                    } catch (_: Exception) {
-                        // Best-effort: the focus path resolves it properly.
-                    } finally {
-                        heroArtPrefetchInFlight.remove(key)
-                    }
+            if (!heroArtPrefetchInFlight.add(key)) return@launch
+            try {
+                // The permit covers the bitmap decode as well as the resolve:
+                // two hero warms at a time is the memory ceiling.
+                heroArtPrefetchSemaphore.withPermit {
+                    warmHeroArtBitmap(resolveHeroArtworkForPrefetch(item))
                 }
-            }.awaitAll()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Best-effort: the focus path resolves it properly.
+            } finally {
+                heroArtPrefetchInFlight.remove(key)
+            }
         }
     }
 
@@ -12305,7 +12268,15 @@ private suspend fun calculateEpisodesRemaining(
             // 0.9.393 paste, against a 150-entry detail cache that cannot hold
             // a Home screen, so every cold load re-asked about ~440 movies it
             // had asked about minutes earlier.
-            releasedYear = { meta -> meta.yearOrNull }
+            releasedYear = { meta -> meta.yearOrNull },
+            // Only Home's behind-the-row passes ask for this: their rows are
+            // already drawn, so a verdict landing in three seconds instead of
+            // one is invisible, while the walk's frames are not. Every other
+            // caller (KB folders, add-on search) keeps the blocking behaviour
+            // and the latency it expects.
+            yieldBetweenItems = {
+                com.kennyb1201.kbstream.data.reporting.UiFrameTrace.inWalkWindow()
+            }
         )
 
     /**
@@ -14993,57 +14964,29 @@ private suspend fun calculateEpisodesRemaining(
         /**
          * Cards after the focused one that the EPISODE-ROW warm covers (F3).
          *
-         * Card-size art only, since 2026-11-19: the hero-size bitmap warm has its
-         * own, smaller budget in [HERO_BITMAP_LOOKAHEAD_CARDS], because a rail
-         * tile and a 1280x720 hero entry are not the same purchase.
+         * Card-size art only: ~0.1MB per card, so three is cheap. The hero-size
+         * warm is not on this number and never was - it warms one card, the one
+         * focus settled on ([warmHeroLookahead]), because a 1280x720 entry is
+         * 3.5MB and thirty-five of these.
          */
         private const val HERO_LOOKAHEAD_CARDS = 3
 
         /**
-         * Cards after the focused one whose HERO-SIZE bitmap is warmed into the
-         * memory cache (TCL walk, build 387).
+         * How long the hero-size warm waits after a focus step before it decodes
+         * anything (spec 2026-11-19 churn F2, re-aimed 0.9.400).
          *
-         * Separate from [HERO_LOOKAHEAD_CARDS] on purpose: that number is the
-         * width of the EPISODE-ROW warm, which writes card-size art (~0.1MB) and
-         * can afford three. This one pays 1280x720 ARGB_8888 - 3.5MB, nine rail
-         * tiles - and a cache that also has to hold the rail cannot afford six of
-         * them per step, which is what the lookahead was writing.
+         * Two jobs in one number. It gives the step's own work - the meta
+         * resolve and the rail's tiles - the box first, which is why it is not
+         * fired inline. And because every further step CANCELS this timer, it is
+         * also the walk's settle window: only the card the viewer stopped on is
+         * still owed a warm 250ms later.
          *
-         * The build-387 walk measured the result: nine hero entries held 31MB of a
-         * 47/48MB cache, and 37 hero warms bought seven hero-draw hits (22%). The
-         * rail's own 115 tiles are ~43MB at 0.38MB each - it does not fit beside
-         * that much speculation, so every walk back re-decoded what it had already
-         * drawn (`cardDiskDecodes=306`, 137 of which were the tile warms).
-         *
-         * One ahead and one back keeps the card the walk is heading to and the one
-         * it came from; the neighbouring rails' head cards are left to the tile
-         * warm, which covers the same cards at a ninth of the bytes.
-         */
-        private const val HERO_BITMAP_LOOKAHEAD_CARDS = 1
-
-        /**
-         * How long the hero-size warm waits after the hero's own art publishes
-         * (spec 2026-11-19, churn F2).
-         *
-         * The art publish and the warm are one coroutine resumption apart, so the
-         * hero's 1280x720 decode/upload - the frame the viewer is looking at - was
-         * competing with two more of the same plus the rail's tiles. The walk's
-         * own meter puts a settle frame at 66ms p50 (four vsyncs) in every build
-         * measured, and 462 of 643 decodes landed inside a metered gesture.
-         *
-         * Four of those settle frames is enough for a disk-backed hero decode and
-         * its texture upload to be out of the way, and it is still well inside the
-         * [HERO_ART_DWELL_MS] of stillness the next card's art needs before it can
-         * publish - so the warm keeps its hit and the swap stops paying for it.
+         * It has to sit well inside [HERO_ART_DWELL_MS], because the lead it
+         * leaves is the point: the hero publishes its art (and draws) after 600ms
+         * of stillness, so 250ms here leaves roughly a third of a second for a
+         * resolve and a decode to be done before the draw asks for the bitmap.
          */
         private const val HERO_WARM_AFTER_ART_MS = 250L
-
-        /**
-         * The card BEFORE the focused one, warmed at hero size (spec
-         * 2026-11-17, F3): a walk back used to land on cold art because the
-         * lookahead only ever looked forward.
-         */
-        private const val HERO_LOOKAHEAD_BACK = 1
 
         /**
          * The head card of the row above and of the row below: the card a
@@ -15060,8 +15003,7 @@ private suspend fun calculateEpisodesRemaining(
          *
          * The episode-row warm fills it - three forward, one back and one head
          * card of the neighbouring row - because its art is card-size. The
-         * hero-size bitmap warm uses two of the six since 2026-11-19; the cap
-         * still bounds it if those numbers ever grow again.
+         * hero-size warm is one card and does not go through this cap.
          */
         private const val HERO_LOOKAHEAD_MAX_CARDS = 6
 

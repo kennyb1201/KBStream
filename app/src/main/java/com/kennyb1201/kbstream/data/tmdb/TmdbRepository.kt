@@ -3275,7 +3275,14 @@ class TmdbRepository private constructor(context: Context) :
         // The year the ROW already carries, when it has one. Callers that do
         // not (KB folders, an add-on search page) keep the default and behave
         // exactly as before: no gate, one fetch per movie, same verdict.
-        releasedYear: (T) -> Int? = { null }
+        releasedYear: (T) -> Int? = { null },
+        // Whether the caller wants this pass to yield the box to something more
+        // urgent than a verdict. Only the rows that publish BEFORE their
+        // verdicts pass this (see HomeViewModel.filterCatalogRowBehind): they
+        // are already on screen, so their verdicts are invisible work competing
+        // with the viewer's own frames. Defaults to "never yield" so the
+        // blocking callers (KB folders, add-on search) keep their latency.
+        yieldBetweenItems: () -> Boolean = { false }
     ): List<T> {
 
         if (items.isEmpty() || !isDigitalFilterEnabled()) return items
@@ -3302,6 +3309,23 @@ class TmdbRepository private constructor(context: Context) :
                     // the pinned batch's window.
                     if (ReleaseAgeGate.isDefinitelyReleased(releasedYear(item), today.year)) {
                         return@async item
+                    }
+
+                    // Yield the box to the viewer's own frames.
+                    //
+                    // This pass is invisible work: its caller already published
+                    // the row (see [yieldBetweenItems]), so the only thing it can
+                    // buy the viewer is a title disappearing later. The 07:26
+                    // paste on the 0.9.399 build measured what not yielding cost:
+                    // `catalogFilter=14491ms` of one-per-movie detail reads at six
+                    // permits, running under the first walk, beside
+                    // `artLookup p95=1247ms` (the posters waiting behind it) and a
+                    // walk at `p50=83ms`. Sleeping one step per item does not make
+                    // the pass cheaper - it makes it give way: the walk's frames,
+                    // decodes and art get the disk and the CPU, and the verdicts
+                    // land a little later on rows that are already drawn.
+                    if (yieldBetweenItems()) {
+                        kotlinx.coroutines.delay(FOREGROUND_YIELD_MS)
                     }
 
                     val verdict = availabilitySemaphore.withPermit {
@@ -5030,6 +5054,18 @@ class TmdbRepository private constructor(context: Context) :
         normalizeMediaType(type)
 
     companion object {
+
+        /**
+         * How long an already-published row's verdict pass backs off before its
+         * next item, while the viewer is walking.
+         *
+         * One frame's worth of a slow TV frame (60 ms, where the walk itself
+         * measures a p50 of 83 ms) is enough to take the pass out of the frame's
+         * way without turning a 15-second pass into a minute-long one: the cost
+         * is paid per ITEM, and the items are read at six permits, so the pace
+         * falls from a continuous stream to one item per step per permit.
+         */
+        private const val FOREGROUND_YIELD_MS = 60L
 
         /**
          * The media type every TMDB call - and every key derived from one - is

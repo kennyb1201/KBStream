@@ -6,29 +6,28 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The hero lookahead, warm-ahead spec (2026-11-17), as amended 2026-11-19.
+ * The hero lookahead: warm-ahead spec (2026-11-17), as re-shaped by the 0.9.399
+ * walk (2026-11-20).
  *
- * The lookahead warmed the right things but arrived behind the walk: it warmed
- * its cards one at a time and only ever looked forward in the same rail, so on a
- * fast walk - exactly when the jank is felt - every card was cold. F2/F3 fixed
- * the SHAPE of the warm (parallel, back and across rails) and those pins hold.
+ * Every rule here was bought with a paste. F2/F3 fixed the SHAPE of the warm -
+ * parallel, bounded by a two-permit semaphore and an in-flight set - and those
+ * pins still hold. F1 moved the trigger onto the focus event; the 2026-11-19
+ * churn reading moved it to the art dwell, because firing per step put six
+ * ~3.5MB decodes into a 48MB cache for every card the D-pad passed.
  *
- * F1 moved the trigger onto the focus event; the 2026-11-19 churn reading
- * reversed that half. Firing per focus step put six ~3.5MB decodes against a 48MB
- * cache for every card the D-pad passed, and the build-386 walk drew 18 heroes
- * from 113 warms with ZERO memory hits - the art publishes only after the same
- * 600 ms dwell, so the warms had evicted each other before anything read them.
- * The warm now fires at that dwell, so it describes the card the viewer stopped
- * on. Sizes, parallelism, semaphore and in-flight set are unchanged, which is
- * what the rest of this class pins.
+ * The 0.9.399 walk then showed the dwell is the wrong half of the same mistake:
+ * `heroWarms=10` beside `heroDraws=14` with `hits=2 misses=12`, and 117 focus
+ * arrivals for those 14 draws. A warm fired at the dwell starts in the same
+ * frame the hero draws, so it can only duplicate that decode; and the near field
+ * it wrote was the art of cards the walk merely crossed. `hero=24MB/7` of a
+ * 44/48MB cache was entries the hero never read.
  *
- * The build-387 walk then measured what those warms cost the cache: nine hero
- * entries held 31MB of a 47/48MB cap, and 37 warms bought seven hero-draw hits
- * (22%), while the walk's own 115 rail tiles (~43MB) could not stay resident -
- * so a walk back re-decoded what it had already drawn. The hero-size forward
- * lookahead is one card now and the neighbouring rails' head cards are left to
- * the tile warm, which writes a ninth of the bytes for the same card. One
- * method below pins that narrowing; the rest still pin F2/F3's shape.
+ * The rule since 0.9.400: the FOCUS STEP starts a timer, every further step
+ * cancels it, and the one card still owed a warm when the walk stops is the card
+ * the hero will draw - 600ms of stillness after that last step. One card, one
+ * decode, one entry, and enough lead for it to be a hit.
+ *
+ * Source pins, because the ViewModel is not harness-compilable.
  */
 class HeroLookaheadWarmAheadContractTest {
 
@@ -36,14 +35,14 @@ class HeroLookaheadWarmAheadContractTest {
     private val home by lazy { source(HOME_SCREEN) }
     private val imageTrace by lazy { source(IMAGE_TRACE) }
 
-    // ── F1: fired on focus, before the debounce ──────────────────────────
+    // ── F1: fired on focus, never from the dwell ─────────────────────────
 
     @Test
-    fun `the warm starts on the settled hero, and the tiles still start on focus`() {
+    fun `the warm starts on the focus step, never from the art dwell`() {
         val select = home.substringAfter("fun selectHero(")
             .substringBefore("fun selectContinueWatchingHero(")
         assertTrue(
-            "the card's own focus handler still asks for the near field",
+            "the card's own focus handler asks for the warm",
             select.contains("viewModel.warmHeroFocus(item)")
         )
         val entry = vm.substringAfter("fun warmHeroFocus(")
@@ -52,18 +51,18 @@ class HeroLookaheadWarmAheadContractTest {
             "which starts the tile warm",
             entry.contains("warmRailTiles(item)")
         )
-        assertFalse(
-            "and NOT the hero lookahead: per focus step it was six 3.5MB decodes " +
-                "the walk never drew (2026-11-19, churn F1)",
+        assertTrue(
+            "and the hero-size warm, which the walk's own cadence re-aims " +
+                "(see the cancel below) instead of warming a field of neighbours",
             entry.contains("warmHeroLookahead(item)")
         )
         val resolve = vm.substringAfter("fun resolveHeroMeta(")
             .substringBefore("fun reWarmIfCachesWereReleased()")
-        val dwellAt = resolve.indexOf("awaitHeroArtDwell(resolveStartedAtMs)")
-        assertTrue(
-            "the lookahead now starts after the art dwell, where the hero has " +
-                "settled and the art actually publishes",
-            dwellAt >= 0 && resolve.indexOf("warmHeroLookahead(item)") > dwellAt
+        assertFalse(
+            "the art dwell must NOT start it: that is the frame the hero draws " +
+                "in, so a warm there can only duplicate its decode (0.9.399: " +
+                "heroWarms=10, heroDraws=14, hits=2)",
+            resolve.contains("warmHeroLookahead(item)")
         )
         assertTrue(
             "the dwells themselves still gate what the resolve publishes",
@@ -72,18 +71,28 @@ class HeroLookaheadWarmAheadContractTest {
         )
     }
 
-    // ── F2: parallel, behind the same bounds ─────────────────────────────
+    // ── F2: one card, behind the same bounds ────────────────────────────
 
     @Test
-    fun `the cards warm in parallel, not one at a time`() {
+    fun `one card is warmed, and the walk's step decides which`() {
         val lookahead = lookaheadBlock()
+        assertFalse(
+            "no near field: 117 arrivals bought 14 draws on 0.9.399, so a warm " +
+                "for a card the walk passes is 3.5MB of art nothing draws",
+            lookahead.contains("HERO_BITMAP_LOOKAHEAD_CARDS") ||
+                lookahead.contains("HERO_LOOKAHEAD_BACK") ||
+                lookahead.contains(".take(HERO_LOOKAHEAD_MAX_CARDS)")
+        )
         assertTrue(
-            "one async per card, joined - the sequential forEach loop this replaced " +
-                "made three cards cost three cards' latency",
-            lookahead.contains("targets.map { next ->") &&
-                lookahead.contains("async {") &&
-                lookahead.contains("}.awaitAll()") &&
-                !lookahead.contains("ahead.forEach {")
+            "every focus step cancels the pending warm, so only a step the walk " +
+                "STOPS on survives the delay",
+            lookahead.contains("heroLookaheadJob?.cancel()") &&
+                lookahead.indexOf("heroLookaheadJob?.cancel()") <
+                lookahead.indexOf("delay(HERO_WARM_AFTER_ART_MS)")
+        )
+        assertTrue(
+            "and that card is the focused item itself",
+            lookahead.contains("resolveHeroArtworkForPrefetch(item)")
         )
         assertTrue(
             "still behind the existing semaphore and in-flight set, so a fast walk " +
@@ -93,46 +102,28 @@ class HeroLookaheadWarmAheadContractTest {
                 lookahead.contains("heroArtPrefetchInFlight.remove(key)")
         )
         assertTrue(
-            "the permit covers the decode too: six 1280x720 bitmaps are never in " +
+            "the permit covers the decode too: 1280x720 bitmaps are never in " +
                 "flight at once on a small box",
             Regex("withPermit \\{\\s*warmHeroArtBitmap\\(").containsMatchIn(lookahead)
         )
     }
 
-    // ── F3: the near field is no longer forward-only ─────────────────────
+    // ── F3: the entry written is the entry the hero reads ───────────────
 
     @Test
-    fun `one card forward and one back are warmed at hero size, and the rail heads are not`() {
-        val lookahead = lookaheadBlock()
+    fun `the warm asks at the size the hero draws, on the url the hero upgraded`() {
         assertTrue(
-            "forward is the next landing only - a hero entry is nine rail tiles",
-            lookahead.contains("rail.items.drop(index + 1).take(HERO_BITMAP_LOOKAHEAD_CARDS)")
+            "1280x720 in, 1280x720 out: an entry at any other size is one the " +
+                "hero can never read (0.9.393: hits=0 misses=25)",
+            vm.contains("private const val HERO_LOOKAHEAD_BITMAP_WIDTH = 1280") &&
+                home.contains(".size(Size(1280, 720))") &&
+                lookaheadBlock().contains("warmHeroArtBitmap(")
         )
         assertTrue(
-            "back: the card a walk back lands on",
-            lookahead.contains("subList(maxOf(0, index - HERO_LOOKAHEAD_BACK), index)")
-        )
-        assertFalse(
-            "the neighbouring rails' head cards are NOT warmed at hero size: the tile " +
-                "warm covers the same cards at a ninth of the bytes, and two 3.5MB " +
-                "entries per step is what kept the walk's own rail out of the cache " +
-                "(build 387: 31MB of a 47MB cache held hero art, hits 22%)",
-            lookahead.contains("rails.getOrNull(railIndex - 1)?.items") ||
-                lookahead.contains("rails.getOrNull(railIndex + 1)?.items")
-        )
-        assertTrue(
-            "no duplicate cards, and the cap still bounds it",
-            lookahead.contains(".distinctBy { \"\${it.type}:\${it.id}\" }") &&
-                lookahead.contains(".take(HERO_LOOKAHEAD_MAX_CARDS)")
-        )
-        assertTrue(
-            "the hero bitmap budget is its own number, so the episode-row warm keeps " +
-                "its three",
-            vm.contains("HERO_BITMAP_LOOKAHEAD_CARDS = 1") &&
-                vm.contains("HERO_LOOKAHEAD_CARDS = 3") &&
-                vm.contains("HERO_LOOKAHEAD_BACK = 1") &&
-                vm.contains("HERO_LOOKAHEAD_RAIL_HEAD = 1") &&
-                vm.contains("HERO_LOOKAHEAD_MAX_CARDS = 6")
+            "and on the resolved url, not the w1280 one the hero upgrades before " +
+                "asking Coil - keyed by url AND size, the warm has to match both",
+            vm.substringAfter("private suspend fun warmHeroArtBitmap(")
+                .contains("TmdbRepository.fullResBackdropUrl(")
         )
     }
 
@@ -165,35 +156,34 @@ class HeroLookaheadWarmAheadContractTest {
         )
     }
 
-    // ── F2 (2026-11-19, churn): the warm waits for the hero's own draw ──
+    // ── F2 (2026-11-19, churn): the wait, and who owns it ───────────────
 
     @Test
-    fun `the hero warm waits for the hero's own art to publish and decode`() {
+    fun `the wait sits inside the dwell and belongs to the walk`() {
+        assertTrue(
+            "250ms, well inside the 600ms of stillness the hero needs before it " +
+                "publishes - the rest of the dwell is the lead the hit comes from",
+            vm.contains("private const val HERO_WARM_AFTER_ART_MS = 250L") &&
+                vm.contains("private const val HERO_ART_DWELL_MS = 600L")
+        )
         val lookahead = lookaheadBlock()
         val launchAt = lookahead.indexOf("viewModelScope.launch {")
         val delayAt = lookahead.indexOf("delay(HERO_WARM_AFTER_ART_MS)")
         val firstWarmAt = lookahead.indexOf("warmHeroArtBitmap(")
-
         assertTrue(
-            "the wait is 250ms: four of the 66ms settle frames the meter reports, " +
-                "and still inside the 600ms of stillness the next art publish needs",
-            vm.contains("private const val HERO_WARM_AFTER_ART_MS = 250L")
-        )
-        assertTrue(
-            "the wait belongs to the lookahead's OWN launch, so a superseding focus " +
-                "step cannot cancel the warm it just delayed",
+            "the wait is inside the lookahead's own launch",
             launchAt >= 0 && delayAt > launchAt
         )
         assertTrue(
-            "and it must come before the first decode, or the two settle frames the " +
-                "hero draws on are still sharing a CPU with two 3.5MB warms",
+            "and before the first decode, or the step's own work and the warm " +
+                "still share the frame the walk is on",
             firstWarmAt > delayAt
         )
         assertFalse(
-            "the rail-tile warm is not delayed with it: it fires on the focus event, " +
-                "a rail of card-size decodes ahead of the art publish",
+            "the rail-tile warm is not delayed with it: it fires on the focus " +
+                "event, a rail of card-size decodes",
             vm.substringAfter("fun warmHeroFocus(")
-                .substringBefore("private fun warmHeroLookahead(")
+                .substringBefore("private var heroLookaheadJob")
                 .contains("HERO_WARM_AFTER_ART_MS")
         )
     }

@@ -32,30 +32,33 @@ class WarmDispatchCostContractTest {
     fun `neither warm scans the rails any more`() {
         val hero = block(model, "private fun warmHeroLookahead(")
         val tiles = block(model, "private fun warmRailTiles(")
-        listOf("hero" to hero, "tiles" to tiles).forEach { (name, warm) ->
-            assertFalse(
-                "$name: no rail scan left",
-                warm.contains("rails.indexOfFirst")
-            )
-            assertFalse(
-                "$name: and no item scan either",
-                warm.contains("rail.items.indexOfFirst") ||
-                    warm.contains("items.indexOfFirst")
-            )
-            assertTrue(
-                "$name: the position comes from the index",
-                warm.contains("val slot = warmSlotOf(rails, item) ?: return") &&
-                    warm.contains("val rail = slot.rail") &&
-                    warm.contains("val index = slot.itemIndex")
-            )
-            if (name == "tiles") {
-                assertTrue(
-                    "tiles: it also reads the rail's number, because its warm " +
-                        "reaches across rails; the hero warm no longer does",
-                    warm.contains("val railIndex = slot.railIndex")
-                )
-            }
-        }
+        assertFalse(
+            "hero: no rail scan, and no index either - it warms the focused card " +
+                "and nothing beside it (0.9.400)",
+            hero.contains("rails.indexOfFirst") ||
+                hero.contains("rail.items.indexOfFirst") ||
+                hero.contains("warmSlotOf(")
+        )
+        assertFalse(
+            "tiles: no rail scan left",
+            tiles.contains("rails.indexOfFirst")
+        )
+        assertFalse(
+            "tiles: and no item scan either",
+            tiles.contains("rail.items.indexOfFirst") ||
+                tiles.contains("items.indexOfFirst")
+        )
+        assertTrue(
+            "tiles: the position comes from the index",
+            tiles.contains("val slot = warmSlotOf(rails, item) ?: return") &&
+                tiles.contains("val rail = slot.rail") &&
+                tiles.contains("val index = slot.itemIndex")
+        )
+        assertTrue(
+            "tiles: it also reads the rail's number, because its warm " +
+                "reaches across rails; the hero warm no longer does",
+            tiles.contains("val railIndex = slot.railIndex")
+        )
     }
 
     @Test
@@ -104,31 +107,34 @@ class WarmDispatchCostContractTest {
     // ── F2: coverage, trigger and sizes unchanged ────────────────────────
 
     @Test
-    fun `S2 - the hero bitmap warm is one card each way, and the rail heads are the tile warm's`() {
+    fun `S2 - the hero bitmap warm is one card, and the rail heads are the tile warm's`() {
         val hero = block(model, "private fun warmHeroLookahead(")
         assertTrue(
-            "hero: one forward - a hero entry is nine rail tiles, so a cache that " +
-                "also holds the rail cannot carry six (build 387: 31MB of 47MB was " +
-                "hero art, hits 22%)",
-            hero.contains(".take(HERO_BITMAP_LOOKAHEAD_CARDS)") &&
-                model.contains("private const val HERO_BITMAP_LOOKAHEAD_CARDS = 1")
+            "hero: ONE card - the focused one. The 0.9.399 walk bought 14 draws " +
+                "from 117 arrivals, so art warmed for a card it crossed was 3.5MB " +
+                "nothing drew (heroWarms=10 beside hits=2); the near-field budget " +
+                "went with it",
+            hero.contains("resolveHeroArtworkForPrefetch(item)") &&
+                !hero.contains("HERO_BITMAP_LOOKAHEAD_CARDS") &&
+                !model.contains("private const val HERO_BITMAP_LOOKAHEAD_CARDS")
         )
         assertTrue(
-            "hero: 1 back, reversed so the nearest is warmed first",
-            hero.contains("maxOf(0, index - HERO_LOOKAHEAD_BACK)") &&
-                hero.contains(".asReversed()") &&
-                model.contains("private const val HERO_LOOKAHEAD_BACK = 1")
+            "hero: and which card that is, is the walk's to decide - every step " +
+                "cancels the pending warm before the delay",
+            hero.contains("heroLookaheadJob?.cancel()") &&
+                hero.indexOf("heroLookaheadJob?.cancel()") <
+                hero.indexOf("delay(HERO_WARM_AFTER_ART_MS)")
         )
         assertFalse(
-            "hero: the rails above and below are no longer warmed at HERO size - " +
+            "hero: the rails above and below are not warmed at HERO size - " +
                 "the tile warm below covers those head cards at a ninth of the bytes",
             hero.contains("rails.getOrNull(railIndex - 1)?.items") ||
                 hero.contains("rails.getOrNull(railIndex + 1)?.items")
         )
         assertTrue(
-            "hero: deduped and capped at 6",
-            hero.contains(".distinctBy { \"\${it.type}:\${it.id}\" }") &&
-                hero.contains(".take(HERO_LOOKAHEAD_MAX_CARDS)") &&
+            "hero: one entry, behind the same semaphore and in-flight set",
+            hero.contains("heroArtPrefetchSemaphore.withPermit") &&
+                hero.contains("heroArtPrefetchInFlight.add(key)") &&
                 model.contains("private const val HERO_LOOKAHEAD_MAX_CARDS = 6")
         )
         val tiles = block(model, "private fun warmRailTiles(")
@@ -149,31 +155,41 @@ class WarmDispatchCostContractTest {
     }
 
     @Test
-    fun `the per-step buildList work is untouched, as F1 asked`() {
-        listOf(
-            "private fun warmHeroLookahead(" to "hero",
-            "private fun warmRailTiles(" to "tiles"
-        ).forEach { (declaration, name) ->
-            val warm = block(model, declaration)
-            assertTrue(
-                "$name: still a buildList per step",
-                warm.contains("val targets = buildList {") || warm.contains("val neighbours = buildList {")
-            )
-            assertTrue("$name: still filters blank ids", warm.contains(".filter { it.id.isNotBlank() }"))
-            assertTrue("$name: still deduped", warm.contains(".distinctBy {"))
-            assertTrue(
-                "$name: still guarded against a card already warming",
-                warm.contains("InFlight.add(key)")
-            )
-            assertTrue(
-                "$name: still its own launch, not a child of the resolve",
-                warm.contains("viewModelScope.launch {")
-            )
-        }
+    fun `the tile warm keeps its buildList, and the hero warm has no list to build`() {
+        val tiles = block(model, "private fun warmRailTiles(")
+        assertTrue(
+            "tiles: still a buildList per step",
+            tiles.contains("val neighbours = buildList {") ||
+                tiles.contains("val targets = buildList {")
+        )
+        assertTrue("tiles: still filters blank ids", tiles.contains(".filter { it.id.isNotBlank() }"))
+        assertTrue("tiles: still deduped", tiles.contains(".distinctBy {"))
+        assertTrue(
+            "tiles: still guarded against a card already warming",
+            tiles.contains("InFlight.add(key)")
+        )
+        assertTrue(
+            "tiles: still its own launch, not a child of the resolve",
+            tiles.contains("viewModelScope.launch {")
+        )
+        val hero = block(model, "private fun warmHeroLookahead(")
+        assertFalse(
+            "hero: one card, so there is no list and no per-step allocation to " +
+                "build (0.9.400)",
+            hero.contains("buildList {")
+        )
+        assertTrue(
+            "hero: still guarded against a card already warming",
+            hero.contains("heroArtPrefetchInFlight.add(key)")
+        )
+        assertTrue(
+            "hero: still its own launch, which the next step cancels",
+            hero.contains("viewModelScope.launch {")
+        )
     }
 
     @Test
-    fun `S3 - focus triggers the tiles, the settled hero triggers the lookahead`() {
+    fun `S3 - focus triggers both warms, and the walk decides which hero card`() {
         val focus = block(model, "fun warmHeroFocus(")
         assertTrue(
             "episode rows still return early",
@@ -183,19 +199,15 @@ class WarmDispatchCostContractTest {
             "the tile warm still starts on the focus event",
             focus.contains("warmRailTiles(item)")
         )
-        assertFalse(
-            "and the hero lookahead no longer does: six ~3.5MB decodes per D-pad " +
-                "step filled the cache with art the walk never drew (113 warms, " +
-                "18 draws, 0 memory hits on the build-386 walk; 2026-11-19 churn F1)",
+        assertTrue(
+            "and the hero warm starts there too: the art dwell is the frame the " +
+                "hero draws in, so a warm fired there can only duplicate that decode " +
+                "(0.9.399: heroWarms=10, heroDraws=14, hits=2)",
             focus.contains("warmHeroLookahead(item)")
         )
-        assertTrue(
-            "it starts after the art dwell instead, so it describes the card the " +
-                "viewer stopped on",
-            block(model, "fun resolveHeroMeta(").let { resolve ->
-                val dwell = resolve.indexOf("awaitHeroArtDwell(resolveStartedAtMs)")
-                dwell in 1 until resolve.indexOf("warmHeroLookahead(item)")
-            }
+        assertFalse(
+            "the settle path must NOT start it any more",
+            block(model, "fun resolveHeroMeta(").contains("warmHeroLookahead(item)")
         )
         assertTrue(
             "the arrival counter the paste reads is still noted",
