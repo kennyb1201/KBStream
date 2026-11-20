@@ -77,6 +77,43 @@ class DigitalFilterSurfacesContractTest {
     }
 
     @Test
+    fun `an answered verdict is remembered instead of derived twice`() {
+        val repository = source(TMDB_REPOSITORY)
+
+        val pass = repository
+            .substringAfter("suspend fun <T> filterByHomeAvailabilityById(")
+            .substringBefore("private fun rememberHomeAvailabilityVerdict(")
+
+        val recall = pass.indexOf("homeAvailabilityVerdicts[verdictKey]")
+        val yield = pass.indexOf("if (yieldBetweenItems())")
+
+        assertTrue(
+            "the shared pass must answer a title it has already judged from the " +
+                "session memo: the same show sits on several rows, and on 0.9.404 " +
+                "that repetition was priced at `catalogFilter=11595ms` against " +
+                "`detailSrc disk:845` - 845 reads of payloads the device had",
+            recall >= 0
+        )
+        assertTrue(
+            "a memo hit is not work, so it must be answered BEFORE the walk " +
+                "yield sleeps - otherwise every remembered title still stalls a frame",
+            yield > 0 && recall < yield
+        )
+        assertTrue(
+            "only an ANSWER is remembered: a null is a read that failed, and filing " +
+                "it as unavailable would hide a released title for the whole session",
+            pass.contains("if (verdict != null) {") &&
+                pass.contains("rememberHomeAvailabilityVerdict(verdictKey, verdict)")
+        )
+        assertTrue(
+            "the memo is a memo: it is bounded so an endless scroll cannot grow it",
+            repository.contains(
+                "homeAvailabilityVerdicts.size >= HOME_AVAILABILITY_VERDICTS_MAX"
+            )
+        )
+    }
+
+    @Test
     fun `Home, the KB folders and add-on search all call the shared filter`() {
         assertTrue(
             "HomeViewModel must filter its rails through the shared helper",

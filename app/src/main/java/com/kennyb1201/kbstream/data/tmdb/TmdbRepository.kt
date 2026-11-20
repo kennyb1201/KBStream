@@ -3256,6 +3256,27 @@ class TmdbRepository private constructor(context: Context) :
     }
 
     /**
+     * The home-availability verdict this process has already reached, by id.
+     *
+     * The pass is one enriched-detail read per movie, and the same movie is on
+     * several rows at once - "Top Movies Today" and a Trending catalog share
+     * half a page routinely - and every rebuild of Home (a resume, an add-on
+     * refresh) asks the whole set again. The 12:36 paste on 0.9.404 priced that
+     * repetition: `catalogFilter=11595ms` plus `pinnedVerdicts=9798ms` behind a
+     * build that was itself on screen in 239 ms, against `detailSrc disk:845` -
+     * 845 reads of payloads the device already had.
+     *
+     * A verdict is a pure function of (that payload, today), so inside one
+     * process it cannot change: an ANSWER is remembered and the next row - or
+     * the next build - reads it instead of deriving it again. Only an answer is
+     * remembered. A null is a read that failed, and filing that as "not
+     * available" would hide a released title for the rest of the session on one
+     * bad request.
+     */
+    private val homeAvailabilityVerdicts =
+        java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    /**
      * [filterByHomeAvailability] for rows that carry their own RAW id rather
      * than a TMDB id: an add-on catalog page, a KB folder row, an add-on search
      * hit. The id may be "tmdb:<n>", an IMDb "tt..." id, a bare TMDB id or
@@ -3311,6 +3332,15 @@ class TmdbRepository private constructor(context: Context) :
                         return@async item
                     }
 
+                    // One show is on several rows, and each row asked again.
+                    // Answered already in this process: no read, no sleep.
+                    val verdictKey =
+                        id(item)
+
+                    homeAvailabilityVerdicts[verdictKey]?.let { known ->
+                        return@async if (known) item else null
+                    }
+
                     // Yield the box to the viewer's own frames.
                     //
                     // This pass is invisible work: its caller already published
@@ -3340,6 +3370,10 @@ class TmdbRepository private constructor(context: Context) :
                         }.getOrNull()
                     }
 
+                    if (verdict != null) {
+                        rememberHomeAvailabilityVerdict(verdictKey, verdict)
+                    }
+
                     when (verdict) {
                         false -> null
                         else -> item
@@ -3347,6 +3381,19 @@ class TmdbRepository private constructor(context: Context) :
                 }
             }.awaitAll().filterNotNull()
         }
+    }
+
+    /**
+     * Remembers one answered verdict, and keeps the map a memo rather than a
+     * cache: it is dropped wholesale once it is larger than any Home screen can
+     * need, so a session that scrolled through thousands of titles does not hold
+     * them all in order to make the next row cheap.
+     */
+    private fun rememberHomeAvailabilityVerdict(key: String, available: Boolean) {
+        if (homeAvailabilityVerdicts.size >= HOME_AVAILABILITY_VERDICTS_MAX) {
+            homeAvailabilityVerdicts.clear()
+        }
+        homeAvailabilityVerdicts[key] = available
     }
 
     // ------------------------------------------------------------------
@@ -5066,6 +5113,14 @@ class TmdbRepository private constructor(context: Context) :
          * falls from a continuous stream to one item per step per permit.
          */
         private const val FOREGROUND_YIELD_MS = 60L
+
+        /**
+         * How many answered verdicts the session memo holds before it is
+         * dropped. Well past the couple of thousand titles a long session's
+         * rows can contain, so the clear is a backstop against an endless
+         * scroll, not a working limit.
+         */
+        private const val HOME_AVAILABILITY_VERDICTS_MAX = 4096
 
         /**
          * The media type every TMDB call - and every key derived from one - is

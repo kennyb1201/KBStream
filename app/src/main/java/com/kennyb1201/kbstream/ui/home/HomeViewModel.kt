@@ -5046,13 +5046,19 @@ Log.d(
         // one can reach here twice. The schedule builder collapses the rows it
         // is given, but doing it first keeps the dismissal and profile gates
         // from being spent on a duplicate.
+        //
+        // Matched on ANY shared id form, not on an identical key set: a local
+        // candidate carries {tt..., tmdbId} while an MDBList one may carry only
+        // {tmdb:...}, and those two sets survived `distinctBy` as two rows - the
+        // 12:36 paste on 0.9.404 lists 'Eternally Yours' twice. See
+        // [collapseBySharedKey].
         val cards =
             applyContinueWatchingDismissals(
-                items = built.distinctBy {
+                items = collapseBySharedKey(built) { card ->
                     upNextShowParentKeys(
-                        it.parentId,
-                        it.parentType,
-                        it.tmdbId
+                        card.parentId,
+                        card.parentType,
+                        card.tmdbId
                     )
                 },
                 upcoming = true

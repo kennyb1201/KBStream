@@ -1087,6 +1087,35 @@ internal fun upNextAdvanceTimes(targetRuntimeMinutes: Int?): UpNextAdvanceTimes 
     )
 
 /**
+ * Keeps the first item that introduces a show and drops any later one that
+ * shares ONE id form with it.
+ *
+ * `distinctBy { keysOf(it) }` is not the same thing, and the difference is
+ * visible: it compares the key SETS, so a show MDBList knows only by its TMDB id
+ * and the local pass knows by its imdb id survives twice even though the sets
+ * overlap. The 12:36 paste on 0.9.404 caught it in
+ * `caught-up cards (local+mdb)=11`: 'Eternally Yours' twice, once as
+ * `tt33078239` and once as `tmdb:313630` - the same show, one row.
+ *
+ * An item with no keys at all cannot collide with anything, so it is kept.
+ */
+internal fun <T> collapseBySharedKey(
+    items: List<T>,
+    keysOf: (T) -> Set<String>
+): List<T> {
+    val seen = HashSet<String>()
+    return items.filter { item ->
+        val keys = keysOf(item)
+        if (keys.any { key -> key in seen }) {
+            false
+        } else {
+            seen += keys
+            true
+        }
+    }
+}
+
+/**
  * The parent identity keys a show is known by, in the same vocabulary as
  * [upNextGroupingKeys]. Built from raw fields because a locally CAUGHT-UP show
  * has no card to read them off - it is precisely the show that must not appear
