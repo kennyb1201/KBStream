@@ -65,7 +65,7 @@ class CatalogRailSplitContractTest {
 
     @Test
     fun `the verdicts land behind the row, and only a pass that hid something rewrites it`() {
-        val behind = vm.substringAfter("private fun filterCatalogRowBehind(")
+        val behind = vm.substringAfter("private suspend fun filterCatalogRowBehind(")
             .substringBefore("private suspend fun fetchCatalogThrottled(")
 
         assertTrue(
@@ -108,7 +108,79 @@ class CatalogRailSplitContractTest {
         )
         assertTrue(
             "and nothing is recorded or rewritten when nothing was hidden",
-            behind.contains("if (hidden.isEmpty()) return@launch")
+            behind.contains("if (hidden.isEmpty()) return keptIds")
+        )
+    }
+
+    // ── The same pass, owed instead of paid, for the pinned rows ──────────
+
+    @Test
+    fun `a pinned Top Today row publishes on the local filters and owes its verdicts`() {
+        val pinned = vm.substringAfter("private suspend fun loadPinnedTopTodayRails(")
+            .substringBefore("private val _libraryRailItems")
+
+        assertTrue(
+            "the row is built on the date pass and the distinct-by, which are the " +
+                "two local comparisons a row can be drawn on",
+            pinned.contains("(if (hideUpcoming) filterUpcoming(metas) else metas)") &&
+                pinned.contains(".distinctBy { it.id }")
+        )
+        assertFalse(
+            "and NOT on the verdicts. The 2026-11-19 paste priced this leg: " +
+                "`pinnedTopToday=17090ms` with the addon fetch at 104ms, " +
+                "`pinnedCustomCatalogs` at 7ms and `pinnedPublish` at 2ms - the " +
+                "whole batch was a TMDB detail call per row item standing in front " +
+                "of the row. `Top ... Today` is current-year titles, so the " +
+                "releasedYear shortcut could never skip one of them",
+            pinned.contains("applyDigitalAvailabilityFilter") ||
+                pinned.contains("kidsFilterMetas")
+        )
+        assertTrue(
+            "what it owes is handed back with the items the row was BUILT from, " +
+                "not the ones it shows - the pass has to see what was filtered out",
+            pinned.contains("verdictsBehind += PinnedVerdictsBehind(railKey, metas)")
+        )
+    }
+
+    @Test
+    fun `the owed verdicts land behind the pinned publish, and they write the snapshot`() {
+        val defer = vm.substringAfter("private fun deferPinnedVerdicts(")
+            .substringBefore("/**\n     * Reads [fetchPage]")
+
+        assertTrue(
+            "one implementation, not a second copy of the filters: the pinned " +
+                "rows go through the same pass the catalog rows use",
+            defer.contains("filterCatalogRowBehind(") &&
+                defer.contains("label = \"home.pinnedVerdicts\"")
+        )
+        assertTrue(
+            "the owed rows run in parallel, the way the batch fetched them, or the " +
+                "snapshot lands a second leg later than it does today",
+            defer.contains(".awaitAll()")
+        )
+        assertTrue(
+            "a pass that could not answer leaves the snapshot alone rather than " +
+                "writing half a batch: an older snapshot was right when it was " +
+                "written",
+            defer.contains("if (answers.any { (_, kept) -> kept == null }) return@launch")
+        )
+        assertTrue(
+            "and the snapshot is written from the ANSWER, because it is what the " +
+                "next cold start paints - before any verdict exists",
+            defer.contains("answers.mapNotNull { (key, kept) -> kept?.let { key to it } }") &&
+                defer.contains("val items = rail.items.filter { meta -> meta.id in kept }") &&
+                defer.contains("pinnedSnapshotScope,\n                snapshot")
+        )
+        assertTrue(
+            "the batch saves the snapshot itself only when nothing is owed",
+            vm.contains("if (verdictsBehind.isEmpty()) {") &&
+                vm.contains("HomePinnedSnapshot.save(\n                                        getApplication<Application>(),")
+        )
+        assertTrue(
+            "and the owed pass is launched after the publish it belongs to, not " +
+                "before it",
+            vm.indexOf("deferPinnedVerdicts(\n                                rails = rails") >
+                vm.indexOf("home.pinnedPublish")
         )
     }
 

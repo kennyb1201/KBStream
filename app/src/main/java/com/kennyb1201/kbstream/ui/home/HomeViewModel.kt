@@ -12664,6 +12664,15 @@ private suspend fun calculateEpisodesRemaining(
                             val rails =
                                 mutableListOf<Rail>()
 
+                            // The "Top ... Today" rows the batch publishes without
+                            // their availability verdicts (0.9.397). Written from
+                            // the rows' own async blocks, hence the synchronized
+                            // list - the same shape as the catalog collector.
+                            val verdictsBehind =
+                                java.util.Collections.synchronizedList(
+                                    mutableListOf<PinnedVerdictsBehind>()
+                                )
+
                             // The three legs of the pinned batch, timed apart
                             // (0.9.394). `home.pinnedRefined` said what the batch
                             // cost but not what it was made of, and the 17:47
@@ -12705,7 +12714,8 @@ private suspend fun calculateEpisodesRemaining(
                                 loadPinnedTopTodayRails(
                                     rails,
                                     hideUpcoming,
-                                    landscapeCards
+                                    landscapeCards,
+                                    verdictsBehind
                                 )
                                 loadPinnedGuestRails(
                                     rails,
@@ -12716,7 +12726,8 @@ private suspend fun calculateEpisodesRemaining(
                                 loadPinnedTopTodayRails(
                                     rails,
                                     hideUpcoming,
-                                    landscapeCards
+                                    landscapeCards,
+                                    verdictsBehind
                                 )
                             }
                             PerfTrace.record(
@@ -12762,22 +12773,45 @@ private suspend fun calculateEpisodesRemaining(
                                     replacing = cachedPinnedKeys
                                 )
                                 // The next cold start paints from THIS batch, not
-                                // from the one before it.
-                                HomePinnedSnapshot.save(
-                                    getApplication<Application>(),
-                                    pinnedSnapshotScope,
-                                    rails
-                                )
+                                // from the one before it - once the rows that are
+                                // still owed their verdicts have answered.
+                                //
+                                // A snapshot is written to be painted BEFORE any
+                                // verdict exists, so saving the unverified batch
+                                // would put a title that is not out yet back in
+                                // "Top ... Today" on every launch until the next
+                                // pass caught it. The behind pass writes it from
+                                // its answer instead ([deferPinnedVerdicts]); here
+                                // there is nothing owed, so the batch is final.
+                                if (verdictsBehind.isEmpty()) {
+                                    HomePinnedSnapshot.save(
+                                        getApplication<Application>(),
+                                        pinnedSnapshotScope,
+                                        rails
+                                    )
+                                }
                             }
                             // The publish and the snapshot write are one leg on
                             // purpose: they are the only two things here that
                             // touch the screen and the disk, and a snapshot save
                             // that blocks the landing would read as "the rows
-                            // were slow" in every other number.
+                            // were slow" in every other number. When a row is
+                            // owed its verdicts the write happens in
+                            // [deferPinnedVerdicts] instead - not before them.
                             PerfTrace.record(
                                 "home.pinnedPublish",
                                 android.os.SystemClock.elapsedRealtime() -
                                     pinnedPublishStartedAtMs
+                            )
+
+                            // The verdicts the Top Today rows did not wait for,
+                            // and the snapshot they owe: behind the batch, the
+                            // shape the catalog rows already use.
+                            deferPinnedVerdicts(
+                                rails = rails,
+                                owed = verdictsBehind.toList(),
+                                hideUpcoming = hideUpcoming,
+                                buildEpochAtStart = buildEpochAtStart
                             )
 
                             // With nothing cached there was no paint-first publish
@@ -13326,12 +13360,16 @@ private suspend fun calculateEpisodesRemaining(
         railSourceOffset[railKeyOf(rail)] = metas.size
 
         // The verdicts, off the row's critical path (see the comment above).
-        filterCatalogRowBehind(
-            railKey = railKey,
-            metas = metas,
-            hideUpcoming = hideUpcoming,
-            buildEpoch = buildEpoch
-        )
+        // Launched here because the pass is suspending: the catalog rows never
+        // read its answer, they only want the screen corrected.
+        viewModelScope.launch {
+            filterCatalogRowBehind(
+                railKey = railKey,
+                metas = metas,
+                hideUpcoming = hideUpcoming,
+                buildEpoch = buildEpoch
+            )
+        }
 
         return rail
     }
@@ -13360,82 +13398,94 @@ private suspend fun calculateEpisodesRemaining(
      * A failure is not a failure to show: an unavailable-or-unresolvable title is
      * kept by the filter itself, and a pass that throws leaves the row exactly as
      * published.
+     *
+     * SUSPENDING, and it returns the ids it kept (0.9.397). The pinned "Top ...
+     * Today" rows owe the same pass behind their publish
+     * ([deferPinnedVerdicts]), and what they have to persist - the pinned
+     * snapshot - is the pass's ANSWER, not the row on screen. Callers that only
+     * want the screen updated launch it ([loadCatalogRail]). Null means the pass
+     * could not answer, and the caller must leave what it has alone.
      */
-    private fun filterCatalogRowBehind(
+    private suspend fun filterCatalogRowBehind(
         railKey: String,
         metas: List<MetaPreview>,
         hideUpcoming: Boolean,
-        buildEpoch: Long
-    ) {
-        viewModelScope.launch {
-            val startedAtMs = android.os.SystemClock.elapsedRealtime()
+        buildEpoch: Long,
+        // Which leg's cost this is. The catalogs keep the field number they have
+        // always had; the pinned rows record their own, so a paste can say which
+        // of the two asked TMDB and which one stalled Home.
+        label: String = "home.catalogFilter"
+    ): Set<String>? {
+        val startedAtMs = android.os.SystemClock.elapsedRealtime()
 
-            val verdicts =
-                try {
-                    if (hideUpcoming) {
-                        tmdbRepository.kidsFilterMetas(
-                            applyDigitalAvailabilityFilter(
-                                filterUpcoming(metas)
-                            )
+        val verdicts =
+            try {
+                if (hideUpcoming) {
+                    tmdbRepository.kidsFilterMetas(
+                        applyDigitalAvailabilityFilter(
+                            filterUpcoming(metas)
                         )
-                    } else {
-                        tmdbRepository.kidsFilterMetas(metas)
-                    }
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Log.e(
-                        "HOME_RAILS",
-                        "catalog verdicts failed for $railKey: " +
-                            e.message, e
                     )
-                    return@launch
+                } else {
+                    tmdbRepository.kidsFilterMetas(metas)
                 }
-
-            PerfTrace.record(
-                "home.catalogFilter",
-                android.os.SystemClock.elapsedRealtime() - startedAtMs
-            )
-
-            if (buildEpoch != railBuildEpoch) return@launch
-
-            val kept = verdicts.distinctBy { it.id }
-            val asked =
-                (if (hideUpcoming) filterUpcoming(metas) else metas).distinctBy { it.id }
-            val hidden =
-                asked.map { meta -> meta.id }.toSet() - kept.map { meta -> meta.id }.toSet()
-
-            // The filters only ever remove, so nothing hidden means the row is
-            // already what this pass would publish.
-            if (hidden.isEmpty()) return@launch
-
-            /*
-             * Recorded BEFORE the screen is consulted, because the row may not
-             * have been inserted yet: the build streams each rail as it resolves
-             * and publishes the whole list at the end, and either of those would
-             * otherwise put back a title this pass just hid. The map is what
-             * [withCatalogVerdicts] reads in both places.
-             */
-            catalogHiddenIds.compute(railKey) { _, existing ->
-                existing.orEmpty() + hidden
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(
+                    "HOME_RAILS",
+                    "catalog verdicts failed for $railKey: " +
+                        e.message, e
+                )
+                return null
             }
 
-            _rails.update { current ->
-                if (kept.isEmpty()) {
-                    // Every title was filtered: the blocking version never
-                    // published this row at all, so neither does this one.
-                    current.filterNot { rail -> railKeyOf(rail) == railKey }
-                } else {
-                    current.map { rail ->
-                        if (railKeyOf(rail) == railKey) {
-                            rail.copy(items = withCatalogVerdicts(railKey, rail.items))
-                        } else {
-                            rail
-                        }
+        PerfTrace.record(
+            label,
+            android.os.SystemClock.elapsedRealtime() - startedAtMs
+        )
+
+        if (buildEpoch != railBuildEpoch) return null
+
+        val kept = verdicts.distinctBy { it.id }
+        val keptIds = kept.map { meta -> meta.id }.toSet()
+        val asked =
+            (if (hideUpcoming) filterUpcoming(metas) else metas).distinctBy { it.id }
+        val hidden =
+            asked.map { meta -> meta.id }.toSet() - keptIds
+
+        // The filters only ever remove, so nothing hidden means the row is
+        // already what this pass would publish.
+        if (hidden.isEmpty()) return keptIds
+
+        /*
+         * Recorded BEFORE the screen is consulted, because the row may not
+         * have been inserted yet: the build streams each rail as it resolves
+         * and publishes the whole list at the end, and either of those would
+         * otherwise put back a title this pass just hid. The map is what
+         * [withCatalogVerdicts] reads in both places.
+         */
+        catalogHiddenIds.compute(railKey) { _, existing ->
+            existing.orEmpty() + hidden
+        }
+
+        _rails.update { current ->
+            if (kept.isEmpty()) {
+                // Every title was filtered: the blocking version never
+                // published this row at all, so neither does this one.
+                current.filterNot { rail -> railKeyOf(rail) == railKey }
+            } else {
+                current.map { rail ->
+                    if (railKeyOf(rail) == railKey) {
+                        rail.copy(items = withCatalogVerdicts(railKey, rail.items))
+                    } else {
+                        rail
                     }
                 }
             }
         }
+
+        return keptIds
     }
 
     /**
@@ -13534,6 +13584,91 @@ private suspend fun calculateEpisodesRemaining(
                 pinned = pinnedRails,
                 replacing = replacing,
                 keyOf = { rail -> railKeyOf(rail) }
+            )
+        }
+    }
+
+    /**
+     * A pinned row published without its availability verdicts (0.9.397).
+     *
+     * [metas] is what the row was BUILT from, after the addon answered and
+     * before any filter: the behind pass has to see what the local filters took
+     * out as well as what they kept, or the two sets cannot be compared.
+     */
+    private class PinnedVerdictsBehind(
+        val railKey: String,
+        val metas: List<MetaPreview>
+    )
+
+    /**
+     * The pinned rows' verdicts, behind the batch they belong to.
+     *
+     * [loadPinnedTopTodayRails] publishes on the local filters so the rows land
+     * at the speed of the addon feed, and hands the items it published to this
+     * pass. It runs the same filter the blocking version ran, through the same
+     * one implementation the catalog rows use ([filterCatalogRowBehind]) - so
+     * the profile guard, the pre-publish hide record and the empty-row drop are
+     * not re-stated here - and then writes the pinned snapshot.
+     *
+     * The snapshot is the reason this is not simply the catalog call: it is what
+     * the NEXT cold start paints, and that paint happens before any verdict
+     * exists. It is therefore written from the ANSWER, and only when every row
+     * owed one answered - an older snapshot is a row that was right when it was
+     * written, while a partial one would resurrect the very titles the pass hid.
+     *
+     * Nothing about the snapshot's timing is lost against 0.9.396: there the
+     * batch could not be saved before `pinnedRefined`, which was this pass's own
+     * cost (17.1s in the 2026-11-19 paste), so the file was written at the same
+     * moment it is written here - with the screen now up 17s earlier.
+     */
+    private fun deferPinnedVerdicts(
+        rails: List<Rail>,
+        owed: List<PinnedVerdictsBehind>,
+        hideUpcoming: Boolean,
+        buildEpochAtStart: Long
+    ) {
+        if (owed.isEmpty()) return
+        viewModelScope.launch {
+            // In PARALLEL, the way the rows were fetched: the two legs used to
+            // run side by side inside the batch, and serialising them here would
+            // put the snapshot a second leg's latency after where it lands today.
+            val answers =
+                coroutineScope {
+                    owed.map { entry ->
+                        async {
+                            entry.railKey to
+                                filterCatalogRowBehind(
+                                    railKey = entry.railKey,
+                                    metas = entry.metas,
+                                    hideUpcoming = hideUpcoming,
+                                    buildEpoch = buildEpochAtStart,
+                                    label = "home.pinnedVerdicts"
+                                )
+                        }
+                    }.awaitAll()
+                }
+
+            // Every owed row has to answer before the snapshot is replaced: a
+            // partial file is the one thing worse than an old one.
+            if (answers.any { (_, kept) -> kept == null }) return@launch
+            val keptById =
+                answers.mapNotNull { (key, kept) -> kept?.let { key to it } }.toMap()
+
+            if (buildEpochAtStart != railBuildEpoch) return@launch
+
+            // A row the pass emptied is dropped here too, so the snapshot cannot
+            // hold a rail the screen no longer draws.
+            val snapshot =
+                rails.mapNotNull { rail ->
+                    val kept = keptById[railKeyOf(rail)] ?: return@mapNotNull rail
+                    val items = rail.items.filter { meta -> meta.id in kept }
+                    if (items.isEmpty()) null else rail.copy(items = items)
+                }
+
+            HomePinnedSnapshot.save(
+                getApplication<Application>(),
+                pinnedSnapshotScope,
+                snapshot
             )
         }
     }
@@ -14192,7 +14327,12 @@ private suspend fun calculateEpisodesRemaining(
     private suspend fun loadPinnedTopTodayRails(
         result: MutableList<Rail>,
         hideUpcoming: Boolean,
-        landscapeCards: Boolean
+        landscapeCards: Boolean,
+        // The rows whose availability verdicts this batch does NOT wait for
+        // (0.9.397). Handed back to the batch, which runs them behind the
+        // publish and writes the snapshot from their answer
+        // ([deferPinnedVerdicts]).
+        verdictsBehind: MutableList<PinnedVerdictsBehind>
     ) {
 
         val baseUrl = PinnedRailsSpec.baseUrl
@@ -14227,20 +14367,43 @@ private suspend fun calculateEpisodesRemaining(
                                 return@async null
                             }
 
-                            // App-wide digital-release filter applies to the
-                            // pinned rails too (same toggle as addon rails),
-                            // followed by the kids-mode ceiling filter.
-                            val filteredMetas =
-                                if (hideUpcoming) {
-                                    tmdbRepository.kidsFilterMetas(
-                                        applyDigitalAvailabilityFilter(metas)
-                                    )
-                                } else {
-                                    tmdbRepository.kidsFilterMetas(metas)
-                                }
+                            // The row publishes on the LOCAL filters: the
+                            // upcoming-date pass and the distinct-by. The verdicts
+                            // behind them - digital availability (one TMDB detail
+                            // fetch per movie) and the kids ceiling - are OWED,
+                            // not paid here (0.9.397).
+                            //
+                            // The 2026-11-19 paste priced them: `pinned=
+                            // 10ms` from the snapshot, then `pinnedRefined=
+                            // 17115ms` whose whole cost was `pinnedTopToday=
+                            // 17090ms` with `http.toptoday` at 104ms and
+                            // `pinnedCustomCatalogs`/`pinnedPublish` at 7ms and
+                            // 2ms. In other words the batch was a TMDB detail
+                            // call per row item, standing in front of the row it
+                            // belonged to - the same shape the catalog rows had
+                            // before `filterCatalogRowBehind` moved them behind
+                            // their publish.
+                            //
+                            // The releasedYear shortcut cannot help THIS row:
+                            // "Top ... Today" is current-year titles by
+                            // construction, so the one case it skips is the one
+                            // this feed never carries.
+                            val distinct =
+                                (if (hideUpcoming) filterUpcoming(metas) else metas)
+                                    .distinctBy { it.id }
 
                             if (
-                                filteredMetas.isEmpty()
+                                distinct.isEmpty()
+                            ) {
+                                return@async null
+                            }
+
+                            val railKey =
+                                railKeyOf(PinnedRailsSpec.ADDON_NAME, catalogId, type)
+                            val visible = withCatalogVerdicts(railKey, distinct)
+
+                            if (
+                                visible.isEmpty()
                             ) {
                                 return@async null
                             }
@@ -14250,7 +14413,7 @@ private suspend fun calculateEpisodesRemaining(
                                     addonName = PinnedRailsSpec.ADDON_NAME,
                                     catalogName = formatCatalogName(catalogName),
                                     type = type,
-                                    items = filteredMetas,
+                                    items = visible,
                                     catalogId = catalogId,
                                     baseUrl = baseUrl,
                                     landscapeArt = previousLandscapeArt[
@@ -14275,6 +14438,11 @@ private suspend fun calculateEpisodesRemaining(
                                 )
 
                             railSourceOffset[railKeyOf(rail)] = metas.size
+
+                            // Owed to this batch's behind pass, with the items the
+                            // row was built from rather than the ones it shows: the
+                            // pass has to be able to see what the filters took out.
+                            verdictsBehind += PinnedVerdictsBehind(railKey, metas)
 
                             rail
                         } catch (e: Exception) {
