@@ -52,33 +52,46 @@ class HeroBackdropCachePolicyContractTest {
     }
 
     @Test
-    fun `the hero draws the warmed entry but never writes one`() {
+    fun `the hero keeps the bitmap it draws and drops the one it replaced`() {
         val screen = source(SCREEN)
         val backdrop = screen
             .substringAfter("private fun HeroBackdropArt(url: String?)")
             .substringBefore("internal fun HeroClearLogo(")
 
-        val sizeAt = backdrop.indexOf(".size(Size(1280, 720))")
-        val policyAt = backdrop.indexOf(".memoryCachePolicy(CachePolicy.READ_ONLY)")
-        val crossfadeAt = backdrop.indexOf(".crossfade(false)")
-
-        assertTrue("the hero still asks for its own 1280x720 decode", sizeAt >= 0)
         assertTrue(
-            "the draw must read the memory cache, not add to it: the eight heroes a " +
-                "walk passes were 28MB of a 47/48MB cache and none but the one on " +
-                "screen is ever drawn again (build-389 paste)",
-            policyAt >= 0
-        )
-        assertTrue(
-            "one request: the policy belongs to the builder that carries the size and " +
-                "the crossfade setting, not to a second one",
-            sizeAt < policyAt && policyAt < crossfadeAt
+            "the hero still asks for its own 1280x720 decode",
+            backdrop.contains(".size(Size(1280, 720))")
         )
         assertFalse(
-            "a disabled memory cache would throw away the hits the warm buys (11 of 37 " +
-                "draws, 29%): the draw reads, it just does not write",
+            "the draw WRITES its bitmap again (0.9.399, coverage). `hits=0 " +
+                "misses=17` beside `hero=10MB/3` on the 2026-11-19 walk was a draw " +
+                "that could never leave an entry behind, so every walk back over " +
+                "ground already seen paid the decode again",
+            backdrop.contains("memoryCachePolicy(CachePolicy.READ_ONLY)")
+        )
+        assertFalse(
+            "and it is neither disabled nor write-only: the hero has to READ the " +
+                "entry the lookahead warmed",
             backdrop.contains("memoryCachePolicy(CachePolicy.DISABLED)") ||
                 backdrop.contains("memoryCachePolicy(CachePolicy.WRITE_ONLY)")
+        )
+        assertTrue(
+            "the draw hands Coil's own key back to the holder: that is what makes " +
+                "the eviction possible without rebuilding the key by hand",
+            backdrop.contains("held.hold(context, url, state.result.memoryCacheKey)")
+        )
+
+        val holder = screen.substringAfter("private class HeroHeldBitmap")
+            .substringBefore("/**\n * The hero's backdrop art")
+        assertTrue(
+            "one entry, not eight: the entry the replaced hero wrote is removed as " +
+                "soon as the new one has landed",
+            holder.contains("memoryCache") && holder.contains(".remove(previous)")
+        )
+        assertTrue(
+            "and the same url drawn again is not a new hero: removing it would " +
+                "throw away the bitmap that is on screen",
+            holder.contains("if (url == heldUrl)")
         )
     }
 

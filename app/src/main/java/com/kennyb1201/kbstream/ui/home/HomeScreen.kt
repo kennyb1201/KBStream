@@ -123,8 +123,9 @@ import androidx.compose.foundation.BorderStroke
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Surface
+import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
-import coil3.request.CachePolicy
+import coil3.memory.MemoryCache
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import coil3.size.Size
@@ -1283,6 +1284,42 @@ internal fun HeroInlineTrailerPlayer(
 }
 
 /**
+ * The one hero bitmap this draw site keeps warm (0.9.399, coverage).
+ *
+ * [hold] runs on every successful draw. When the hero has moved to a new URL,
+ * the entry the previous one wrote is removed from the memory cache - so a walk
+ * that passes eight heroes leaves one behind, not eight, and every hero the
+ * viewer comes back to is still a hit.
+ *
+ * Removal rather than a smaller entry: the entry IS the hero's own decode, and
+ * a second size would be a second decode of the same picture.
+ */
+private class HeroHeldBitmap {
+    private var heldKey: MemoryCache.Key? = null
+    private var heldUrl: String? = null
+
+    fun hold(
+        context: android.content.Context,
+        url: String?,
+        key: MemoryCache.Key?
+    ) {
+        if (url.isNullOrBlank() || key == null) return
+        if (url == heldUrl) {
+            heldKey = key
+            return
+        }
+        val previous = heldKey
+        heldUrl = url
+        heldKey = key
+        if (previous != null && previous != key) {
+            SingletonImageLoader.get(context.applicationContext)
+                .memoryCache
+                ?.remove(previous)
+        }
+    }
+}
+
+/**
  * The hero's backdrop art, as one composable.
  *
  * It is drawn in TWO places - as the whole hero when no trailer is resolved,
@@ -1295,35 +1332,29 @@ internal fun HeroInlineTrailerPlayer(
  * brought in. Visually identical at the size it renders. The Home hero backdrop
  * is the one image the whole screen is built around, so it keeps the fade.
  *
- * READ_ONLY memory cache (spec 2026-11-19, churn F2): the hero READS the entry
- * the lookahead warmed and never WRITES its own.
+ * ONE held entry (0.9.399, coverage): the hero keeps the bitmap it is drawing
+ * and drops the one it replaced. See [HeroHeldBitmap].
  *
- * The build-389 walk is why. `image cache: 47MB of 48MB hero=28MB/8` - eight
- * 1280x720 entries, 3.5MB each, holding 58% of a cache the rail's own tiles
- * (~0.38MB) were being evicted from, while `heroWarms` had already been cut to
- * 10. The warms were never the 28MB: every settled focus that the warm happened
- * to miss decoded a backdrop and Coil cached it, and a walk's last eight heroes
- * are dead weight the moment the glow moves on - only the one on screen is ever
- * drawn again. Reading but not writing keeps the hits the warm buys (11 of 37
- * draws, 29%) and stops the misses from compounding into the rail's budget.
+ * Both extremes before this were measured, and both were wrong. Every draw
+ * writing: the build-389 walk ended at `image cache: 47MB of 48MB hero=28MB/8`
+ * - eight 1280x720 entries, 3.5MB each, holding 58% of a cache the rail's own
+ * tiles (~0.38MB) were being evicted from. Nothing writing (0.9.393,
+ * `READ_ONLY`): the 2026-11-19 walk ended at `hero=10MB/3` with `hits=0
+ * misses=17`, because the draw on screen left nothing behind for the walk back.
  *
- * Disk and network stay enabled: the next visit to that hero still reads the
- * decoded bitmap from disk rather than decoding again, which is what the
+ * Disk and network stay enabled either way: the next visit to that hero reads
+ * the decoded bitmap from disk rather than fetching it again, which is what the
  * prefetch half already pays for.
  */
 @Composable
 private fun HeroBackdropArt(url: String?) {
     val context = LocalContext.current
+    val held = remember { HeroHeldBitmap() }
     AsyncImage(
         model = remember(url) {
             ImageRequest.Builder(context)
                 .data(url)
                 .size(Size(1280, 720))
-                // F7 (spec 2026-11-19, churn F2): read the warm's entry, do not
-                // add one. See this composable's own note - eight drawn hero
-                // bitmaps were 28MB of a 47/48MB cache and only the one on
-                // screen was ever drawn again.
-                .memoryCachePolicy(CachePolicy.READ_ONLY)
                 // F6 (spec 2026-11-16, scrolling round three): ONE buffer.
                 //
                 // Coil's crossfade blends the OUTGOING and INCOMING drawables,
@@ -1351,6 +1382,9 @@ private fun HeroBackdropArt(url: String?) {
         // can say whether the walk landed on art the lookahead had decoded or
         // paid a fresh one. A memory hit is a warm the walk actually reached.
         onSuccess = { state ->
+            // Coil hands back the key it wrote under, so the entry this draw
+            // replaced can be removed without reconstructing Coil's key.
+            held.hold(context, url, state.result.memoryCacheKey)
             ImageLoadTrace.noteHeroDraw(
                 state.result.dataSource == coil3.decode.DataSource.MEMORY_CACHE
             )
