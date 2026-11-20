@@ -16,8 +16,12 @@ class TraktRateGuardTest {
 
     private var now = 1_000_000L
 
+    // `clock` is named rather than passed as a trailing lambda: the persisted
+    // 429 park made `parkStore` the constructor's last parameter, so a trailing
+    // lambda now binds to the store and this test stops compiling. The clock
+    // itself, and what it is for, is unchanged.
     private fun guard(max: Int = 3, windowMs: Long = 60_000L) =
-        TraktRateGuard(maxRequestsInWindow = max, windowMs = windowMs) { now }
+        TraktRateGuard(maxRequestsInWindow = max, windowMs = windowMs, clock = { now })
 
     @Test
     fun `the budget is spent and then refuses`() {
