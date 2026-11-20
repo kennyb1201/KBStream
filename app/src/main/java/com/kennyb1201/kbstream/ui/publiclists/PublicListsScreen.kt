@@ -8,14 +8,17 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -62,6 +65,20 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
  * The vendor comes from the route rather than the ViewModel's constructor, so
  * the activity-scoped ViewModel can be shared: opening the other vendor
  * re-derives its state instead of adding a second instance.
+ *
+ * Rendering (2026-11-20): the whole page is ONE [LazyColumn], and every card and
+ * title row is an `items(...)` entry. It used to be a `verticalScroll` Column
+ * whose bodies were `forEach` loops, which composed and measured every card in a
+ * single pass. Trakt's directory is up to 300 cards (3 pages × 100) against
+ * MDBList's 100, so that single pass was enough to kill the process on a 1.7 GB
+ * TCL - with no crash in Sentry, because a system kill is not an exception, and
+ * no line in the diagnostics export, because only playback deaths were recorded
+ * (see F3 in MainApplication). Lazy composition is the fix: only what fits on
+ * screen is composed, and the list is the same height it always was.
+ *
+ * A LazyColumn cannot live inside a verticalScroll container (the inner one
+ * would be measured against an infinite height), which is why the page header is
+ * leading `item {}`s rather than a Column above the list.
  */
 @Composable
 fun PublicListsScreen(
@@ -93,6 +110,17 @@ fun PublicListsScreen(
         if (uiState.canGoBack) vm.back() else onBack()
     }
 
+    val listState = rememberLazyListState()
+
+    // A new level starts at the top. Going Directory → Detail → back used to
+    // leave the reader wherever the composition happened to sit; with one list
+    // for the whole page the offset would also be read against different
+    // content (a detail's title rows are not a directory's cards). Cards
+    // themselves are NOT refetched - they live in the ViewModel.
+    LaunchedEffect(uiState.level) {
+        listState.scrollToItem(0)
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -112,91 +140,109 @@ fun PublicListsScreen(
                 )
         )
 
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 28.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            contentAlignment = Alignment.TopCenter
         ) {
-            Column(
+            // The panel is the page now rather than a box that grew with its
+            // content: a lazy list has no content height to measure, so the
+            // surface that used to wrap the cards fills the space they scroll
+            // through. Same colour, same shape, same 1080dp cap.
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = 1080.dp)
-                    .focusGroup()
+                    .fillMaxHeight()
                     .background(KBSurface, KBShapePanel)
-                    .padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .focusGroup()
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    KBPageTitle(
-                        text = uiState.vendor.browseTitle,
-                        color = KBAccent,
-                        modifier = Modifier.weight(1f)
-                    )
-                    KBButton(label = "BACK") {
-                        if (uiState.canGoBack) vm.back() else onBack()
+                    item {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            KBPageTitle(
+                                text = uiState.vendor.browseTitle,
+                                color = KBAccent,
+                                modifier = Modifier.weight(1f)
+                            )
+                            KBButton(label = "BACK") {
+                                if (uiState.canGoBack) vm.back() else onBack()
+                            }
+                        }
                     }
-                }
 
-                // Attribution is the surface's standing sentence: these are
-                // community lists, not KBStream's picks, on every level.
-                Text(
-                    text = uiState.vendor.attributionRule,
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.bodySmall
-                )
+                    // Attribution is the surface's standing sentence: these are
+                    // community lists, not KBStream's picks, on every level.
+                    item {
+                        Text(
+                            text = uiState.vendor.attributionRule,
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
 
-                uiState.gate?.let { gate -> GatePanel(gate, uiState.vendor) }
+                    uiState.gate?.let { gate ->
+                        item { GatePanel(gate, uiState.vendor) }
+                    }
 
-                // The two directory vendors keep their tabs and search; an anime
-                // vendor has neither (there is no trending-lists directory for
-                // anime), so its root is the username box below.
-                if (!uiState.vendor.byUsername) {
-                    DirectoryTabs(
-                        state = uiState,
-                        onSelect = vm::selectDirectory,
-                        onOpenSearch = vm::openSearch
-                    )
-                }
+                    // The two directory vendors keep their tabs and search; an
+                    // anime vendor has neither (there is no trending-lists
+                    // directory for anime), so its root is the username box.
+                    if (!uiState.vendor.byUsername) {
+                        item {
+                            DirectoryTabs(
+                                state = uiState,
+                                onSelect = vm::selectDirectory,
+                                onOpenSearch = vm::openSearch
+                            )
+                        }
+                    }
 
-                when (val level = uiState.level) {
-                    PublicListLevel.Username -> UsernameBody(
-                        state = uiState,
-                        onQueryChange = vm::setUsernameQuery,
-                        onRead = vm::readUsername,
-                        onOpenCard = vm::openDetail,
-                        onSave = vm::save
-                    )
+                    when (val level = uiState.level) {
+                        PublicListLevel.Username -> usernameBodyItems(
+                            state = uiState,
+                            onQueryChange = vm::setUsernameQuery,
+                            onRead = vm::readUsername,
+                            onOpenCard = vm::openDetail,
+                            onSave = vm::save
+                        )
 
-                    is PublicListLevel.Directory -> DirectoryBody(
-                        cards = uiState.cards,
-                        isLoading = uiState.isLoadingCards,
-                        error = uiState.cardsError,
-                        vendor = uiState.vendor,
-                        savePhases = uiState.savePhases,
-                        onOpenCard = vm::openDetail,
-                        onSave = vm::save
-                    )
+                        is PublicListLevel.Directory -> directoryBodyItems(
+                            cards = uiState.cards,
+                            isLoading = uiState.isLoadingCards,
+                            error = uiState.cardsError,
+                            vendor = uiState.vendor,
+                            savePhases = uiState.savePhases,
+                            onOpenCard = vm::openDetail,
+                            onSave = vm::save
+                        )
 
-                    PublicListLevel.Search -> SearchBody(
-                        state = uiState,
-                        onQueryChange = vm::setSearchQuery,
-                        onSearch = vm::runSearch,
-                        onOpenCard = vm::openDetail,
-                        onSave = vm::save
-                    )
+                        PublicListLevel.Search -> searchBodyItems(
+                            state = uiState,
+                            onQueryChange = vm::setSearchQuery,
+                            onSearch = vm::runSearch,
+                            onOpenCard = vm::openDetail,
+                            onSave = vm::save
+                        )
 
-                    is PublicListLevel.Detail -> DetailBody(
-                        card = level.card,
-                        titles = uiState.titles,
-                        phase = uiState.savePhases[level.card.key],
-                        onOpenTitle = onOpenTitle,
-                        onSave = { vm.save(level.card) }
-                    )
+                        is PublicListLevel.Detail -> detailBodyItems(
+                            card = level.card,
+                            titles = uiState.titles,
+                            phase = uiState.savePhases[level.card.key],
+                            onOpenTitle = onOpenTitle,
+                            onSave = { vm.save(level.card) }
+                        )
+                    }
                 }
             }
         }
@@ -247,59 +293,68 @@ private fun GatePanel(gate: PublicListGate, vendor: PublicListVendor) {
  * own lists with, and the snapshot note under the cards is the one promise a
  * copy makes - it does not follow the owner's later edits.
  */
-@Composable
-private fun UsernameBody(
+private fun LazyListScope.usernameBodyItems(
     state: PublicListsUiState,
     onQueryChange: (String) -> Unit,
     onRead: () -> Unit,
     onOpenCard: (PublicListCard) -> Unit,
     onSave: (PublicListCard) -> Unit
 ) {
-    KBSectionHeader(title = "Read a ${state.vendor.label} profile")
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        KBTextField(
-            value = state.usernameQuery,
-            onValueChange = onQueryChange,
-            placeholder = PublicListRules.usernamePlaceholder(state.vendor),
-            modifier = Modifier.weight(1f),
-            onDone = onRead
-        )
-        Spacer(modifier = Modifier.width(10.dp))
-        KBButton(
-            label = if (state.isReadingUsername) "READING…" else "READ LISTS",
-            enabled = !state.isReadingUsername &&
-                PublicListRules.usernameEnabled(state.usernameQuery)
-        ) { onRead() }
+    item { KBSectionHeader(title = "Read a ${state.vendor.label} profile") }
+    item {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            KBTextField(
+                value = state.usernameQuery,
+                onValueChange = onQueryChange,
+                placeholder = PublicListRules.usernamePlaceholder(state.vendor),
+                modifier = Modifier.weight(1f),
+                onDone = onRead
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            KBButton(
+                label = if (state.isReadingUsername) "READING…" else "READ LISTS",
+                enabled = !state.isReadingUsername &&
+                    PublicListRules.usernameEnabled(state.usernameQuery)
+            ) { onRead() }
+        }
     }
     if (!state.vendor.needsConnection) {
-        Text(
-            text = "Public profiles need no account of yours: type any username. A " +
-                "private profile answers with a prompt, never an empty list.",
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodySmall
-        )
+        item {
+            Text(
+                text = "Public profiles need no account of yours: type any username. A " +
+                    "private profile answers with a prompt, never an empty list.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
     }
-    state.usernameError?.let { ReasonLine(it) }
+    state.usernameError?.let { message ->
+        item { ReasonLine(message) }
+    }
     if (!state.isReadingUsername && state.usernameError == null &&
         state.usernameLists.isEmpty() && state.username != null
     ) {
-        Text(
-            text = PublicListRules.emptyUsernameText(
-                state.vendor,
-                state.username.orEmpty()
-            ),
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodySmall
-        )
+        item {
+            Text(
+                text = PublicListRules.emptyUsernameText(
+                    state.vendor,
+                    state.username.orEmpty()
+                ),
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
     }
     if (state.usernameLists.isNotEmpty()) {
-        Text(
-            text = PublicListRules.copySnapshotNote(state.vendor),
-            color = KBTextLo,
-            style = MaterialTheme.typography.labelSmall
-        )
+        item {
+            Text(
+                text = PublicListRules.copySnapshotNote(state.vendor),
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
     }
-    state.usernameLists.forEach { card ->
+    items(state.usernameLists, key = { it.key }) { card ->
         PublicListCardView(
             card = card,
             phase = state.savePhases[card.key],
@@ -310,8 +365,7 @@ private fun UsernameBody(
 }
 
 /** One directory's cards. */
-@Composable
-private fun DirectoryBody(
+private fun LazyListScope.directoryBodyItems(
     cards: List<PublicListCard>,
     isLoading: Boolean,
     error: String?,
@@ -321,27 +375,35 @@ private fun DirectoryBody(
     onSave: (PublicListCard) -> Unit
 ) {
     if (isLoading) {
-        Text(
-            text = "Reading ${vendor.label}'s lists…",
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodySmall
-        )
+        item {
+            Text(
+                text = "Reading ${vendor.label}'s lists…",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
         return
     }
-    error?.let { ReasonLine(it) }
+    error?.let { message ->
+        item { ReasonLine(message) }
+    }
     if (cards.isEmpty()) {
-        Text(
-            text = if (error != null) {
-                "Nothing to show from the last read."
-            } else {
-                PublicListRules.emptyDirectoryText(vendor)
-            },
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodySmall
-        )
+        item {
+            Text(
+                text = if (error != null) {
+                    "Nothing to show from the last read."
+                } else {
+                    PublicListRules.emptyDirectoryText(vendor)
+                },
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
         return
     }
-    cards.forEach { card ->
+    // Only the cards on screen are composed. A Trakt directory is up to 300 of
+    // them; composing all 300 at once is what the TCL could not survive.
+    items(cards, key = { it.key }) { card ->
         PublicListCardView(
             card = card,
             phase = savePhases[card.key],
@@ -352,48 +414,56 @@ private fun DirectoryBody(
 }
 
 /** The search row and the cards a query returned. */
-@Composable
-private fun SearchBody(
+private fun LazyListScope.searchBodyItems(
     state: PublicListsUiState,
     onQueryChange: (String) -> Unit,
     onSearch: () -> Unit,
     onOpenCard: (PublicListCard) -> Unit,
     onSave: (PublicListCard) -> Unit
 ) {
-    KBSectionHeader(title = "Search public lists")
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        KBTextField(
-            value = state.searchQuery,
-            onValueChange = onQueryChange,
-            placeholder = "List name, theme, owner…",
-            modifier = Modifier.weight(1f),
-            onDone = onSearch
-        )
-        Spacer(modifier = Modifier.width(10.dp))
-        KBButton(
-            label = if (state.isSearching) "SEARCHING…" else "SEARCH",
-            enabled = !state.isSearching && PublicListRules.searchEnabled(state.searchQuery)
-        ) { onSearch() }
+    item { KBSectionHeader(title = "Search public lists") }
+    item {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            KBTextField(
+                value = state.searchQuery,
+                onValueChange = onQueryChange,
+                placeholder = "List name, theme, owner…",
+                modifier = Modifier.weight(1f),
+                onDone = onSearch
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            KBButton(
+                label = if (state.isSearching) "SEARCHING…" else "SEARCH",
+                enabled = !state.isSearching &&
+                    PublicListRules.searchEnabled(state.searchQuery)
+            ) { onSearch() }
+        }
     }
     if (!PublicListRules.searchEnabled(state.searchQuery) && !state.isSearching) {
-        Text(
-            text = "Type at least two characters. Search finds LISTS, never individual " +
-                "titles.",
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodySmall
-        )
+        item {
+            Text(
+                text = "Type at least two characters. Search finds LISTS, never individual " +
+                    "titles.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
     }
-    state.searchError?.let { ReasonLine(it) }
+    state.searchError?.let { message ->
+        item { ReasonLine(message) }
+    }
     if (!state.isSearching && state.searchError == null && state.searchResults.isEmpty() &&
         PublicListRules.searchEnabled(state.searchQuery)
     ) {
-        Text(
-            text = PublicListRules.NO_SEARCH_RESULTS,
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodySmall
-        )
+        item {
+            Text(
+                text = PublicListRules.NO_SEARCH_RESULTS,
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
     }
-    state.searchResults.forEach { card ->
+    items(state.searchResults, key = { it.key }) { card ->
         PublicListCardView(
             card = card,
             phase = state.savePhases[card.key],
@@ -463,93 +533,119 @@ private fun PublicListCardView(
 }
 
 /** The detail level: attribution, the save action, and the list's titles. */
-@Composable
-private fun DetailBody(
+private fun LazyListScope.detailBodyItems(
     card: PublicListCard,
     titles: PublicListTitlesState,
     phase: PublicListSavePhase?,
     onOpenTitle: (mediaType: String, id: String) -> Unit,
     onSave: () -> Unit
 ) {
-    Text(
-        text = card.name,
-        color = KBTextHi,
-        style = MaterialTheme.typography.headlineSmall,
-        fontWeight = FontWeight.SemiBold
-    )
-    Text(
-        text = PublicListRules.attribution(card),
-        color = KBTextLo,
-        style = MaterialTheme.typography.bodySmall
-    )
-    Text(
-        text = PublicListRules.countsLabel(card.itemCount, card.likes),
-        color = KBAccent,
-        style = MaterialTheme.typography.labelSmall
-    )
-    card.description?.let { description ->
+    item {
         Text(
-            text = description,
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodyMedium
+            text = card.name,
+            color = KBTextHi,
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.SemiBold
         )
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        KBButton(
-            label = saveLabel(phase, card.liked, card.vendor),
-            enabled = phase !is PublicListSavePhase.Saving && card.liked != true
-        ) { onSave() }
-        Spacer(modifier = Modifier.width(12.dp))
-        PhaseLine(phase)
-    }
-    if (card.vendor.byUsername) {
+    item {
         Text(
-            text = PublicListRules.copySnapshotNote(card.vendor),
-            color = KBTextLo,
-            style = MaterialTheme.typography.labelSmall
-        )
-    }
-    KBSectionHeader(title = "Titles")
-
-    when (titles) {
-        PublicListTitlesState.Loading -> Text(
-            text = "Reading this list's titles…",
+            text = PublicListRules.attribution(card),
             color = KBTextLo,
             style = MaterialTheme.typography.bodySmall
         )
+    }
+    item {
+        Text(
+            text = PublicListRules.countsLabel(card.itemCount, card.likes),
+            color = KBAccent,
+            style = MaterialTheme.typography.labelSmall
+        )
+    }
+    card.description?.let { description ->
+        item {
+            Text(
+                text = description,
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+    }
+    item {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            KBButton(
+                label = saveLabel(phase, card.liked, card.vendor),
+                enabled = phase !is PublicListSavePhase.Saving && card.liked != true
+            ) { onSave() }
+            Spacer(modifier = Modifier.width(12.dp))
+            PhaseLine(phase)
+        }
+    }
+    if (card.vendor.byUsername) {
+        item {
+            Text(
+                text = PublicListRules.copySnapshotNote(card.vendor),
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+    }
+    item { KBSectionHeader(title = "Titles") }
 
-        is PublicListTitlesState.Failed -> ReasonLine(titles.message)
+    when (titles) {
+        PublicListTitlesState.Loading -> item {
+            Text(
+                text = "Reading this list's titles…",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+
+        is PublicListTitlesState.Failed -> item { ReasonLine(titles.message) }
 
         is PublicListTitlesState.Titles -> {
             // Says the ceiling rule plainly: the list is the provider's, and
             // KBStream (not the provider) is what keeps a title off a strict
             // profile.
-            Text(
-                text = PublicListRules.CEILING_NOTE,
-                color = KBTextLo,
-                style = MaterialTheme.typography.labelSmall
-            )
+            item {
+                Text(
+                    text = PublicListRules.CEILING_NOTE,
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
             // F6: the header counts the PROVIDER's titles, so a title with no
             // id - skipped below because there is nothing to open - has to be
             // accounted for rather than quietly missing from the rows.
             if (titles.droppedCount > 0) {
-                Text(
-                    text = publicListDroppedTitlesNote(titles.droppedCount),
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.bodySmall
-                )
+                item {
+                    Text(
+                        text = publicListDroppedTitlesNote(titles.droppedCount),
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
             }
             if (titles.rows.isEmpty()) {
-                Text(
-                    text = "This list has no titles ${card.vendor.label} can show.",
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.bodySmall
-                )
+                item {
+                    Text(
+                        text = "This list has no titles ${card.vendor.label} can show.",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
             }
-            titles.rows.forEach { row ->
-                val detailId = row.detailId
-                if (detailId != null) {
-                    TitleRow(row) { onOpenTitle(if (row.isMovie) "movie" else "series", detailId) }
+            // The detail read is uncapped, so a 1,000+ title list is exactly
+            // the case this exists for: only the rows on screen are composed.
+            // No `key`: a provider's list may legitimately name the same title
+            // twice, and duplicate keys would fail the list outright.
+            val openable = titles.rows.mapNotNull { row ->
+                row.detailId?.let { detailId -> row to detailId }
+            }
+            items(openable.size) { index ->
+                val (row, detailId) = openable[index]
+                TitleRow(row) {
+                    onOpenTitle(if (row.isMovie) "movie" else "series", detailId)
                 }
             }
         }

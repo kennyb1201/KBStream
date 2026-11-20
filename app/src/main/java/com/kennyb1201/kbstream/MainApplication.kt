@@ -181,14 +181,39 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             // session's death. Reported first: it is the only step in this chain
             // whose subject cannot be reconstructed later.
             startupStep("startup.playbackDeath", "app_create_playback_death") {
+                // The OS's account of how the previous process ended, read
+                // ONCE and unconditionally.
+                //
+                // It used to be read only inside the playback-death branch
+                // below, so a process the system ended WITHOUT a playback
+                // session left no trace anywhere: no marker (nothing was
+                // playing), nothing in Sentry (a system kill is not an
+                // exception, an ANR or a signal), and therefore nothing in the
+                // diagnostics export either. The field report that made this
+                // concrete was the Trakt public-lists page on a 1.7 GB TCL,
+                // which killed the app on open and vanished without a record.
+                // The platform's exit history is the one place that death is
+                // written down, so it is read here for every launch.
+                val exit = ProcessExitRecord.previous(applicationContext)
+                if (exit != null && !exit.deliberate) {
+                    // Deliberate exits - force-stop, an update, a permission
+                    // change, the app switching itself off - are not deaths and
+                    // would be pure noise in the export. Everything else is
+                    // recorded, including the crash / native-signal / ANR
+                    // reasons Sentry already has a stack for: one line here
+                    // names the cause beside it, and nothing is sent to the
+                    // crash feed.
+                    CrashReporter.recordEvent(
+                        "process_exit",
+                        "previous process: ${exit.label}"
+                    )
+                }
                 PlaybackDeathMarker.consume(applicationContext)?.let { death ->
-                    // The marker proves the session never finished; only the
-                    // platform knows why the process ended, and the answer
-                    // decides whether this is a death at all (see
-                    // ProcessExitRecord). Read before the branch: an app the
+                    // The marker proves the session never finished; the exit
+                    // read above says why (see ProcessExitRecord), and that
+                    // answer decides whether this is a death at all: an app the
                     // installer replaced mid-session leaves the same marker a
                     // native abort does.
-                    val exit = ProcessExitRecord.previous(applicationContext)
                     when {
                         exit?.deliberate == true -> CrashReporter.recordEvent(
                             // Force-stopped, updated, or switched off on purpose:
