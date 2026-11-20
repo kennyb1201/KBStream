@@ -57,6 +57,22 @@ internal object AniListClient {
     private var parkedUntilMs = 0L
 
     /**
+     * Where the 429 park is persisted (R3, spec 2026-11-20).
+     *
+     * The in-memory field alone meant a restart re-learned the park by firing
+     * into the same limit; the store is installed once at app start.
+     */
+    private var parkStore: com.kennyb1201.kbstream.data.network.ParkUntilStore =
+        com.kennyb1201.kbstream.data.network.NoParkUntilStore
+
+    /** Points the client at the persisted park (see the Simkl pattern). */
+    @Synchronized
+    fun attachParkStore(store: com.kennyb1201.kbstream.data.network.ParkUntilStore) {
+        parkStore = store
+        parkedUntilMs = maxOf(parkedUntilMs, store.readParkUntilMs())
+    }
+
+    /**
      * The one query the ID hub and the Detail enrichment need.
      *
      * One call answers all of it - AniList id, MAL id, the community score and
@@ -164,6 +180,7 @@ internal object AniListClient {
                                 System.currentTimeMillis()
                             )
                             parkedUntilMs = until
+                            parkStore.writeParkUntilMs(until)
                             AniListAnswer.Parked(until)
                         }
                         !response.isSuccessful ->
@@ -193,6 +210,12 @@ internal object AniListClient {
      */
     private suspend fun post(query: String, variables: JSONObject): JSONObject? =
         withContext(Dispatchers.IO) {
+            // R2: a parked leg fires nothing. This used to sit in awaitSlot and
+            // DELAY for the park (in 5s steps), which on an hour-long park is a
+            // coroutine idling for an hour to produce the null it could return
+            // now.
+            if (parkedUntilMs > System.currentTimeMillis()) return@withContext null
+
             awaitSlot()
 
             val body = JSONObject()
@@ -261,12 +284,16 @@ internal object AniListClient {
         val seconds = retryAfter?.trim()?.toLongOrNull()
         val waitMs = seconds?.takeIf { it > 0L }?.times(1_000L) ?: DEFAULT_PARK_MS
         parkedUntilMs = System.currentTimeMillis() + waitMs
+        // Persisted before the answer goes back, so a restart during the park
+        // does not fire the same query again (R3).
+        parkStore.writeParkUntilMs(parkedUntilMs)
     }
 
     /** Test hook: forgets the window and any park. */
     internal fun resetRateLimitForTest() {
         recentRequestsMs.clear()
         parkedUntilMs = 0L
+        parkStore = com.kennyb1201.kbstream.data.network.NoParkUntilStore
     }
 }
 

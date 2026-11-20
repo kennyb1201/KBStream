@@ -1667,7 +1667,22 @@ class BingeCatRepository private constructor(private val context: Context?) {
         ) {
             return fresh
         }
+        // R2 (spec 2026-11-20): while the read leg is parked, a stale snapshot is
+        // the answer. This is the half of the gap that made a 429 repeat: a failed
+        // refresh never advanced `refreshedAtMs`, so every caller after it (Home
+        // rails, Library, the picker, taste adds) re-fired the whole four-leg
+        // fan-out straight back into the limit.
+        if (bingeCatReadParkMs() > 0L) {
+            return fresh?.takeIf { it.mappedId == mapped && it.profileId == activeProfile }
+        }
         return cacheMutex.withLock {
+            // Re-checked inside the lock: a 429 from another caller can land
+            // while this one queues, and the fan-out it already stopped must not
+            // be started again here.
+            if (bingeCatReadParkMs() > 0L) {
+                return@withLock cached
+                    ?.takeIf { it.mappedId == mapped && it.profileId == activeProfile }
+            }
             val current = cached
             if (
                 current != null &&
@@ -2413,6 +2428,11 @@ class BingeCatRepository private constructor(private val context: Context?) {
     private suspend fun <T> authorizedBody(
         call: suspend (String) -> Response<T>
     ): T? {
+        // R2: the gate is checked BEFORE anything is fired. Every BingeCat read
+        // goes through here - the snapshot's four legs, listRows, profiles,
+        // categories - so one check covers all of them, and a 429 noted by the
+        // first leg stops the rest of that fan-out from firing too.
+        if (bingeCatReadParkMs() > 0L) return null
         val token = ensureFreshToken() ?: run {
             BingeCatTrace.recordError("no-token")
             return null
@@ -2442,6 +2462,10 @@ class BingeCatRepository private constructor(private val context: Context?) {
             }
         }
         if (response.code() == 429) {
+            // R1/R6: park for the FULL Retry-After (never clamped below it) and
+            // remember it across restarts, so the revalidation clock cannot
+            // re-fire this fan-out on the next screen.
+            noteBingeCatReadRateLimit(response.headers()["Retry-After"])
             BingeCatTrace.recordError("429")
             return null
         }

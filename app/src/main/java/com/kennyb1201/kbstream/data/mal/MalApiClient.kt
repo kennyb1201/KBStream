@@ -274,6 +274,11 @@ internal object MalApiClient {
         val id = malId?.takeIf { it > 0 } ?: return MalWriteResult.Skipped("no MAL id")
         val token = MalAuth.accessToken(context) ?: return MalWriteResult.Skipped("not connected")
 
+        // The same gate as the status write: this is the delete arm of the same
+        // bucket, and a 429 here used to fall through to "delete refused" with
+        // nothing parked.
+        if (malRateParkMs() > 0L) return MalWriteResult.Failed(429, "rate limited")
+
         return withContext(Dispatchers.IO) {
             val request =
                 Request.Builder()
@@ -288,6 +293,10 @@ internal object MalApiClient {
                         response.isSuccessful -> MalWriteResult.Written("DELETE")
                         malNeedsRefresh(response.code) ->
                             MalWriteResult.Failed(401, "unauthorized")
+                        response.code == 429 -> {
+                            malRateGuard.noteRetryAfter(response.header("Retry-After"))
+                            MalWriteResult.Failed(429, "rate limited")
+                        }
                         else -> MalWriteResult.Failed(response.code, "delete refused")
                     }
                 }
@@ -302,6 +311,10 @@ internal object MalApiClient {
         method: String
     ): MalWriteResult {
         val token = MalAuth.accessToken(context) ?: return MalWriteResult.Skipped("not connected")
+
+        // R2 (spec 2026-11-20): parked means no request at all. Before this a
+        // 429 was logged and the very next title asked again.
+        if (malRateParkMs() > 0L) return MalWriteResult.Failed(429, "rate limited")
 
         return withContext(Dispatchers.IO) {
             val request =
@@ -325,6 +338,7 @@ internal object MalApiClient {
                             MalWriteResult.Failed(401, "unauthorized")
                         }
                         response.code == 429 -> {
+                            malRateGuard.noteRetryAfter(response.header("Retry-After"))
                             Log.w(TAG, "MAL write parked: 429")
                             MalWriteResult.Failed(429, "rate limited")
                         }
@@ -367,6 +381,10 @@ internal object MalApiClient {
         context: Context?,
         forceRefresh: Boolean
     ): MalGet {
+        // R2: the read arm shares the account's single bucket, so the same park
+        // gates it - the audit's "429 park" did not exist on either arm.
+        if (malRateParkMs() > 0L) return MalGet.Missing
+
         val builder = Request.Builder().url(url).header("User-Agent", MalConfig.USER_AGENT)
 
         if (authorized) {
@@ -390,6 +408,7 @@ internal object MalApiClient {
                     }
                     malNeedsRefresh(response.code) -> MalGet.Unauthorized
                     response.code == 429 -> {
+                        malRateGuard.noteRetryAfter(response.header("Retry-After"))
                         Log.w(TAG, "MAL read parked: 429")
                         MalGet.Missing
                     }

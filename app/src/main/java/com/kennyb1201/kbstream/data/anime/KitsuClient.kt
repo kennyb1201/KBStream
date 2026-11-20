@@ -115,6 +115,11 @@ internal object KitsuClient {
      * caller reads it as "Kitsu has nothing to say", never as an empty list.
      */
     private suspend fun get(url: String): JSONObject? = withContext(Dispatchers.IO) {
+        // R2: a parked leg fires nothing. The 1s spacing below is not a rate
+        // limit and could never stop this - a 429 used to come back as null like
+        // any other failure, and the next caller retried a second later.
+        if (kitsuReadPark.parkedForMs() > 0L) return@withContext null
+
         awaitSlot()
 
         val request =
@@ -127,6 +132,12 @@ internal object KitsuClient {
 
         runCatching {
             httpClient.newCall(request).execute().use { response ->
+                if (response.code == 429) {
+                    // Park the whole read surface, not just this URL. Kitsu
+                    // publishes no rate headers, so the 60s default applies.
+                    kitsuReadPark.noteRetryAfter(response.header("Retry-After"))
+                    return@use null
+                }
                 if (!response.isSuccessful) return@use null
                 JSONObject(response.body?.string().orEmpty())
             }
@@ -142,8 +153,9 @@ internal object KitsuClient {
         }
     }
 
-    /** Test hook: forgets the spacing state. */
+    /** Test hook: forgets the spacing state and any park. */
     internal fun resetRateLimitForTest() {
         lastRequestMs = 0L
+        kitsuReadPark.resetForTest()
     }
 }

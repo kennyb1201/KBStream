@@ -59,6 +59,23 @@ internal object KitsuLibrary {
     @Volatile
     private var parkedUntilMs = 0L
 
+    /**
+     * Where that park is persisted (R3, spec 2026-11-20).
+     *
+     * Kept apart from the read leg's store: the same rule as the guards -
+     * a 429 on the authenticated write bucket says nothing about the public
+     * read one, and a restart must restore each park to its own leg.
+     */
+    private var parkStore: com.kennyb1201.kbstream.data.network.ParkUntilStore =
+        com.kennyb1201.kbstream.data.network.NoParkUntilStore
+
+    /** Points the write leg at the persisted park (see the Simkl pattern). */
+    @Synchronized
+    fun attachParkStore(store: com.kennyb1201.kbstream.data.network.ParkUntilStore) {
+        parkStore = store
+        parkedUntilMs = maxOf(parkedUntilMs, store.readParkUntilMs())
+    }
+
     /** animeId → library-entry id. The write that normally follows is a PATCH. */
     private val entryIds = ConcurrentHashMap<String, String>()
 
@@ -69,6 +86,7 @@ internal object KitsuLibrary {
     internal fun resetForTest() {
         lastRequestMs = 0L
         parkedUntilMs = 0L
+        parkStore = com.kennyb1201.kbstream.data.network.NoParkUntilStore
         entryIds.clear()
     }
 
@@ -330,6 +348,15 @@ internal object KitsuLibrary {
         token: String,
         body: String?
     ): KitsuWriteOutcome = withContext(Dispatchers.IO) {
+        // R2: a parked leg fires nothing. The caller already reads
+        // [KitsuWriteOutcome.RateLimited] as "wait out the window", so this
+        // answer costs nothing it did not already handle - and it is the
+        // difference between a queue that idles and one that hammers.
+        val parked = parkedUntilMs
+        if (parked > System.currentTimeMillis()) {
+            return@withContext KitsuWriteOutcome.RateLimited(parked)
+        }
+
         awaitSlot()
 
         val request =
@@ -365,6 +392,7 @@ internal object KitsuLibrary {
                             System.currentTimeMillis()
                         )
                         parkedUntilMs = until
+                        parkStore.writeParkUntilMs(until)
                         Log.i(TAG, "Kitsu rate limited; parked until $until")
                         KitsuWriteOutcome.RateLimited(until)
                     }
@@ -406,10 +434,12 @@ internal object KitsuLibrary {
                         null
                     }
                     response.code == 429 -> {
-                        parkedUntilMs = KitsuWriteRules.parkMs(
+                        val until = KitsuWriteRules.parkMs(
                             response.header("Retry-After"),
                             System.currentTimeMillis()
                         )
+                        parkedUntilMs = until
+                        parkStore.writeParkUntilMs(until)
                         null
                     }
                     else -> null

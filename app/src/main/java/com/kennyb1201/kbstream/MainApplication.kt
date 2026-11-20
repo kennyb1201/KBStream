@@ -57,6 +57,11 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         // (spec 2026-11-19, Simkl quota F1): a TV that updates or reboots during
         // a 16-hour park must not spend a quota call re-learning it.
         com.kennyb1201.kbstream.data.simkl.installSimklParkStores(this)
+        // The same for every other rate-limited leg (spec 2026-11-20): BingeCat's
+        // reads and writes, Kitsu's reads and writes, AniList, MAL and Trakt.
+        // A restart must not re-learn a 429 by firing the fan-out that earned
+        // it - which is exactly what the 0.9.407 paste showed happening.
+        com.kennyb1201.kbstream.data.network.installRateLimitParkStores(this)
         // Build fingerprint, logged before anything that can fail. The question
         // every device test turns on is "which build is this?": a logcat full of
         // behavior from a stale APK wastes the whole session, and a suppression

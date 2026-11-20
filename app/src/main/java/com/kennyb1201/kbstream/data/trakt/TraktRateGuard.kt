@@ -1,5 +1,8 @@
 package com.kennyb1201.kbstream.data.trakt
 
+import com.kennyb1201.kbstream.data.network.NoParkUntilStore
+import com.kennyb1201.kbstream.data.network.ParkUntilStore
+
 /**
  * Trakt's request budget, from day one.
  *
@@ -24,13 +27,27 @@ package com.kennyb1201.kbstream.data.trakt
 internal class TraktRateGuard(
     private val maxRequestsInWindow: Int = 900,
     private val windowMs: Long = 5L * 60L * 1_000L,
-    private val clock: () -> Long = System::currentTimeMillis
+    private val clock: () -> Long = System::currentTimeMillis,
+    private var parkStore: ParkUntilStore = NoParkUntilStore
 ) {
 
     private val stamps = ArrayDeque<Long>()
 
     @Volatile
-    private var blockedUntilMs: Long = 0L
+    private var blockedUntilMs: Long = parkStore.readParkUntilMs()
+
+    /**
+     * Points the guard at the persisted 429 park (R3, spec 2026-11-20).
+     *
+     * The window's stamps stay in memory on purpose: a budget that survives a
+     * restart would hold back a leg that is no longer spending. Only the park -
+     * the server's own instruction - outlives the process.
+     */
+    @Synchronized
+    fun attachParkStore(store: ParkUntilStore) {
+        parkStore = store
+        blockedUntilMs = maxOf(blockedUntilMs, store.readParkUntilMs())
+    }
 
     /** True when this request may be made right now. */
     @Synchronized
@@ -50,6 +67,15 @@ internal class TraktRateGuard(
     fun noteRetryAfter(seconds: Long) {
         val waitMs = seconds.coerceAtLeast(1L) * 1_000L
         blockedUntilMs = maxOf(blockedUntilMs, clock() + waitMs)
+        parkStore.writeParkUntilMs(blockedUntilMs)
+    }
+
+    /** Test hook: forgets the window and any park. */
+    @Synchronized
+    fun resetForTest() {
+        stamps.clear()
+        blockedUntilMs = 0L
+        parkStore = NoParkUntilStore
     }
 
     /** True while a server-requested pause is still running. */

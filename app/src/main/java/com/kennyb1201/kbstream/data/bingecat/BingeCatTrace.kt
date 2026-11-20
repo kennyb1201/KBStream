@@ -242,6 +242,11 @@ object BingeCatTrace {
             "connected=${if (connected) "yes" else "no"} " +
                 "mapped=${mappedProfile ?: "unmapped"} " +
                 "last_refresh=$refreshed last_error=$lastError cached=$counts" +
+                // R6 (spec 2026-11-20): the two 429 parks, in seconds, 0 when
+                // the leg may fire. One paste then proves the gate engaged
+                // instead of leaving a reader to infer it from a request count.
+                " read_park=${parkSeconds(bingeCatReadParkMs())}s" +
+                " write_park=${parkSeconds(bingeCatWriteParkMs())}s" +
                 " writes=$writesAttempted/$writesSucceeded " +
                 "last_write_error=$lastWriteError " +
                 "last_write=$lastWriteDetail " +
@@ -256,6 +261,9 @@ object BingeCatTrace {
                 "last_import_error=$lastImportError last_import=$lastImportDetail"
         )
     }
+
+    /** Milliseconds as whole seconds, rounded up, for the park fields. */
+    private fun parkSeconds(ms: Long): Long = (ms + 999L) / 1_000L
 
     /** Test hook: the record is process-wide and must not leak between cases. */
     internal fun reset() {
