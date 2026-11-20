@@ -635,6 +635,21 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     private var loadedDetailAtMs: Long = 0L
 
     /**
+     * When this load's loading card came down (elapsedRealtime), or -1 before
+     * the first paint of a load.
+     *
+     * This exists because `detail.tail` cannot answer the question the
+     * episode-ordering change raised: the tail is measured when the LOAD
+     * returns, and the load still ends on the add-on probes and the recs
+     * filter, so it reads the same whether the episode row arrived early or
+     * last. `detail.episodes` is timed from this instead - first paint to the
+     * moment the season listing is published - which is the only figure that
+     * can say whether the row still waits behind an add-on.
+     */
+    @Volatile
+    private var detailFirstPaintAtMs: Long = -1L
+
+    /**
      * True when [_resumeInfo] was read from local history rather than from the
      * Simkl/MDBList cloud sessions. The freshness gate's fast path re-reads
      * local rows only, so it has to know whether a row that is now missing
@@ -1694,9 +1709,11 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
             // the title"), recorded once per load, and the tail is measured as
             // whatever is left after it.
             var firstPaintAt = -1L
+            detailFirstPaintAtMs = -1L
             fun markFirstPaint() {
                 if (firstPaintAt >= 0) return
                 firstPaintAt = SystemClock.elapsedRealtime() - loadStartedAt
+                detailFirstPaintAtMs = SystemClock.elapsedRealtime()
                 PerfTrace.record(
                     "detail.firstPaint",
                     firstPaintAt,
@@ -2923,6 +2940,21 @@ for ((metaAddon, response, error) in probeResults) {
                     _episodes.value = applyAirDateCorrections(seasonEpisodes, season)
                     _episodeError.value = null
                     _loadedSeason.value = season
+                    // How long the viewer waited for the episode row, counted
+                    // from the moment the page appeared. `detail.tail` cannot
+                    // show this: it stops when the LOAD stops, which is after
+                    // the add-on probes and the recs filter, so a row that
+                    // arrived first and a row that arrived last produced the
+                    // same tail. Compare this to `http.addon.<name>`: it must
+                    // no longer track the slowest probe.
+                    val paintedAt = detailFirstPaintAtMs
+                    if (paintedAt >= 0) {
+                        PerfTrace.record(
+                            "detail.episodes",
+                            SystemClock.elapsedRealtime() - paintedAt,
+                            ok = true
+                        )
+                    }
 
                     val resume = _resumeInfo.value
                     // A resume row's 0 is "no episode" (see EpisodeNumbering):
