@@ -51,6 +51,19 @@ object PoTokenTrace {
      */
     private var warmLine: String? = null
 
+    /**
+     * How long the last resolve actually blocked on minting (0.9.408).
+     *
+     * `pot.gvs: state=minted latency=7241ms` cannot be read on its own. The
+     * resolver's GVS budget is 6 s and a provider-level mint is allowed 10 s, so
+     * a mint recorded at 7241 ms may have finished AFTER the resolve stopped
+     * waiting: the token was minted, was never handed to the request, and the
+     * cost the viewer felt was the 6 s cut-off rather than the 7.2 s. The two
+     * lines together settle it - this one is the wait, that one is the mint - and
+     * only this one is a playback latency.
+     */
+    private var mintLine: String? = null
+
     private var eventLine: String? = null
 
     /**
@@ -167,6 +180,21 @@ object PoTokenTrace {
         // warm token" without inferring it from a latency.
         if (source != null) line.append(" source=$source")
         contextLines[context.label] = line.toString()
+    }
+
+    /**
+     * Records how long a resolve blocked on minting, and whether the GVS mint
+     * returned inside the budget it was given.
+     *
+     * [gvsInBudget] is "the resolve got a GVS token within [budgetMs]", which is the
+     * half a capture cannot infer from `pot.gvs`: a mint that reports `minted`
+     * at a latency above this budget arrived after the resolve had already gone
+     * on, so it decorated nothing.
+     */
+    @Synchronized
+    fun recordMintWait(waitedMs: Long, budgetMs: Long, gvsInBudget: Boolean) {
+        mintLine = "pot.mint: resolve waited ${waitedMs}ms budget=${budgetMs}ms " +
+            "gvs=${if (gvsInBudget) "in-budget" else "none"}"
     }
 
     /**
@@ -497,6 +525,7 @@ object PoTokenTrace {
         sourceLine?.let { add(it) }
         add(warmLine ?: "pot.warm: state=$WARM_COLD")
         eventLine?.let { add(it) }
+        mintLine?.let { add(it) }
         deathLine?.let { add(it) }
         // Standalone, after the death line and independent of it: the death
         // line is overwritten by every answer to its retry (a chunk read that
@@ -521,6 +550,7 @@ object PoTokenTrace {
         resolveLine = null
         sourceLine = null
         warmLine = null
+        mintLine = null
         eventLine = null
         deathLine = null
         chunkDeath = null

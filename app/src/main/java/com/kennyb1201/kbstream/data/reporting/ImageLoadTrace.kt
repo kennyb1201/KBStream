@@ -144,6 +144,19 @@ internal object ImageLoadTrace {
     private var decodesOverBudget = 0
     private var decodesOverTwoBudgets = 0
     private var slowestDecodeMs = 0
+
+    /**
+     * What the slowest decode actually WAS (0.9.408).
+     *
+     * `decode: ... max=433ms` named the cost and nothing else, so the paste that
+     * carried it (`home frames=600 p50=16ms max=499ms`, one hitch in six hundred)
+     * could not say whether those 433 ms belonged to a 1280x720 backdrop, a
+     * 420x236 tile or a 3840x2160 still - and every one of those has a different
+     * fix. Captured with the decode that set [slowestDecodeMs], asked size and
+     * source included, so the next capture names the bitmap to shrink instead of
+     * the next guess.
+     */
+    private var slowestDecodeShape: String? = null
     private var decodesDuringFrame = 0
 
     // The request's own end-to-end latency, kept apart from the decode (0.9.399).
@@ -247,7 +260,13 @@ internal object ImageLoadTrace {
                 timedDecodes++
                 if (decodeMs >= FRAME_BUDGET_MS) decodesOverBudget++
                 if (decodeMs >= TWO_FRAME_BUDGET_MS) decodesOverTwoBudgets++
-                if (decodeMs > slowestDecodeMs) slowestDecodeMs = decodeMs
+                if (decodeMs > slowestDecodeMs) {
+                    slowestDecodeMs = decodeMs
+                    slowestDecodeShape =
+                        "decoded ${width}x$height asked ${askedWidth}x$askedHeight " +
+                            "src=${source.name.lowercase()} " +
+                            "duringFrame=${if (duringFrame) "yes" else "no"}"
+                }
                 if (duringFrame) decodesDuringFrame++
             }
             // ...and the wait around it, which is a different question with a
@@ -395,6 +414,10 @@ internal object ImageLoadTrace {
                 "ge33=$decodesOverTwoBudgets max=${slowestDecodeMs}ms " +
                 "duringFrame=$decodesDuringFrame"
         }
+        // The max above, attributed: the one line a shrink/skip fix is aimed at.
+        slowestDecodeShape?.let { shape ->
+            out += "decode slowest: ${slowestDecodeMs}ms $shape"
+        }
         if (timedRequests > 0) {
             out += "request: n=$timedRequests ge16=$requestsOverBudget " +
                 "ge33=$requestsOverTwoBudgets max=${slowestRequestMs}ms"
@@ -464,6 +487,7 @@ internal object ImageLoadTrace {
             decodesOverBudget = 0
             decodesOverTwoBudgets = 0
             slowestDecodeMs = 0
+            slowestDecodeShape = null
             decodesDuringFrame = 0
             timedRequests = 0
             requestsOverBudget = 0

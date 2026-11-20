@@ -657,12 +657,23 @@ object InnerTubeExtractor {
     private suspend fun mintTokens(videoId: String, visitorData: String?): ResolveTokens {
         if (visitorData.isNullOrBlank()) return ResolveTokens(null, null)
         val provider = PoTokens.provider()
+        val mintStartedAtNs = System.nanoTime()
         val gvs = tokenWithinBudget(GVS_TOKEN_BUDGET_MS) {
             provider.gvsToken(videoId, visitorData)
         }
         val player = tokenWithinBudget(TOKEN_BUDGET_MS) {
             provider.playerToken(visitorData)
         }
+        // The wait, recorded where it is paid (0.9.408). The 14:29 paste carried
+        // `pot.gvs: state=minted latency=7241ms` with the budgets at 6 s + 4 s and
+        // no way to tell a resolve that waited 7.2 s from one that cut off at
+        // 6.0 s and received a gift it could not spend. This line is the answer,
+        // and it is the only one of the pair that is a playback latency.
+        PoTokenTrace.recordMintWait(
+            waitedMs = (System.nanoTime() - mintStartedAtNs) / 1_000_000L,
+            budgetMs = GVS_TOKEN_BUDGET_MS,
+            gvsInBudget = gvs != null
+        )
         // Asked AFTER the mint: the page's identity is only known once the mint
         // has observed it. With minting off (or no adoption) this is the request
         // visitor unchanged, so the request stays byte-identical to pre-spec.
