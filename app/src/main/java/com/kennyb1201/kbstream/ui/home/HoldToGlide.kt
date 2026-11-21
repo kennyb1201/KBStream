@@ -47,7 +47,7 @@ import kotlinx.coroutines.launch
  * Compose-free file so a test can pin them.
  *
  * TRIGGERED ON THE WALL CLOCK, not on the platform's key repeats. KBCard's
- * long-press and HomeTopBarHoldMs both document the same field fact: plenty of TV
+ * long press documents the same field fact: plenty of TV
  * remotes, emulators and ADB-injected key streams never emit repeat KeyDown
  * events at all - one KeyDown, then KeyUp, however long the button was held. A
  * repeat-triggered glide would then be a glide on some hardware only. So a press
@@ -65,13 +65,12 @@ import kotlinx.coroutines.launch
 /**
  * Which direction keys belong to an axis.
  *
- * UP IS DELIBERATELY NOT ONE OF THEM on the vertical axis. Up is already spoken
- * for: a held Up for [HomeTopBarHoldMs] reveals Home's top bar from any rail (see
- * rememberHomeTopBarHoldUpHook), and that shortcut is how the bar is reached from
- * the bottom of a long Home. Gliding up as well would take the press over before
- * the hold could fire, or - worse - glide the rails on after the bar opened over
- * them. So Up keeps exactly today's behavior (a step up, or the bar on a hold),
- * and the glide owns Down, Left and Right.
+ * UP IS DELIBERATELY NOT ONE OF THEM on the vertical axis. Up is the one key on
+ * this screen that has to stay a plain step for a plain press: it is how the
+ * viewer climbs the rails, and the rail drawn first also answers it with the top
+ * bar. Gliding up would take the press over and stop focus from ever reaching
+ * that rail. So Up keeps exactly today's behavior (a step up), and the glide
+ * owns Down, Left and Right.
  */
 internal fun glideAxisKeys(axis: GlideAxis): Set<Key> = when (axis) {
     GlideAxis.Horizontal -> setOf(Key.DirectionLeft, Key.DirectionRight)

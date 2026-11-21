@@ -52,9 +52,9 @@ internal const val GlideLostReleaseMs = 160L
 /**
  * Absolute ceiling on one glide, so a lost KeyUp can never scroll forever.
  *
- * Only reachable on the hardware the app already documents (KBCard's long press,
- * HomeTopBarHoldMs): a remote that never sends repeat KeyDown and then loses the
- * KeyUp as well. Eight seconds is far past any deliberate hold and still finite.
+ * Only reachable on the hardware the app already documents (KBCard's long
+ * press): a remote that never sends repeat KeyDown and then loses the KeyUp as
+ * well. Eight seconds is far past any deliberate hold and still finite.
  */
 internal const val GlideMaxMs = 8_000L
 

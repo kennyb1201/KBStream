@@ -3768,8 +3768,9 @@ private fun BillboardAction(
      *
      * The hero is the middle stop of a three-stop chain (top rail -> pills ->
      * top bar). Without this the chain ended at the pills: they had no UP
-     * handler at all, so the bar was only reachable by the undiscoverable
-     * hold-UP. Null leaves the key alone - the phone has no bar to open.
+     * handler at all, so the bar was reachable only by a shortcut a viewer had
+     * to be told about. Null leaves the key alone - the phone has no bar to
+     * open.
      */
     onUp: (() -> Unit)? = null,
     /**

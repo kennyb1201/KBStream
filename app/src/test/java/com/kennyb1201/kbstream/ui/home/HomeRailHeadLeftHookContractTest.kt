@@ -132,7 +132,7 @@ class HomeRailHeadLeftHookContractTest {
     fun `dismissing the bar after a Left summon restores the head card`() {
         val home = source(HOME)
         val open = home.substringAfter("fun openTopBar(")
-            .substringBefore("fun openTopBarFromHold(")
+            .substringBefore("val handFocusBack")
         assertTrue(
             "the summon stores the card's own requester as the restore target",
             open.contains("lastPosterFocusRequester = requester")
@@ -149,7 +149,7 @@ class HomeRailHeadLeftHookContractTest {
 
     @Test
     fun `the edge-stop still cancels the Left search`() {
-        val stop = bodyOf(SLOTS, "internal fun Modifier.homeRailHeadLeftEdgeStop(", "How long D-pad Up has to be HELD")
+        val stop = bodyOf(SLOTS, "internal fun Modifier.homeRailHeadLeftEdgeStop(", "fun KBHomeCollectionRail(")
         assertTrue(
             stop.contains("this.focusProperties { left = FocusRequester.Cancel }")
         )

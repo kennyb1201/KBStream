@@ -36,7 +36,7 @@ class HomeRailHeadLeftEdgeStopContractTest {
         val stop = slice(
             slots,
             "internal fun Modifier.homeRailHeadLeftEdgeStop(",
-            "internal const val HomeTopBarHoldMs"
+            "fun KBHomeCollectionRail("
         )
         assertTrue(
             "the preferred mechanism: the Left search is cancelled, so focus stays",

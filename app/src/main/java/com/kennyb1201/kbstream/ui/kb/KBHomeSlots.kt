@@ -21,7 +21,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -501,12 +500,12 @@ internal fun Modifier.homeTopRailUpHook(
 /**
  * The D-pad Left -> top bar hook for the HEAD card of a Home rail.
  *
- * The bar used to be reachable only by Up, and only from the rail drawn first
- * (see [homeTopRailUpHook]), or by holding Up for [HomeTopBarHoldMs] from
- * anywhere. Both are still there. This adds the faster route: a rail's head
- * card has no neighbour to its left, so Left there is a dead press today - and a
- * dead press is the one kind that can be given a job without taking anything
- * away from the viewer.
+ * The bar is otherwise reachable only by Up, and only from the rail drawn first
+ * (see [homeTopRailUpHook]) - one press per rail to climb back to it. This is
+ * the faster route: a rail's head card has no neighbour to its left, so Left
+ * there is a dead press, and a dead press is the one kind that can be given a
+ * job without taking anything away from the viewer. The app shell gives that
+ * same dead press the same answer on every screen that is not Home.
  *
  * NOT gated by rail position, unlike Up. Up from a lower rail has a legitimate
  * target (the rail above), which is why exactly one rail may take it; Left from
@@ -609,101 +608,6 @@ internal fun Modifier.homeRailHeadLeftEdgeStop(isHeadCard: Boolean): Modifier =
     }
 
 /**
- * How long D-pad Up has to be HELD, on any rail, before Home reveals its top
- * bar.
- *
- * The bar is otherwise reachable only from the rail drawn first (see
- * [homeTopRailUpHook]), so on a Home with a full catalog list it is one Up
- * press per rail - forty-nine catalogs down that is forty-nine presses to
- * reach SEARCH. The hold is the shortcut from anywhere, and a normal (short)
- * press still moves focus to the rail above, so nothing about vertical
- * navigation changes.
- *
- * Longer than the Select long press (KBCard's 450 ms) on purpose: Up is also
- * the key a viewer holds to skim several rails in one go, and reusing the
- * Select threshold turned that skim into the top bar opening over it. 700 ms is
- * past a skim and still well short of feeling unresponsive.
- *
- * Timed on the wall clock between KeyDown and KeyUp rather than from the
- * platform's key repeats, for the reason KBCard documents: plenty of TV remotes
- * and emulators never emit repeat KeyDown events at all, so a repeat-based hold
- * is a hold only on some hardware.
- */
-internal const val HomeTopBarHoldMs = 700L
-
-/** Whether a D-pad Up held for [heldMs] reveals Home's top bar. */
-internal fun isTopBarHold(heldMs: Long): Boolean = heldMs >= HomeTopBarHoldMs
-
-/**
- * The hold-Up -> top bar hook, applied to Home's RAILS LIST rather than to a
- * card.
- *
- * Preview key events travel down from the root to the focused element, so one
- * modifier on the list sees Up for every rail drawn inside it - every catalog
- * rail, every browse and collection row and both built-ins - and no rail kind
- * can forget to apply it, which is exactly the hole [homeTopRailUpHook] has for
- * the short press (it needs each rail kind to pass it on; see
- * HomeRailUpHookContractTest).
- *
- * KeyDown is never consumed: the press has to reach the focus system, because a
- * short press still means "move focus to the rail above". Only the KeyUp that
- * ends a long hold is swallowed, so the release cannot also fight the focus
- * move its own press already made.
- *
- * [restoreTargetAtPress] is read once, when the press begins: that is the card
- * the viewer was on, and it is what the bar hands focus back to when it closes.
- * Reading it at KeyUp instead would return focus to whichever card focus had
- * climbed to during the hold - i.e. not where the viewer was.
- */
-@Composable
-internal fun rememberHomeTopBarHoldUpHook(
-    restoreTargetAtPress: () -> FocusRequester?,
-    onOpenTopBar: (FocusRequester?) -> Unit
-): Modifier {
-    var pressStartTime by remember {
-        mutableLongStateOf(0L)
-    }
-    var restoreTarget by remember {
-        mutableStateOf<FocusRequester?>(null)
-    }
-
-    return Modifier.onPreviewKeyEvent { event ->
-        when {
-            event.key != Key.DirectionUp -> false
-
-            event.type == KeyEventType.KeyDown -> {
-                if (event.nativeKeyEvent.repeatCount == 0) {
-                    pressStartTime = System.currentTimeMillis()
-                    restoreTarget = restoreTargetAtPress()
-                }
-                false
-            }
-
-            event.type == KeyEventType.KeyUp -> {
-                // 0 means no press of ours is open - a release the list never
-                // saw the press for (focus arrived inside it mid-press, say).
-                // Timed against a zeroed start it would read as a hold of
-                // fifty-odd years and open the bar on a stray release.
-                val heldMs = if (pressStartTime == 0L) {
-                    0L
-                } else {
-                    System.currentTimeMillis() - pressStartTime
-                }
-                pressStartTime = 0L
-                if (isTopBarHold(heldMs)) {
-                    onOpenTopBar(restoreTarget)
-                    true
-                } else {
-                    false
-                }
-            }
-
-            else -> false
-        }
-    }
-}
-
-/**
  * The tiles a collection rail can actually draw, in order.
  *
  * A folder without an id can't be opened ([KBHomeCollectionRail] needs the id
@@ -763,7 +667,7 @@ fun KBHomeCollectionRail(
     /**
      * The tile D-pad focus has just landed on, reported with its KEY and its
      * own FocusRequester. Home keeps the requester of the card focus is ON (it
-     * is what a hold-Up restore and the top bar's dismiss come back to), and a
+     * is what the top bar's dismiss comes back to), and a
      * tile's requester is made inside the row, where only this rail can see it.
      * The key rides along because Home remembers it for the return from Detail
      * (see HomeScreen's railFocusRequesters): the card the viewer left Home on

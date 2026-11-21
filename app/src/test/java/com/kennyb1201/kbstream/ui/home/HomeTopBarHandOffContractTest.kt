@@ -97,9 +97,9 @@ class HomeTopBarHandOffContractTest {
                 home.contains("var topBarSummons by remember { mutableStateOf(0) }")
         )
         assertEquals(
-            "both summon paths - the short press on the top rail and the " +
-                "hold-Up shortcut - bump it",
-            2,
+            "the short press on the top rail bumps it, and Left on a head card " +
+                "reaches the same opener, so there is one place that does",
+            1,
             home.split("topBarSummons++").size - 1
         )
         assertTrue(
@@ -107,12 +107,6 @@ class HomeTopBarHandOffContractTest {
                 "the dismiss can put focus back there",
             home.contains("fun openTopBar( requester: FocusRequester ) " +
                 "{ lastPosterFocusRequester = requester showTopBar = true topBarSummons++ }")
-        )
-        assertTrue(
-            "the hold-Up path keeps its own restore target and gains the same " +
-                "re-arm",
-            home.contains("fun openTopBarFromHold(restoreTarget: FocusRequester?) {") &&
-                handOff.isNotEmpty()
         )
     }
 

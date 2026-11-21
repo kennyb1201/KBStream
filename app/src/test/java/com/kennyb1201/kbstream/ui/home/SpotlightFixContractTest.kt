@@ -17,7 +17,7 @@ import org.junit.Test
  *    D-pad had nowhere to go;
  *  - the billboard's pills were touch clickables with no focus treatment and no
  *    anchor, so nothing held focus on Spotlight entry, and with no rails
- *    viewport the top-bar hold-up (Settings' only door from Home) could not be
+ *    viewport the top-bar shortcut (Settings' only door from Home) could not be
  *    reached at all;
  *  - the TV's feed chooser was a hardcoded four builtins, two of which are
  *    progress rails rather than catalogs, instead of the Home's rails.
@@ -164,15 +164,10 @@ class SpotlightFixContractTest {
     }
 
     @Test
-    fun `the rails keep the hold-up to the top bar in Spotlight too`() {
+    fun `the rails keep the top bar in Spotlight too`() {
         val home = source(HOME)
         assertTrue(
-            "the hook rides the rails list itself, so it covers the hero's DOWN " +
-                "into the rails as well as every rail kind",
-            home.contains("rememberHomeTopBarHoldUpHook(")
-        )
-        assertTrue(
-            "and the bar it summons is drawn by the same screen, not by a layout",
+            "the bar the rails summon is drawn by the same screen, not by a layout",
             home.contains("topBarFocusRequester")
         )
         // The trap this class of fix must not re-ship: a hero that consumes the

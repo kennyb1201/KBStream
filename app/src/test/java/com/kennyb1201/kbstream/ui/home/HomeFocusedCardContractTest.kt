@@ -9,15 +9,14 @@ import org.junit.Test
  * Home restores focus to where the viewer actually IS.
  *
  * Two reported bugs, one mechanism. First, `lastPosterFocusRequester` - the
- * restore target for the top bar's dismiss and for the hold-Up shortcut - was
- * written only where a target is CAPTURED (a long press, a short-press Up on
- * the top rail), so plain D-pad traversal never updated it: holding Up five
- * rails down and dismissing came back to the last card that had been
- * long-pressed, and on a session that had not long-pressed anything the var was
- * still null, so the dismiss was a silent no-op while the bar's chip was
- * disposed by AnimatedVisibility - focus fell to nothing and the D-pad was
- * dead. There is now a second var, kept current by every rail's own focus
- * callback, that those two consumers read.
+ * restore target for the top bar's dismiss - was written only where a target is
+ * CAPTURED (a long press, a short-press Up on the top rail), so plain D-pad
+ * traversal never updated it: summoning the bar five rails down and dismissing
+ * came back to the last card that had been long-pressed, and on a session that
+ * had not long-pressed anything the var was still null, so the dismiss was a
+ * silent no-op while the bar's chip was disposed by AnimatedVisibility - focus
+ * fell to nothing and the D-pad was dead. There is now a second var, kept
+ * current by every rail's own focus callback, that the dismiss reads.
  *
  * Second, the Continue Watching menu's "Mark as Watched" and "Remove" both
  * deleted the row the stored requester pointed at and then asked it for focus:
@@ -47,7 +46,7 @@ class HomeFocusedCardContractTest {
     }
 
     @Test
-    fun `the top bar's dismiss and the hold-Up restore read where focus is`() {
+    fun `the top bar's dismiss reads where focus is`() {
         assertTrue(
             "the dismiss prefers the focused card and falls back to the captured " +
                 "target, for a rail kind that reports no focused card at all",
@@ -86,12 +85,6 @@ class HomeFocusedCardContractTest {
                 "restoreFocus(lastPosterFocusRequester) }") &&
                 home.contains("fun dismissPosterMenu() { posterMenu = null " +
                     "restoreFocus(lastPosterFocusRequester) }")
-        )
-        assertTrue(
-            "and the hold-Up shortcut captures the same pair at press time",
-            home.contains(
-                "restoreTargetAtPress = { focusedCardRequester ?: lastPosterFocusRequester }"
-            )
         )
     }
 

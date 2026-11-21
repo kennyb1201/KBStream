@@ -44,7 +44,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.LocalFocusManager
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -103,6 +105,7 @@ import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.addons.AddonsScreen
 import com.kennyb1201.kbstream.ui.collection.CollectionScreen
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
+import com.kennyb1201.kbstream.ui.components.TvTopBarOverlay
 import com.kennyb1201.kbstream.ui.components.KBFeedbackHost
 import com.kennyb1201.kbstream.ui.components.KBHeroTransition
 import com.kennyb1201.kbstream.ui.components.LocalKBHeroTransition
@@ -536,6 +539,30 @@ sealed class Screen {
          */
         val linkCacheKey: String? = null
     ) : Screen()
+}
+
+/**
+ * Whether the app shell hosts the top bar over this screen (see
+ * [com.kennyb1201.kbstream.ui.components.TvTopBarOverlay]).
+ *
+ * Not Home: it has its own bar, summoned from its rails and wired into its
+ * focus graph. Not the profile screens either (choosing an identity is the one
+ * job on screen, and Home's bar already carries the profile chip that opens
+ * them). Not the player (a separate Activity) and not the streams picker, which
+ * is a transient step that may hand straight off to playback.
+ *
+ * Everything else gets it, including the connect pages and the browse
+ * drill-downs: the bar is how a viewer gets to SEARCH / TV GUIDE / LIBRARY /
+ * SETTINGS / HOME from a stack that would otherwise need one Back per step.
+ */
+private fun Screen.hostsAppTopBar(): Boolean = when (this) {
+    is Screen.Home,
+    is Screen.ProfilePicker,
+    is Screen.ProfileEdit,
+    is Screen.Streams,
+    is Screen.Player -> false
+
+    else -> true
 }
 
 // Screen persistence (rememberSaveable) — the saver, the JSON screen codec,
@@ -2766,6 +2793,66 @@ fun AppRoot(
     // browse drill-downs, the player and the connect pages.
     val mobileNavDestination = if (FormFactor.isTv) null else mobileNavSelection(screen)
 
+    // ------------------------------------------------------------------ tv top bar
+    //
+    // The bar is Home's, but Home is not the only place a viewer wants it: every
+    // other TV screen had no route to SEARCH / TV GUIDE / LIBRARY / SETTINGS /
+    // HOME at all except one Back per step.
+    //
+    // Left from an item with nothing to its left is the summon, on every screen -
+    // the same press Home's rail heads already answer with the bar, and the one
+    // direction key that is a dead press at the start of a row. There is no hold
+    // to learn and no second gesture: Left either steps along the row or, when
+    // there is no step to take, opens the bar.
+    var appTopBarVisible by remember { mutableStateOf(false) }
+    // Running a Left search is how you ask whether a Left press has anywhere to
+    // go: the search either moves focus or answers that it cannot.
+    val appTopBarFocus = LocalFocusManager.current
+
+    // Not over the kids-time lock: the veil swallows every press, and a bar
+    // summoned before the lock engaged has nothing it should still be offering.
+    val appTopBarArmed =
+        FormFactor.isTv && !timeLocked.locked && screen.hostsAppTopBar()
+
+    // A bar that was up when the screen underneath changed has nothing left to
+    // belong to. Only the bar's own chips navigate, and they close it first -
+    // this is the guard for every other way a screen can change.
+    LaunchedEffect(appTopBarArmed) {
+        if (!appTopBarArmed) {
+            appTopBarVisible = false
+        }
+    }
+
+    if (appTopBarArmed && appTopBarVisible) {
+        TvTopBarOverlay(
+            onDismiss = { appTopBarVisible = false },
+            onOpenHome = {
+                appTopBarVisible = false
+                screen = Screen.Home
+            },
+            onSearch = {
+                appTopBarVisible = false
+                navToSearch()
+            },
+            onOpenGuide = {
+                appTopBarVisible = false
+                navToGuide()
+            },
+            onOpenLibrary = {
+                appTopBarVisible = false
+                navToLibrary()
+            },
+            onOpenSettings = {
+                appTopBarVisible = false
+                navToSettings()
+            },
+            onSwitchProfile = {
+                appTopBarVisible = false
+                screen = Screen.ProfilePicker(returnTo = screen)
+            }
+        )
+    }
+
     // Screen transitions. Every navigation used to be an instant cut, which is
     // the one thing that most reliably reads as "not a finished app" on a TV —
     // the user triggers it constantly.
@@ -2789,7 +2876,32 @@ fun AppRoot(
     // arrangement that would have needed every screen edited.) On a television
     // the bar is null and this column holds the one child it always had.
     Column(modifier = Modifier.fillMaxSize()) {
-    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+    Box(
+        modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth()
+            // Bubble phase, not preview: the screen gets the press first. A
+            // screen that gives Left a job of its own (TV Guide's channel
+            // column switches groups, Library's calendar pages months, each in
+            // its own handler) consumes it and this never runs - what reaches
+            // here is a Left nobody wanted.
+            .onKeyEvent { event ->
+                if (!appTopBarArmed ||
+                    event.type != KeyEventType.KeyDown ||
+                    event.key != Key.DirectionLeft
+                ) {
+                    return@onKeyEvent false
+                }
+                // The press is answered here rather than left to the focus
+                // system: running the search the press would have run both
+                // takes the ordinary step along a row and tells apart the dead
+                // press - nothing to the left - that opens the bar.
+                if (!appTopBarFocus.moveFocus(FocusDirection.Left)) {
+                    appTopBarVisible = true
+                }
+                true
+            }
+    ) {
     AnimatedContent(
         targetState = screen,
         contentKey = { it.typeName() },

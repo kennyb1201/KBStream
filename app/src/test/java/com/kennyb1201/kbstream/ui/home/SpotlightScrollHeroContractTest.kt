@@ -148,7 +148,7 @@ class SpotlightScrollHeroContractTest {
         )
     }
 
-    // ── (d) short UP reaches the hero's pills, hold-UP still opens the bar ──
+    // ── (d) short UP reaches the hero's pills ──────────────────────────────
 
     @Test
     fun `short Up returns to the hero pills and hold Up still opens the bar`() {
@@ -170,11 +170,6 @@ class SpotlightScrollHeroContractTest {
                 "composed while it is scrolled away, so the request cannot live in it",
             h.contains("val spotlightHeroPillRequester = remember { FocusRequester() }") &&
                 h.contains("pillFocusRequester = spotlightHeroPillRequester")
-        )
-        assertTrue(
-            "hold-Up stays: the list's own hold hook is still applied",
-            h.contains("rememberHomeTopBarHoldUpHook(") &&
-                h.contains("onOpenTopBar = { target -> openTopBarFromHold(target) }")
         )
     }
 

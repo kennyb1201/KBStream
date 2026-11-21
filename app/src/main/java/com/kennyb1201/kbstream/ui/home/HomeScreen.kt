@@ -197,7 +197,6 @@ import com.kennyb1201.kbstream.ui.kb.KBHomeCollectionRail
 import com.kennyb1201.kbstream.ui.kb.homeRailHeadLeftEdgeStop
 import com.kennyb1201.kbstream.ui.kb.homeRailHeadLeftTopBarHook
 import com.kennyb1201.kbstream.ui.kb.homeTopRailUpHook
-import com.kennyb1201.kbstream.ui.kb.rememberHomeTopBarHoldUpHook
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.ui.components.hideTarget
@@ -583,8 +582,17 @@ private fun TopProfileItem(
     }
 }
 
+/**
+ * The top bar itself: profile, HOME, SEARCH, TV GUIDE, LIBRARY, SETTINGS.
+ *
+ * [onOpenHome] is null on Home, where the bar already belongs to the screen
+ * that chip would navigate to, and set everywhere else: the app shell hosts
+ * this same bar over the other TV screens (see TvTopBarOverlay), and HOME is
+ * the way back from any of them. The chip leads the words so a bar that is
+ * summoned from elsewhere lands its focus on the way home.
+ */
 @Composable
-private fun TopActionBar(
+internal fun TopActionBar(
     onSearch: () -> Unit,
     onOpenGuide: () -> Unit,
     onOpenLibrary: () -> Unit,
@@ -592,7 +600,8 @@ private fun TopActionBar(
     onSwitchProfile: () -> Unit,
     firstActionFocusRequester: FocusRequester,
     onBarFocusChanged: (Boolean) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onOpenHome: (() -> Unit)? = null
 ) {
     // Quick profile switch lives on the top bar: the button IS the active
     // profile, so it's obvious what's running and one click swaps profiles
@@ -601,9 +610,10 @@ private fun TopActionBar(
     // back to the letter tile, exactly like the picker's fallback.
     //
     // It leads the bar instead of trailing the words, because the avatar is the
-    // identity control the viewer reaches for first. SEARCH keeps the row's
-    // first-focus requester, so opening the bar still lands there and a single
-    // D-pad left reaches the profile.
+    // identity control the viewer reaches for first. The first WORD chip keeps
+    // the row's first-focus requester - HOME where there is one, SEARCH on Home
+    // itself - so opening the bar lands there and a single D-pad left reaches
+    // the profile.
     val activeProfile by
         ProfileManager.activeProfile
             .collectAsStateWithLifecycle()
@@ -632,12 +642,31 @@ private fun TopActionBar(
             modifier = Modifier.padding(end = 8.dp)
         )
 
+        if (onOpenHome != null) {
+            TopActionItem(
+                label = "HOME",
+                onClick = onOpenHome,
+                onDismiss = onDismiss,
+                modifier = Modifier
+                    .focusRequester(firstActionFocusRequester)
+                    .padding(end = 8.dp)
+            )
+        }
+
         TopActionItem(
             label = "SEARCH",
             onClick = onSearch,
             onDismiss = onDismiss,
             modifier = Modifier
-                .focusRequester(firstActionFocusRequester)
+                .then(
+                    // Home has no HOME chip, so the first chip below is still
+                    // where the hand-off must land there.
+                    if (onOpenHome == null) {
+                        Modifier.focusRequester(firstActionFocusRequester)
+                    } else {
+                        Modifier
+                    }
+                )
                 .padding(end = 8.dp)
         )
 
@@ -4102,11 +4131,11 @@ private fun BuiltinContinueWatchingRail(
      * The card D-pad focus has just landed on: its key and its own requester,
      * reported on every focus change.
      *
-     * The requester is what keeps Home's [focusedCardRequester] current, so a
-     * hold-Up from anywhere in this rail comes back to where the viewer was; the
-     * key rides along because it is what Home remembers for the return from
-     * Detail (see [HomeViewModel.lastFocusedRailItemKey]), and only the card
-     * knows its own name.
+     * The requester is what keeps Home's [focusedCardRequester] current, so the
+     * bar's dismiss comes back to where the viewer was; the key rides along
+     * because it is what Home remembers for the return from Detail (see
+     * [HomeViewModel.lastFocusedRailItemKey]), and only the card knows its own
+     * name.
      */
     onFocusedCard: (key: String, requester: FocusRequester) -> Unit,
     onOpenUpNext: (UpNextItem) -> Unit,
@@ -4504,9 +4533,8 @@ private fun BuiltinContinueWatchingRail(
                             onLongPress(item)
                         },
                         onFocus = {
-                            // Where the viewer actually is: hold-Up from this
-                            // card, and the bar's dismiss, come back HERE (see
-                            // focusedCardRequester).
+                            // Where the viewer actually is: the bar's dismiss
+                            // comes back HERE (see focusedCardRequester).
                             onFocusedCard(cardKey, requester)
                             if (continueWatchingWalkedByFocus(index)) {
                                 // The viewer's own place in the rail, not the
@@ -5649,7 +5677,8 @@ fun HomeScreen(
     }
 
     // Bumped by EVERY summon of the top bar - a short-press Up on the top rail
-    // ([openTopBar]) and the hold-Up shortcut ([openTopBarFromHold]) alike.
+    // ([openTopBar]) or a Left on any rail's head card, which re-arms a bar that
+    // is already up.
     //
     // The hand-off effect below keys on this as well as on [showTopBar], so an
     // Up press while the bar is already showing but did not take focus re-drives
@@ -5705,8 +5734,8 @@ fun HomeScreen(
     // while the bar's own chip was disposed by AnimatedVisibility - focus fell
     // to nothing and the D-pad was dead until something else grabbed it.
     //
-    // [lastPosterFocusRequester] keeps the menu restores it was written for; the
-    // hold-Up shortcut and [dismissTopBar] read THIS, and fall back to it.
+    // [lastPosterFocusRequester] keeps the menu restores it was written for;
+    // [dismissTopBar] reads THIS, and falls back to it.
     var focusedCardRequester by remember {
         mutableStateOf<FocusRequester?>(null)
     }
@@ -6075,28 +6104,6 @@ fun HomeScreen(
         // Re-arm the hand-off even when the bar is already up (see
         // [topBarSummons]): this is the press that recovers a stranded bar
         // without Back.
-        topBarSummons++
-    }
-
-    /**
-     * Open the top bar from a rail that is NOT the one drawn first - the
-     * hold-Up shortcut (see [rememberHomeTopBarHoldUpHook]).
-     *
-     * [restoreTarget] is the card the viewer was on when the hold began, so the
-     * bar's dismiss puts them back exactly there. A null target keeps whatever
-     * focus target is already remembered (a rail kind that reports none for its
-     * cards), rather than clearing it and leaving the bar's dismiss with nowhere
-     * to send focus.
-     *
-     * That is the one difference from [openTopBar], which is handed the
-     * requester of the card it was pressed on and can therefore always store it.
-     */
-    fun openTopBarFromHold(restoreTarget: FocusRequester?) {
-        if (restoreTarget != null) {
-            lastPosterFocusRequester = restoreTarget
-        }
-        showTopBar = true
-        // The same re-arm as [openTopBar]: the hold-Up shortcut is a summon too.
         topBarSummons++
     }
 
@@ -6866,9 +6873,9 @@ fun HomeScreen(
             // taps UP, he does not hold it, and the pills had no UP handler at
             // all, so the chain died on the hero. The chain is now three stops on
             // every rail kind: top rail -> hero pills (this hook) -> top bar (the
-            // pills' own UP, see BillboardAction). HOLD-Up remains as a second,
-            // faster path from any rail through the list's own hold hook; it is
-            // no longer the only way to the bar from the hero.
+            // pills' own UP, see BillboardAction). Left on any rail's head card is
+            // the other route from the hero down, and the app shell gives that
+            // same dead press the same answer on every screen that is not Home.
             spotlightActive -> {
                 { railRequester: FocusRequester ->
                     // Kept for the bar's dismiss (F6, settler S10): DOWN from
@@ -7150,13 +7157,6 @@ fun HomeScreen(
                     // F5: the rails above and below are composed while the list
                     // is idle, so a vertical move never pays a first composition
                     // on the press (the window rides `railListState`).
-                    // Hold-Up from ANY rail reveals the top bar (see
-                    // rememberHomeTopBarHoldUpHook): on the list rather than on
-                    // a card, so every rail kind is covered by construction and
-                    // the shortcut cannot be lost when a rail is added. A short
-                    // press is passed through untouched, so Up still walks focus
-                    // rail by rail - and on the first rail the card's own hook
-                    // still opens the bar on the press itself.
                     modifier = Modifier
                         .weight(1f)
                         // The viewport the landing's visibility check measures
@@ -7171,21 +7171,8 @@ fun HomeScreen(
                             )
                         }
                         .then(
-                            rememberHomeTopBarHoldUpHook(
-                                // The card the hold began on - the one focus is
-                                // actually on - rather than the last card that
-                                // was long-pressed (see [focusedCardRequester]).
-                                restoreTargetAtPress = {
-                                    focusedCardRequester ?: lastPosterFocusRequester
-                                },
-                                onOpenTopBar = { target ->
-                                    openTopBarFromHold(target)
-                                }
-                            )
-                        )
-                        .then(
-                            // Hold Down to GLIDE the rows (Up stays the top
-                            // bar's own hold - see glideAxisKeys): from the first
+                            // Hold Down to GLIDE the rows (Up is not a glide key -
+                            // see glideAxisKeys): from the first
                             // repeat (or the moment the press passes the hold
                             // threshold, on a remote that sends no repeats) the
                             // column scrolls at a constant velocity and focus
