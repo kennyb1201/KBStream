@@ -12313,7 +12313,8 @@ private suspend fun calculateEpisodesRemaining(
      * so a cold first load doesn't stampede TMDB.
      */
     private suspend fun applyDigitalAvailabilityFilter(
-        metas: List<MetaPreview>
+        metas: List<MetaPreview>,
+        pinnedLeg: Boolean = false
     ): List<MetaPreview> =
         // One implementation with the KB folders and add-on search
         // (TmdbRepository.filterByHomeAvailabilityById), so an un-released movie
@@ -12331,6 +12332,9 @@ private suspend fun calculateEpisodesRemaining(
             // a Home screen, so every cold load re-asked about ~440 movies it
             // had asked about minutes earlier.
             releasedYear = { meta -> meta.yearOrNull },
+            // Its own permits: this leg's answer is what the pinned snapshot
+            // keeps, so it must not wait out the catalog rows' backlog.
+            pinnedLeg = pinnedLeg,
             // Only Home's behind-the-row passes ask for this: their rows are
             // already drawn, so a verdict landing in three seconds instead of
             // one is invisible, while the walk's frames are not. Every other
@@ -13452,12 +13456,19 @@ private suspend fun calculateEpisodesRemaining(
     ): Set<String>? {
         val startedAtMs = android.os.SystemClock.elapsedRealtime()
 
+        // The pinned rows' answers are PERSISTED (the pinned snapshot), so their
+        // lookups get their own permits instead of queueing behind every catalog
+        // row's backlog - the 0.9.422 paste put `pinnedVerdicts=10944ms` behind
+        // `catalogFilter=11603ms` for no reason but the queue they shared.
+        val pinnedLeg = label == "home.pinnedVerdicts"
+
         val verdicts =
             try {
                 if (hideUpcoming) {
                     tmdbRepository.kidsFilterMetas(
                         applyDigitalAvailabilityFilter(
-                            filterUpcoming(metas)
+                            filterUpcoming(metas),
+                            pinnedLeg = pinnedLeg
                         )
                     )
                 } else {

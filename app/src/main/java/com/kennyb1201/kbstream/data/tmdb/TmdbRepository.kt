@@ -331,6 +331,22 @@ class TmdbRepository private constructor(context: Context) :
     private val availabilitySemaphore = Semaphore(permits = 6)
 
     /**
+     * The same cap for the PINNED leg of that filter, with its own permits.
+     *
+     * The pinned rows are the ones whose answer is persisted - `Top ... Today`
+     * owes [HomeAvailabilityFilter]'s result to the pinned snapshot, and the next
+     * cold start paints from that snapshot. Sharing the catalogue's six permits
+     * put the snapshot behind every catalog row's backlog: on the 0.9.422 pastes
+     * `pinnedVerdicts=10944ms` was not the pinned leg's own cost, it was the queue
+     * it inherited, and the artifact that makes the NEXT launch fast landed 11
+     * seconds in because of the order it happened to join.
+     *
+     * Three, not six: this leg is a couple of rows against the catalogue's six, so
+     * it does not need the width - it needs to not wait.
+     */
+    private val pinnedAvailabilitySemaphore = Semaphore(permits = 3)
+
+    /**
      * How many of a keyword's titles the kids ceiling looks at (spec 2026-11-18,
      * F1) - see [kidsFilterKeywords]. Twelve, not a page of forty: the answer is
      * "does anything under this keyword pass?" and the popular end answers it,
@@ -3297,6 +3313,12 @@ class TmdbRepository private constructor(context: Context) :
         // not (KB folders, an add-on search page) keep the default and behave
         // exactly as before: no gate, one fetch per movie, same verdict.
         releasedYear: (T) -> Int? = { null },
+        /**
+         * This pass answers for the PINNED rows, whose result is persisted.
+         * Their lookups get their own permits rather than queueing behind every
+         * catalog row (see [pinnedAvailabilitySemaphore]).
+         */
+        pinnedLeg: Boolean = false,
         // Whether the caller wants this pass to yield the box to something more
         // urgent than a verdict. Only the rows that publish BEFORE their
         // verdicts pass this (see HomeViewModel.filterCatalogRowBehind): they
@@ -3333,11 +3355,14 @@ class TmdbRepository private constructor(context: Context) :
                     }
 
                     // One show is on several rows, and each row asked again.
-                    // Answered already in this process: no read, no sleep.
+                    // Answered already in this process: no read, no sleep. An
+                    // answer this process has not seen is then read from the
+                    // cache instead of re-derived - same question, same day
+                    // ([HomeAvailabilityVerdict]).
                     val verdictKey =
                         id(item)
 
-                    homeAvailabilityVerdicts[verdictKey]?.let { known ->
+                    knownHomeAvailabilityVerdict(verdictKey, today)?.let { known ->
                         return@async if (known) item else null
                     }
 
@@ -3358,7 +3383,9 @@ class TmdbRepository private constructor(context: Context) :
                         kotlinx.coroutines.delay(FOREGROUND_YIELD_MS)
                     }
 
-                    val verdict = availabilitySemaphore.withPermit {
+                    val permits =
+                        if (pinnedLeg) pinnedAvailabilitySemaphore else availabilitySemaphore
+                    val verdict = permits.withPermit {
 
                         runCatchingCancellable {
 
@@ -3384,12 +3411,48 @@ class TmdbRepository private constructor(context: Context) :
     }
 
     /**
-     * Remembers one answered verdict, and keeps the map a memo rather than a
-     * cache: it is dropped wholesale once it is larger than any Home screen can
-     * need, so a session that scrolled through thousands of titles does not hold
-     * them all in order to make the next row cheap.
+     * The verdict for [key] on [today], from this process's memo and then from
+     * the row the last session left ([HomeAvailabilityVerdict]).
+     *
+     * Null means the title has not been answered yet, which is the caller's
+     * signal to read its payload - the only correct thing to do when no answer
+     * exists. A read that fails leaves no row, so a transient TMDB failure is
+     * never filed as "not available" (the reason only an ANSWER is persisted).
      */
-    private fun rememberHomeAvailabilityVerdict(key: String, available: Boolean) {
+    private suspend fun knownHomeAvailabilityVerdict(key: String, today: LocalDate): Boolean? {
+        homeAvailabilityVerdicts[key]?.let { return it }
+
+        val row = runCatchingCancellable {
+            tmdbJsonCacheDao.getByKey(HomeAvailabilityVerdict.key(key))
+        }.getOrNull()?.json ?: return null
+
+        val known = HomeAvailabilityVerdict.decode(row, today.toEpochDay()) ?: return null
+        rememberVerdictInMemory(key, known)
+        return known
+    }
+
+    /**
+     * Remembers one answered verdict: in the memo, and in the cache.
+     *
+     * The memo keeps this process cheap and the row keeps the NEXT one cheap -
+     * which is the case that mattered, because a Home rebuild (resume, add-on
+     * refresh) threw the memo away and re-derived every answer from the payloads.
+     */
+    private suspend fun rememberHomeAvailabilityVerdict(key: String, available: Boolean) {
+        rememberVerdictInMemory(key, available)
+        cacheJson(
+            key = HomeAvailabilityVerdict.key(key),
+            json = HomeAvailabilityVerdict.encode(LocalDate.now().toEpochDay(), available),
+            now = System.currentTimeMillis()
+        )
+    }
+
+    /**
+     * The memo half, kept a memo rather than a cache: it is dropped wholesale
+     * once it is larger than any Home screen can need, so a session that scrolled
+     * through thousands of titles does not hold them all.
+     */
+    private fun rememberVerdictInMemory(key: String, available: Boolean) {
         if (homeAvailabilityVerdicts.size >= HOME_AVAILABILITY_VERDICTS_MAX) {
             homeAvailabilityVerdicts.clear()
         }
