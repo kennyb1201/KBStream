@@ -19,14 +19,24 @@
 # "startup files" to maintain, no per-PR judgement about whether a change is big
 # enough to matter, and a diff to review when it does change.
 #
-# A TV box still produces a more faithful traversal (D-pad focus is part of what
-# is captured), so with one attached `./gradlew :app:generateBaselineProfile`
-# remains the better path - and the artifact is still uploaded if that is how you
-# want to take the file.
+# The capture runs on a TV emulator by default (dispatch input `device`), so the
+# D-pad focus path is included without a PC or a box attached; `device: phone`
+# reproduces the original phone-image run. With a PC and the TV on the same
+# network, `./gradlew :app:generateBaselineProfile` on the real box is still the
+# most faithful - and the artifact is uploaded either way if you want the file by
+# hand.
 name: Baseline profile
 
 on:
   workflow_dispatch:
+    inputs:
+      device:
+        description: 'Emulator flavour - tv captures the D-pad focus path'
+        type: choice
+        options:
+          - tv
+          - phone
+        default: tv
   # 04:00 UTC on the 1st of each month. An emulator run costs ~30-60 minutes, so
   # this is not something to do more often; monthly is frequent enough that a
   # startup-path change is never more than one release cycle away from a
@@ -114,10 +124,24 @@ jobs:
             -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 1000 \
             -dname "CN=KBStream baseline capture, O=KBStream, C=US"
 
-      # `-Pkbstream.captureAbi=x86_64` is what makes the capture APK
-      # installable HERE: release is deliberately ARM-only (arm64-v8a and
-      # armeabi-v7a), and this runner's emulator is x86_64. The property adds
-      # the emulator ABI for this build only - a released APK never passes it.
+      # WHICH DEVICE (2026-11-21): a TV emulator by default.
+      #
+      # The field device is a TCL TV, and the phone emulator this used to run
+      # captured the touch traversal only - the focus path (leanback rails, Compose
+      # focus search, the D-pad keys the generator sends) never executed, so the
+      # classes behind it were not in the profile. A TV image runs the app's TV
+      # form factor for real: FormFactor reads the leanback feature, the Home hero
+      # and rail layout become the television's, and the generator's D-pad presses
+      # move focus the way the viewer does.
+      #
+      # No PC and no TV attachment needed. `tv_1080p` matches the panel the app is
+      # built for (1920x1080 UI); `phone` reproduces exactly what this job ran
+      # before, for the case where the TV image misbehaves.
+      #
+      # `-Pkbstream.captureAbi=<abi>` is what makes the capture APK installable
+      # HERE: release is deliberately ARM-only (arm64-v8a and armeabi-v7a), and
+      # the emulator is x86_64 on the phone image and x86 on the TV one. The
+      # property adds that ABI for this build only - a released APK never sees it.
       - name: Generate the profile
         uses: reactivecircus/android-emulator-runner@v2
         env:
@@ -126,11 +150,12 @@ jobs:
           KBSTREAM_KEY_ALIAS: androiddebugkey
           KBSTREAM_KEY_PASSWORD: android
         with:
-          api-level: 31
-          target: google_apis
-          arch: x86_64
+          api-level: ${{ inputs.device == 'phone' && '31' || '33' }}
+          target: ${{ inputs.device == 'phone' && 'google_apis' || 'android-tv' }}
+          arch: ${{ inputs.device == 'phone' && 'x86_64' || 'x86' }}
+          profile: ${{ inputs.device == 'phone' && 'N/A' || 'tv_1080p' }}
           disable-animations: true
-          script: ./gradlew :app:generateBaselineProfile -Pkbstream.captureAbi=x86_64 --stacktrace
+          script: ./gradlew :app:generateBaselineProfile -Pkbstream.captureAbi=${{ inputs.device == 'phone' && 'x86_64' || 'x86' }} --stacktrace
 
       - name: Upload the profile
         uses: actions/upload-artifact@v4
