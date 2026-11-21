@@ -2876,10 +2876,7 @@ fun AppRoot(
     // arrangement that would have needed every screen edited.) On a television
     // the bar is null and this column holds the one child it always had.
     Column(modifier = Modifier.fillMaxSize()) {
-    Box(
-        modifier = Modifier
-            .weight(1f)
-            .fillMaxWidth()
+    Box(modifier = Modifier.weight(1f).fillMaxWidth()
             // Bubble phase, not preview: the screen gets the press first. A
             // screen that gives Left a job of its own (TV Guide's channel
             // column switches groups, Library's calendar pages months, each in

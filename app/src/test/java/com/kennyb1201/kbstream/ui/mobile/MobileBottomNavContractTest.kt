@@ -254,7 +254,7 @@ class MobileBottomNavContractTest {
                 "with the screen that owns it",
             switch >= 0 && bar > switch
         )
-        val screenBox = main.indexOf("Box(modifier = Modifier.weight(1f).fillMaxWidth())")
+        val screenBox = main.indexOf("Box(modifier = Modifier.weight(1f).fillMaxWidth()")
         assertTrue(
             "the switch must be given the space above the bar, so no screen's last " +
                 "row can end up underneath it",
@@ -299,14 +299,14 @@ class MobileBottomNavContractTest {
             rawActivity(),
             listOf(
                 "Column(modifier = Modifier.fillMaxSize())",
-                "Box(modifier = Modifier.weight(1f).fillMaxWidth())",
+                "Box(modifier = Modifier.weight(1f).fillMaxWidth()",
                 "LaunchSplash()",
                 host,
                 "MobileBottomNav("
             )
         )
         val column = depths.getValue("Column(modifier = Modifier.fillMaxSize())")
-        val screenBox = depths.getValue("Box(modifier = Modifier.weight(1f).fillMaxWidth())")
+        val screenBox = depths.getValue("Box(modifier = Modifier.weight(1f).fillMaxWidth()")
         val splash = depths.getValue("LaunchSplash()")
         val barHost = depths.getValue(host)
         val bar = depths.getValue("MobileBottomNav(")
