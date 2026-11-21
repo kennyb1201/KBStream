@@ -39,6 +39,26 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # --- MPV engine native library ----------------------------------------
+      # This job configures :app, and :app cannot even CONFIGURE without the MPV
+      # AAR: the dependency block throws (MpvBackend imports is.xyz.mpv.MPV from
+      # it), so the first dispatch of this workflow died before a single task
+      # ran with "The MPV engine AAR is missing at
+      # app/libs/mpv-android-lib-libdovi.aar". The release workflow fetches it;
+      # this one has to as well.
+      #
+      # Same cache key as build.yml, so a runner that already built a release
+      # restores the ~155 MB AAR instead of downloading it, and the script
+      # re-verifies the digest and the 16 KB alignment either way.
+      - name: Cache MPV engine AAR
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: app/libs/mpv-android-lib-libdovi.aar
+          key: mpv-aar-${{ runner.os }}-b19d39a7b4d1c65b
+
+      - name: Fetch MPV engine AAR
+        run: bash scripts/fetch_mpv_aar.sh
+
       # KVM on the runner is what makes an x86_64 emulator usable rather than
       # unusably slow; without it the emulator boots in software rendering and
       # the capture times out.
