@@ -827,6 +827,18 @@ jobs:
       # separately below as a best-effort step.
       - name: Build signed release APK
         run: ./gradlew assembleRelease -x uploadSentryProguardMappingsRelease --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
+        # The signing env belongs HERE. It was orphaned onto the profile-report
+        # step below when the profile check was inserted between this step and
+        # its `env:`, so `assembleRelease` ran without a keystore and died at
+        # `:app:validateSigningRelease` with "Keystore file not set for signing
+        # config release" - v0.9.424. Nothing about the Android build config was
+        # wrong; the variables simply were not in this step's environment.
+        env:
+          GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
+          KBSTREAM_STORE_FILE: kbstream-release.jks
+          KBSTREAM_STORE_PASSWORD: ${{ secrets.KBSTREAM_KEYSTORE_PASSWORD }}
+          KBSTREAM_KEY_ALIAS: ${{ secrets.KBSTREAM_KEY_ALIAS }}
+          KBSTREAM_KEY_PASSWORD: ${{ secrets.KBSTREAM_KEY_PASSWORD }}
 
       # The baseline profile is INPUT to this build, not something this run
       # generates: app/src/release/generated/baselineProfiles/baseline-prof.txt
@@ -851,12 +863,6 @@ jobs:
         if: hashFiles('app/src/release/generated/baselineProfiles/baseline-prof.txt') == ''
         run: |
           echo "::warning::No baseline profile in the tree, so this build ships without one. Run the 'Baseline profile' workflow (Actions > Baseline profile > Run workflow) and commit its artifact to app/src/release/generated/baselineProfiles/baseline-prof.txt."
-        env:
-          GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
-          KBSTREAM_STORE_FILE: kbstream-release.jks
-          KBSTREAM_STORE_PASSWORD: ${{ secrets.KBSTREAM_KEYSTORE_PASSWORD }}
-          KBSTREAM_KEY_ALIAS: ${{ secrets.KBSTREAM_KEY_ALIAS }}
-          KBSTREAM_KEY_PASSWORD: ${{ secrets.KBSTREAM_KEY_PASSWORD }}
 
       # Play uploads are an Android App Bundle, not an APK: the signed APK
       # above is what the self-update feed serves, and this is what a Play
