@@ -131,7 +131,22 @@ class BrowseChipMenuFocusContractTest {
                 ) &&
                 Regex("state.animateScrollToItem\\(target.index, target.scrollOffset\\)")
                     .findAll(grid)
-                    .count() == 2
+                    .count() >= 2
+        )
+        // ...and the UNMEASURED case (field, 2026-11-20) has the same two arms
+        // again, driven by the rule for a row the grid composed but never laid
+        // out. Four arms in total; a branch that returned instead is the bug this
+        // pins, and the top-aligned fallback is the one case with no direction to
+        // infer.
+        assertTrue(
+            "a chip focus reached but the grid never measured is scrolled to by " +
+                "index, not ignored",
+            grid.contains("chipRevealTargetUnmeasured(") &&
+                grid.contains("firstVisibleIndex = firstVisible") &&
+                Regex("state.animateScrollToItem\\(target.index, target.scrollOffset\\)")
+                    .findAll(grid)
+                    .count() == 4 &&
+                grid.contains("state.scrollToItem(index, 0)")
         )
         assertTrue(
             "the row's height is the one the grid measured, so a two-line " +
