@@ -95,16 +95,18 @@ class DetailHeaderSnapContractTest {
     @Test
     fun `every snap call site passes that gate`() {
         assertEquals(
-            "the declaration plus the three surfaces that snap: the Play/Trailer " +
-                "row, the meta column with the genre chips, and the overview's own " +
-                "\"View more\" toggle (the topmost focusable INSIDE the list, and so " +
-                "the other node a dismissing menu's transient focus can land on)",
-            4,
+            "the declaration plus the two surfaces that snap: the Play/Trailer " +
+                "row and the meta column with the genre chips. The third used to be " +
+                "the overview's \"View more\" toggle, which snapped because it was " +
+                "the topmost focusable INSIDE the list; since 2026-11-21 the toggle " +
+                "is in the fixed header with its block, so there is no scroll left " +
+                "for it to ask for",
+            3,
             Regex("\\.scrollToTopOnFocus\\(").findAll(source).count()
         )
         assertEquals(
-            "each of them names the pending hand-back as the reason not to move",
-            3,
+            "and both of them name the pending hand-back as the reason not to move",
+            2,
             Regex("scrollToTopOnFocus\\(detailListState, scope\\) \\{ " +
                 "handFocusBack\\.pending == null \\}")
                 .findAll(source)
