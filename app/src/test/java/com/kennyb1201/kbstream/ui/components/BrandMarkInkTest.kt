@@ -261,11 +261,18 @@ class BrandMarkInkTest {
         )
         assertTrue(
             "it must be measured in the load callback, off the draw and scroll path",
-            mark.contains("val sampled = sampleBrandMark(state.result.image)")
+            mark.contains("val image = state.result.image") &&
+                mark.contains("withContext(Dispatchers.Default) { sampleBrandMark(image) }")
+        )
+        assertTrue(
+            "and off the frame thread: AsyncImage's onSuccess runs on the main thread, " +
+                "and one rail composes a screenful of marks at once",
+            mark.contains("scope.launch")
         )
         assertTrue(
             "one sampling call site: a second would be a second pass per composition",
-            Regex("sampleBrandMark\\(state").findAll(mark).count() == 1
+            Regex("sampleBrandMark\\(state").findAll(mark).count() == 0 &&
+                Regex("sampleBrandMark\\(image\)").findAll(mark).count() == 1
         )
         assertTrue(
             "the transform must be remembered from the sample and the slot, not " +
