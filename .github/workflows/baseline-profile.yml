@@ -71,6 +71,25 @@ jobs:
       - name: Fetch MPV engine AAR
         run: bash scripts/fetch_mpv_aar.sh
 
+      # The same dependency cache the release workflow uses, keyed the same way,
+      # so a runner that built a release restores it instead of resolving every
+      # plugin and artifact again. That is mostly speed - this job also builds
+      # the app it profiles - but it is also the failure that killed one run:
+      # `Plugin [id: 'com.google.devtools.ksp', version: '2.3.12'] was not found`
+      # while the very same commit resolved it minutes earlier, i.e. a repository
+      # hiccup on a cold cache. A warm cache means fewer requests to hiccup on.
+      - name: Cache Gradle dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/caches/jars-9
+            ~/.gradle/caches/9.8.0
+            ~/.gradle/wrapper/dists
+          key: gradle-deps-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/*.gradle', 'gradle/wrapper/gradle-wrapper.properties', 'gradle.properties') }}
+          restore-keys: |
+            gradle-deps-${{ runner.os }}-
+
       # KVM on the runner is what makes an x86_64 emulator usable rather than
       # unusably slow; without it the emulator boots in software rendering and
       # the capture times out.
