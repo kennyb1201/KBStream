@@ -71,8 +71,15 @@ object SimklCompletionQueue {
     /** How many writes are waiting. Printed by the diagnostics line (F3). */
     fun depth(context: Context): Int = entries(context).size
 
-    /** The newest drain failure, or null. */
-    fun failure(context: Context): Failure? = read(context).failure
+    /**
+     * The newest drain failure, or null.
+     *
+     * Internal with [Failure] itself: this is queue bookkeeping read by the
+     * diagnostics line and the submission path, not a public shape, and a public
+     * function may not expose an internal return type (which is exactly what
+     * stopped the module compiling).
+     */
+    internal fun failure(context: Context): Failure? = read(context).failure
 
     /**
      * Queues [entry] for delivery, collapsing a duplicate of the same write.
