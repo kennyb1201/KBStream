@@ -2489,10 +2489,16 @@ class BingeCatRepository private constructor(private val context: Context?) {
      * the mapping still in place.
      */
     private suspend fun ensureFreshToken(force: Boolean = false): String? {
-        val current = store.read()
+        val stored = store.read()
         // Nothing to call with, or a pair the server already refused: no request
-        // is worth making, and the honest answer is "reconnect".
-        if (current == null || store.needsReconnect()) {
+        // is worth making, and the honest answer is "reconnect" - unless the
+        // ACCOUNT has been handed a different pair since (F2).
+        val current = if (stored == null || store.needsReconnect()) {
+            adoptAccountPair()
+        } else {
+            stored
+        }
+        if (current == null) {
             refuseSession()
             return null
         }
@@ -2512,8 +2518,16 @@ class BingeCatRepository private constructor(private val context: Context?) {
             return current.accessToken
         }
         return refreshMutex.withLock {
-            val latest = store.read()
-            if (latest == null || store.needsReconnect()) {
+            val storedLatest = store.read()
+            // The same healing as the check before the lock (F2): a sync pull can
+            // land the sibling's pair at any moment, including between that
+            // check and this one.
+            val latest = if (storedLatest == null || store.needsReconnect()) {
+                adoptAccountPair()
+            } else {
+                storedLatest
+            }
+            if (latest == null) {
                 refuseSession()
                 return@withLock null
             }
@@ -2546,11 +2560,23 @@ class BingeCatRepository private constructor(private val context: Context?) {
             // smart-cast (the same rule the device-code path follows).
             val access = granted?.accessToken?.takeIf { it.isNotBlank() }
             if (!response.isSuccessful || access == null) {
-                // The server answered and refused (invalid_grant on a rotated
-                // refresh token, a revoked grant, a 401): the pair cannot be
-                // revived here, so it is flagged for the connect flow rather
-                // than retried on every read.
-                BingeCatTrace.recordError("refresh-failed")
+                // F3: name the server's verdict, not just "failed" - the next
+                // paste then says WHY a reconnect was (or was not) needed.
+                BingeCatTrace.recordError(
+                    BingeCatRefreshRecovery.verdict(response.code(), oauthError(response))
+                )
+                // F1: `invalid_grant` is what a CONSUMED refresh token looks
+                // like. BingeCat rotates the pair on every refresh, so two
+                // devices refreshing the same grant before sync carries the
+                // winner's pair across leave the loser presenting a token that
+                // no longer exists - while a perfectly good newer pair is in the
+                // account copy. Adopt it and retry ONCE before calling the
+                // session lost.
+                val recovered = retryWithAdoptedAccountPair(refused = latest)
+                if (recovered != null) return@withLock recovered.accessToken
+                // Nothing to adopt, or the adopted pair was refused too: the
+                // grant really is gone, so it is flagged for the connect flow
+                // rather than retried on every read.
                 refuseSession()
                 return@withLock null
             }
@@ -2574,6 +2600,101 @@ class BingeCatRepository private constructor(private val context: Context?) {
             publishAuthToSync()
             token.accessToken
         }
+    }
+
+    /**
+     * Adopts the account's session when it is a DIFFERENT pair (F2).
+     *
+     * The refusal marker is local and names the access token it was recorded
+     * against, so it stops applying once the account holds a different pair
+     * ([BingeCatTokenStore.needsReconnect]). That test compares ACCESS tokens,
+     * which covers the ordinary rotation - but a pair whose access token was
+     * still valid can rotate its refresh token alone, and the profile then keeps
+     * a marker over a session that has already been replaced. Reading the account
+     * copy again here closes both shapes: a sibling's pair that landed after this
+     * device flagged itself heals on the next BingeCat use, with no QR code.
+     *
+     * Returns null when there is nothing to adopt - the same pair, no account
+     * copy, or a deliberate disconnect, which is a decision and not a rotation.
+     */
+    private fun adoptAccountPair(): BingeCatToken? {
+        val pair = BingeCatRefreshRecovery.adoptable(
+            signedOut = store.isSignedOut(),
+            // THIS profile's own copy is the pair the marker was recorded
+            // against - a sync pull writes the account store only, so the two
+            // differ exactly when a sibling has rotated the pair since.
+            held = store.readLocal(),
+            account = store.readAccount(),
+            refusedAccessToken = store.refusedAccessToken()
+        ) ?: return null
+        // save() is what retires the marker: it clears `needsReconnect` and the
+        // refused token, and writes the pair to this profile AND the account.
+        if (runCatching { store.save(pair) }.isFailure) return null
+        return pair
+    }
+
+    /**
+     * F1: one refresh attempt with the account's pair, after the pair that was
+     * sent got refused.
+     *
+     * Exactly one - a genuinely revoked grant refuses twice and lands in the same
+     * honest `needsReconnect` state as before, while a lost rotation race
+     * recovers silently. The refused pair is never deleted: it stays until the
+     * adopted pair replaces it (the builds 242-253 lesson).
+     *
+     * Returns the ROTATED pair on success (a refresh rotates again, so the result
+     * must be saved and published, not just returned).
+     */
+    private suspend fun retryWithAdoptedAccountPair(refused: BingeCatToken): BingeCatToken? {
+        val account = BingeCatRefreshRecovery.adoptable(
+            signedOut = store.isSignedOut(),
+            // The pair that was ACTUALLY sent, not a fresh read: `store.read()`
+            // answers account-first, so reading again would compare the account
+            // copy with itself and never see the sibling's rotation.
+            held = refused,
+            // Re-read at the moment of the refusal: the sibling's publish can
+            // have landed during the call that just failed.
+            account = store.readAccount(),
+            refusedAccessToken = store.refusedAccessToken()
+        ) ?: return null
+        val adoptedRefresh = account.refreshToken?.takeIf { it.isNotBlank() } ?: return null
+        // The pair that was just refused is not an answer.
+        if (adoptedRefresh == refused.refreshToken) return null
+        // Adopted before the retry, so the marker is retired and a failure here
+        // is recorded against the pair that actually failed.
+        if (runCatching { store.save(account) }.isFailure) return null
+        val response = runCatchingCancellable {
+            service.refreshToken(
+                BingeCatRefreshTokenRequest(
+                    refreshToken = adoptedRefresh,
+                    clientId = BingeCatConfig.clientId
+                )
+            )
+        }.getOrNull() ?: return null
+        val granted = response.body()
+        val access = granted?.accessToken?.takeIf { it.isNotBlank() }
+        if (!response.isSuccessful || access == null) {
+            // The adopted pair was refused too. Nothing more is tried: this is
+            // the revoked-grant shape, and one retry is the whole budget.
+            BingeCatTrace.recordError("refresh-failed")
+            return null
+        }
+        val token = BingeCatToken(
+            accessToken = access,
+            refreshToken = granted.refreshToken ?: adoptedRefresh,
+            expiresAtEpochMillis = BingeCatDeviceFlowRules.expiresAtEpochMillis(
+                createdAtEpochSeconds = granted.createdAtEpochSeconds,
+                expiresInSeconds = granted.expiresInSeconds,
+                nowMs = System.currentTimeMillis()
+            ),
+            scope = granted.scope ?: account.scope
+        )
+        if (runCatching { store.save(token) }.isFailure) return null
+        // This refresh rotated the pair as well: the siblings are now one
+        // generation behind, and the account copy has to carry the newest one.
+        publishAuthToSync()
+        BingeCatTrace.recordError(BingeCatRefreshRecovery.RECOVERED)
+        return token
     }
 
     /**

@@ -254,6 +254,25 @@ internal class BingeCatTokenStore(
         return adoptFromSiblingProfile()
     }
 
+    /**
+     * The ACCOUNT's session on its own - no local fallback and no adoption.
+     *
+     * [read] answers account-first, so this is not how a read is normally done:
+     * it exists for the refresh-refusal path, which needs to know whether the
+     * account copy has been REPLACED since the pair it just sent - the sibling's
+     * side of the rotation race (see [BingeCatRefreshRecovery]).
+     */
+    internal fun readAccount(): BingeCatToken? = account.read()
+
+    /**
+     * The access token the `needsReconnect` marker was recorded against, or null.
+     *
+     * Read by the recovery rules, which must not adopt the very pair that was
+     * refused.
+     */
+    internal fun refusedAccessToken(): String? =
+        prefs?.getString(KEY_REFUSED_ACCESS, null)?.takeIf { it.isNotBlank() }
+
     /** This profile's OWN stored pair, with no account fallback - the adoption source. */
     internal fun readLocal(): BingeCatToken? {
         val access = prefs?.getString(KEY_ACCESS_TOKEN, null)?.takeIf { it.isNotBlank() }
