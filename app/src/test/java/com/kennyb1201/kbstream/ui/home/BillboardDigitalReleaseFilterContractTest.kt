@@ -128,8 +128,11 @@ class BillboardDigitalReleaseFilterContractTest {
     fun `the lookups stay on the shared cache and throttle`() {
         val impl = filterImpl()
         assertTrue(
-            "every verified title takes the shared availability semaphore",
-            impl.contains("availabilitySemaphore.withPermit {")
+            "every verified title takes the shared availability semaphore - or, for the " +
+                "pinned leg whose answer is persisted, its own permits rather than the " +
+                "catalogue's queue (0.9.422: `pinnedVerdicts=10944ms` of inherited backlog)",
+            impl.contains("if (pinnedLeg) pinnedAvailabilitySemaphore else availabilitySemaphore") &&
+                impl.contains("permits.withPermit {")
         )
         assertTrue(
             "and the enriched-detail cache is what it resolves through (12h/30d)",

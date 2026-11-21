@@ -84,7 +84,7 @@ class DigitalFilterSurfacesContractTest {
             .substringAfter("suspend fun <T> filterByHomeAvailabilityById(")
             .substringBefore("private fun rememberHomeAvailabilityVerdict(")
 
-        val recall = pass.indexOf("homeAvailabilityVerdicts[verdictKey]")
+        val recall = pass.indexOf("knownHomeAvailabilityVerdict(verdictKey, today)")
         val yield = pass.indexOf("if (yieldBetweenItems())")
 
         assertTrue(
@@ -104,6 +104,14 @@ class DigitalFilterSurfacesContractTest {
                 "it as unavailable would hide a released title for the whole session",
             pass.contains("if (verdict != null) {") &&
                 pass.contains("rememberHomeAvailabilityVerdict(verdictKey, verdict)")
+        )
+        assertTrue(
+            "the memo alone dies with the process, which is why every rebuild re-read " +
+                "the payloads (`detailSrc disk:962`): the recall must consult the day's " +
+                "row as well",
+            repository.contains("homeAvailabilityVerdicts[key]?.let { return it }") &&
+                repository.contains("HomeAvailabilityVerdict.decode(row, today.toEpochDay())") &&
+                repository.contains("json = HomeAvailabilityVerdict.encode(")
         )
         assertTrue(
             "the memo is a memo: it is bounded so an endless scroll cannot grow it",
