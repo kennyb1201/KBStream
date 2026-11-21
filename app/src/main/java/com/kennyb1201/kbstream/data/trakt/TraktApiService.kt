@@ -111,6 +111,18 @@ interface TraktApiService {
      * The read that lets Trakt be the authoritative resume source on another
      * device (see [com.kennyb1201.kbstream.data.settings.ResumeAuthority]).
      */
+    /**
+     * What changed on the account, per section (F1).
+     *
+     * One cheap call that answers "did anything watched move?". Trakt sends a
+     * timestamp per section; [TraktWatchedStamps] keeps the two the watched
+     * snapshot is built from.
+     */
+    @GET("sync/last_activities")
+    suspend fun lastActivities(
+        @Header("Authorization") authorization: String
+    ): Response<TraktLastActivities>
+
     @GET("sync/playback/movies")
     suspend fun playbackMovies(
         @Header("Authorization") authorization: String,

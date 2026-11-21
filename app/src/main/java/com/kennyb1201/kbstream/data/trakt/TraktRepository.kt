@@ -284,6 +284,23 @@ class TraktRepository private constructor(private val context: Context?) {
     @Volatile
     private var cachedSnapshotAt: Long = 0L
 
+    /**
+     * The stamps the cached snapshot was built from (F1). Null means "cannot
+     * prove anything is unchanged", which always falls back to a fetch.
+     */
+    private var cachedStamps: TraktWatchedStamps? = null
+
+    /**
+     * The snapshot's disk home, per profile (F1).
+     *
+     * Lazy because the repository is built before the app's profile is
+     * guaranteed to be selected, and the prefs file this resolves to depends on
+     * it.
+     */
+    private val snapshotCache: TraktWatchedSnapshotCache by lazy {
+        TraktWatchedSnapshotCache(context)
+    }
+
     @Volatile
     private var cachedSnapshotKey: String? = null
 
@@ -992,6 +1009,22 @@ class TraktRepository private constructor(private val context: Context?) {
          */
         flushPendingScrobbles()
 
+        // F1: a cold start answers from disk before the network is asked. The
+        // snapshot is account-wide and only changes when an episode is
+        // watched, so a launch that re-walked every page was paying for data it
+        // already had - four devices times every launch.
+        if (cachedSnapshot == null) {
+            snapshotCache.read(token)?.let { entry ->
+                cachedSnapshot = TraktWatchedSnapshot(
+                    movieKeys = entry.movieKeys,
+                    shows = entry.shows
+                )
+                cachedSnapshotAt = entry.savedAtMs
+                cachedSnapshotKey = token
+                cachedStamps = entry.stamps
+            }
+        }
+
         cachedSnapshot?.let { cached ->
             if (!forceRefresh &&
                 cachedSnapshotKey == token &&
@@ -1010,27 +1043,83 @@ class TraktRepository private constructor(private val context: Context?) {
                 return@withLock previous
             }
             val authorization = "Bearer $token"
-            val shows = readAllWatchedPages(
-                pageSize = TRAKT_PAGE_SIZE,
-                acquire = guard::tryAcquire,
-                noteRetryAfter = ::noteRetryAfter,
-                fetch = { page, limit ->
-                    api.watchedShows(authorization, page = page, limit = limit)
-                }
-            ) ?: return@withLock previous ?: TraktWatchedSnapshot()
-            val movies = readAllWatchedPages(
-                pageSize = TRAKT_PAGE_SIZE,
-                acquire = guard::tryAcquire,
-                noteRetryAfter = ::noteRetryAfter,
-                fetch = { page, limit ->
-                    api.watchedMovies(authorization, page = page, limit = limit)
-                }
-            ) ?: return@withLock previous ?: TraktWatchedSnapshot()
 
-            val built = TraktWatchRules.snapshot(shows = shows, movies = movies)
+            // Ask what changed before asking for everything (F1).
+            //
+            // `previous` above may have come from memory OR from the disk
+            // entry just loaded; either way its stamps say what it was built
+            // from, and an unchanged stamp means the section's answer is the
+            // one already in hand. A null answer (a 429, a park, a failed call)
+            // is never read as "unchanged" - it falls through to the full read
+            // exactly as this function behaved before the gate existed.
+            val stamps = readLastActivities(authorization)
+            val previousStamps = cachedStamps
+            if (stamps != null && previous != null && stamps == previousStamps) {
+                // Nothing watched moved anywhere: this is a check, not a
+                // fetch, and the TTL restarts so the next fifteen minutes cost
+                // nothing at all.
+                cachedSnapshotAt = System.currentTimeMillis()
+                return@withLock previous
+            }
+
+            val fetchShows = forceRefresh || stamps == null ||
+                previous == null || stamps.seriesMovedSince(previousStamps)
+            val fetchMovies = forceRefresh || stamps == null ||
+                previous == null || stamps.moviesMovedSince(previousStamps)
+
+            val shows = if (fetchShows) {
+                readAllWatchedPages(
+                    pageSize = TRAKT_PAGE_SIZE,
+                    acquire = guard::tryAcquire,
+                    noteRetryAfter = ::noteRetryAfter,
+                    fetch = { page, limit ->
+                        api.watchedShows(authorization, page = page, limit = limit)
+                    }
+                ) ?: return@withLock previous ?: TraktWatchedSnapshot()
+            } else {
+                null
+            }
+            val movies = if (fetchMovies) {
+                readAllWatchedPages(
+                    pageSize = TRAKT_PAGE_SIZE,
+                    acquire = guard::tryAcquire,
+                    noteRetryAfter = ::noteRetryAfter,
+                    fetch = { page, limit ->
+                        api.watchedMovies(authorization, page = page, limit = limit)
+                    }
+                ) ?: return@withLock previous ?: TraktWatchedSnapshot()
+            } else {
+                null
+            }
+
+            // The half that was not fetched keeps what the previous snapshot
+            // already had - it was built from the same section, and that
+            // section's stamp did not move.
+            val built = TraktWatchedSnapshot(
+                movieKeys = movies
+                    ?.let { TraktWatchRules.snapshot(shows = null, movies = it).movieKeys }
+                    ?: previous?.movieKeys.orEmpty(),
+                shows = shows
+                    ?.let { TraktWatchRules.snapshot(shows = it, movies = null).shows }
+                    ?: previous?.shows.orEmpty()
+            )
             cachedSnapshot = built
             cachedSnapshotAt = System.currentTimeMillis()
             cachedSnapshotKey = token
+            cachedStamps = stamps
+            snapshotCache.write(
+                token = token,
+                entry = TraktWatchedSnapshotCache.Entry(
+                    // A read whose activities call failed still gets its
+                    // snapshot stored: the next launch then shows badges and
+                    // CW immediately and fetches, because empty stamps can
+                    // never be mistaken for "unchanged".
+                    stamps = stamps ?: TraktWatchedStamps(movies = null, series = null),
+                    movieKeys = built.movieKeys,
+                    shows = built.shows,
+                    savedAtMs = System.currentTimeMillis()
+                )
+            )
             built
         }
     }
@@ -1227,11 +1316,39 @@ class TraktRepository private constructor(private val context: Context?) {
         )
     }
 
-    /** Drops the cached snapshot so the next read re-downloads it. */
+    /**
+     * Drops the cached snapshot so the next read re-downloads it.
+     *
+     * The disk entry goes with it (F1): this is called when THIS device writes
+     * watch state, and the old behaviour - the very next read re-reads - is the
+     * one Continue Watching depends on. Waiting for the activities stamp to
+     * catch up would be a moment of visibly stale resume rows for a write we
+     * just made.
+     */
     private fun invalidateWatchedSnapshot() {
         cachedSnapshot = null
         cachedSnapshotAt = 0L
         cachedSnapshotKey = null
+        cachedStamps = null
+        snapshotCache.clear()
+    }
+
+    /**
+     * What changed on the account, or null when the answer cannot be had (F1).
+     *
+     * One cheap call. It spends the same budget as every other read and parks on
+     * a 429 the same way; a spent budget or a failed call answers null, which
+     * the caller reads as "cannot prove anything is unchanged" and turns into
+     * the full read rather than a snapshot it cannot vouch for.
+     */
+    private suspend fun readLastActivities(authorization: String): TraktWatchedStamps? {
+        if (!guard.tryAcquire()) return null
+        val response = runCatchingCancellable {
+            api.lastActivities(authorization)
+        }.getOrNull() ?: return null
+        noteRetryAfter(response)
+        if (!response.isSuccessful) return null
+        return response.body()?.stamps()
     }
 
     // ------------------------------------------------------------------
