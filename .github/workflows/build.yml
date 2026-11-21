@@ -827,6 +827,30 @@ jobs:
       # separately below as a best-effort step.
       - name: Build signed release APK
         run: ./gradlew assembleRelease -x uploadSentryProguardMappingsRelease --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
+
+      # The baseline profile is INPUT to this build, not something this run
+      # generates: app/src/release/generated/baselineProfiles/baseline-prof.txt
+      # is committed, and AGP bundles it as assets/dexopt/baseline.prof. Nothing
+      # fails when it is absent - the app just runs its first frames interpreted
+      # - which is exactly how it went unnoticed that no build had ever shipped
+      # one. This step makes "the profile is in the build" something the run
+      # states rather than something a reader assumes.
+      - name: Verify the baseline profile reached the APK
+        if: hashFiles('app/src/release/generated/baselineProfiles/baseline-prof.txt') != ''
+        run: |
+          set -euo pipefail
+          if unzip -l app/build/outputs/apk/release/app-release.apk \
+            | grep -qE 'assets/dexopt/baseline\.prof'; then
+            echo "Baseline profile present in the release APK."
+          else
+            echo "::error::the profile is committed, but this APK carries no assets/dexopt/baseline.prof - the release would ship without it."
+            exit 1
+          fi
+
+      - name: Report a missing baseline profile
+        if: hashFiles('app/src/release/generated/baselineProfiles/baseline-prof.txt') == ''
+        run: |
+          echo "::warning::No baseline profile in the tree, so this build ships without one. Run the 'Baseline profile' workflow (Actions > Baseline profile > Run workflow) and commit its artifact to app/src/release/generated/baselineProfiles/baseline-prof.txt."
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
           KBSTREAM_STORE_FILE: kbstream-release.jks
