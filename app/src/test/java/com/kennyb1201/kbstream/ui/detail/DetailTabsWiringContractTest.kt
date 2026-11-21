@@ -71,10 +71,12 @@ class DetailTabsWiringContractTest {
     @Test
     fun `a tab choice is remembered per title, before the content composes`() {
         assertTrue(
-            "the page opens on the remembered tab (or Details) synchronously, so a " +
-                "return from the player rebuilds with the right tab's rows",
+            "the page opens on the remembered tab (or the title's own default) " +
+                "synchronously, so a return from the player rebuilds with the " +
+                "right tab's rows",
             screen.contains(
-                "mutableStateOf(DetailTabMemory.read(detailKey) ?: DetailTab.DETAILS)"
+                "DetailTabMemory.read(detailKey)?.takeIf { it in availableTabs } " +
+                    "?: DetailTabChain.stableDefaultTab(isSeriesTitle)"
             )
         )
         assertTrue(
@@ -82,10 +84,10 @@ class DetailTabsWiringContractTest {
             screen.contains("DetailTabMemory.record(detailKey, tab)") &&
                 screen.contains("DetailTabMemory.record(detailKey, next)")
         )
-        assertTrue(
-            "a choice also stops the series default from moving the page later",
-            screen.contains("tabChosenByViewer = true") &&
-                screen.contains("if (tabChosenByViewer) return@LaunchedEffect")
+        assertFalse(
+            "and nothing moves the tab on a data arrival: the default is the " +
+                "title's answer, known before the first frame (rule 2/3)",
+            screen.contains("LaunchedEffect(detailKey, availableTabs")
         )
     }
 
@@ -121,7 +123,7 @@ class DetailTabsWiringContractTest {
     fun `the strip owns its presses and the content is entered through it`() {
         assertTrue(
             "LEFT/RIGHT switch tabs through the chain's clamp rule",
-            screen.contains("val next = DetailTabChain.step(activeTab, delta, tabPresence)")
+            screen.contains("val next = DetailTabChain.step(activeTab, delta, availableTabs)")
         )
         assertTrue(
             "DOWN enters the selected tab's content through one function",
@@ -161,6 +163,20 @@ class DetailTabsWiringContractTest {
                     hasMediaTab = false
                 )
             ) == listOf(DetailTab.DETAILS)
+        )
+    }
+
+    @Test
+    fun `the strip is the stable, keyed, title-decided one`() {
+        assertTrue(
+            "the pills come from the title, not the payload",
+            screen.contains("DetailTabChain.stableTabs(isSeriesTitle)") &&
+                !screen.contains("DetailTabChain.tabs(tabPresence)")
+        )
+        assertTrue(
+            "each pill is keyed by its tab, so a recomposition cannot recreate " +
+                "the focused node",
+            screen.contains("key(tab) { DetailTabPill(")
         )
     }
 

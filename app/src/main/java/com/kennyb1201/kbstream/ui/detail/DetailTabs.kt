@@ -82,9 +82,48 @@ internal object DetailTabChain {
         DetailTab.MEDIA -> presence.hasMediaTab
     }
 
-    /** The tabs on this page, in strip order. */
+    /** The tabs on this page, in strip order (the content-presence rule). */
     fun tabs(presence: DetailTabPresence): List<DetailTab> =
         DetailTab.entries.filter { exists(it, presence) }
+
+    /**
+     * The tabs the strip PAINTS, decided from the title alone (spec
+     * 2026-11-21, rule 3: the strip is stable from first frame).
+     *
+     * [tabs] answers what the loaded payload happens to contain, and that was
+     * the trap: every section lands at a different moment, so the strip grew a
+     * pill per arrival, recomposed, reset the focused pill's node and parked
+     * focus at the top of the page. Eight identical `HEADER -> GENRE -> TABS`
+     * cycles in one paste were eight Down presses restarting on a strip that had
+     * been rebuilt under them.
+     *
+     * So the strip no longer asks the payload. A series is the one shape whose
+     * tab set differs from every other title - it has Episodes - and the route
+     * already says whether this is a series (`type` is what chose the screen),
+     * so the answer is known before the first frame. Everything else can have
+     * cast, recommendations, reviews and media, so those pills are painted from
+     * the start and each shows its own loading or empty state until (or unless)
+     * its content lands. A pill that never disappears cannot lose the focus.
+     *
+     * This is deliberately NOT [tabs]: presence is still the right question for
+     * which ROW a press may land on ([firstRow]), because landing on a rail that
+     * has not composed is still a miss. It is the wrong question for which pills
+     * exist, because the pill is the stable surface the viewer holds while the
+     * rows below it arrive.
+     */
+    fun stableTabs(isSeries: Boolean): List<DetailTab> =
+        DetailTab.entries.filter { tab -> tab != DetailTab.EPISODES || isSeries }
+
+    /**
+     * The tab a page opens on, before any payload has arrived.
+     *
+     * The same rule as [defaultTab], but asked only of the title: a series
+     * opens on Episodes and everything else on Details. Known on the first
+     * frame, so the page never has to move the viewer's tab (and with it their
+     * focus) when the seasons land.
+     */
+    fun stableDefaultTab(isSeries: Boolean): DetailTab =
+        if (isSeries) DetailTab.EPISODES else DetailTab.DETAILS
 
     /**
      * The tab the page opens on: Episodes for a series that has them, Details
@@ -105,11 +144,42 @@ internal object DetailTabChain {
      * are the ends of a list the viewer can see, and jumping from Media back to
      * Episodes would be a move the strip's own geometry contradicts.
      */
-    fun step(from: DetailTab, delta: Int, presence: DetailTabPresence): DetailTab {
-        val visible = tabs(presence)
+    fun step(from: DetailTab, delta: Int, presence: DetailTabPresence): DetailTab =
+        step(from, delta, tabs(presence))
+
+    /**
+     * [step] along the strip the page actually paints ([stableTabs]).
+     *
+     * The screen reads this overload, so LEFT/RIGHT walk the KEYED pills that
+     * are on screen - never a presence list that could name a different set for
+     * a frame while a section lands.
+     */
+    fun step(from: DetailTab, delta: Int, visible: List<DetailTab>): DetailTab {
         if (visible.isEmpty()) return DetailTab.DETAILS
         val index = visible.indexOf(from).let { if (it < 0) 0 else it }
         return visible[(index + delta).coerceIn(0, visible.size - 1)]
+    }
+
+    /**
+     * What a tab with no content says (spec 2026-11-21, rule 3).
+     *
+     * A stable strip means a tab can be opened before its section has arrived - 
+     * and, for a title that genuinely has none, opened when it never will. The
+     * pill itself never changes; the tab says which of the two this is. The
+     * wording is deliberately the title's, never an internal id.
+     *
+     * Details has no message: its facts and ratings are leaf surfaces, and an
+     * empty Details tab is the case the content sink exists for (acceptance 6).
+     */
+    fun placeholder(tab: DetailTab, loading: Boolean): String? = when (tab) {
+        DetailTab.DETAILS -> null
+        DetailTab.EPISODES -> if (loading) "Loading episodes…" else "No episodes listed for this title."
+        DetailTab.CAST -> if (loading) "Loading cast…" else "No cast listed for this title."
+        DetailTab.MORE_LIKE_THIS ->
+            if (loading) "Loading more titles…" else "No more titles like this one."
+        DetailTab.REVIEWS -> if (loading) "Loading reviews…" else "No reviews for this title."
+        DetailTab.MEDIA ->
+            if (loading) "Loading media…" else "No videos, backdrops or posters for this title."
     }
 
     /**

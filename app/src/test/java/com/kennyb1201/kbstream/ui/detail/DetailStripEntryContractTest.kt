@@ -119,8 +119,10 @@ class DetailStripEntryContractTest {
         assertTrue(
             "the block is composed before the strip, so it is above it on every " +
                 "tab instead of living in the Details tab's list",
-            header.contains("OVERVIEW_COLLAPSED_LINES") &&
-                detail.contains("OVERVIEW_EXPANDED_LINES")
+            detail.contains("DetailHeaderBudget.collapsedLines") &&
+                detail.contains("DetailHeaderBudget.expandedLines") &&
+                header.contains("overviewExpandedLines") &&
+                header.contains("overviewCollapsedLines")
         )
         assertFalse(
             "and it is no longer a list item of the Details tab",

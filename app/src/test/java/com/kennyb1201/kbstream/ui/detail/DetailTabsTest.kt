@@ -258,6 +258,62 @@ class DetailTabsTest {
     }
 
     @Test
+    fun `the strip is decided by the title before any payload arrives`() {
+        // Rule 3: a series has Episodes, everything else does not, and every
+        // tab a title CAN have is painted from the first frame. Nothing here
+        // reads the loaded rows, so no pill can pop in or out mid-load.
+        assertEquals(DetailTab.entries, DetailTabChain.stableTabs(isSeries = true))
+        assertEquals(
+            listOf(
+                DetailTab.DETAILS,
+                DetailTab.CAST,
+                DetailTab.MORE_LIKE_THIS,
+                DetailTab.REVIEWS,
+                DetailTab.MEDIA
+            ),
+            DetailTabChain.stableTabs(isSeries = false)
+        )
+        assertEquals(DetailTab.EPISODES, DetailTabChain.stableDefaultTab(isSeries = true))
+        assertEquals(DetailTab.DETAILS, DetailTabChain.stableDefaultTab(isSeries = false))
+    }
+
+    @Test
+    fun `stepping the stable strip never names a tab it does not paint`() {
+        val movie = DetailTabChain.stableTabs(isSeries = false)
+        assertEquals(
+            DetailTab.MEDIA,
+            DetailTabChain.step(DetailTab.DETAILS, 5, movie)
+        )
+        assertEquals(
+            DetailTab.DETAILS,
+            DetailTabChain.step(DetailTab.DETAILS, -1, movie)
+        )
+        assertEquals(
+            DetailTab.MEDIA,
+            DetailTabChain.step(DetailTab.CAST, 3, movie)
+        )
+    }
+
+    @Test
+    fun `a stable tab with nothing in it says so instead of painting blank`() {
+        assertEquals(
+            "a tab whose section is still loading names the wait",
+            "Loading episodes…",
+            DetailTabChain.placeholder(DetailTab.EPISODES, loading = true)
+        )
+        assertEquals(
+            "a tab whose section is genuinely absent says so",
+            "No reviews for this title.",
+            DetailTabChain.placeholder(DetailTab.REVIEWS, loading = false)
+        )
+        assertNull(
+            "Details has no sentence: its leaf rows and the content sink are its " +
+                "empty state (acceptance 6)",
+            DetailTabChain.placeholder(DetailTab.DETAILS, loading = false)
+        )
+    }
+
+    @Test
     fun `the tab a viewer left a title on is remembered per title`() {
         DetailTabMemory.record("series:1", DetailTab.CAST)
         DetailTabMemory.record("movie:2", DetailTab.REVIEWS)

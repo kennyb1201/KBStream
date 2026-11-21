@@ -203,7 +203,10 @@ class DetailFocusChainWiringContractTest {
                 "landed nowhere is what the page has to notice (see the fall-through " +
                 "to the default search below)",
             detail.contains("val landed = if (target == DetailRow.MEDIA") &&
-                detail.contains("focusRow(target, fromColumn, from, direction, settledRows)")
+                detail.contains("askRow(target, fromColumn, from, direction, settledRows)") &&
+                detail.contains(
+                    "askRow(target, fromColumn, from, direction, presence)"
+                )
         )
         assertTrue(
             "and the one row the move does NOT land through focusRow is the " +
@@ -213,7 +216,7 @@ class DetailFocusChainWiringContractTest {
                 "the viewer has no reason to expect",
             detail.contains(
                 "if (target == DetailRow.MEDIA && direction == DetailFocusDirection.DOWN) { " +
-                    "lastMediaCardColumn = fromColumn focusMediaStrip(from) }"
+                    "lastMediaCardColumn = fromColumn askMediaStrip(from) }"
             )
         )
     }

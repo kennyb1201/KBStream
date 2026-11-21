@@ -161,7 +161,7 @@ class DetailMediaRowWiringContractTest {
                 "pressing UP to reach the tabs they had just skipped",
             move.contains("if (target == DetailRow.MEDIA &&") &&
                 move.contains("direction == DetailFocusDirection.DOWN) {") &&
-                move.contains("focusMediaStrip(from)")
+                move.contains("askMediaStrip(from)")
         )
         assertTrue(
             "and the column the press arrived with is kept for the way back, " +

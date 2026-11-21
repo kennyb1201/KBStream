@@ -79,6 +79,7 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -356,21 +357,11 @@ private const val SEASON_FOCUS_DWELL_MS = 140L
 private const val GENRE_ROW_KEY = "genrerow"
 
 /**
- * Lines the overview shows before it is expanded. Four, as before the move into
- * the fixed header: the collapsed treatment did not change, only where it sits.
+ * The overview's line budgets are [DetailHeaderBudget]'s (spec 2026-11-21, rule
+ * 6): the block is part of the fixed header, so its height is measured against
+ * the viewport rather than fixed at four/eight lines. See the object for why
+ * collapsed and expanded answer different questions.
  */
-private const val OVERVIEW_COLLAPSED_LINES = 4
-
-/**
- * Lines the overview may show ONCE EXPANDED, from the fixed header (2026-11-21).
- *
- * The block used to expand without a limit, which was safe because it grew
- * inside the scrolling list. Above the strip it is header height: an unbounded
- * expansion would eat the list's viewport and could push the strip itself off a
- * 540dp-tall screen. Eight lines is ~160dp at this type scale, which leaves the
- * list a row and keeps the strip where the spec says it must be.
- */
-private const val OVERVIEW_EXPANDED_LINES = 8
 
 /**
  * The season chips' list item: the first half of the episode section.
@@ -437,6 +428,17 @@ private const val RETURN_FOCUS_STEPS = 15
 
 /** Delay between those retries, long enough for a frame to be laid out. */
 private const val RETURN_FOCUS_DELAY_MS = 40L
+
+/**
+ * Frames a landing is given to prove itself before the press is re-asked
+ * (spec 2026-11-21, rule 5).
+ *
+ * A `requestFocus()` that returns true can be undone by the composition that
+ * asked it - that is the exact defect this budget exists to catch - so the
+ * landing is observed for a few frames, and only a landing that has left the
+ * origin counts.
+ */
+private const val FOCUS_VERIFY_FRAMES = 3
 
 /**
  * How many times a neighbour's arrival asks the poster row to be revealed.
@@ -1027,6 +1029,45 @@ fun DetailScreen(
     var tabContentSinkArmed by remember { mutableStateOf(false) }
 
     /**
+     * Whether the content sink is the surface holding the focus right now - the
+     * state the handoff below waits on (spec 2026-11-21, rule 4).
+     */
+    var tabContentSinkHoldsFocus by remember { mutableStateOf(false) }
+
+    /**
+     * The chain row that ACTUALLY holds the focus, as reported by the rows'
+     * own `onFocusChanged` (spec 2026-11-21, rule 5: focus is verified, not
+     * assumed).
+     *
+     * `requestFocus()` answering true only says a node accepted the ask in that
+     * frame; the list's own restorer used to take it back a frame later while
+     * every line still read `landed=true`. This is the observation that makes a
+     * landing checkable, and the trace below records every gain and loss so a
+     * paste shows where focus IS rather than where it was asked to go.
+     */
+    var focusedRowNow by remember { mutableStateOf<DetailRow?>(null) }
+
+    /**
+     * Traces focus gains and losses for one chain row.
+     *
+     * Attached to the row's CONTAINER: a `LazyRow`'s own `onFocusChanged` sees
+     * its children's focus, so one modifier covers every card in the rail. The
+     * notes are de-duplicated per row, so walking within a rail is one GAIN,
+     * not one per card.
+     */
+    fun traceRowFocus(row: DetailRow): Modifier = Modifier.onFocusChanged { state ->
+        if (state.hasFocus) {
+            if (focusedRowNow != row) {
+                focusedRowNow = row
+                DetailTrace.note("detail focus GAIN ${row.name}")
+            }
+        } else if (focusedRowNow == row) {
+            focusedRowNow = null
+            DetailTrace.note("detail focus LOST ${row.name}")
+        }
+    }
+
+    /**
      * Whether the overview currently overflows its four collapsed lines - i.e.
      * whether the "View more" toggle is on this page at all.
      *
@@ -1387,12 +1428,46 @@ fun DetailScreen(
     // right tab's rows already in place (and its rail-restoring effect then
     // finds the rail it is looking for).
     val detailKey = "$type:$id"
-    var activeTab by remember(detailKey) {
-        mutableStateOf(DetailTabMemory.read(detailKey) ?: DetailTab.DETAILS)
+    // The title's own normalised type, read from the route before anything
+    // loads: the strip (below) and the default tab are decided from it, so
+    // neither can change when a payload arrives (spec 2026-11-21, rule 3).
+    val normalizedType = when (type.lowercase()) {
+        "tv", "show" -> "series"
+        // Anime catalogs emit type "anime"; TMDB serves those shows under
+        // series, so the season/episode UI must treat anime as series.
+        "anime", "anime.series" -> "series"
+        "anime.movie" -> "movie"
+        else -> type.lowercase()
     }
-    // Set the moment the viewer picks a tab, so the default (Episodes for a
-    // series) cannot pull the page out from under a choice made mid-watch.
-    var tabChosenByViewer by remember { mutableStateOf(false) }
+    val isSeriesTitle = normalizedType == "series"
+    // THE STRIP IS STABLE FROM THE FIRST FRAME (spec 2026-11-21, rule 3).
+    // Which pills exist is the title's answer, not the payload's: a series has
+    // Episodes, everything else has the tabs a title can have. A tab whose
+    // section is still loading paints its loading state INSIDE the tab (see
+    // DetailTabChain.placeholder), so no pill pops in or out and the focused
+    // pill's node is never recreated under the viewer's press.
+    val availableTabs = remember(isSeriesTitle) {
+        DetailTabChain.stableTabs(isSeriesTitle)
+    }
+    // The overview's line budgets, measured against this viewport (spec
+    // 2026-11-21, rule 6). The block is in the fixed header, so these are what
+    // keep the strip visible instead of pushing it under the fold on a
+    // 960x540dp television.
+    val screenHeightDp = LocalConfiguration.current.screenHeightDp
+    val overviewCollapsedLines = remember(screenHeightDp) {
+        DetailHeaderBudget.collapsedLines(screenHeightDp)
+    }
+    val overviewExpandedLines = remember(screenHeightDp) {
+        DetailHeaderBudget.expandedLines(screenHeightDp)
+    }
+    var activeTab by remember(detailKey) {
+        mutableStateOf(
+            // A remembered tab is honoured only while it is still on this
+            // title's strip; the fallback is the title's own default.
+            DetailTabMemory.read(detailKey)?.takeIf { it in availableTabs }
+                ?: DetailTabChain.stableDefaultTab(isSeriesTitle)
+        )
+    }
     // One requester per pill: the strip is the row the chain lands on, and the
     // page asks for the SELECTED pill when a press arrives there from below.
     val tabFocusRequesters = remember {
@@ -1950,15 +2025,6 @@ fun DetailScreen(
     }
 
     val hasStreamAddons by viewModel.hasStreamAddons.collectAsStateWithLifecycle()
-
-    val normalizedType = when (type.lowercase()) {
-        "tv", "show" -> "series"
-        // Anime catalogs emit type "anime"; TMDB serves those shows under
-        // series, so the season/episode UI must treat anime as series.
-        "anime", "anime.series" -> "series"
-        "anime.movie" -> "movie"
-        else -> type.lowercase()
-    }
 
     val seasons = remember(tmdbDetail) {
         tmdbDetail?.seasons.orEmpty()
@@ -3657,6 +3723,67 @@ fun DetailScreen(
     }
 
     /**
+     * Confirms that a landing is still the focus a few frames later, by
+     * OBSERVING the rows' own focus state rather than trusting the request's
+     * answer (spec 2026-11-21, rule 5).
+     *
+     * [before] is the row that held the focus when the ask was made. A landing
+     * counts when the focus is now on a row and it is not the one it came from;
+     * which row it is may differ from the chain's target when the walk stepped
+     * over a row that would not take it, and that is still a real landing.
+     */
+    suspend fun verifyFocusMoved(before: DetailRow?): Boolean {
+        repeat(FOCUS_VERIFY_FRAMES) {
+            awaitFrame()
+            val now = focusedRowNow
+            if (now != null && now != before) return true
+            delay(RETURN_FOCUS_DELAY_MS)
+        }
+        return false
+    }
+
+    /**
+     * The chain's landing ask with rule 5's verification and ONE bounded
+     * re-ask when the observed focus did not move.
+     *
+     * Every chain destination in [moveFocusVertical], [enterTabContent] and the
+     * content sink goes through this, so "landed" in the trace means the focus
+     * was observed on a row and the move is reported as `verified=`; [focusRow]
+     * itself stays the raw ask, because it is also called recursively while
+     * walking rows.
+     */
+    suspend fun askRow(
+        target: DetailRow,
+        fromColumn: Int,
+        from: DetailRow,
+        direction: DetailFocusDirection,
+        presence: DetailRowPresence
+    ): Boolean {
+        val before = focusedRowNow
+        if (!focusRow(target, fromColumn, from, direction, presence)) return false
+        if (verifyFocusMoved(before)) return true
+        DetailTrace.note(
+            "detail focus verify ${target.name} lost after landing; re-asking"
+        )
+        if (!focusRow(target, fromColumn, from, direction, presence)) return false
+        return verifyFocusMoved(before)
+    }
+
+    /**
+     * The Media row's landing, held to the same rule: the strip is a real
+     * focusable but not a LazyRow chip, so it is asked through
+     * [focusMediaStrip] and then observed exactly as [askRow] observes a rail.
+     */
+    suspend fun askMediaStrip(from: DetailRow): Boolean {
+        val before = focusedRowNow
+        if (!focusMediaStrip(from)) return false
+        if (verifyFocusMoved(before)) return true
+        DetailTrace.note("detail focus verify MEDIA lost after landing; re-asking")
+        if (!focusMediaStrip(from)) return false
+        return verifyFocusMoved(before)
+    }
+
+    /**
      * The FIRST row inside the list: the one directly under the genre chips.
      *
      * Read from the chain rather than listed here, so "first list row" cannot
@@ -3740,9 +3867,12 @@ fun DetailScreen(
             // The Media row is entered at its own inner strip, never at a
             // card: the strip is the row's selector (see focusMediaStrip).
             val landed = if (target == DetailRow.MEDIA) {
-                focusMediaStrip(DetailRow.TABS)
+                askMediaStrip(DetailRow.TABS)
             } else {
-                focusRow(target, 0, DetailRow.TABS, DetailFocusDirection.DOWN, rows)
+                // Rule 5: verified, with one bounded re-ask, so "landed" in
+                // the TABS DOWN line is an observed state and not a request's
+                // own answer.
+                askRow(target, 0, DetailRow.TABS, DetailFocusDirection.DOWN, rows)
             }
             if (landed) {
                 trace(target.name, true, "chain")
@@ -3831,6 +3961,9 @@ fun DetailScreen(
         // visible as one that never landed.
         var tracedTarget: DetailRow? = null
         var tracedLanded = false
+        // Rule 5: whether the focus was OBSERVED on a row after the landing,
+        // not merely whether the request said it landed.
+        var tracedVerified = false
         // NOT "edge". This default is what build 322's paste printed for a DOWN
         // the chain had named a row for - see the cancel arm below - and an
         // "edge" label on a move that never reached a verdict sent the first
@@ -3890,12 +4023,13 @@ fun DetailScreen(
             val landed =
                 if (target == DetailRow.MEDIA && direction == DetailFocusDirection.DOWN) {
                     lastMediaCardColumn = fromColumn
-                    focusMediaStrip(from)
+                    askMediaStrip(from)
                 } else {
-                    focusRow(target, fromColumn, from, direction, presence)
+                    askRow(target, fromColumn, from, direction, presence)
                 }
             tracedVia = "chain"
             tracedLanded = landed
+            tracedVerified = landed
             if (landed) return true
 
             // F1a: an UP that walked to the header and could not LAND on it is a
@@ -3962,13 +4096,14 @@ fun DetailScreen(
                 tracedWaited = waited > 0
                 val retried =
                     if (target == DetailRow.MEDIA && direction == DetailFocusDirection.DOWN) {
-                        focusMediaStrip(from)
+                        askMediaStrip(from)
                     } else {
-                        focusRow(target, fromColumn, from, direction, settled)
+                        askRow(target, fromColumn, from, direction, settled)
                     }
                 if (retried) {
                     tracedVia = "chain"
                     tracedLanded = true
+                    tracedVerified = true
                     return true
                 }
             }
@@ -3994,13 +4129,14 @@ fun DetailScreen(
             // where it used to be able to happen.
             val secondAsk =
                 if (target == DetailRow.MEDIA && direction == DetailFocusDirection.DOWN) {
-                    focusMediaStrip(from)
+                    askMediaStrip(from)
                 } else {
-                    focusRow(target, fromColumn, from, direction, settledRows)
+                    askRow(target, fromColumn, from, direction, settledRows)
                 }
             if (secondAsk) {
                 tracedVia = "chain"
                 tracedLanded = true
+                tracedVerified = true
                 return true
             }
 
@@ -4045,8 +4181,8 @@ fun DetailScreen(
         } finally {
             DetailTrace.note(
                 "detail move $from $direction -> ${tracedTarget ?: "none"} " +
-                    "landed=$tracedLanded via=$tracedVia loading=$tracedLoading " +
-                    "waited=$tracedWaited"
+                    "landed=$tracedLanded verified=$tracedVerified via=$tracedVia " +
+                    "loading=$tracedLoading waited=$tracedWaited"
             )
         }
     }
@@ -4771,48 +4907,17 @@ fun DetailScreen(
                 hasMediaRow = hasMediaRow
             )
 
-            // ── The tabs those rows now live in (see [DetailTabs]) ───────────
+            // ── The tabs those rows live in (see [DetailTabs]) ───────────────
             //
-            // Presence comes from the SAME fields the rows render behind, so a
-            // tab exists exactly when its content does - a movie has no
-            // Episodes tab, a title with no reviews has none, and there is no
-            // empty tab to press into.
-            val tabPresence = remember(pageRowPresence) {
-                DetailTabPresence.of(pageRowPresence)
-            }
-            val availableTabs = remember(tabPresence) { DetailTabChain.tabs(tabPresence) }
-
-            // Open on the tab the viewer last had, else the page's default:
-            // Episodes for a series, Details for a movie. A viewer's own choice
-            // always wins (see tabChosenByViewer).
-            LaunchedEffect(detailKey, availableTabs, tabChosenByViewer) {
-                if (tabChosenByViewer) return@LaunchedEffect
-                val target = DetailTabMemory.read(detailKey)
-                    ?.takeIf { it in availableTabs }
-                    ?: DetailTabChain.defaultTab(
-                        isSeries = normalizedType == "series",
-                        presence = tabPresence
-                    )
-                // The default is only allowed to move a page that has not been
-                // navigated: a viewer standing on anything but the initial
-                // Details tab made that choice before the seasons landed.
-                if (activeTab !in availableTabs ||
-                    (activeTab == DetailTab.DETAILS && target != DetailTab.DETAILS)
-                ) {
-                    activeTab = target
-                }
-            }
-            // A tab can also lose its content while it is open (a review load
-            // that came back empty): fall back to the default rather than leave
-            // the strip pointing at nothing.
-            LaunchedEffect(availableTabs) {
-                if (activeTab !in availableTabs) {
-                    activeTab = DetailTabChain.defaultTab(
-                        isSeries = normalizedType == "series",
-                        presence = tabPresence
-                    )
-                }
-            }
+            // The strip is NOT decided here any more (spec 2026-11-21, rule 3).
+            // `availableTabs` is the title's stable answer, read once at screen
+            // scope; these rows decide only what a press may LAND on. There is
+            // deliberately no effect that moves `activeTab` when a section
+            // lands: a tab the payload could add or remove was a tab that could
+            // rebuild itself under the focused pill, and the eight restarting
+            // `HEADER -> GENRE -> TABS` cycles in the field paste were exactly
+            // that. A viewer's own choice is still theirs; the default was
+            // already applied before the first composition.
 
             // The rows of the SELECTED tab, in the shape the vertical chain
             // reads: everything outside the tab answers absent, so a press
@@ -5873,6 +5978,10 @@ fun DetailScreen(
                             )
                             .focusGroup()
                             .focusRestorer()
+                            // Rule 5: this row's focus gains and losses are
+                            // observed, so a move into the header can be
+                            // verified.
+                            .then(traceRowFocus(DetailRow.HEADER))
                             .scrollToTopOnFocus(detailListState, scope) {
                                 // Not while a menu's hand-back is in flight: the
                                 // focus the header sees then is the framework's
@@ -6393,6 +6502,7 @@ fun DetailScreen(
                                 modifier = Modifier
                                     .focusGroup()
                                     .focusRestorer()
+                                    .then(traceRowFocus(DetailRow.GENRE))
                             ) {
                                 itemsIndexed(
                                     tmdbGenres,
@@ -6483,15 +6593,14 @@ fun DetailScreen(
                     // and made its position depend on which tab was open - the
                     // field report asked for the opposite of both.
                     //
-                    // Collapsed to four lines with the "View more" toggle it
-                    // always had, and capped when expanded
-                    // ([OVERVIEW_EXPANDED_LINES]): this header is FIXED, so the
+                    // Collapsed with the "View more" toggle it always had,
+                    // and capped when expanded. This header is FIXED, so the
                     // block is the one thing above the strip whose height is
-                    // not already bounded by a layout weight. Uncapped, an
-                    // expanded overview would push the strip and the first
-                    // content row off a 540dp-tall screen, which is the one
-                    // thing the revamp spec says this page must never do - the
-                    // strip gives way only by collapsing the overview.
+                    // not already bounded by a layout weight. Its line counts
+                    // come from [DetailHeaderBudget], measured against the
+                    // viewport: collapsed must leave the strip and a content
+                    // row, expanded may push the content down but never the
+                    // strip off a 540dp-tall screen (rule 6).
                     run {
                         val overviewText =
                             tmdbDetail?.overview
@@ -6511,18 +6620,20 @@ fun DetailScreen(
                                 mutableStateOf(false)
                             }
                             Column(
-                                modifier = Modifier.padding(
-                                    start = 24.dp,
-                                    end = 24.dp,
-                                    bottom = 8.dp
-                                )
+                                modifier = Modifier
+                                    .padding(
+                                        start = 24.dp,
+                                        end = 24.dp,
+                                        bottom = 8.dp
+                                    )
+                                    .then(traceRowFocus(DetailRow.OVERVIEW))
                             ) {
                                 Text(
                                     overviewText,
                                     maxLines = if (overviewExpanded) {
-                                        OVERVIEW_EXPANDED_LINES
+                                        overviewExpandedLines
                                     } else {
-                                        OVERVIEW_COLLAPSED_LINES
+                                        overviewCollapsedLines
                                     },
                                     overflow = TextOverflow.Ellipsis,
                                     onTextLayout = { textLayoutResult ->
@@ -6649,13 +6760,14 @@ fun DetailScreen(
                         selected = activeTab,
                         requesters = tabFocusRequesters,
                         onSelect = { tab ->
-                            tabChosenByViewer = true
                             activeTab = tab
                             DetailTabMemory.record(detailKey, tab)
                         },
                         onStep = { delta ->
-                            val next = DetailTabChain.step(activeTab, delta, tabPresence)
-                            tabChosenByViewer = true
+                            // Walk the pills that are ON SCREEN: the stable,
+                            // keyed strip the viewer is holding (see
+                            // DetailTabChain.stableTabs).
+                            val next = DetailTabChain.step(activeTab, delta, availableTabs)
                             activeTab = next
                             DetailTabMemory.record(detailKey, next)
                             scope.launch {
@@ -6677,7 +6789,8 @@ fun DetailScreen(
                         },
                         onDown = {
                             scope.launch { enterTabContent() }
-                        }
+                        },
+                        modifier = Modifier.then(traceRowFocus(DetailRow.TABS))
                     )
 
                     // The content region's focus sink: 1dp, transparent, and
@@ -6693,11 +6806,100 @@ fun DetailScreen(
                             .focusProperties { canFocus = tabContentSinkArmed }
                             .focusable()
                             .onFocusChanged { state ->
+                                tabContentSinkHoldsFocus = state.isFocused
                                 if (!state.isFocused && tabContentSinkArmed) {
                                     tabContentSinkArmed = false
                                 }
                             }
+                            // The sink's own presses (rule 4): while a tab's
+                            // rows are still arriving it is the only focusable
+                            // surface inside the tab, so UP must still reach
+                            // the strip and DOWN must be the first row the
+                            // moment one exists - never a dead key.
+                            .onPreviewKeyEvent { event ->
+                                if (event.type != KeyEventType.KeyDown) {
+                                    false
+                                } else {
+                                    when (event.key) {
+                                        Key.DirectionUp -> {
+                                            scope.launch { focusTabStrip() }
+                                            true
+                                        }
+
+                                        Key.DirectionDown -> {
+                                            scope.launch {
+                                                val rows = DetailTabChain.rowPresence(
+                                                    activeTab,
+                                                    latestPageRowPresence.value
+                                                        ?: detailRowPresence
+                                                )
+                                                val target = DetailTabChain.firstRow(
+                                                    activeTab,
+                                                    rows
+                                                )
+                                                val landed = target != null &&
+                                                    askRow(
+                                                        target,
+                                                        0,
+                                                        DetailRow.TABS,
+                                                        DetailFocusDirection.DOWN,
+                                                        rows
+                                                    )
+                                                val name = target?.name ?: "none"
+                                                DetailTrace.note(
+                                                    "detail sink DOWN -> $name landed=$landed"
+                                                )
+                                                if (!landed) {
+                                                    fallThroughIfMidPage(
+                                                        DetailRow.TABS,
+                                                        DetailFocusDirection.DOWN,
+                                                        rows
+                                                    )
+                                                }
+                                            }
+                                            true
+                                        }
+
+                                        else -> false
+                                    }
+                                }
+                            }
                     )
+
+                    // THE SINK'S HANDOFF (spec 2026-11-21, rule 4). While the
+                    // sink holds the focus, the moment the tab's first row
+                    // composes it takes the focus - traced, bounded, and
+                    // only on a real change in presence, so a tab that is
+                    // genuinely empty leaves the sink enterable instead of
+                    // bouncing the viewer to the header.
+                    LaunchedEffect(
+                        tabContentSinkHoldsFocus,
+                        activeTab,
+                        detailRowPresence
+                    ) {
+                        if (!tabContentSinkHoldsFocus) return@LaunchedEffect
+                        val rows = DetailTabChain.rowPresence(
+                            activeTab,
+                            latestPageRowPresence.value ?: detailRowPresence
+                        )
+                        val target = DetailTabChain.firstRow(activeTab, rows)
+                            ?: return@LaunchedEffect
+                        val landed =
+                            if (target == DetailRow.MEDIA) {
+                                askMediaStrip(DetailRow.TABS)
+                            } else {
+                                askRow(
+                                    target,
+                                    0,
+                                    DetailRow.TABS,
+                                    DetailFocusDirection.DOWN,
+                                    rows
+                                )
+                            }
+                        DetailTrace.note(
+                            "detail sink handoff -> ${target.name} landed=$landed"
+                        )
+                    }
 
                     LazyColumn(
                         state = detailListState,
@@ -6709,8 +6911,15 @@ fun DetailScreen(
                         modifier = Modifier
                             .weight(1f, fill = true)
                             .fillMaxWidth()
-                            .focusGroup()
-                            .focusRestorer(),
+                            // PASSIVE CONTAINER (spec 2026-11-21, rule 1). The
+                            // list used to carry its own `focusRestorer` and
+                            // make its own focus decisions beside the chain -
+                            // a requestFocus() the chain had verified could be
+                            // taken back a frame later by this restorer. The
+                            // chain is the only thing that moves focus now;
+                            // the list only groups its rows so a search stays
+                            // inside them.
+                            .focusGroup(),
                         contentPadding = PaddingValues(
                             top = 6.dp
                         )
@@ -6874,6 +7083,7 @@ fun DetailScreen(
                                         .padding(bottom = 10.dp)
                                         .focusGroup()
                                         .focusRestorer()
+                                        .then(traceRowFocus(DetailRow.KEYWORDS))
                                         .revealSeasonRowOnFocus(
                                             seasonRowReveal,
                                             KEYWORDS_ROW_KEY
@@ -6997,6 +7207,14 @@ fun DetailScreen(
                             item(key = SEASON_ROW_KEY, contentType = "section-row") {
                                 SeasonPosterRow(
                                     posterResolver = seasonPosterResolver,
+                                    // Rule 5: the season chips are the EPISODES
+                                    // row's first half, so their focus is
+                                    // observed under the same row name as the
+                                    // cards below them.
+                                    rowModifier = Modifier.then(
+                                        traceRowFocus(DetailRow.EPISODES)
+                                    ),
+                                    episodesPaused = episodesLoading,
                                     seasonNameFor = { season ->
                                         tmdbDetail?.displaySeasonName(season)
                                     },
@@ -7168,6 +7386,7 @@ fun DetailScreen(
                                                     )
                                                     .focusGroup()
                                                     .focusRestorer()
+                                                    .then(traceRowFocus(DetailRow.EPISODES))
                                                     // The row BELOW the poster row:
                                                     // its cards ask for the reveal
                                                     // the fact cards ask for above
@@ -7254,50 +7473,22 @@ fun DetailScreen(
                                                         ] = focusRequester
                                                     }
 
-                                                    val shouldFocusThisCard =
-                                                        when {
-                                                            resolvedTargetEpisode
-                                                                ?.streamId != null ->
-                                                                ep.streamId ==
-                                                                    resolvedTargetEpisode
-                                                                        .streamId
-
-                                                            targetEpisodeNumber != null ->
-                                                                ep.episodeNumber ==
-                                                                    targetEpisodeNumber
-
-                                                            else -> false
-                                                        }
-
-                                                    LaunchedEffect(
-                                                        shouldFocusThisCard,
-                                                        episodesLoading,
-                                                        effectiveSeason,
-                                                        episodes.size,
-                                                        userManuallyChangedSeason,
-                                                        episodeTransitionState.edge
-                                                    ) {
-                                                        if (
-                                                            // The same latch as the rail's
-                                                            // auto-scroll: this effect fires
-                                                            // again whenever the episode list
-                                                            // reloads, and by then the viewer
-                                                            // may have walked to another row -
-                                                            // dragging the focus back up to
-                                                            // this card is the reported yank.
-                                                            episodeAutoFocusAllowed() &&
-                                                            shouldFocusThisCard &&
-                                                            !episodesLoading &&
-                                                            episodes.isNotEmpty() &&
-                                                            !userManuallyChangedSeason &&
-                                                            !restoredReturnFocus &&
-                                                            episodeTransitionState.edge ==
-                                                                null
-                                                        ) {
-                                                            focusRequester
-                                                                .requestFocus()
-                                                        }
-                                                    }
+                                                    // DATA ARRIVAL NEVER MOVES FOCUS
+                                                    // (spec 2026-11-21, rule 2).
+                                                    // There used to be an effect
+                                                    // here that asked this card
+                                                    // for the focus when the
+                                                    // resume episode arrived,
+                                                    // and it was the quiet half
+                                                    // of the trap: the viewer's
+                                                    // focus was on PLAY (or on
+                                                    // a pill), the episode list
+                                                    // landed a second later, and
+                                                    // the D-pad was yanked into
+                                                    // the list. The 
+                                                    // requester stays filed for
+                                                    // the chain; nothing asks
+                                                    // for it on a load.
 
                                                     // Round four F8b: the same
                                                     // tick round three put on
@@ -7754,6 +7945,7 @@ fun DetailScreen(
                                         )
                                         .focusGroup()
                                         .focusRestorer()
+                                        .then(traceRowFocus(DetailRow.PEOPLE))
                                 ) {
                                     itemsIndexed(
                                         items = peopleItems,
@@ -7895,6 +8087,7 @@ fun DetailScreen(
                                         )
                                         .focusGroup()
                                         .focusRestorer()
+                                        .then(traceRowFocus(DetailRow.NETWORK))
                                         // No UP handler on the ROW any more.
                                         // UP and DOWN are decided by the chip
                                         // itself (see its own key handler
@@ -8014,6 +8207,7 @@ fun DetailScreen(
                                         )
                                         .focusGroup()
                                         .focusRestorer()
+                                        .then(traceRowFocus(DetailRow.PRODUCTION))
                                 ) {
                                     itemsIndexed(
                                         companies.distinctBy { it.id },
@@ -8121,6 +8315,7 @@ fun DetailScreen(
                                         )
                                         .focusGroup()
                                         .focusRestorer()
+                                        .then(traceRowFocus(DetailRow.COLLECTION))
                                 ) {
                                     itemsIndexed(
                                         collectionParts.distinctBy { it.id },
@@ -8304,6 +8499,7 @@ fun DetailScreen(
                                         )
                                         .focusGroup()
                                         .focusRestorer()
+                                        .then(traceRowFocus(DetailRow.MORE_LIKE_THIS))
                                 ) {
                                     itemsIndexed(
                                         recommendations.distinctBy { it.id }.take(30),
@@ -8513,6 +8709,7 @@ fun DetailScreen(
                                         )
                                         .focusGroup()
                                         .focusRestorer()
+                                        .then(traceRowFocus(DetailRow.REVIEWS))
                                 ) {
                                     itemsIndexed(
                                         reviews.distinctBy { it.id }.take(60),
@@ -8629,10 +8826,12 @@ fun DetailScreen(
                                         },
                                         presence = detailRowPresence
                                     ),
-                                    modifier = Modifier.padding(
-                                        start = KBScreenEdge,
-                                        bottom = 10.dp
-                                    )
+                                    modifier = Modifier
+                                        .padding(
+                                            start = KBScreenEdge,
+                                            bottom = 10.dp
+                                        )
+                                        .then(traceRowFocus(DetailRow.MEDIA))
                                 )
                             }
 
@@ -8682,6 +8881,7 @@ fun DetailScreen(
                                         .padding(bottom = 14.dp)
                                         .focusGroup()
                                         .focusRestorer()
+                                        .then(traceRowFocus(DetailRow.MEDIA))
                                 ) {
                                     itemsIndexed(
                                         mediaCards,
@@ -8820,6 +9020,99 @@ fun DetailScreen(
                                         )
                                     }
                                 }
+                            }
+                        }
+
+                        // A STABLE STRIP CAN OPEN A TAB WITH NOTHING IN IT
+                        // YET (spec 2026-11-21, rule 3). The pill no longer
+                        // pops in with its content, so the tab says which of
+                        // "still loading" and "this title has none" it is
+                        // instead of painting an unexplained blank region.
+                        // Details has no sentence: its facts and ratings are
+                        // leaf surfaces, and an empty Details tab is exactly
+                        // what the content sink is for (acceptance 6).
+                        val emptyTabMessage = when (activeTab) {
+                            DetailTab.EPISODES ->
+                                if (!pageRowPresence.hasEpisodesRow) {
+                                    DetailTabChain.placeholder(
+                                        activeTab,
+                                        rowsStillArriving()
+                                    )
+                                } else {
+                                    null
+                                }
+                            DetailTab.DETAILS ->
+                                if (
+                                    !pageRowPresence.hasKeywordsRow &&
+                                    !pageRowPresence.hasNetworkRow &&
+                                    !pageRowPresence.hasProductionRow &&
+                                    detailFacts.isEmpty() &&
+                                    mdbListRatings?.hasAny != true &&
+                                    (tmdbDetail?.voteAverage ?: 0.0) <= 0.0
+                                ) {
+                                    DetailTabChain.placeholder(activeTab, false)
+                                } else {
+                                    null
+                                }
+                            DetailTab.CAST ->
+                                if (
+                                    !pageRowPresence.hasPeopleRow &&
+                                    m.cast.isNullOrEmpty() &&
+                                    m.director.isNullOrEmpty()
+                                ) {
+                                    DetailTabChain.placeholder(
+                                        activeTab,
+                                        rowsStillArriving()
+                                    )
+                                } else {
+                                    null
+                                }
+                            DetailTab.MORE_LIKE_THIS ->
+                                if (
+                                    !pageRowPresence.hasCollectionRow &&
+                                    !pageRowPresence.hasMoreLikeThisRow
+                                ) {
+                                    DetailTabChain.placeholder(
+                                        activeTab,
+                                        rowsStillArriving()
+                                    )
+                                } else {
+                                    null
+                                }
+                            DetailTab.REVIEWS ->
+                                if (reviews.isEmpty()) {
+                                    DetailTabChain.placeholder(
+                                        activeTab,
+                                        rowsStillArriving()
+                                    )
+                                } else {
+                                    null
+                                }
+                            DetailTab.MEDIA ->
+                                if (!pageRowPresence.hasMediaRow) {
+                                    DetailTabChain.placeholder(
+                                        activeTab,
+                                        rowsStillArriving()
+                                    )
+                                } else {
+                                    null
+                                }
+                        }
+                        if (emptyTabMessage != null) {
+                            item(
+                                key = "tabplaceholder:${activeTab.name}",
+                                contentType = "status"
+                            ) {
+                                Text(
+                                    text = emptyTabMessage,
+                                    color = KBTextLo,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.padding(
+                                        start = 24.dp,
+                                        end = 24.dp,
+                                        top = 12.dp
+                                    )
+                                )
                             }
                         }
 
@@ -9649,6 +9942,12 @@ private fun DetailFactCard(
 @Composable
 private fun SeasonPosterRow(
     posterResolver: SeasonPosterResolver,
+    // The page's own modifier for the row: it carries the focus observation
+    // that makes the EPISODES landing verifiable (spec 2026-11-21, rule 5).
+    rowModifier: Modifier = Modifier,
+    // Rule 7: while the selected season's episodes are loading, the posters
+    // wait instead of competing for the same network.
+    episodesPaused: Boolean = false,
     state: LazyListState,
     seasons: List<Int>,
     seasonPremiereDates: Map<Int, LocalDate>,
@@ -9688,7 +9987,7 @@ private fun SeasonPosterRow(
             bottom = 10.dp
         ),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
-        modifier = Modifier
+        modifier = rowModifier
             .padding(bottom = 10.dp)
             .focusGroup()
     ) {
@@ -9738,7 +10037,11 @@ private fun SeasonPosterRow(
             val posterUrl =
                 rememberSeasonPoster(
                     season = season,
-                    resolver = posterResolver
+                    resolver = posterResolver,
+                    // Rule 7: the selected season's episodes are the thing the
+                    // viewer is waiting for; poster lookups wait their turn
+                    // instead of competing for the same host's requests.
+                    paused = episodesPaused
                 )
 
             var posterFocused by remember(season) {
@@ -11429,79 +11732,117 @@ private fun DetailTabStrip(
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         tabs.forEach { tab ->
-            val isSelected = tab == selected
-            Surface(
-                onClick = { onSelect(tab) },
-                shape = ClickableSurfaceDefaults.shape(shape = KBShapeChip),
-                colors = ClickableSurfaceDefaults.colors(
-                    containerColor = if (isSelected) KBSurfaceRaised else Color.Transparent,
-                    contentColor = if (isSelected) KBTextHi else KBTextLo,
-                    focusedContainerColor = KBSurfaceRaised,
-                    focusedContentColor = KBAccent,
-                    pressedContainerColor = KBSurfaceRaised,
-                    pressedContentColor = KBAccent
-                ),
-                scale = ClickableSurfaceDefaults.scale(
-                    focusedScale = KBFocusChip,
-                    pressedScale = KBFocusPressed
-                ),
-                border = ClickableSurfaceDefaults.border(
-                    border = Border(
-                        border = BorderStroke(
-                            1.dp,
-                            if (isSelected) KBAccent.copy(alpha = 0.7f)
-                            else KBTextLo.copy(alpha = 0.25f)
-                        ),
-                        shape = KBShapeChip
-                    ),
-                    focusedBorder = Border(
-                        border = BorderStroke(2.dp, KBAccent),
-                        shape = KBShapeChip
-                    )
-                ),
-                glow = ClickableSurfaceDefaults.glow(
-                    focusedGlow = Glow(
-                        elevationColor = KBAccent,
-                        elevation = KBFocusGlowSmall
-                    )
-                ),
-                modifier = Modifier
-                    .focusRequester(requesters.getValue(tab))
-                    .onPreviewKeyEvent { event ->
-                        if (event.type != KeyEventType.KeyDown) {
-                            return@onPreviewKeyEvent false
-                        }
-                        when (event.key) {
-                            Key.DirectionLeft -> {
-                                onStep(-1)
-                                true
-                            }
-                            Key.DirectionRight -> {
-                                onStep(1)
-                                true
-                            }
-                            Key.DirectionDown -> {
-                                onDown()
-                                true
-                            }
-                            Key.DirectionUp -> {
-                                onUp()
-                                true
-                            }
-                            else -> false
-                        }
-                    }
-            ) {
-                Text(
-                    text = tab.label,
-                    color = if (isSelected) KBTextHi else KBTextLo,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                    maxLines = 1,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+            // KEYED BY TAB (spec 2026-11-21, rule 3). Unkeyed, a pill's node is
+            // recreated whenever the list around it changes, and a recreated
+            // node cannot keep the focus - which is how eight Down presses in
+            // one paste each restarted from the header. The key is the tab, not
+            // its index, so the Episodes pill keeps its identity when a viewer
+            // steps to Details and back.
+            key(tab) {
+                DetailTabPill(
+                    tab = tab,
+                    selected = tab == selected,
+                    requester = requesters.getValue(tab),
+                    onSelect = onSelect,
+                    onStep = onStep,
+                    onUp = onUp,
+                    onDown = onDown
                 )
             }
         }
+    }
+}
+
+/**
+ * One pill of the strip, extracted so the keyed `key(tab)` wrapper above is the
+ * only thing that owns the pill's identity.
+ *
+ * Every press is consumed: LEFT/RIGHT switch tabs and are clamped by the caller,
+ * DOWN enters the tab's content ([onDown]), and UP is the row above the strip.
+ * The pill never moves focus sideways itself - [onStep] selects the next tab and
+ * the screen asks that pill for the focus in the same move, so focus follows the
+ * selection rather than the platform's geometric search finding a neighbour.
+ */
+@Composable
+private fun DetailTabPill(
+    tab: DetailTab,
+    selected: Boolean,
+    requester: FocusRequester,
+    onSelect: (DetailTab) -> Unit,
+    onStep: (Int) -> Unit,
+    onUp: () -> Unit,
+    onDown: () -> Unit
+) {
+    Surface(
+        onClick = { onSelect(tab) },
+        shape = ClickableSurfaceDefaults.shape(shape = KBShapeChip),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = if (selected) KBSurfaceRaised else Color.Transparent,
+            contentColor = if (selected) KBTextHi else KBTextLo,
+            focusedContainerColor = KBSurfaceRaised,
+            focusedContentColor = KBAccent,
+            pressedContainerColor = KBSurfaceRaised,
+            pressedContentColor = KBAccent
+        ),
+        scale = ClickableSurfaceDefaults.scale(
+            focusedScale = KBFocusChip,
+            pressedScale = KBFocusPressed
+        ),
+        border = ClickableSurfaceDefaults.border(
+            border = Border(
+                border = BorderStroke(
+                    1.dp,
+                    if (selected) KBAccent.copy(alpha = 0.7f)
+                    else KBTextLo.copy(alpha = 0.25f)
+                ),
+                shape = KBShapeChip
+            ),
+            focusedBorder = Border(
+                border = BorderStroke(2.dp, KBAccent),
+                shape = KBShapeChip
+            )
+        ),
+        glow = ClickableSurfaceDefaults.glow(
+            focusedGlow = Glow(
+                elevationColor = KBAccent,
+                elevation = KBFocusGlowSmall
+            )
+        ),
+        modifier = Modifier
+            .focusRequester(requester)
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) {
+                    return@onPreviewKeyEvent false
+                }
+                when (event.key) {
+                    Key.DirectionLeft -> {
+                        onStep(-1)
+                        true
+                    }
+                    Key.DirectionRight -> {
+                        onStep(1)
+                        true
+                    }
+                    Key.DirectionDown -> {
+                        onDown()
+                        true
+                    }
+                    Key.DirectionUp -> {
+                        onUp()
+                        true
+                    }
+                    else -> false
+                }
+            }
+    ) {
+        Text(
+            text = tab.label,
+            color = if (selected) KBTextHi else KBTextLo,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+        )
     }
 }
 

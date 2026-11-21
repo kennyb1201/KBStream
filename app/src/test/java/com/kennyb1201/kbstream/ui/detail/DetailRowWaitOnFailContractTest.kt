@@ -89,7 +89,7 @@ class DetailRowWaitOnFailContractTest {
         assertTrue(
             "and the re-ask is for the SAME target, with the settled presence - the " +
                 "press never starts asking for rows below it",
-            move.contains("focusRow(target, fromColumn, from, direction, settled)")
+            move.contains("askRow(target, fromColumn, from, direction, settled)")
         )
         val wait = move.slice(
             "if (rowsStillArriving() || DetailFocusChain.exists(target, settledRows)) {",
@@ -99,7 +99,7 @@ class DetailRowWaitOnFailContractTest {
             "exactly one re-ask inside the wait: the first failed landing, then one " +
                 "retry - the second, post-settle attempt of 2026-11-14's F2 is a " +
                 "separate step and is pinned in DetailGenreTrapAndSeeMoreTest",
-            wait.count("focusRow(") == 1 && wait.count("focusMediaStrip(") == 1
+            wait.count("askRow(") == 1 && wait.count("askMediaStrip(") == 1
         )
         assertTrue(
             "a retry that lands ends the move with that landing",
@@ -162,7 +162,7 @@ class DetailRowWaitOnFailContractTest {
                 "a retry that asked for a card would change what the press means",
             firstAsk.contains("target == DetailRow.MEDIA && direction == DetailFocusDirection.DOWN") &&
                 wait.contains("target == DetailRow.MEDIA && direction == DetailFocusDirection.DOWN") &&
-                wait.contains("focusMediaStrip(from)")
+                wait.contains("askMediaStrip(from)")
         )
     }
 
@@ -187,8 +187,10 @@ class DetailRowWaitOnFailContractTest {
         assertTrue(
             "the line appends both, leaving every existing field where the paste " +
                 "expects it",
-            move.contains("\"landed=\$tracedLanded via=\$tracedVia loading=\$tracedLoading \"") &&
-                move.contains("\"waited=\$tracedWaited\"") &&
+            move.contains(
+                "\"landed=\$tracedLanded verified=\$tracedVerified via=\$tracedVia \""
+            ) &&
+                move.contains("\"loading=\$tracedLoading waited=\$tracedWaited\"") &&
                 move.contains("\"detail move \$from \$direction -> ")
         )
     }

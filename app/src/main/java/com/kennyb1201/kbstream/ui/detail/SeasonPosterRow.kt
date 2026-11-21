@@ -161,12 +161,18 @@ internal fun rememberSeasonPosterResolver(
 @Composable
 internal fun rememberSeasonPoster(
     season: Int,
-    resolver: SeasonPosterResolver
+    resolver: SeasonPosterResolver,
+    // Spec 2026-11-21, rule 7: poster art must never compete with the episode
+    // list for the network. While the selected season's episodes are loading
+    // the TV row pauses its poster lookups (they rerun when this flips back),
+    // so the row the viewer is waiting for is served first. A poster already
+    // resolved stays drawn - this only gates new requests.
+    paused: Boolean = false
 ): String? {
     var poster by remember(season) { mutableStateOf<String?>(null) }
     var runs by remember(season) { mutableIntStateOf(0) }
-    LaunchedEffect(season, resolver) {
-        if (!resolver.canResolve) return@LaunchedEffect
+    LaunchedEffect(season, resolver, paused) {
+        if (!resolver.canResolve || paused) return@LaunchedEffect
         val lookup = resolver.lookup(season) ?: return@LaunchedEffect
         val trigger = if (runs == 0) "open" else "rerun"
         runs += 1

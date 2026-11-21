@@ -255,13 +255,17 @@ class DetailFocusGraphContractTest {
     @Test
     fun `the episode effects stop placing the focus once the viewer steers away`() {
         assertEquals(
-            "both of them - the rail's auto-scroll and the per-card auto-focus - " +
-                "are gated on the recorded landing row. They re-run on every " +
-                "episodes load, and after a season reload dragged the focus back " +
-                "up to a card the viewer had already walked away from, which is " +
-                "the reported snap-back",
-            2,
+            "one of them is left - the rail's auto-SCROLL. The per-card " +
+                "auto-FOCUS is gone entirely (2026-11-21, rule 2: data arrival " +
+                "never moves focus); the scroll still has to respect the latch, " +
+                "because a late episode delivery dragging the rail back after " +
+                "the viewer walked away is the reported snap-back",
+            1,
             Regex("episodeAutoFocusAllowed\\(\\) &&").findAll(detail).count()
+        )
+        assertFalse(
+            "and nothing asks an episode card for focus when a list lands",
+            detail.contains("shouldFocusThisCard")
         )
         assertTrue(
             "the record is the REQUESTED target, written where every chain move " +
