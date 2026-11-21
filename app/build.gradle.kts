@@ -440,8 +440,13 @@ android {
             // can still run the app.
             ndk {
                 abiFilters += listOf("arm64-v8a", "armeabi-v7a")
-                // See `captureAbi` above: the emulator the profile is captured
-                // on is x86_64, and this is the variant the generator installs.
+                // Belt and braces for the profile CAPTURE, which runs on an
+                // x86_64 emulator: the variant the generator installs is built
+                // from this block. The plugin may override the filter for its
+                // own variant (it targets the connected device's ABI), in which
+                // case this is inert - and if it does not, this is what makes
+                // the APK installable on the emulator at all. Nothing but the
+                // generation workflow passes the property.
                 if (captureAbi != null) abiFilters += captureAbi
             }
         }
@@ -615,7 +620,21 @@ baselineProfile {
 }
 
 
+
+
 dependencies {
+    // The other half of the baseline profile: the module that CAPTURES it.
+    //
+    // Without this the consumer plugin has no producer for the release variant,
+    // so `:app:generateBaselineProfile` succeeds having generated nothing, the
+    // copy-into-src task writes no file, and the profile stays empty forever.
+    // The plugin says so in one warning line ("no dependency has been set for
+    // variant `release`, so no baseline profile will be generated for it") that
+    // scrolls past in a CI log - which is how the first two runs of the
+    // generation workflow ended green on the step that mattered and produced
+    // nothing to upload.
+    baselineProfile(project(":baselineprofile"))
+
     implementation(libs.androidx.core.ktx)
     // EncryptedSharedPreferences backs the auth-token stores (Supabase session,
     // Simkl token, MDBList key). The key is held in the AndroidKeyStore and
