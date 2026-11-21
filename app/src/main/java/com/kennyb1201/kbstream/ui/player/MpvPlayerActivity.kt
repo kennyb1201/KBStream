@@ -1600,7 +1600,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             outputMode = AppPreferences.getAudioOutput(this),
             tuningNeutral = effectiveAudioDownmix() == PlayerAudioTuning.DOWNMIX_AUTO &&
                 effectiveAudioDialogueBoost() == 0 &&
-                effectiveAudioVolumeBoost() == 0
+                effectiveAudioVolumeBoost() == 0 &&
+                // Night Mode is not neutral either: it cannot ride a bitstream,
+                // so Auto must decode while it is on (F4).
+                !AppPreferences.getAudioNightMode(this)
         )
 
         if (!view.initialize()) return
@@ -1620,6 +1623,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         view.setBufferMode(AppPreferences.getDefaultBufferMode(this))
         view.setDialogueBoost(effectiveAudioDialogueBoost())
         view.setVolumeBoostDb(effectiveAudioVolumeBoost())
+        // Global, not per-title (v1): the pref the Settings row and both panels
+        // write. The `af` chain picks it up now, and re-issues on a toggle.
+        view.setNightMode(AppPreferences.getAudioNightMode(this))
 
         fun loadStream() {
             startFrameRateProbe()
@@ -4997,6 +5003,18 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         audioVolumeBoostDb = db
         persistTitlePreferences()
         surface?.setVolumeBoostDb(effectiveAudioVolumeBoost())
+        refreshSettings()
+    }
+
+    /**
+     * Night Mode from the settings panel: the one global audio toggle, so it
+     * writes the shared pref (nothing per-title) and re-issues `af` live - the
+     * change is heard within the buffer, no rebuild, no rebuffer.
+     */
+    internal fun chooseNightMode(enabled: Boolean) {
+        AppPreferences.setAudioNightMode(this, enabled)
+        surface?.setNightMode(enabled)
+        showToast("Night Mode: " + if (enabled) "ON" else "OFF", 2_500L)
         refreshSettings()
     }
 

@@ -2608,6 +2608,14 @@ private fun VideoPaneMobile() {
     var audioVolumeBoost by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getAudioVolumeBoostDb(context))
     }
+    // Night Mode is the one audio tuning key that SYNCS (see
+    // PrefsPayloadBuilder.SYNCED_PREF_KEYS), so its read is keyed on the sync
+    // revision rather than the profile: flipping it on the TV has to move this
+    // switch while the pane is open.
+    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    var audioNightMode by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getAudioNightMode(context))
+    }
 
     PaneScroll {
         // Audio leads (settings reorg §5.1): the pane is called "Video & Audio",
@@ -2660,6 +2668,17 @@ private fun VideoPaneMobile() {
             onLevelChange = {
                 audioDialogueBoost = it
                 AppPreferences.setAudioDialogueBoost(context, it)
+            }
+        )
+        SettingsToggleMobile(
+            label = "Night Mode",
+            description = "Compresses loud and quiet passages toward each other, so " +
+                "dialogue stays audible without loud peaks. Night Mode decodes audio — " +
+                "passthrough is off while it's on.",
+            checked = audioNightMode,
+            onChange = {
+                audioNightMode = it
+                AppPreferences.setAudioNightMode(context, it)
             }
         )
         SettingsChoiceMobile(

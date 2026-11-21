@@ -451,7 +451,7 @@ internal object SettingsSearchIndex {
         ),
 
         // ── Video & Audio ─────────────────────────────────────────────────────
-        // Fourteen rows that were drawn, labelled and reachable by scrolling -
+        // Fifteen rows that were drawn, labelled and reachable by scrolling -
         // and findable by no query at all: the pane the viewer goes to for
         // "why does this sound wrong" had nothing in the index. Order is the
         // pane's own (settings reorg §14.2, U3): audio first, then buffering,
@@ -480,6 +480,13 @@ internal object SettingsSearchIndex {
             SettingsPane.VIDEO,
             "Volume Boost",
             "volume boost gain louder quiet limiter dynamics loudness"
+        ),
+        SettingSearchEntry(
+            "video.night-mode",
+            SettingsPane.VIDEO,
+            "Night Mode",
+            "night mode compress compression dynamics quiet dialogue explosion " +
+                "loud peaks loudness late night"
         ),
         SettingSearchEntry(
             "video.network-buffer",

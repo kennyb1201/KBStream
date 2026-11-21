@@ -52,6 +52,7 @@ internal class PlayerPanelSection(
     private val positionPills = mutableListOf<Pair<TextView, Int>>()
     private val downmixPills = mutableListOf<Pair<TextView, Int>>()
     private val volumePills = mutableListOf<Pair<TextView, Int>>()
+    private val nightModePills = mutableListOf<Pair<TextView, Boolean>>()
     private var audioDelayZeroPill: TextView? = null
     private var dialogueValue: TextView? = null
 
@@ -147,6 +148,23 @@ internal class PlayerPanelSection(
             )
         )
 
+        // A toggle, not a level: Night Mode rides the gain against the signal
+        // level (see AudioDownmix.NightModeCompressor), so there is nothing to
+        // step. Global - v1 has no per-title override.
+        column.addView(label("Night Mode", topMarginDp = 8))
+        addPillGrid(column, 4, listOf("Off" to false, "On" to true), nightModePills) { enabled ->
+            activity.setNightMode(enabled)
+            refresh()
+        }
+        column.addView(
+            label(
+                "Compresses loud and quiet passages toward each other, so dialogue stays " +
+                    "audible without loud peaks. Decodes audio - passthrough is off while " +
+                    "it is on.",
+                topMarginDp = 4
+            )
+        )
+
         column.addView(label("Volume boost", topMarginDp = 8))
         addPillGrid(
             column,
@@ -230,6 +248,9 @@ internal class PlayerPanelSection(
             }
             volumePills.forEach { (view, value) ->
                 stylePill(view, PlayerTrackBridge.audioVolumeBoostDb == value)
+            }
+            nightModePills.forEach { (view, on) ->
+                stylePill(view, AppPreferences.getAudioNightMode(context) == on)
             }
             dialogueValue?.text = PlayerAudioTuning.dialogueLevelText(
                 PlayerTrackBridge.audioDialogueBoost

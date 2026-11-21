@@ -344,6 +344,14 @@ object PrefsPayloadBuilder {
         "auto_skip_credits",
         "preferred_audio_language",          // preferred track languages: same on every device
         "preferred_subtitle_language",
+        // Night Mode (dynamic-range compression) is the one AUDIO TUNING key
+        // that syncs: whether a mix needs its quiet passages lifted and its
+        // peaks tamed is a fact about the content a viewer is watching, not
+        // about this room's speakers or this box's decoders - so the living-room
+        // TV and the bedroom phone should agree. Downmix, dialogue boost and
+        // volume boost stay device-local (they answer the speakers and the
+        // room), which is why they are not here.
+        "audio_night_mode",
         "subtitle_mode",                     // off / forced only / on: a viewing preference
         "auto_fetch_subtitles",              // subtitle auto-fetch: a viewing preference
         "spoiler_free",                      // spoiler-free browsing: how much of a show's

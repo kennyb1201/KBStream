@@ -371,7 +371,11 @@ internal object PlayerTrackBridge {
             dialogueBoost = audioDialogueBoost.takeIf { it >= 0 }
                 ?: AppPreferences.getAudioDialogueBoost(context),
             volumeBoostDb = audioVolumeBoostDb.takeIf { it >= 0 }
-                ?: AppPreferences.getAudioVolumeBoostDb(context)
+                ?: AppPreferences.getAudioVolumeBoostDb(context),
+            // Night Mode has no per-title override in v1: it is one global
+            // toggle, read here so a session that started before the pref
+            // changed republishes the same value every panel change.
+            nightMode = AppPreferences.getAudioNightMode(context)
         )
     }
 

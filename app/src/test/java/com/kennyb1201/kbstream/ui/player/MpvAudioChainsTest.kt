@@ -32,12 +32,24 @@ class MpvAudioChainsTest {
 
     @Test
     fun `nothing is filtered while every knob is off`() {
-        assertNull(MpvAudioChains.audioFilterSpec(dialogueLevel = 0, channels = 6, volumeBoostDb = 0))
+        assertNull(
+            MpvAudioChains.audioFilterSpec(
+                dialogueLevel = 0,
+                channels = 6,
+                volumeBoostDb = 0,
+                nightMode = false
+            )
+        )
     }
 
     @Test
     fun `the boost's gain and limiter are one chain, limiter last`() {
-        val spec = MpvAudioChains.audioFilterSpec(dialogueLevel = 0, channels = 2, volumeBoostDb = 6)
+        val spec = MpvAudioChains.audioFilterSpec(
+            dialogueLevel = 0,
+            channels = 2,
+            volumeBoostDb = 6,
+            nightMode = false
+        )
 
         assertEquals("volume=6dB,alimiter=level=disabled:limit=0.97", spec)
         // The order IS the fix: a limiter ahead of the gain could not catch what
@@ -50,7 +62,12 @@ class MpvAudioChainsTest {
 
     @Test
     fun `the dialogue lift and the boost share the one af property`() {
-        val spec = MpvAudioChains.audioFilterSpec(dialogueLevel = 1, channels = 6, volumeBoostDb = 3)
+        val spec = MpvAudioChains.audioFilterSpec(
+            dialogueLevel = 1,
+            channels = 6,
+            volumeBoostDb = 3,
+            nightMode = false
+        )
 
         assertTrue(
             "the pan comes first, the boost's chain after it: $spec",
@@ -152,11 +169,21 @@ class MpvAudioChainsTest {
 
     @Test
     fun `decode never bitstreams, passthrough always does`() {
-        assertEquals("", MpvAudioChains.audioSpdifSpec(PlayerAudioTuning.AUDIO_OUTPUT_DECODE, true))
-        assertEquals("", MpvAudioChains.audioSpdifSpec(PlayerAudioTuning.AUDIO_OUTPUT_DECODE, false))
+        assertEquals(
+            "",
+            MpvAudioChains.audioSpdifSpec(PlayerAudioTuning.AUDIO_OUTPUT_DECODE, true, false)
+        )
+        assertEquals(
+            "",
+            MpvAudioChains.audioSpdifSpec(PlayerAudioTuning.AUDIO_OUTPUT_DECODE, false, false)
+        )
         assertEquals(
             MpvAudioChains.SPDIF_CODECS,
-            MpvAudioChains.audioSpdifSpec(PlayerAudioTuning.AUDIO_OUTPUT_PASSTHROUGH, true)
+            MpvAudioChains.audioSpdifSpec(
+                PlayerAudioTuning.AUDIO_OUTPUT_PASSTHROUGH,
+                tuningNeutral = true,
+                nightMode = false
+            )
         )
     }
 
@@ -166,11 +193,19 @@ class MpvAudioChainsTest {
         // app to fold / lift / boost, and the change would vanish silently.
         assertEquals(
             MpvAudioChains.SPDIF_CODECS,
-            MpvAudioChains.audioSpdifSpec(PlayerAudioTuning.AUDIO_OUTPUT_AUTO, tuningNeutral = true)
+            MpvAudioChains.audioSpdifSpec(
+                PlayerAudioTuning.AUDIO_OUTPUT_AUTO,
+                tuningNeutral = true,
+                nightMode = false
+            )
         )
         assertEquals(
             "",
-            MpvAudioChains.audioSpdifSpec(PlayerAudioTuning.AUDIO_OUTPUT_AUTO, tuningNeutral = false)
+            MpvAudioChains.audioSpdifSpec(
+                PlayerAudioTuning.AUDIO_OUTPUT_AUTO,
+                tuningNeutral = false,
+                nightMode = false
+            )
         )
     }
 

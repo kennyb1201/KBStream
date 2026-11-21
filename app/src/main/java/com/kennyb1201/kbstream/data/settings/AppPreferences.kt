@@ -123,6 +123,7 @@ object AppPreferences {
     private const val KEY_AUDIO_DOWNMIX = "audio_downmix_target"               // 0=auto, 2=stereo, 6=5.1 (see PlayerAudioTuning)
     private const val KEY_AUDIO_DIALOGUE_BOOST = "audio_dialogue_boost"       // 0=off .. PlayerAudioTuning.DIALOGUE_MAX
     private const val KEY_AUDIO_VOLUME_BOOST_DB = "audio_volume_boost_db"     // 0-15 dB, with the limiter
+    private const val KEY_AUDIO_NIGHT_MODE = "audio_night_mode"               // compress the mix's dynamic range
     private const val KEY_AUDIO_OUTPUT = "audio_output_mode"                 // 0=auto, 1=passthrough, 2=decode (see PlayerAudioTuning)
     private const val KEY_DV_COMPAT_MODE = "dv_compat_mode"                  // 0=p7->8.1, 1=none, 3=strip all (2=legacy auto+hdr10+, 4=legacy combined 8.1)
     private const val KEY_STRIP_HDR10_PLUS = "strip_hdr10_plus"             // independent of the DV mode
@@ -1329,6 +1330,27 @@ object AppPreferences {
 
     fun setAudioVolumeBoostDb(context: Context, db: Int) {
         prefs(context).edit().putInt(KEY_AUDIO_VOLUME_BOOST_DB, db.coerceIn(0, 15)).apply()
+    }
+
+    /**
+     * Night Mode: compresses the mix's dynamic range, so quiet passages (whispers,
+     * dialogue under score) come up and loud peaks come down at a fixed TV volume.
+     *
+     * Off by default, and applied by each engine through the audio path it already
+     * owns (the Exo chain's compressor, MPV's `dynaudnorm` filter) - neither is a
+     * dialogue boost or a volume boost, and it stacks with both.
+     *
+     * SYNCED, unlike the three tuning keys above it: it is a viewing preference
+     * about content (some mixes are unwatchable at night), not an answer about
+     * this room's speakers, so flipping it on the phone must reach the TV. See
+     * `PrefsPayloadBuilder.SYNCED_PREF_KEYS`.
+     */
+    fun getAudioNightMode(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_AUDIO_NIGHT_MODE, false)
+
+    fun setAudioNightMode(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_AUDIO_NIGHT_MODE, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     /**

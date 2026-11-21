@@ -28,9 +28,14 @@ import kotlin.math.roundToInt
  *     effects untouched), and a multichannel stream keeps its layout but has the
  *     real center channel lifted and its surrounds trimmed, so the device's own
  *     fold then works on an already-balanced mix rather than the untouched one.
- *  3. **Gain** by the configured volume boost, so content mixed too quietly is
+ *  3. **Compress** when Night Mode is on ([PlayerAudioTuning.nightMode]): an
+ *     RMS gain rider with a peak guard ([AudioDownmix.NightModeCompressor]) that
+ *     lifts quiet passages and holds peaks down. Off, this step is skipped
+ *     outright - not a multiply by one - so a Night-Mode-off session is exactly
+ *     today's build, sample for sample.
+ *  4. **Gain** by the configured volume boost, so content mixed too quietly is
  *     audible without the TV's volume rocker pinned and the amp clipping.
- *  4. **Limit** the result with a linked-channel peak limiter, which is what
+ *  5. **Limit** the result with a linked-channel peak limiter, which is what
  *     makes the extra level safe: the fold sums four to six channels of a
  *     near-full-scale mix, and a plain sum clips.
  *
@@ -88,6 +93,9 @@ internal class AudioDownmixProcessor : BaseAudioProcessor() {
 
     private var limiter = AudioDownmix.Limiter(sampleRate = 48_000)
 
+    /** Night Mode's gain rider; its state is preallocated, like every hot-path field here. */
+    private var nightCompressor = AudioDownmix.NightModeCompressor(sampleRate = 48_000)
+
     private var channelScratch = FloatArray(0)
     private var mixScratch = FloatArray(0)
 
@@ -105,6 +113,7 @@ internal class AudioDownmixProcessor : BaseAudioProcessor() {
             }
 
         limiter = AudioDownmix.Limiter(sampleRate = sampleRate)
+        nightCompressor = AudioDownmix.NightModeCompressor(sampleRate = sampleRate)
         matrixSignature = Int.MIN_VALUE
 
         if (bytesPerSample == 0 || AudioDownmix.rolesFor(inputChannels) == null) {
@@ -143,11 +152,13 @@ internal class AudioDownmixProcessor : BaseAudioProcessor() {
     @Suppress("OVERRIDE_DEPRECATION") // media3's AudioProcessor.onFlush is deprecated.
     override fun onFlush() {
         limiter.reset()
+        nightCompressor.reset()
         matrixSignature = Int.MIN_VALUE
     }
 
     override fun onReset() {
         limiter.reset()
+        nightCompressor.reset()
         matrixSignature = Int.MIN_VALUE
     }
 
@@ -181,6 +192,7 @@ internal class AudioDownmixProcessor : BaseAudioProcessor() {
 
         val gain = PlayerAudioTuning.linearGain
         val midLift = PlayerAudioTuning.midGain
+        val nightMode = PlayerAudioTuning.nightMode
         val liftPhantomCenter = inputChannels == 2 && outputChannels == 2 && midLift > 1f
         val mixing = matrix
 
@@ -216,6 +228,26 @@ internal class AudioDownmixProcessor : BaseAudioProcessor() {
                     val extra = mid * (midLift - 1f)
                     mixed[0] += extra
                     mixed[1] += extra
+                }
+            }
+
+            // Night Mode: one gain for the whole frame, computed from its own
+            // level - after the fold/balance (so the lift is part of what is
+            // measured) and before the volume gain and the limiter (so the
+            // limiter sees the compressed, then boosted, samples).
+            if (nightMode) {
+                var sumSquares = 0f
+                var framePeak = 0f
+                for (out in 0 until outputChannels) {
+                    val value = mixed[out]
+                    sumSquares += value * value
+                    val magnitude = abs(value)
+                    if (magnitude > framePeak) framePeak = magnitude
+                }
+                val compression =
+                    nightCompressor.nextGain(sumSquares / outputChannels, framePeak)
+                for (out in 0 until outputChannels) {
+                    mixed[out] *= compression
                 }
             }
 

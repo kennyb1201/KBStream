@@ -1,6 +1,10 @@
 package com.kennyb1201.kbstream.ui.player
 
+import kotlin.math.abs
 import kotlin.math.exp
+import kotlin.math.log10
+import kotlin.math.pow
+import kotlin.math.sqrt
 
 /**
  * The channel arithmetic behind the app's audio downmix — pure Kotlin, no
@@ -257,6 +261,125 @@ internal object AudioDownmix {
     ): Boolean {
         if (inputChannels <= 0) return false
         return desiredOutputChannels(inputChannels) != currentOutputChannels
+    }
+
+    /**
+     * Night Mode's gain rider: a gentle RMS compressor with a linked-channel
+     * peak guard - the continuous counterpart of what [Limiter] does only at
+     * peaks.
+     *
+     * Night Mode is not a dialogue boost (that lifts one channel) and not a
+     * volume boost (that is a flat gain): it rides the gain against the signal
+     * level, so a whisper under score comes up and an explosion comes down at
+     * the same TV volume. It sits AFTER the fold/balance and BEFORE the volume
+     * gain and [Limiter], so the limiter sees the compressed and then boosted
+     * samples - the same order the MPV chain writes its filters in.
+     *
+     * Not full EBU R128 `loudnorm`: that wants measured loudness over a program
+     * and adds latency, and this runs inside a real-time sink. The shape here is
+     * a soft-knee compressor over an RMS envelope (threshold [THRESHOLD_DB],
+     * ratio [RATIO], [KNEE_DB] of knee) with [ATTACK_MS]/[RELEASE_MS]
+     * smoothing and [MAKEUP_DB] of makeup gain, plus a hard peak guard so a
+     * transient is never pushed past [PEAK_CEILING] before the limiter even
+     * sees it.
+     *
+     * No lookahead and no allocation: the state is two floats, and [nextGain]
+     * is called once per frame (not per sample) with the frame's mean square and
+     * peak. These are the spec's starting values; the ear test is the arbiter.
+     */
+    class NightModeCompressor(
+        sampleRate: Int = 48_000,
+        private val thresholdDb: Float = THRESHOLD_DB,
+        private val ratio: Float = RATIO,
+        private val kneeDb: Float = KNEE_DB,
+        attackMs: Float = ATTACK_MS,
+        releaseMs: Float = RELEASE_MS,
+        private val makeupDb: Float = MAKEUP_DB
+    ) {
+
+        private val attackCoef =
+            exp(-1f / ((attackMs / 1000f) * sampleRate).coerceAtLeast(1f))
+
+        private val releaseCoef =
+            exp(-1f / ((releaseMs / 1000f) * sampleRate).coerceAtLeast(1f))
+
+        /** Smoothed RMS level of the program, linear. */
+        private var envelope = 0f
+
+        /** Smoothed compression gain applied to every channel (1 = untouched). */
+        private var gain = 1f
+
+        /** Current gain, visible for tests/diagnostics. */
+        val currentGain: Float
+            get() = gain
+
+        /** New stream (seek/track change, or Night Mode just turned on). */
+        fun reset() {
+            envelope = 0f
+            gain = 1f
+        }
+
+        /**
+         * Gain for the next frame, from its mean square and its peak magnitude.
+         *
+         * The gain is smoothed rather than the reduction: a rising level pulls
+         * it down over [ATTACK_MS] and a falling one lets it back up over
+         * [RELEASE_MS], which is what keeps music from pumping. The peak guard
+         * is applied OUTSIDE that smoothing (it is the frame's own fact) so it
+         * can never be outrun by the envelope.
+         */
+        fun nextGain(meanSquare: Float, peak: Float): Float {
+            val level = sqrt(meanSquare.coerceAtLeast(0f))
+            envelope =
+                if (level > envelope) {
+                    attackCoef * envelope + (1f - attackCoef) * level
+                } else {
+                    releaseCoef * envelope + (1f - releaseCoef) * level
+                }
+
+            val levelDb = 20f * log10(envelope.coerceAtLeast(1e-6f))
+            val over = levelDb - thresholdDb
+            val reductionDb =
+                when {
+                    over <= -kneeDb / 2f -> 0f
+                    over >= kneeDb / 2f -> (1f / ratio - 1f) * over
+                    else -> {
+                        val kneePos = over + kneeDb / 2f
+                        (1f / ratio - 1f) * kneePos * kneePos / (2f * kneeDb)
+                    }
+                }
+
+            val target = 10f.pow((reductionDb + makeupDb) / 20f)
+            gain =
+                if (target < gain) {
+                    attackCoef * gain + (1f - attackCoef) * target
+                } else {
+                    releaseCoef * gain + (1f - releaseCoef) * target
+                }
+
+            val magnitude = abs(peak)
+            return if (magnitude * gain > PEAK_CEILING) PEAK_CEILING / magnitude else gain
+        }
+
+        companion object {
+            /** Where compression starts. -18 dBFS leaves normal dialogue alone. */
+            const val THRESHOLD_DB = -18f
+
+            /** 3:1: quiet passages rise, peaks are tamed, the mix is still the mix. */
+            const val RATIO = 3f
+
+            /** 6 dB of soft knee, so nothing switches on at the threshold. */
+            const val KNEE_DB = 6f
+
+            const val ATTACK_MS = 8f
+            const val RELEASE_MS = 250f
+
+            /** Makeup gain, capped: the limiter after it is what makes it safe. */
+            const val MAKEUP_DB = 6f
+
+            /** Pre-limiter guard, matching the listening ceiling this chain targets. */
+            const val PEAK_CEILING = 0.97f
+        }
     }
 
     /**

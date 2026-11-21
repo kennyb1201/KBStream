@@ -27,18 +27,43 @@ internal object MpvAudioChains {
     const val SPDIF_CODECS = "ac3,eac3,dts,dts-hd,truehd"
 
     /**
+     * Night Mode's filter: FFmpeg's Dynamic Audio Normalizer, which is built for
+     * exactly this job - frame-based gain riding, so quiet passages come up and
+     * loud ones are held down.
+     *
+     * The short frame (150 ms, the starting point in mpv night-mode practice)
+     * keeps it responsive to a scene rather than an act; `peak=0.95` is FFmpeg's
+     * own default ceiling; `maxgain=2` caps the amplification at ~+6 dB, the
+     * spec's makeup figure - `maxgain` is a LINEAR factor (default 10), not dB.
+     * Both names/units were verified against the FFmpeg 8.1 filter reference, and
+     * `dynaudnorm` itself was verified present in the shipped AAR's libavfilter
+     * (FFmpeg n8.1.1) before being relied on - see the NightMode contract test.
+     *
+     * These are STARTING values: the ear test is the arbiter and the string is
+     * the one place to change them.
+     */
+    const val NIGHT_MODE_FILTER = "dynaudnorm=framelen=150:maxgain=2:peak=0.95"
+
+    /**
      * The whole `af` chain for this session, or null when nothing is on.
      *
      * Order matters and is the point of composing it here: the dialogue lift
-     * first, then the volume boost's gain and its limiter - the limiter AFTER
-     * the gain is the only arrangement in which it can see the boosted samples,
-     * and it is the counterpart of the main player's own limiter sitting after
-     * its boost. `af` is a single property with a single owner, so both filters
-     * are written together or one would erase the other.
+     * first, then Night Mode's gain riding, then the volume boost's gain and its
+     * limiter - the limiter AFTER the gain is the only arrangement in which it
+     * can see the compressed and boosted samples, and it is the counterpart of
+     * the main player's own limiter sitting after its own compression and boost.
+     * `af` is a single property with a single owner, so every filter is written
+     * together or one would erase the others.
      */
-    fun audioFilterSpec(dialogueLevel: Int, channels: Int, volumeBoostDb: Int): String? {
+    fun audioFilterSpec(
+        dialogueLevel: Int,
+        channels: Int,
+        volumeBoostDb: Int,
+        nightMode: Boolean
+    ): String? {
         val spec = listOfNotNull(
             dialogueFilterSpec(dialogueLevel, channels),
+            if (nightMode) NIGHT_MODE_FILTER else null,
             volumeBoostSpec(volumeBoostDb)
         )
         return spec.takeIf { it.isNotEmpty() }?.joinToString(",")
@@ -111,12 +136,24 @@ internal object MpvAudioChains {
      * untouched, or an empty string to keep everything decoded.
      *
      * [tuningNeutral] is the caller's answer to "is the downmix / dialogue /
-     * volume chain doing anything for this session": Auto passes the bitstream
-     * through only while it is NOT, because passthrough never reaches the app's
-     * PCM chain and would silently discard a change the viewer asked for - the
-     * same rule [PlayerAudioTuning.requiresDecode] applies on the other engine.
+     * volume / Night Mode chain doing anything for this session": Auto passes
+     * the bitstream through only while it is NOT, because passthrough never
+     * reaches the app's PCM chain and would silently discard a change the viewer
+     * asked for - the same rule [PlayerAudioTuning.requiresDecode] applies on the
+     * other engine.
+     *
+     * [nightMode] outranks even an explicit Passthrough, exactly as
+     * [PlayerAudioTuning.requiresDecode] does on the Exo side and as Night Mode's
+     * Settings description promises: the gain rider cannot touch a bitstream, so
+     * a mode that cannot be honoured would change a number and nothing audible.
+     * Turning Night Mode off gives the bitstream back.
      */
-    fun audioSpdifSpec(outputMode: Int, tuningNeutral: Boolean): String = when {
+    fun audioSpdifSpec(
+        outputMode: Int,
+        tuningNeutral: Boolean,
+        nightMode: Boolean
+    ): String = when {
+        nightMode -> ""
         outputMode == PlayerAudioTuning.AUDIO_OUTPUT_DECODE -> ""
         outputMode == PlayerAudioTuning.AUDIO_OUTPUT_PASSTHROUGH -> SPDIF_CODECS
         tuningNeutral -> SPDIF_CODECS

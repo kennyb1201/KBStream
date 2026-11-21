@@ -581,6 +581,13 @@ fun SettingsScreen(
     var audioVolumeBoostDb by remember(profileRowKey) {
         mutableIntStateOf(AppPreferences.getAudioVolumeBoostDb(context))
     }
+    // Night Mode is the one audio tuning key that SYNCS (see
+    // PrefsPayloadBuilder.SYNCED_PREF_KEYS), so its read is keyed on the sync
+    // revision: flipping it on the phone has to move this row while the pane is
+    // open.
+    var audioNightMode by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getAudioNightMode(context))
+    }
     // Decode vs passthrough (device-level, like the audio decoder above).
     var audioOutput by remember(profileRowKey) {
         mutableIntStateOf(AppPreferences.getAudioOutput(context))
@@ -4239,6 +4246,26 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
+                // Beside the dialogue row on purpose: both are "make the mix
+                // clearer" controls, and this one is the only one that rides
+                // the gain against the level rather than lifting a channel.
+                // The description names the passthrough consequence rather
+                // than greying the row out for passthrough users (F1/F4): the
+                // choice stays theirs, and the decode it forces is stated.
+                ToggleRow(
+                    label = "Night Mode",
+                    description = "Compresses loud and quiet passages toward each other, so " +
+                        "dialogue stays audible without loud peaks. Night Mode decodes audio — " +
+                        "passthrough is off while it's on.",
+                    checked = audioNightMode,
+                    onToggle = {
+                        audioNightMode = it
+                        AppPreferences.setAudioNightMode(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
                 AudioTuningRow(
                     label = "Volume Boost",
                     description = "Extra gain for mixes that are simply too quiet, with a limiter that " +
@@ -4257,8 +4284,9 @@ fun SettingsScreen(
                 Text(
                     text = "Applies to the app's PCM audio path. Tunneled playback, below, is " +
                         "skipped while any of these are on (a tunnel bypasses the audio chain). " +
-                        "All three apply while a film is playing, downmix included. Any title " +
-                        "can override these from the player's own panel.",
+                        "They apply while a film is playing, downmix included. Any title " +
+                        "can override the tuning rows from the player's own panel; Night Mode " +
+                        "is global.",
                     color = KBTextLo,
                     style = MaterialTheme.typography.labelSmall
                 )

@@ -77,15 +77,24 @@ internal object PlayerAudioTuning {
     /**
      * Whether [AudioDownmixProcessor]'s input must be PCM for this output mode.
      *
-     * Explicit Decode always, explicit Passthrough never, and Auto exactly when
-     * the tuning is doing something ([isNeutral] false) - because that is the
-     * only case where bitstreaming would silently discard a change the viewer
-     * asked for. With the tuning at its defaults, Auto leaves the device to
-     * passthrough as it always did, so nothing changes for the common case.
+     * Explicit Decode always, and Auto exactly when the tuning is doing
+     * something ([isNeutral] false) - because that is the only case where
+     * bitstreaming would silently discard a change the viewer asked for. With
+     * the tuning at its defaults, Auto leaves the device to passthrough as it
+     * always did, so nothing changes for the common case.
+     *
+     * Explicit Passthrough still wins over the ordinary knobs (a viewer who
+     * said "bitstream everything" keeps it when they lift dialogue), but NOT
+     * over [nightMode]: the compressor cannot ride a bitstream at all, so
+     * Night Mode decoding is the one thing that mode cannot be combined with -
+     * which is exactly what its Settings description says, and the alternative
+     * (a toggle that changes a number and nothing audible) is the silent no-op
+     * this app refuses to ship.
      */
-    fun requiresDecode(outputMode: Int): Boolean = when (outputMode) {
-        AUDIO_OUTPUT_DECODE -> true
-        AUDIO_OUTPUT_PASSTHROUGH -> false
+    fun requiresDecode(outputMode: Int): Boolean = when {
+        nightMode -> true
+        outputMode == AUDIO_OUTPUT_DECODE -> true
+        outputMode == AUDIO_OUTPUT_PASSTHROUGH -> false
         else -> !isNeutral
     }
 
@@ -166,6 +175,21 @@ internal object PlayerAudioTuning {
     var volumeBoostDb: Int = 0
 
     /**
+     * Night Mode: ride the gain against the signal level (compress the dynamic
+     * range), so whispers and dialogue under score come up while explosions are
+     * held down at the same TV volume.
+     *
+     * Global rather than per-title (v1): the Settings row and both players'
+     * panels write this one pref, and it syncs - see
+     * [com.kennyb1201.kbstream.data.settings.AppPreferences.getAudioNightMode].
+     *
+     * Read by [AudioDownmixProcessor] per buffer on the Exo engine, and by
+     * [MpvAudioChains.audioFilterSpec] when MPV's `af` chain is (re)issued.
+     */
+    @Volatile
+    var nightMode: Boolean = false
+
+    /**
      * Center-channel gain for a 5.1/7.1 downmix. 0.7071 is the standard ITU
      * coefficient (center at the same perceived level as a front channel);
      * the boost multiplies on top of it, and the center channel is where
@@ -207,17 +231,22 @@ internal object PlayerAudioTuning {
 
     /** True when every knob is at its default: the processor becomes a pass-through. */
     val isNeutral: Boolean
-        get() = downmixTarget == DOWNMIX_AUTO && dialogueBoost == 0 && volumeBoostDb == 0
+        get() = downmixTarget == DOWNMIX_AUTO &&
+            dialogueBoost == 0 &&
+            volumeBoostDb == 0 &&
+            !nightMode
 
     /** Applies values resolved from the global defaults plus any per-file override. */
     fun apply(
         downmixTarget: Int,
         dialogueBoost: Int,
-        volumeBoostDb: Int
+        volumeBoostDb: Int,
+        nightMode: Boolean = false
     ) {
         this.downmixTarget = downmixTarget
         this.dialogueBoost = dialogueBoost
         this.volumeBoostDb = volumeBoostDb
+        this.nightMode = nightMode
     }
 
     /** Standard ITU-R BS.775 center coefficient (1/sqrt(2)). */

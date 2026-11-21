@@ -699,6 +699,93 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     /**
+     * Night Mode on/off from the settings panel (F5), the one global audio
+     * toggle: it writes the shared pref (no per-title override in v1) and
+     * republishes the tuning, which the sink's processor reads per buffer - so a
+     * decoded session hears it within a buffer, no rebuild and no gap.
+     *
+     * A BITSTREAM session is the one case that cannot just start working:
+     * passthrough never reaches the PCM chain, so there is nothing to compress.
+     * That is what [restateAudioChainForNightMode] rebuilds for - and Night Mode
+     * counts as requiring decode ([PlayerAudioTuning.requiresDecode]), so a
+     * VOD session comes back on the PCM path with the playhead carried.
+     */
+    internal fun setNightMode(enabled: Boolean) {
+        val wasDecoding = audioDecodeToPcmActive
+        AppPreferences.setAudioNightMode(this, enabled)
+        PlayerTrackBridge.publishAudioTuning(this)
+        Toast.makeText(
+            this,
+            "Night Mode: " + if (enabled) "ON" else "OFF",
+            Toast.LENGTH_SHORT
+        ).show()
+        restateAudioChainForNightMode(enabled, wasDecoding)
+    }
+
+    /**
+     * Rebuilds the player when a Night Mode toggle changes whether this session
+     * can hear the PCM chain at all.
+     *
+     * Turning it ON only owes a rebuild to a session that was actually
+     * BITSTREAMING: every decoded stream already runs the processors, so its
+     * next buffer is compressed with nothing to do here. Turning it OFF owes one
+     * the other way - a session the toggle pushed onto the PCM path hands the
+     * bitstream back when the tuning is neutral again (the Settings row's promise:
+     * "passthrough is off while it's on").
+     *
+     * Live is deliberately not rebuilt: a channel restart is a zap, and the
+     * honest answer there is to name when the change lands rather than to take
+     * the picture away. It still applies to every live stream that is decoded
+     * (AAC/MP2 are), which is the ordinary IPTV channel.
+     */
+    private fun restateAudioChainForNightMode(enabled: Boolean, wasDecoding: Boolean) {
+        val decoding = PlayerAudioTuning.requiresDecode(AppPreferences.getAudioOutput(this))
+        if (decoding == wasDecoding) return
+        val rebuildNow =
+            if (enabled) {
+                !wasDecoding && audioFormatIsBitstream()
+            } else {
+                wasDecoding && !decoding
+            }
+        if (!rebuildNow) return
+        if (isLiveChannel) {
+            if (enabled) {
+                Toast.makeText(
+                    this,
+                    "Night Mode applies from the next channel",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            return
+        }
+        // Frame-gated like the other carry writes: before the first frame the
+        // player clock still sits on the launch position.
+        if (firstFrameRendered) {
+            carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
+        }
+        recreatePlayer()
+    }
+
+    /**
+     * Whether what is playing now is a codec the sink hands to the receiver
+     * untouched - the only case where the app's PCM chain never sees the audio.
+     *
+     * The set matches the formats media3 can bitstream and the app documents as
+     * passthrough material (see the audio decoder row): AC-3, E-AC-3 (+JOC),
+     * DTS, DTS-HD and TrueHD. Everything else - AAC, MP2/MP3, FLAC, PCM, Opus -
+     * is decoded, so the compressor applies to it whatever the output mode says.
+     */
+    private fun audioFormatIsBitstream(): Boolean {
+        val mime = exoPlayer?.audioFormat?.sampleMimeType ?: return false
+        return mime == MimeTypes.AUDIO_AC3 ||
+            mime == MimeTypes.AUDIO_E_AC3 ||
+            mime == MimeTypes.AUDIO_E_AC3_JOC ||
+            mime == MimeTypes.AUDIO_DTS ||
+            mime == MimeTypes.AUDIO_DTS_HD ||
+            mime == MimeTypes.AUDIO_TRUEHD
+    }
+
+    /**
      * Rebuilds the player when a dialogue step turns the audio tuning on or off
      * during a TUNNELED session.
      *

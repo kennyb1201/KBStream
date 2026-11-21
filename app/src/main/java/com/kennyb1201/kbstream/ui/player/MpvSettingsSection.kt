@@ -50,6 +50,7 @@ internal class MpvSettingsSection(
     private val positionPills = mutableListOf<Pair<TextView, Int>>()
     private val downmixPills = mutableListOf<Pair<TextView, Int>>()
     private val volumePills = mutableListOf<Pair<TextView, Int>>()
+    private val nightModePills = mutableListOf<Pair<TextView, Boolean>>()
     private var dialogueValue: TextView? = null
     private val bufferPills = mutableListOf<Pair<TextView, Int>>()
     private var externalSubtitleLabel: TextView? = null
@@ -310,6 +311,23 @@ internal class MpvSettingsSection(
             )
         )
 
+        // A toggle, not a level: on this engine it is one FFmpeg filter
+        // (`dynaudnorm`, see MpvAudioChains.NIGHT_MODE_FILTER) rather than a
+        // number to step. Global - v1 has no per-title override.
+        column.addView(ui.label("Night Mode", topMarginDp = 8))
+        ui.addPillGrid(column, 4, listOf("Off" to false, "On" to true), nightModePills) { enabled ->
+            activity.chooseNightMode(enabled)
+            refresh()
+        }
+        column.addView(
+            ui.label(
+                "Compresses loud and quiet passages toward each other, so dialogue stays " +
+                    "audible without loud peaks. Decodes audio - passthrough is off while " +
+                    "it is on.",
+                topMarginDp = 4
+            )
+        )
+
         column.addView(ui.label("Volume boost", topMarginDp = 8))
         ui.addPillGrid(
             column,
@@ -413,6 +431,9 @@ internal class MpvSettingsSection(
             subtitleOffsetZeroPill?.let { ui.stylePill(it, activity.subtitleOffsetMs() == 0) }
             positionPills.forEach { (view, index) ->
                 ui.stylePill(view, activity.subtitlePosition() == index)
+            }
+            nightModePills.forEach { (view, on) ->
+                ui.stylePill(view, AppPreferences.getAudioNightMode(activity) == on)
             }
 
             syncLabel?.text = "Audio delay: ${activity.audioDelayMs()}ms  ·  " +

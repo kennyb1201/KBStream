@@ -497,6 +497,13 @@ class MpvPlayerView @JvmOverloads constructor(
     private var volumeBoostDb = 0
 
     /**
+     * Night Mode: FFmpeg's Dynamic Audio Normalizer in the same `af` chain, or
+     * absent. Global rather than per-title, so the panel's toggle and Settings'
+     * row write the one pref.
+     */
+    private var nightMode = false
+
+    /**
      * The resolved `audio-channels` value for [downmixTarget], kept so the
      * open-time option ([applyOptions]) and any later change write the same
      * layout rather than re-deriving "Auto" against a different device answer.
@@ -838,7 +845,7 @@ class MpvPlayerView @JvmOverloads constructor(
      * decoded.
      */
     private fun audioSpdifSpec(): String =
-        MpvAudioChains.audioSpdifSpec(audioOutputMode, audioTuningNeutral)
+        MpvAudioChains.audioSpdifSpec(audioOutputMode, audioTuningNeutral, nightMode)
 
     /**
      * Dialogue lift, matching what the main player's chain does: a center
@@ -866,6 +873,19 @@ class MpvPlayerView @JvmOverloads constructor(
      */
     fun setVolumeBoostDb(db: Int) {
         volumeBoostDb = db.coerceIn(0, 15)
+        if (initialized) applyAudioFilters()
+    }
+
+    /**
+     * Night Mode on/off, re-issuing the `af` chain like the other two knobs.
+     *
+     * mpv applies a filter chain by decoding, so turning it on also takes this
+     * session out of passthrough; turning it off hands the chain back empty and
+     * the next open passes the bitstream again. Heard within the buffer - this
+     * engine has no tunnel to work around.
+     */
+    fun setNightMode(enabled: Boolean) {
+        nightMode = enabled
         if (initialized) applyAudioFilters()
     }
 
@@ -1836,7 +1856,12 @@ class MpvPlayerView @JvmOverloads constructor(
      * value it settled on is the honest one to report.
      */
     private fun applyAudioFilters() {
-        val spec = MpvAudioChains.audioFilterSpec(dialogueBoost, audioChannelCount(), volumeBoostDb)
+        val spec = MpvAudioChains.audioFilterSpec(
+            dialogueBoost,
+            audioChannelCount(),
+            volumeBoostDb,
+            nightMode
+        )
         runCatching { MpvBackend.setPropertyString("af", spec.orEmpty()) }
             .onFailure { Log.w(TAG, "af rejected: $spec", it) }
         if (spec != null) {
@@ -2482,9 +2507,10 @@ class MpvPlayerView @JvmOverloads constructor(
         when (property) {
             // The file's layout is known from here on: build the audio filter
             // chain against the track actually playing (the dialogue pan needs
-            // the channel count; the boost's limiter rides the same chain).
+            // the channel count; Night Mode and the boost's limiter ride the
+            // same chain).
             "audio-params/channel-count" ->
-                if (dialogueBoost > 0 || volumeBoostDb > 0) applyAudioFilters()
+                if (dialogueBoost > 0 || volumeBoostDb > 0 || nightMode) applyAudioFilters()
         }
     }
 
