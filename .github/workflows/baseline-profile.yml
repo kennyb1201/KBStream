@@ -166,8 +166,18 @@ jobs:
           git push --force origin "$BRANCH"
           if gh pr list --head "$BRANCH" --state open --json number --jq '.[].number' | grep -q .; then
             echo "A refresh pull request is already open; this run's profile is on its branch."
-          else
-            gh pr create --base "$BASE" --head "$BRANCH" \
+          elif out=$(gh pr create --base "$BASE" --head "$BRANCH" \
               --title "Refresh the baseline profile" \
-              --body "Generated on the emulator by the Baseline profile workflow.\n\nMerging this is what makes the next build ship \`assets/dexopt/baseline.prof\`; without it the app still works, it just runs its first frames interpreted. A TV-captured profile is more faithful for D-pad traversal - run \`:app:generateBaselineProfile\` with the box attached if a capture matters more than freshness."
+              --body "Generated on the emulator by the Baseline profile workflow.\n\nMerging this is what makes the next build ship \`assets/dexopt/baseline.prof\`; without it the app still works, it just runs its first frames interpreted. A TV-captured profile is more faithful for D-pad traversal - run \`:app:generateBaselineProfile\` with the box attached if a capture matters more than freshness." 2>&1); then
+            echo "$out"
+          else
+            # Repositories that do not permit workflows to open pull requests
+            # (Settings > Actions > General) answer with
+            #   "GitHub Actions is not permitted to create or approve pull requests"
+            # and that refusal is NOT a failed run: the branch is pushed, the
+            # profile is committed on it, and the artifact is uploaded. Name the
+            # branch and stop - failing here would hide a capture that worked.
+            echo "::warning::Could not open the refresh pull request: $out"
+            echo "The profile is on branch $BRANCH - open the pull request at"
+            echo "https://github.com/$GITHUB_REPOSITORY/compare/$BASE...$BRANCH?expand=1"
           fi
