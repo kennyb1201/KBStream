@@ -134,6 +134,44 @@ class HomePinnedSnapshotCodecTest {
     }
 
     @Test
+    fun `a restored item keeps its year, so the verdict pass can skip it`() {
+        // 0.9.437: `pinnedVerdicts=10224ms` on a launch whose pinned rows came
+        // from this blob. The live row carried a year, the restored one did not,
+        // so the digital-availability pass saw `yearOrNull == null` for every
+        // pinned movie and read a detail payload for each one - the gate that
+        // exists to take old releases off that queue could never fire.
+        val dated = item("a").copy(releaseInfo = "1994")
+        val decoded = HomePinnedSnapshot.decode(
+            HomePinnedSnapshot.encode(listOf(rail("top_movies_today", listOf(dated))))
+        )
+
+        assertEquals("1994", decoded[0].items[0].releaseInfo)
+        assertEquals(
+            "and the age gate reads it back as a year",
+            1994,
+            decoded[0].items[0].yearOrNull
+        )
+    }
+
+    @Test
+    fun `a blob from an older build still decodes, just without years`() {
+        // The field was appended, so a line written by 0.9.437 and earlier has
+        // six parts. Losing an item to make room for a year would be a much
+        // worse trade than one extra verdict read.
+        val legacy = HomePinnedSnapshot.encode(
+            listOf(rail("top_movies_today", listOf(item("a").copy(releaseInfo = "1994"))))
+        ).lineSequence().joinToString("\n") { line ->
+            if (line.startsWith("I\t")) line.substringBeforeLast('\t') else line
+        }
+
+        val decoded = HomePinnedSnapshot.decode(legacy)
+
+        assertEquals(1, decoded.size)
+        assertEquals(listOf("a"), decoded[0].items.map { it.id })
+        assertNull("no year is the old behaviour, not a failure", decoded[0].items[0].releaseInfo)
+    }
+
+    @Test
     fun `the scope separates profiles and their ceilings`() {
         assertTrue(
             "a kids profile must never read the adult profile's cached rows",

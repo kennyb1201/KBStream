@@ -29,9 +29,24 @@ class HeroLookaheadTraceTest {
         assertEquals(
             "the warm fired, so the paste says so - a 0/0 rate is honest, not absent",
             "hero: lookahead arrivals=1 hits=0 misses=0 rate=0% " +
-                "skippedWalk=0 skippedNoArt=0",
+                "skippedWalk=0 skippedNoArt=0 skippedInFlight=0 skippedCached=0",
             line
         )
+    }
+
+    @Test
+    fun `every arrival has a bucket, so the line's arithmetic closes`() {
+        // 0.9.437: `arrivals=139 skippedWalk=42 heroWarms=4` left 93 arrivals
+        // unnamed. An arrival is now either cancelled by the debounce, already
+        // warming (same card again), a warm that decoded, a warm the memory
+        // cache already covered, or a card with no artwork.
+        ImageLoadTrace.noteHeroFocusArrival()
+        ImageLoadTrace.noteHeroWarmSkippedInFlight()
+        ImageLoadTrace.noteHeroWarmCached()
+
+        val line = ImageLoadTrace.lines().first { it.startsWith("hero: lookahead") }
+        assertTrue(line, line.contains("skippedInFlight=1"))
+        assertTrue(line, line.contains("skippedCached=1"))
     }
 
     @Test
@@ -60,7 +75,7 @@ class HeroLookaheadTraceTest {
         ImageLoadTrace.noteHeroFocusArrival()
         assertEquals(
             "hero: lookahead arrivals=1 hits=0 misses=0 rate=0% " +
-                "skippedWalk=0 skippedNoArt=0",
+                "skippedWalk=0 skippedNoArt=0 skippedInFlight=0 skippedCached=0",
             ImageLoadTrace.lines().single()
         )
     }

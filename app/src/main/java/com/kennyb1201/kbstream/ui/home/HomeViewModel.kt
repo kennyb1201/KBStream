@@ -3043,11 +3043,17 @@ Log.d(
      * A hero backdrop the viewer overrode ([ImageOverrides]) is a different URL
      * again and is not known here, so an overridden hero still pays its own
      * decode. That is the pre-existing behaviour, not a regression.
+     *
+     * @return true when this call DECODED the bitmap, false when Coil answered
+     *   from the memory cache (nothing to warm) or the request failed. The
+     *   lookahead times only the decodes: a cached warm costs ~0 ms and would
+     *   otherwise be read as "the box is fast enough" beside a decode that is
+     *   not.
      */
-    private suspend fun warmHeroArtBitmap(artwork: HeroArtwork?) {
-        val url = TmdbRepository.fullResBackdropUrl(artwork?.backdropUrl) ?: return
+    private suspend fun warmHeroArtBitmap(artwork: HeroArtwork?): Boolean {
+        val url = TmdbRepository.fullResBackdropUrl(artwork?.backdropUrl) ?: return false
         val application = getApplication<Application>()
-        runCatchingCancellable {
+        return runCatchingCancellable {
             val result = coil3.SingletonImageLoader.get(application).execute(
                 coil3.request.ImageRequest.Builder(application)
                     .data(url)
@@ -3067,12 +3073,24 @@ Log.d(
             // identity, so `heroDecodes` today mixes this - never displayed -
             // decode with the hero's own draw. `heroDecodes - heroWarms` is the
             // draws that cost a decode.
-            if (result is coil3.request.SuccessResult &&
-                result.dataSource != coil3.decode.DataSource.MEMORY_CACHE
-            ) {
+            //
+            // A warm Coil answered from memory is the OTHER outcome, and it used
+            // to be counted nowhere: the lookahead had already covered that
+            // title, so the warm did nothing - the best case, filed as silence
+            // (0.9.437 walk, `arrivals=139` against `heroWarms=4`). It feeds
+            // `skippedCached` and the return value, which is what the lookahead
+            // times: a cached warm's ~0 ms would otherwise drag `warmP50` down
+            // and hide the decode latency the sample exists to measure.
+            if (result is coil3.request.SuccessResult) {
+                if (result.dataSource == coil3.decode.DataSource.MEMORY_CACHE) {
+                    ImageLoadTrace.noteHeroWarmCached()
+                    return@runCatchingCancellable false
+                }
                 ImageLoadTrace.noteHeroWarm()
+                return@runCatchingCancellable true
             }
-        }
+            false
+        }.getOrDefault(false)
     }
 
     /**
@@ -3383,7 +3401,13 @@ Log.d(
                 ImageLoadTrace.noteHeroWarmSkippedWalk()
                 throw cancelled
             }
-            if (!heroArtPrefetchInFlight.add(key)) return@launch
+            if (!heroArtPrefetchInFlight.add(key)) {
+                // The same card arrived again while its warm ran: the dedupe
+                // working. Counted, or the line's arithmetic never closes -
+                // 139 arrivals read as 42 cancelled beside 4 warms (0.9.437).
+                ImageLoadTrace.noteHeroWarmSkippedInFlight()
+                return@launch
+            }
             try {
                 // The permit covers the bitmap decode as well as the resolve:
                 // two hero warms at a time is the memory ceiling.
@@ -3403,12 +3427,14 @@ Log.d(
                         // cannot say whether the misses are "no warm" or "warm
                         // arrived late" - this sample is the answer.
                         val warmStartedAtMs = android.os.SystemClock.elapsedRealtime()
-                        warmHeroArtBitmap(artwork)
-                        ImageLoadTrace.noteHeroWarmMs(
-                            (android.os.SystemClock.elapsedRealtime() - warmStartedAtMs)
-                                .coerceAtMost(Int.MAX_VALUE.toLong())
-                                .toInt()
-                        )
+                        val decoded = warmHeroArtBitmap(artwork)
+                        if (decoded) {
+                            ImageLoadTrace.noteHeroWarmMs(
+                                (android.os.SystemClock.elapsedRealtime() - warmStartedAtMs)
+                                    .coerceAtMost(Int.MAX_VALUE.toLong())
+                                    .toInt()
+                            )
+                        }
                     }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {

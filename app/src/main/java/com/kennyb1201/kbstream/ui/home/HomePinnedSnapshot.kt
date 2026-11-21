@@ -92,7 +92,16 @@ internal object HomePinnedSnapshot {
                         escape(item.type),
                         escape(item.name),
                         escape(item.poster),
-                        escape(item.background)
+                        escape(item.background),
+                        // The YEAR (0.9.438). Without it a restored pinned row
+                        // hands the verdict pass an item with `yearOrNull ==
+                        // null`, and the age gate that keeps older movies off
+                        // the detail queue can never fire for it: the pinned
+                        // rows re-derived every verdict from a payload read
+                        // (`pinnedVerdicts=10224ms` on the 0.9.437 walk) even
+                        // though the live row carried the year. Written last so
+                        // a blob from an older build still decodes.
+                        escape(item.releaseInfo)
                     ).joinToString("\t")
                 ).append('\n')
             }
@@ -151,7 +160,12 @@ internal object HomePinnedSnapshot {
                             type = unescape(parts[2]),
                             name = unescape(parts[3]),
                             poster = unescape(parts[4]).takeIf { it.isNotBlank() },
-                            background = unescape(parts[5]).takeIf { it.isNotBlank() }
+                            background = unescape(parts[5]).takeIf { it.isNotBlank() },
+                            // Absent in a blob written before 0.9.438, which
+                            // is exactly the old behaviour: no year, one fetch.
+                            releaseInfo = parts.getOrNull(6)
+                                ?.let { unescape(it) }
+                                ?.takeIf { it.isNotBlank() }
                         )
                     }
                 }

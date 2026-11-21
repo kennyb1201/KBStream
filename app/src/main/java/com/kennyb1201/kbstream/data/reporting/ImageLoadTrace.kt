@@ -138,6 +138,20 @@ internal object ImageLoadTrace {
     private var heroWarmSkippedWalk = 0
     private var heroWarmSkippedNoArt = 0
 
+    // The other two ways an arrival leaves no decode behind (2026-11-21, the
+    // 0.9.437 walk). `arrivals=139 skippedWalk=42 heroWarms=4` left 93 arrivals
+    // unaccounted for, and the two causes are opposite:
+    //
+    //  - `skippedInFlight` - the SAME card arrived again while its warm was
+    //    still running ([HomeViewModel.heroArtPrefetchInFlight] dedupes by key).
+    //    The warm is doing its job; the count is arrivals, not cards.
+    //  - `skippedCached` - the warm ran and Coil answered from the memory cache.
+    //    That is a WARM HIT, not a miss, and it was invisible: a warm is only
+    //    counted when it decoded, so a title already covered read as no warm at
+    //    all. `hits` and this together are the warm's real yield.
+    private var heroWarmSkippedInFlight = 0
+    private var heroWarmCached = 0
+
     // The warm's own LATENCY (2026-11-21, the 45% hit rate). `heroWarms` says a
     // warm ran; it cannot say whether it finished before the hero drew, and the
     // lead it gets is fixed by two constants: the warm starts
@@ -364,6 +378,16 @@ internal object ImageLoadTrace {
         }
     }
 
+    /** An arrival on a card whose warm was already running. */
+    fun noteHeroWarmSkippedInFlight() {
+        synchronized(lock) { heroWarmSkippedInFlight++ }
+    }
+
+    /** A warm that Coil answered from the memory cache - a hit, not a decode. */
+    fun noteHeroWarmCached() {
+        synchronized(lock) { heroWarmCached++ }
+    }
+
     /** A hero-size warm the walk cancelled before its delay expired. */
     fun noteHeroWarmSkippedWalk() {
         synchronized(lock) { heroWarmSkippedWalk++ }
@@ -499,6 +523,7 @@ internal object ImageLoadTrace {
         return "hero: lookahead arrivals=$heroFocusArrivals " +
             "hits=$heroDrawHits misses=$heroDrawMisses rate=$rate% " +
             "skippedWalk=$heroWarmSkippedWalk skippedNoArt=$heroWarmSkippedNoArt" +
+            " skippedInFlight=$heroWarmSkippedInFlight skippedCached=$heroWarmCached" +
             latency
     }
 
@@ -519,6 +544,8 @@ internal object ImageLoadTrace {
             heroDrawHits = 0
             heroDrawMisses = 0
             heroWarmSkippedWalk = 0
+            heroWarmSkippedInFlight = 0
+            heroWarmCached = 0
             heroWarmCount = 0
             heroWarmSkippedNoArt = 0
             timedDecodes = 0
