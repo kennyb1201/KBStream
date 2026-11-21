@@ -240,6 +240,12 @@ val releaseSigningConfigured =
         !releaseKeyAlias.isNullOrBlank() &&
         !releaseKeyPassword.isNullOrBlank()
 
+// The baseline-profile CAPTURE runs on an x86_64 emulator and installs the APK
+// it just built, while the release variant is deliberately ARM-only (see the
+// release ndk block). Only .github/workflows/baseline-profile.yml passes this
+// property, so a released APK still ships exactly the two ABIs it always has.
+val captureAbi = providers.gradleProperty("kbstream.captureAbi").orNull
+
 // Release version stamping (set by CI; local builds fall back to dev values).
 // VERSION_CODE=github.run_number makes every CI build strictly higher than the
 // last, so `adb install -r` upgrades cleanly and bug reports identify builds.
@@ -434,6 +440,9 @@ android {
             // can still run the app.
             ndk {
                 abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+                // See `captureAbi` above: the emulator the profile is captured
+                // on is x86_64, and this is the variant the generator installs.
+                if (captureAbi != null) abiFilters += captureAbi
             }
         }
     }

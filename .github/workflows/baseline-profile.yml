@@ -69,14 +69,37 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      # The generator INSTALLS the app it just built, and the variant it
+      # installs inherits the release signing config - which is empty unless the
+      # KBSTREAM_* variables are set (README > Baseline profile: the run then
+      # stops at install with INSTALL_PARSE_FAILED_NO_CERTIFICATES and nothing
+      # mentions signing). A throwaway key is enough: the APK is only ever
+      # installed on this emulator and then thrown away with the runner.
+      - name: Create a throwaway signing key
+        run: |
+          keytool -genkeypair -v \
+            -keystore "$RUNNER_TEMP/capture.jks" \
+            -storetype JKS -storepass android -keypass android \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 1000 \
+            -dname "CN=KBStream baseline capture, O=KBStream, C=US"
+
+      # `-Pkbstream.captureAbi=x86_64` is what makes the capture APK
+      # installable HERE: release is deliberately ARM-only (arm64-v8a and
+      # armeabi-v7a), and this runner's emulator is x86_64. The property adds
+      # the emulator ABI for this build only - a released APK never passes it.
       - name: Generate the profile
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          KBSTREAM_STORE_FILE: ${{ runner.temp }}/capture.jks
+          KBSTREAM_STORE_PASSWORD: android
+          KBSTREAM_KEY_ALIAS: androiddebugkey
+          KBSTREAM_KEY_PASSWORD: android
         with:
           api-level: 31
           target: google_apis
           arch: x86_64
           disable-animations: true
-          script: ./gradlew :app:generateBaselineProfile --stacktrace
+          script: ./gradlew :app:generateBaselineProfile -Pkbstream.captureAbi=x86_64 --stacktrace
 
       - name: Upload the profile
         uses: actions/upload-artifact@v4
