@@ -3397,7 +3397,18 @@ Log.d(
                     if (artwork?.backdropUrl.isNullOrBlank()) {
                         ImageLoadTrace.noteHeroWarmSkippedNoArt()
                     } else {
+                        // Timed from here (settle over, permit held) to the
+                        // finished bitmap. The dwell gives this ~350 ms before
+                        // the hero draws, and the 0.9.431 walk's 45% hit rate
+                        // cannot say whether the misses are "no warm" or "warm
+                        // arrived late" - this sample is the answer.
+                        val warmStartedAtMs = android.os.SystemClock.elapsedRealtime()
                         warmHeroArtBitmap(artwork)
+                        ImageLoadTrace.noteHeroWarmMs(
+                            (android.os.SystemClock.elapsedRealtime() - warmStartedAtMs)
+                                .coerceAtMost(Int.MAX_VALUE.toLong())
+                                .toInt()
+                        )
                     }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {

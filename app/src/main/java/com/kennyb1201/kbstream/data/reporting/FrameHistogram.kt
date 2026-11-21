@@ -191,6 +191,41 @@ object FrameHistogram {
                 " totalP50=${total.p50Ms}ms totalP95=${total.p95Ms}ms"
     }
 
+    /**
+     * The `ui` aggregate, split into the three parts it is the sum of.
+     *
+     * The first split named the thread; this one names the WORK. `uiP50=107ms`
+     * beside `renderP50=8ms` (the 2026-11-21 walk) says the app's own frame
+     * thread held the frame, but `ui` is `animation + layout/measure + draw` and
+     * each of those is a different fix:
+     *
+     *  - `anim` - the animation clock and callbacks (a change animation, an
+     *    `animate*AsState` running across a rail, a scheduled scroll);
+     *  - `layout` - measure and layout of the tree (a wide invalidation, a
+     *    non-constant size, a list re-measuring off-screen children);
+     *  - `draw` - `recordDisplayList` for the frame's views (`graphicsLayer`,
+     *    alpha, clipping, an oversized surface).
+     *
+     * Same p50/p95 pairing as the aggregates, so the three parts are read
+     * against the `ui` they add up to. Empty when the session sampled no phases
+     * - [phaseSplit] already says `phaseFrames=0`, and two instruments
+     * announcing the same silence would read as two failures.
+     */
+    fun uiParts(
+        anim: FrameStats?,
+        layout: FrameStats?,
+        draw: FrameStats?,
+        phaseFrames: Int,
+        sessionFrames: Int
+    ): String = when {
+        sessionFrames <= 0 -> ""
+        anim == null || layout == null || draw == null -> ""
+        else ->
+            " uiAnimP50=${anim.p50Ms}ms uiAnimP95=${anim.p95Ms}ms" +
+                " uiLayoutP50=${layout.p50Ms}ms uiLayoutP95=${layout.p95Ms}ms" +
+                " uiDrawP50=${draw.p50Ms}ms uiDrawP95=${draw.p95Ms}ms"
+    }
+
     /** Nearest-rank percentile over an ascending list. */
     private fun percentile(sorted: List<Int>, percent: Int): Int {
         val rank = (percent / 100.0 * sorted.size).let { kotlin.math.ceil(it).toInt() }

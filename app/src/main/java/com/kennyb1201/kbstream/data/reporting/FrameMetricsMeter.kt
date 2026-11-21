@@ -70,12 +70,15 @@ internal object FrameMetricsMeter {
      */
     private fun record(metrics: FrameMetrics) {
         runCatching {
+            // Handed over part by part, not summed here: the trace files each
+            // one, so the next paste can say whether the app's 100 ms frame was
+            // animation, layout or recordDisplayList (see uiParts).
             UiFrameTrace.noteFramePhases(
-                uiMs = metrics.millis(FrameMetrics.ANIMATION_DURATION) +
-                    metrics.millis(FrameMetrics.LAYOUT_MEASURE_DURATION) +
-                    metrics.millis(FrameMetrics.DRAW_DURATION),
-                renderMs = metrics.millis(FrameMetrics.SYNC_DURATION) +
-                    metrics.millis(FrameMetrics.COMMAND_ISSUE_DURATION),
+                animMs = metrics.millis(FrameMetrics.ANIMATION_DURATION),
+                layoutMs = metrics.millis(FrameMetrics.LAYOUT_MEASURE_DURATION),
+                drawMs = metrics.millis(FrameMetrics.DRAW_DURATION),
+                syncMs = metrics.millis(FrameMetrics.SYNC_DURATION),
+                commandMs = metrics.millis(FrameMetrics.COMMAND_ISSUE_DURATION),
                 totalMs = metrics.millis(FrameMetrics.TOTAL_DURATION)
             )
         }

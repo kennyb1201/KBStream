@@ -75,11 +75,23 @@ object UiFrameTrace {
          * frame thread like everything else here, so the three arrays share one
          * count and one index: they are the same frame, measured three ways.
          * See [FrameHistogram.phaseSplit] for what the three aggregates mean and
-         * which fix each one points at.
+         * which fix each one points at, and [FrameHistogram.uiParts] for the split
+         * of `ui` into animation, layout and draw.
          */
         val phaseUi = IntArray(MAX_FRAMES)
         val phaseRender = IntArray(MAX_FRAMES)
         val phaseTotal = IntArray(MAX_FRAMES)
+
+        /**
+         * `ui` split into the three things it is made of (2026-11-21, second
+         * split). The first split answered "which thread"; the 0.9.431 walk
+         * then showed `uiP50=107ms` with `renderP50=8ms`, and "composition,
+         * layout or recordDisplayList" is still three different fixes. Filed
+         * on the same index as the aggregates above, from the same frame.
+         */
+        val phaseAnim = IntArray(MAX_FRAMES)
+        val phaseLayout = IntArray(MAX_FRAMES)
+        val phaseDraw = IntArray(MAX_FRAMES)
         var phaseCount = 0
 
         var lastFrameNs = 0L
@@ -185,13 +197,26 @@ object UiFrameTrace {
      * metric the platform does not have comes back as METRIC_UNKNOWN and would
      * otherwise be filed as a real 0 ms.
      */
-    fun noteFramePhases(uiMs: Int, renderMs: Int, totalMs: Int) {
+    fun noteFramePhases(
+        animMs: Int,
+        layoutMs: Int,
+        drawMs: Int,
+        syncMs: Int,
+        commandMs: Int,
+        totalMs: Int
+    ) {
         val session = active ?: return
+        val uiMs = (animMs + layoutMs + drawMs).coerceAtLeast(0)
+        val renderMs = (syncMs + commandMs).coerceAtLeast(0)
         if (uiMs <= 0 && renderMs <= 0 && totalMs <= 0) return
         if (session.phaseCount >= MAX_FRAMES) return
-        session.phaseUi[session.phaseCount] = uiMs.coerceAtLeast(0)
-        session.phaseRender[session.phaseCount] = renderMs.coerceAtLeast(0)
-        session.phaseTotal[session.phaseCount] = totalMs.coerceAtLeast(0)
+        val at = session.phaseCount
+        session.phaseUi[at] = uiMs
+        session.phaseRender[at] = renderMs
+        session.phaseTotal[at] = totalMs.coerceAtLeast(0)
+        session.phaseAnim[at] = animMs.coerceAtLeast(0)
+        session.phaseLayout[at] = layoutMs.coerceAtLeast(0)
+        session.phaseDraw[at] = drawMs.coerceAtLeast(0)
         session.phaseCount++
     }
 
@@ -249,6 +274,13 @@ object UiFrameTrace {
                 ui = FrameHistogram.phases(session.phaseUi, session.phaseCount),
                 render = FrameHistogram.phases(session.phaseRender, session.phaseCount),
                 total = FrameHistogram.phases(session.phaseTotal, session.phaseCount),
+                phaseFrames = session.phaseCount,
+                sessionFrames = stats.frames
+            ) +
+            FrameHistogram.uiParts(
+                anim = FrameHistogram.phases(session.phaseAnim, session.phaseCount),
+                layout = FrameHistogram.phases(session.phaseLayout, session.phaseCount),
+                draw = FrameHistogram.phases(session.phaseDraw, session.phaseCount),
                 phaseFrames = session.phaseCount,
                 sessionFrames = stats.frames
             )

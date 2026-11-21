@@ -85,15 +85,22 @@ class FramePhaseMeterWiringContractTest {
     fun `a frame is only filed while a metered gesture is open`() {
         assertTrue(
             "the listener runs on every frame of the window; the session is the gate",
-            trace.contains("fun noteFramePhases(uiMs: Int, renderMs: Int, totalMs: Int)") &&
+            trace.contains("fun noteFramePhases(") &&
+                trace.contains("animMs: Int") &&
+                trace.contains("layoutMs: Int") &&
+                trace.contains("drawMs: Int") &&
                 trace.contains("val session = active ?: return")
         )
         assertTrue(
-            "and the three arrays share one count, because they are one frame",
-            trace.contains("session.phaseUi[session.phaseCount] = uiMs.coerceAtLeast(0)") &&
-                trace.contains("session.phaseRender[session.phaseCount] =") &&
-                trace.contains("session.phaseTotal[session.phaseCount] =") &&
-                trace.contains("session.phaseCount++")
+            "and every array shares one count, because they are one frame",
+            trace.contains("session.phaseUi[at] = uiMs") &&
+                trace.contains("session.phaseRender[at] =") &&
+                trace.contains("session.phaseTotal[at] =") &&
+                trace.contains("session.phaseAnim[at] =") &&
+                trace.contains("session.phaseLayout[at] =") &&
+                trace.contains("session.phaseDraw[at] =") &&
+                trace.contains("session.phaseCount++") &&
+                trace.contains("val at = session.phaseCount")
         )
         assertTrue(
             "the sample is capped like every other array in the session",
@@ -119,6 +126,13 @@ class FramePhaseMeterWiringContractTest {
                 trace.contains("FrameHistogram.phases(session.phaseTotal, session.phaseCount)") &&
                 trace.contains("phaseFrames = session.phaseCount") &&
                 trace.contains("sessionFrames = stats.frames")
+        )
+        assertTrue(
+            "and ui is split into the work it is made of, from the same frames",
+            finish.contains("FrameHistogram.uiParts(") &&
+                trace.contains("FrameHistogram.phases(session.phaseAnim, session.phaseCount)") &&
+                trace.contains("FrameHistogram.phases(session.phaseLayout, session.phaseCount)") &&
+                trace.contains("FrameHistogram.phases(session.phaseDraw, session.phaseCount)")
         )
         assertTrue(
             "so a paste gets it from the frame line it already reads",

@@ -5,6 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
@@ -23,6 +24,9 @@ import coil3.Image
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.allowHardware
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * ONE brand mark drawn for a dark surface, with the treatment
@@ -83,6 +87,7 @@ internal fun BrandMarkImage(
     onUnusable: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     // The verdict AND the ink box for this URL, held for as long as the URL is
     // on screen: measured once, in the load callback below, never per frame.
     // (Four floats and a verdict per URL - the same `remember(url)` scope the
@@ -152,8 +157,19 @@ internal fun BrandMarkImage(
             // Paint first: the trim below is a transform on this same paint, so
             // it can never hold the caller's title placeholder open.
             onDrawn()
-            val sampled = sampleBrandMark(state.result.image)
-            if (sampled.treatment == BrandMark.UNUSABLE) onUnusable() else sample = sampled
+            // The sample is BITMAP work - a full-size copy when Coil hands back
+            // a hardware bitmap, a 48x48 scale, and two walks of its pixels -
+            // and AsyncImage calls this on the main thread. One Home rail is a
+            // screenful of landscape cards, each with a mark, so on a walk they
+            // land in the same few frames: the 0.9.431 paste's `uiP50=107ms`
+            // is that burst. It runs where the hero's own logo analysis already
+            // runs, off the frame thread; the draw does not wait for it (the
+            // mark is painted above, the trim arrives a frame later).
+            val image = state.result.image
+            scope.launch {
+                val sampled = withContext(Dispatchers.Default) { sampleBrandMark(image) }
+                if (sampled.treatment == BrandMark.UNUSABLE) onUnusable() else sample = sampled
+            }
         },
         // A logo that never arrives must not hold its slot open either.
         onError = { onUnusable() },

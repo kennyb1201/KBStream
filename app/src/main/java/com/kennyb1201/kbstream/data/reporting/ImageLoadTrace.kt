@@ -138,6 +138,18 @@ internal object ImageLoadTrace {
     private var heroWarmSkippedWalk = 0
     private var heroWarmSkippedNoArt = 0
 
+    // The warm's own LATENCY (2026-11-21, the 45% hit rate). `heroWarms` says a
+    // warm ran; it cannot say whether it finished before the hero drew, and the
+    // lead it gets is fixed by two constants: the warm starts
+    // `HERO_WARM_AFTER_ART_MS` (250 ms) after focus and the hero publishes after
+    // `HERO_ART_DWELL_MS` (600 ms) of stillness. That leaves ~350 ms for a
+    // 1280x720 decode on a box whose 640x360 decode p50 read 316 ms - so the
+    // warm may be losing a race it was never given time to win, and no hit-rate
+    // change would fix that. These samples are the only way to tell the two
+    // apart. A ring, not a histogram: the paste wants p50 and max.
+    private val heroWarmMs = IntArray(32)
+    private var heroWarmCount = 0
+
     // The cost side (diagnosis 2026-11-18, §1/§7). Counts, not samples: a paste
     // needs "how many decodes were slow", never the list itself.
     private var timedDecodes = 0
@@ -338,6 +350,20 @@ internal object ImageLoadTrace {
         synchronized(lock) { heroWarms++ }
     }
 
+    /**
+     * One hero warm, timed from the end of its settle delay to the finished
+     * bitmap - the number to read against the ~350 ms the dwell leaves it.
+     */
+    fun noteHeroWarmMs(ms: Int) {
+        synchronized(lock) {
+            if (heroWarmCount >= heroWarmMs.size) {
+                heroWarmMs.copyInto(heroWarmMs, 0, 1)
+                heroWarmCount = heroWarmMs.size - 1
+            }
+            heroWarmMs[heroWarmCount++] = ms.coerceAtLeast(0)
+        }
+    }
+
     /** A hero-size warm the walk cancelled before its delay expired. */
     fun noteHeroWarmSkippedWalk() {
         synchronized(lock) { heroWarmSkippedWalk++ }
@@ -456,13 +482,24 @@ internal object ImageLoadTrace {
      * The lookahead's one line: focus arrivals, hero-draw hits and misses, and
      * the integer hit rate. No formatting or locale: `rate=80%` is the same
      * string on every device, and an arrival with no draw yet reads 0%.
+     *
+     * `warmP50`/`warmMax` appear only once a warm has been timed: the constant
+     * part of the line stays byte-identical for a session that never warmed, so
+     * old pastes and pinned lines still read the same.
      */
     private fun heroLookaheadLine(): String {
         val draws = heroDrawHits + heroDrawMisses
         val rate = if (draws == 0) 0 else heroDrawHits * 100 / draws
+        val latency = synchronized(lock) {
+            if (heroWarmCount == 0) return@synchronized ""
+            val sorted = heroWarmMs.copyOf(heroWarmCount).also { it.sort() }
+            val p50 = sorted[(sorted.size - 1) / 2]
+            " warmP50=${p50}ms warmMax=${sorted.last()}ms"
+        }
         return "hero: lookahead arrivals=$heroFocusArrivals " +
             "hits=$heroDrawHits misses=$heroDrawMisses rate=$rate% " +
-            "skippedWalk=$heroWarmSkippedWalk skippedNoArt=$heroWarmSkippedNoArt"
+            "skippedWalk=$heroWarmSkippedWalk skippedNoArt=$heroWarmSkippedNoArt" +
+            latency
     }
 
     /** Clears the counters (tests). */
@@ -482,6 +519,7 @@ internal object ImageLoadTrace {
             heroDrawHits = 0
             heroDrawMisses = 0
             heroWarmSkippedWalk = 0
+            heroWarmCount = 0
             heroWarmSkippedNoArt = 0
             timedDecodes = 0
             decodesOverBudget = 0

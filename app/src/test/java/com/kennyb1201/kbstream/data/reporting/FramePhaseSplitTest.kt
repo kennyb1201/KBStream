@@ -109,4 +109,39 @@ class FramePhaseSplitTest {
             line
         )
     }
+
+    // ── the ui split ──────────────────────────────────────────────────────
+
+    @Test
+    fun `the ui aggregate is split into animation, layout and draw`() {
+        // The 0.9.431 walk: uiP50=107ms with renderP50=8ms. "Composition, layout
+        // or recordDisplayList" is three different fixes, and this is the line
+        // that tells them apart.
+        val line = FrameHistogram.uiParts(
+            anim = FrameStats(frames = 25, p50Ms = 2, p95Ms = 9, maxMs = 30, over16Ms = 0, over33Ms = 0),
+            layout = FrameStats(frames = 25, p50Ms = 92, p95Ms = 600, maxMs = 1800, over16Ms = 20, over33Ms = 18),
+            draw = FrameStats(frames = 25, p50Ms = 13, p95Ms = 150, maxMs = 300, over16Ms = 7, over33Ms = 4),
+            phaseFrames = 25,
+            sessionFrames = 149
+        )
+        assertEquals(
+            " uiAnimP50=2ms uiAnimP95=9ms" +
+                " uiLayoutP50=92ms uiLayoutP95=600ms" +
+                " uiDrawP50=13ms uiDrawP95=150ms",
+            line
+        )
+    }
+
+    @Test
+    fun `an unsampled ui split adds nothing to a line that already says so`() {
+        assertEquals(
+            "",
+            FrameHistogram.uiParts(null, null, null, phaseFrames = 0, sessionFrames = 149)
+        )
+        assertEquals(
+            "a session with no frames has no parts",
+            "",
+            FrameHistogram.uiParts(null, null, null, phaseFrames = 0, sessionFrames = 0)
+        )
+    }
 }

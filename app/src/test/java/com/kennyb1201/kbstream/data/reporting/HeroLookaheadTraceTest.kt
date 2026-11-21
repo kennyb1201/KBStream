@@ -35,6 +35,37 @@ class HeroLookaheadTraceTest {
     }
 
     @Test
+    fun `a warm that was timed reports its latency beside the rate`() {
+        // The 0.9.431 walk: 6 warms for 24 draws, hits=11 misses=13. A warm has
+        // ~350 ms (dwell 600 - delay 250) to decode 1280x720, and the paste had
+        // no number for how long a warm actually took - so "late" and "absent"
+        // read the same. Two samples: the median and the max, like the decodes.
+        ImageLoadTrace.noteHeroFocusArrival()
+        ImageLoadTrace.noteHeroWarm()
+        ImageLoadTrace.noteHeroWarmMs(180)
+        ImageLoadTrace.noteHeroWarmMs(920)
+        ImageLoadTrace.noteHeroWarmMs(400)
+
+        val line = ImageLoadTrace.lines().first { it.startsWith("hero: lookahead") }
+        assertTrue(
+            line,
+            line.endsWith(" warmP50=400ms warmMax=920ms")
+        )
+    }
+
+    @Test
+    fun `a session that never warmed keeps the line it always printed`() {
+        // Old pastes and pinned expectations read the same: no samples, no
+        // suffix - not `warmP50=0ms`, which would read as an instant warm.
+        ImageLoadTrace.noteHeroFocusArrival()
+        assertEquals(
+            "hero: lookahead arrivals=1 hits=0 misses=0 rate=0% " +
+                "skippedWalk=0 skippedNoArt=0",
+            ImageLoadTrace.lines().single()
+        )
+    }
+
+    @Test
     fun `a memory-cache draw is a hit and a fresh decode is a miss`() {
         ImageLoadTrace.noteHeroFocusArrival()
         ImageLoadTrace.noteHeroDraw(memoryCached = true)
