@@ -212,6 +212,13 @@ object Diagnostics {
         // profile makes no request), so this line is the only place a capture can
         // tell "never connected" from "connected, unmapped" from "mapped, 429".
         BingeCatTrace.lines().forEach { report.appendLine("bingecat: $it") }
+        // What this session spent per API (F7, spec 2026-11-20). Counted at
+        // BaseHttpClient, the one client every data API derives from, so it is
+        // the line that proves a call-volume cut actually cut calls: a cold
+        // start with nothing changed on the trackers should read one activities
+        // call each and no section fetches, and any regression lands here before
+        // it lands in a quota. Counters are per process.
+        report.appendLine(ApiCallMeter.line())
         // The launch breakdown, printed explicitly: it is the one set of samples
         // the perf summary's ranking below is most likely to crowd out.
         startupLine()?.let { report.appendLine(it) }

@@ -58,7 +58,17 @@ object BaseHttpClient {
     fun get(): OkHttpClient =
         base ?: synchronized(this) {
             base ?: OkHttpClient.Builder()
-                // Brotli first: it only rewrites the response body (and the
+                // The call meter (F7, spec 2026-11-20): every feature client in
+                // the app derives from this base, so counting here counts the
+                // whole data layer - Simkl, Trakt, MDBList, BingeCat, TMDB, the
+                // add-on repository and the EPG stack - without teaching any of
+                // them to report. Installed first so a request is counted even
+                // when a later interceptor is the one that answers it.
+                //
+                // It only increments a ConcurrentHashMap counter: no I/O, no
+                // allocation on the request path beyond a map lookup.
+                .addInterceptor(apiCallMeterInterceptor())
+                // Brotli next: it only rewrites the response body (and the
                 // Accept-Encoding it asks with), so everything derived from
                 // this client - every feature interceptor included - sees an
                 // already-decompressed body exactly as it would with gzip.
