@@ -645,6 +645,8 @@ private fun CollectionHeader(
             .background(KBSurface, KBShapePanel)
     ) {
         if (!backdropUrl.isNullOrBlank()) {
+            // A still, not a logo: opaque art, so it keeps the loader's 565
+            // default (audited 2026-11-21 - see ui/components/LogoArt.kt).
             AsyncImage(
                 model = backdropUrl,
                 contentDescription = null,

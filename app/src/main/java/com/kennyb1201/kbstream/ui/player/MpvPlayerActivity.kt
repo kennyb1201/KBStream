@@ -27,6 +27,7 @@ import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import coil3.load
+import com.kennyb1201.kbstream.ui.components.logoRequest
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
@@ -4523,7 +4524,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         val logo = currentAddonLogoUrl
         if (!logo.isNullOrBlank()) {
             infoAddonIcon?.visibility = View.VISIBLE
-            runCatching { infoAddonIcon?.load(logo) }
+            runCatching {
+                infoAddonIcon?.let { it.load(logoRequest(it.context, logo)) }
+            }
         } else {
             infoAddonIcon?.visibility = View.GONE
             infoAddonIcon?.setImageDrawable(null)
@@ -7268,7 +7271,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      * for the drawable rather than assuming it (see [startSplashLogoPulse]).
      */
     private fun applyClearLogo(url: String) {
-        loadingLogoView?.load(url)
+        loadingLogoView?.let { it.load(logoRequest(it.context, url)) }
         loadingLogoView?.visibility = View.VISIBLE
         loadingTitle?.visibility = View.GONE
         startSplashLogoPulse()

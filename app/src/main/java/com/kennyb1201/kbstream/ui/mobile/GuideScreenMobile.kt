@@ -71,6 +71,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import com.kennyb1201.kbstream.ui.components.logoRequest
 import com.kennyb1201.kbstream.data.iptv.CatchupProgram
 import com.kennyb1201.kbstream.data.notifications.ReminderRules
 import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
@@ -1498,7 +1499,7 @@ private fun MobileChannelLogo(logoUrl: String?, name: String) {
             )
         } else {
             AsyncImage(
-                model = logoUrl,
+                model = logoRequest(LocalContext.current, logoUrl),
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier

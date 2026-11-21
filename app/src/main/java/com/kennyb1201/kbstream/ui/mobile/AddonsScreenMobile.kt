@@ -51,6 +51,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
+import com.kennyb1201.kbstream.ui.components.logoRequest
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
@@ -922,7 +923,7 @@ private fun AddonTileMobile(
             // The letter stays underneath: while the image loads, or if it
             // fails, the tile is still the add-on's initial.
             AsyncImage(
-                model = logoUrl,
+                model = logoRequest(LocalContext.current, logoUrl),
                 contentDescription = name,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier

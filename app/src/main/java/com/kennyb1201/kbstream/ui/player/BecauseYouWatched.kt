@@ -28,6 +28,7 @@ import androidx.activity.ComponentActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.OneShotPreDrawListener
 import coil3.load
+import com.kennyb1201.kbstream.ui.components.logoRequest
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.ui.components.TasteAdds
 import com.kennyb1201.kbstream.ui.components.clipToPosterEdge
@@ -1962,7 +1963,10 @@ internal class BecauseYouWatchedUi(
             ?.let { backdrop.load(it) }
         desc.text = (fetched?.overview ?: pick.overview).orEmpty()
         // Logo: from the per-pick logo pass if it landed already.
-        logoCache[pick.tmdbId]?.let { logo.load(it) } ?: run { logo.setImageDrawable(null) }
+        // A clearlogo on transparency: 8888 (see [logoRequest]), never the 565
+        // default - that is the decode that draws the wordmark as a block.
+        logoCache[pick.tmdbId]?.let { logo.load(logoRequest(logo.context, it)) }
+            ?: run { logo.setImageDrawable(null) }
     }
 
     /** Clips the pick posters and the featured backdrop to the poster edge. */

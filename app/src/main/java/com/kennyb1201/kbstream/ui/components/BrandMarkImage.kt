@@ -130,6 +130,12 @@ internal fun BrandMarkImage(
             // this cap exists to bound.
             .allowHardware(false)
             .size(BRAND_MARK_DECODE_PX)
+            // A wordmark on transparency. 565 has no alpha, so a transparent
+            // pixel decodes opaque and the mark draws as a solid block - and
+            // it would poison the luminance sample below as well, which is
+            // what the WHITEN verdict is read from. 8888 is the only config
+            // this request can be.
+            .logoArt()
             .build()
     }
 

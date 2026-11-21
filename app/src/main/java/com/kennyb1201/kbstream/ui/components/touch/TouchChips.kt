@@ -23,12 +23,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.tmdb.TmdbGenre
+import com.kennyb1201.kbstream.ui.components.logoRequest
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
@@ -265,7 +267,7 @@ fun StudioChip(
         ) {
             if (logoPath != null) {
                 AsyncImage(
-                    model = TmdbRepository.LOGO_BASE + logoPath,
+                    model = logoRequest(LocalContext.current, TmdbRepository.LOGO_BASE + logoPath),
                     contentDescription = name,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier

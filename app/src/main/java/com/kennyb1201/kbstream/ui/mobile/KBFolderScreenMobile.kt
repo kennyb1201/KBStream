@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
+import com.kennyb1201.kbstream.ui.components.logoRequest
 import com.kennyb1201.kbstream.data.kb.KBContentItem
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
@@ -514,7 +515,7 @@ private fun FolderHeaderMobile(
             Column(modifier = Modifier.weight(1f)) {
                 if (logoUrl != null && !logoFailed) {
                     AsyncImage(
-                        model = logoUrl,
+                        model = logoRequest(LocalContext.current, logoUrl),
                         contentDescription = title,
                         contentScale = ContentScale.Fit,
                         onError = { onLogoError() },

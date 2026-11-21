@@ -15,12 +15,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.ui.components.logoRequest
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 
 /**
@@ -58,7 +60,7 @@ fun TouchStudioChip(
         val logo = logoPath?.takeIf { it.isNotBlank() }
         if (logo != null) {
             AsyncImage(
-                model = TmdbRepository.LOGO_BASE + logo,
+                model = logoRequest(LocalContext.current, TmdbRepository.LOGO_BASE + logo),
                 contentDescription = name,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier

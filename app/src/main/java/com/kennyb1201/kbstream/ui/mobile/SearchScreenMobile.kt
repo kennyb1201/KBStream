@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
+import com.kennyb1201.kbstream.ui.components.logoRequest
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
@@ -1478,7 +1479,7 @@ private fun StudioTile(
                 contentAlignment = Alignment.Center
             ) {
                 AsyncImage(
-                    model = TmdbRepository.LOGO_BASE + logoPath,
+                    model = logoRequest(LocalContext.current, TmdbRepository.LOGO_BASE + logoPath),
                     contentDescription = studio.displayName,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier

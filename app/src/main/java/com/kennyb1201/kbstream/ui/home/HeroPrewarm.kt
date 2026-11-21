@@ -61,11 +61,20 @@ private const val HERO_BACKDROP_WARM_HEIGHT = 360
 private const val HERO_LOGO_WARM_WIDTH = 400
 private const val HERO_LOGO_WARM_HEIGHT = 110
 
-/** One image the hero will draw, and the size to warm it at. */
+/**
+ * One image the hero will draw, and the size to warm it at.
+ *
+ * [logo] marks the clearlogo arm: that warm decodes the SAME bitmap the hero
+ * draws, so it must ask for the same pixel format. A warm that decodes a
+ * transparent wordmark as RGB_565 writes the poisoned entry the hero then
+ * draws, which is how a logo became a solid white block on 2026-11-21 even
+ * though the hero's own request opts out.
+ */
 internal data class HeroArtWarmTarget(
     val url: String,
     val width: Int,
-    val height: Int
+    val height: Int,
+    val logo: Boolean = false
 )
 
 /**
@@ -100,7 +109,8 @@ internal fun heroArtWarmTargets(artwork: HeroArtwork?): List<HeroArtWarmTarget> 
                 HeroArtWarmTarget(
                     url = it,
                     width = HERO_LOGO_WARM_WIDTH,
-                    height = HERO_LOGO_WARM_HEIGHT
+                    height = HERO_LOGO_WARM_HEIGHT,
+                    logo = true
                 )
             }
     )

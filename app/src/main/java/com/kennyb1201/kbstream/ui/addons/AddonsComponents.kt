@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Border
 import coil3.compose.SubcomposeAsyncImage
+import com.kennyb1201.kbstream.ui.components.logoArt
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import androidx.tv.material3.ClickableSurfaceDefaults
@@ -705,6 +706,9 @@ internal fun AddonTile(
                 model = ImageRequest.Builder(LocalContext.current)
                     .data(logoUrl)
                     .crossfade(false)
+                    // The add-on's icon is a logo on transparency: 8888 (see
+                    // [logoArt]) - a 565 decode paints its alpha opaque.
+                    .logoArt()
                     .build(),
                 contentDescription = name,
                 contentScale = ContentScale.Fit,

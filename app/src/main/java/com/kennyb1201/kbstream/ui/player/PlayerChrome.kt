@@ -10,6 +10,7 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import coil3.load
+import com.kennyb1201.kbstream.ui.components.logoRequest
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.format.DateFormats
@@ -427,7 +428,7 @@ class PlayerChrome(
         val logoUrl = info.clearLogoUrl
         val logo = clearLogo
         if (logo != null && !logoUrl.isNullOrBlank()) {
-            runCatching { logo.load(logoUrl) }
+            runCatching { logo.load(logoRequest(logo.context, logoUrl)) }
             logo.visibility = View.VISIBLE
             itemName?.visibility = View.GONE
         } else {

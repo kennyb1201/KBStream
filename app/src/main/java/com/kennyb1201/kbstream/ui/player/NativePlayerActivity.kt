@@ -132,6 +132,7 @@ import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import coil3.load
+import com.kennyb1201.kbstream.ui.components.logoRequest
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -2476,7 +2477,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         if (channel.logoUrl.isNullOrBlank()) {
             zapLogo?.setImageDrawable(null)
         } else {
-            zapLogo?.load(channel.logoUrl)
+            // A channel logo is transparent art: 8888 (see [logoRequest]).
+            zapLogo?.let { view ->
+                view.load(logoRequest(view.context, channel.logoUrl))
+            }
         }
 
         // One key per channel and source set, shared with the overlay's
@@ -3667,9 +3671,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * policy pass runs more than once.
      */
     private fun applyClearLogo(url: String) {
-        clearLogo.load(url)
+        clearLogo.load(logoRequest(clearLogo.context, url))
         clearLogo.visibility = View.VISIBLE
-        splashClearLogo.load(url)
+        splashClearLogo.load(logoRequest(splashClearLogo.context, url))
         splashClearLogo.visibility = View.VISIBLE
         itemNameView.visibility = View.GONE
         splashItemName?.visibility = View.GONE
@@ -9449,11 +9453,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
 
         if (resolvedLogoUrl != null) {
-            clearLogo.load(resolvedLogoUrl)
+            clearLogo.load(logoRequest(clearLogo.context, resolvedLogoUrl))
             clearLogo.visibility = View.VISIBLE
             itemNameView.visibility = View.GONE
             // Also load into splash overlay
-            splashClearLogo.load(resolvedLogoUrl)
+            splashClearLogo.load(logoRequest(splashClearLogo.context, resolvedLogoUrl))
         } else if (itemName.isNotBlank()) {
             clearLogo.visibility = View.GONE
             itemNameView.text = itemName
@@ -9579,7 +9583,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         val logo = currentAddonLogoUrl
         if (!logo.isNullOrBlank()) {
             infoAddonIcon.visibility = View.VISIBLE
-            infoAddonIcon.load(logo)
+            infoAddonIcon.load(logoRequest(infoAddonIcon.context, logo))
         } else {
             infoAddonIcon.visibility = View.GONE
             infoAddonIcon.setImageDrawable(null)

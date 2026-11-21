@@ -34,6 +34,7 @@ import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -43,6 +44,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.ui.components.logoRequest
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import kotlinx.coroutines.android.awaitFrame
@@ -259,7 +261,10 @@ internal fun HomeScreensaver(
                     // this is the whole picture and never a poster, and never a
                     // rail's raw promo frame, standing in for it.
                     AsyncImage(
-                        model = slide.logo,
+                        // A clearlogo on transparency: 8888, never the 565
+                        // default (see [logoRequest]). A 565 decode here drew
+                        // the wordmark's transparent pixels as a solid block.
+                        model = logoRequest(LocalContext.current, slide.logo),
                         contentDescription = slide.name,
                         contentScale = ContentScale.Fit,
                         modifier = Modifier

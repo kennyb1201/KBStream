@@ -8,6 +8,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
+import coil3.request.allowRgb565
 import androidx.paging.PagingData
 import androidx.paging.cachedIn
 import com.kennyb1201.kbstream.data.addon.AddonManager
@@ -3000,6 +3001,10 @@ Log.d(
                     coil3.request.ImageRequest.Builder(application)
                         .data(target.url)
                         .size(target.width, target.height)
+                        // The logo arm is warmed at the format the hero DRAWS:
+                        // a 565 warm of a transparent wordmark is the entry
+                        // that draws as a solid block (see HeroPrewarm).
+                        .allowRgb565(!target.logo)
                         .memoryCachePolicy(coil3.request.CachePolicy.DISABLED)
                         .build()
                 )

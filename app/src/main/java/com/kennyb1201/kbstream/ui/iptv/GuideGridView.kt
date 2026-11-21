@@ -88,6 +88,7 @@ import androidx.media3.ui.PlayerView
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
 import coil3.compose.AsyncImage
+import com.kennyb1201.kbstream.ui.components.logoRequest
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.notifications.ReminderRules
@@ -1397,7 +1398,7 @@ private fun ChannelCell(
             ) {
                 if (!logoUrl.isNullOrBlank()) {
                     AsyncImage(
-                        model = logoUrl,
+                        model = logoRequest(LocalContext.current, logoUrl),
                         contentDescription = item.channel.displayName,
                         contentScale = ContentScale.Fit,
                         modifier = Modifier.fillMaxSize().padding(4.dp)
@@ -1825,7 +1826,7 @@ private fun GridPreview(channel: IptvChannel, modifier: Modifier = Modifier) {
                 ) {
                     if (!logoUrl.isNullOrBlank()) {
                         AsyncImage(
-                            model = logoUrl,
+                            model = logoRequest(LocalContext.current, logoUrl),
                             contentDescription = channel.displayName,
                             contentScale = ContentScale.Fit,
                             modifier = Modifier.fillMaxSize().padding(6.dp)

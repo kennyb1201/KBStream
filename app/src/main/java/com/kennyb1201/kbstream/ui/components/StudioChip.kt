@@ -12,6 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -106,7 +107,9 @@ fun StudioChip(
         ) {
             if (logoPath != null) {
                 AsyncImage(
-                    model = TmdbRepository.LOGO_BASE + logoPath,
+                    // A studio's wordmark: transparent art, so 8888 (see
+                    // [logoRequest]) - a 565 decode draws it as a block.
+                    model = logoRequest(LocalContext.current, TmdbRepository.LOGO_BASE + logoPath),
                     contentDescription = name,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier

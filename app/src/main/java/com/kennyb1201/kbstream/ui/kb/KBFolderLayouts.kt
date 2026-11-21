@@ -43,7 +43,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
+import com.kennyb1201.kbstream.ui.components.logoRequest
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.kb.KBContentItem
 import com.kennyb1201.kbstream.data.kb.KBFolder
@@ -120,7 +120,7 @@ private fun FolderTitleBlock(folder: KBFolder?) {
     ) {
         if (logoUrl != null) {
             AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current).data(logoUrl).build(),
+                model = logoRequest(LocalContext.current, logoUrl),
                 contentDescription = folder.title,
                 modifier = Modifier.height(36.dp)
             )

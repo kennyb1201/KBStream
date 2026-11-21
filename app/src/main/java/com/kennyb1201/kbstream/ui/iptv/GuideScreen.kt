@@ -87,7 +87,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import androidx.compose.ui.platform.LocalContext
 import coil3.compose.AsyncImage
+import com.kennyb1201.kbstream.ui.components.logoRequest
 import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.iptv.CatchupProgram
@@ -3559,7 +3561,7 @@ private fun ChannelLogo(
     ) {
         if (!logoUrl.isNullOrBlank()) {
             AsyncImage(
-                model = logoUrl,
+                model = logoRequest(LocalContext.current, logoUrl),
                 contentDescription = item.channel.displayName,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
@@ -4300,7 +4302,7 @@ private fun ChannelSearchDialog(
                             ) {
                                 if (!logoUrl.isNullOrBlank()) {
                                     AsyncImage(
-                                        model = logoUrl,
+                                        model = logoRequest(LocalContext.current, logoUrl),
                                         contentDescription = item.channel.displayName,
                                         contentScale = ContentScale.Fit,
                                         modifier = Modifier.size(width = 44.dp, height = 30.dp)
