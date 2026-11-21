@@ -144,7 +144,13 @@ class BingeCatTrackerContractTest {
         val success = squash(repository)
             .substringAfter("response.isSuccessful ->")
             .substringBefore("noteBingeCatWriteRateLimit(")
-        assertTrue("a committed write invalidates the cached rows", success.contains("cached = null"))
+        assertTrue(
+            "a committed HISTORY write invalidates the snapshot (the next Library " +
+                "open must badge the play) and keeps the list ROWS: a play changes no " +
+                "list's contents, and dropping them would re-walk every pinned rail " +
+                "after every episode (2026-11-21, rule 4)",
+            success.contains("forgetSnapshot()")
+        )
         listOf(
             "ContinueWatchingRefreshBus",
             "WatchHistoryDatabase",

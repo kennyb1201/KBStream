@@ -67,9 +67,36 @@ data class SimklRevokeRequest(
     @Json(name = "token") val token: String
 )
 
+/**
+ * `GET /sync/activities`: the account's last-change stamps.
+ *
+ * [all] is the newest stamp anywhere, which is what the old code compared and
+ * what still answers the cheap "nothing changed" gate. The three domain blocks
+ * are what makes a DELTA possible (2026-11-21, rule 5): a movie's rating must not
+ * re-fetch the show markers, and a show's episode tick must not re-fetch the
+ * movie set. They are optional so a payload without them keeps working - [all]
+ * then counts for every section.
+ */
 @JsonClass(generateAdapter = true)
 data class SimklActivitiesResponse(
-    @Json(name = "all") val all: String?
+    @Json(name = "all") val all: String?,
+    @Json(name = "movies") val movies: SimklActivitySection? = null,
+    @Json(name = "tv_shows") val tvShows: SimklActivitySection? = null,
+    @Json(name = "anime") val anime: SimklActivitySection? = null
+)
+
+/**
+ * One domain block inside [SimklActivitiesResponse].
+ *
+ * Only the stamps this app's two marker sets read are named; the rest of the
+ * block (`rated_at`, `playback`, `plantowatch`, …) is ignored by the adapter,
+ * which is why it is not modelled here.
+ */
+@JsonClass(generateAdapter = true)
+data class SimklActivitySection(
+    @Json(name = "all") val all: String? = null,
+    @Json(name = "completed") val completed: String? = null,
+    @Json(name = "watching") val watching: String? = null
 )
 
 /**

@@ -60,10 +60,22 @@ class OmdbRepository internal constructor(
     private val memoryCache = ConcurrentHashMap<String, Pair<Long, String?>>()
 
     /**
+     * When the last request failed, or 0 (2026-11-21, rule 3).
+     *
+     * Awards are read per title on the Detail page, so an offline box used to
+     * retry once per title per open against a quota of 1,000 a day. Five minutes
+     * is longer than a screen redraw and far shorter than the 30-day TTL.
+     */
+    @Volatile
+    private var lastFailureAtMs = 0L // rule 3: failure clock (see FAILURE_BACKOFF_MS)
+
+    /**
      * Awards text for [imdbId], or null when unknown/unavailable. Never throws.
      *
-     * Null when: no API key is saved, [imdbId] is blank, the request fails, or
-     * OMDB has no awards for the title (`Response = "False"`, `Awards = "N/A"`).
+     * Null when: no API key is saved, [imdbId] is blank, OMDB has no awards for
+     * the title (`Response = "False"`, `Awards = "N/A"`), or the request failed
+     * AND this device never had an answer for it. Since 2026-11-21 a failed
+     * refresh serves the last known awards (rule 2) instead of dropping them.
      */
     suspend fun awardsFor(imdbId: String): String? = withContext(Dispatchers.IO) {
         val id = imdbId.trim()
@@ -74,21 +86,35 @@ class OmdbRepository internal constructor(
 
         val now = System.currentTimeMillis()
 
+        // The last answer this process or the disk has, kept even when it is past
+        // its TTL: rule 2 (2026-11-21) serves it when the refresh FAILS. The TTL
+        // decides when to ask again, never when to forget.
+        var lastKnown: String? = null
+
         memoryCache[id]?.let { (fetchedAt, awards) ->
+            lastKnown = awards
             if (now - fetchedAt < TTL_MS) return@withContext awards
         }
 
         val diskKey = DISK_KEY_PREFIX + id
         runCatchingCancellable { cacheProvider().getByKey(diskKey) }.getOrNull()?.let { row ->
+            val awards = row.json.takeIf { it.isNotBlank() }
+            if (lastKnown == null) lastKnown = awards
             if (now - row.updatedAt < TTL_MS) {
-                val awards = row.json.takeIf { it.isNotBlank() }
                 memoryCache[id] = row.updatedAt to awards
                 evictOldest(memoryCache, { it.first }, MAX_MEMORY_ENTRIES)
                 return@withContext awards
             }
         }
 
-        val fetched = runCatchingCancellable {
+        // Rule 3: a failed read backs off, so a screen that keeps asking does not
+        // spend the same request against the same fault - and OMDB's free tier
+        // is 1,000 requests a DAY.
+        if (lastFailureAtMs > 0L && now - lastFailureAtMs < FAILURE_BACKOFF_MS) {
+            return@withContext lastKnown
+        }
+
+        val outcome = runCatchingCancellable {
             omdbAwardsOrNull(apiProvider().getByImdbId(id, key))
         }
             .onFailure { error ->
@@ -98,7 +124,16 @@ class OmdbRepository internal constructor(
                 // key with it) is deliberately never logged or included here.
                 Log.i("KBStream", "omdb awards unavailable for $id: ${error.message}")
             }
-            .getOrNull()
+
+        if (outcome.isFailure) {
+            // A failed request is NOT "this title has no awards": caching it
+            // would hide the awards for a whole TTL after one blip.
+            lastFailureAtMs = now
+            return@withContext lastKnown
+        }
+
+        lastFailureAtMs = 0L
+        val fetched = outcome.getOrNull()
 
         memoryCache[id] = now to fetched
         evictOldest(memoryCache, { it.first }, MAX_MEMORY_ENTRIES)
@@ -131,6 +166,9 @@ class OmdbRepository internal constructor(
 
         /** Bound so a long browsing session cannot grow the map without end. */
         private const val MAX_MEMORY_ENTRIES = 256
+
+        /** How long a failed request keeps the next caller away (2026-11-21). */
+        private const val FAILURE_BACKOFF_MS = 5L * 60L * 1000L
 
         // Built on first use, shared by every instance: one Retrofit stack for
         // the process instead of one per Detail ViewModel. The client is the

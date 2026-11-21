@@ -187,8 +187,10 @@ class LibraryHomeRailsContractTest {
             "LibrarySource.MDBLIST_LIST" to "MdbListClient.getListItems(context, id)",
             "LibrarySource.TRAKT_WATCHLIST" to "TraktRepository.getInstance(context).watchlist()",
             "LibrarySource.MDBLIST_WATCHLIST" to "MdbListClient.getWatchlist(context)",
+            // 2026-11-21: the branch serves the STORED snapshot first and only
+            // blocks on a read when this device has nothing stored.
             "LibrarySource.BINGECAT_WATCHLIST" to
-                "BingeCatRepository.getInstance(context).snapshot()?.watchlist",
+                "(repository.cachedSnapshot() ?: repository.snapshot())?.watchlist",
             "LibrarySource.SIMKL_WATCHLIST" to
                 "SimklRepository.getInstance(context).getWatchlistItems()"
         ).forEach { (branch, call) ->

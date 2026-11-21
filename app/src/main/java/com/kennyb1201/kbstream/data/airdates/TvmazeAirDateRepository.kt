@@ -83,11 +83,24 @@ class TvmazeAirDateRepository private constructor(context: Context) {
     private val limiter = Semaphore(permits = MAX_CONCURRENT_REQUESTS)
 
     /**
+     * When the last fetch failed, or 0 (2026-11-21, rule 3).
+     *
+     * The Upcoming rail asks for every show in Continue Watching, and a screen
+     * that redraws asks again: without this a network fault was re-paid by every
+     * caller, once per show, for as long as it lasted. In-memory on purpose -
+     * the failure is this process's, and a new process is entitled to try once.
+     */
+    @Volatile
+    private var lastFailureAtMs = 0L
+
+    /**
      * Every episode air date this source knows for [imdbId], keyed
      * `"season:episode"` -> `yyyy-MM-dd` (see [AirDateCorrection.episodeKey]).
      *
-     * Returns an empty map when the show is unknown to the source, when the
-     * network fails, or when [imdbId] isn't an IMDB id.
+     * Returns an empty map when the show is unknown to the source, when
+     * [imdbId] isn't an IMDB id - and when the network fails AND nothing was ever
+     * read for the show. A failure with a last known answer serves that answer
+     * instead (rule 2, 2026-11-21).
      */
     suspend fun episodeAirDates(imdbId: String): Map<String, String> =
         withContext(Dispatchers.IO) {
@@ -98,7 +111,15 @@ class TvmazeAirDateRepository private constructor(context: Context) {
 
             val now = System.currentTimeMillis()
 
+            // The last good answer, kept even when it is past its TTL: rule 2
+            // (2026-11-21) is that a failed refresh serves it instead of
+            // nothing. Before this, a stale-then-offline screen drew a show's
+            // episodes with no corrections at all while the answer it had read
+            // an hour earlier sat in the same cache.
+            var lastKnown: Map<String, String>? = null
+
             memoryCache[id]?.let { (fetchedAt, dates) ->
+                lastKnown = dates
                 // A miss is cached too, but far more briefly: a show TVmaze is
                 // missing today can be added tomorrow, and the negative answer
                 // is only there to stop a stuck screen retrying in a loop.
@@ -108,15 +129,25 @@ class TvmazeAirDateRepository private constructor(context: Context) {
 
             val diskKey = DISK_KEY_PREFIX + id
             runCatchingCancellable { cacheDao.getByKey(diskKey) }.getOrNull()?.let { row ->
-                if (now - row.updatedAt < DISK_TTL_MS) {
-                    runCatching { datesJsonAdapter.fromJson(row.json) }
-                        .getOrNull()
-                        ?.let { dates ->
+                runCatching { datesJsonAdapter.fromJson(row.json) }
+                    .getOrNull()
+                    ?.let { dates ->
+                        if (lastKnown == null) lastKnown = dates
+                        if (now - row.updatedAt < DISK_TTL_MS) {
                             memoryCache[id] = now to dates
                             evictOldest(memoryCache, { it.first }, MAX_MEMORY_ENTRIES)
                             return@withContext dates
                         }
-                }
+                    }
+            }
+
+            // Rule 3: a failed read backs off (minutes), so a screen that keeps
+            // asking does not re-fire the same fan-out. The park is TVmaze's own
+            // instruction; this clock is ours, for the failures that carry no
+            // instruction at all (a timeout, a 5xx).
+            val failedAgo = now - lastFailureAtMs
+            if (lastFailureAtMs > 0L && failedAgo < FAILURE_BACKOFF_MS) {
+                return@withContext lastKnown ?: emptyMap()
             }
 
             val outcome = runCatchingCancellable { limiter.withPermit { fetch(id) } }
@@ -130,7 +161,11 @@ class TvmazeAirDateRepository private constructor(context: Context) {
             // out: a FAILED fetch is not a show with no air dates, and caching it
             // as one cost that show its date corrections for the full miss TTL.
             // Only an ANSWERED empty map is a genuine miss.
-            if (outcome.isFailure) return@withContext emptyMap()
+            if (outcome.isFailure) {
+                lastFailureAtMs = now
+                return@withContext lastKnown ?: emptyMap()
+            }
+            lastFailureAtMs = 0L
             val fetched = outcome.getOrDefault(emptyMap())
 
             memoryCache[id] = now to fetched
@@ -177,6 +212,14 @@ class TvmazeAirDateRepository private constructor(context: Context) {
 
         /** In-flight request cap (each show costs two calls). */
         private const val MAX_CONCURRENT_REQUESTS = 3
+
+        /**
+         * How long a failed read keeps the next caller away (2026-11-21).
+         *
+         * Longer than a screen redraw, far shorter than the TTL: a fault costs
+         * one fetch per show per window rather than one per caller.
+         */
+        private const val FAILURE_BACKOFF_MS = 5L * 60L * 1000L
 
         /**
          * How long a fetched run may be trusted. Air dates for episodes that

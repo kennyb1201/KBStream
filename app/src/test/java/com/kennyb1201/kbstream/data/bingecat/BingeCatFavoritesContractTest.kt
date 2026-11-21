@@ -275,10 +275,12 @@ class BingeCatFavoritesContractTest {
             leg.contains("BingeCatFavoriteRules.legFor(") && leg.contains("if (leg == Leg.NONE)")
         )
         assertTrue(
-            "a success is what re-reads: the repository drops only BingeCat's snapshot",
+            "a success is what re-reads: the repository drops BingeCat's cache. A " +
+                "LIST write changes what a list CONTAINS, so the stored rows go with " +
+                "the snapshot (2026-11-21) - unlike a history write, which keeps them",
             squash(repository)
                 .substringAfter("private suspend fun submitListWrite(")
-                .contains("cached = null")
+                .contains("forgetCache()")
         )
         assertTrue(
             "and the thumb repaints when the leg is over, success or not",

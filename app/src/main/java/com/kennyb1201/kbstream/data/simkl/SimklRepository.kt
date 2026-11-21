@@ -770,6 +770,9 @@ class SimklRepository(
             ?.remove(
                 KEY_LAST_WATCHED_ACTIVITY_ALL
             )
+            ?.remove(
+                KEY_LAST_WATCHED_ACTIVITY_STAMPS
+            )
 
         // F3: a V2 sign-out is DEVICE-LOCAL and writes no tombstone. V2 tokens
         // belong to one device, so there is no shared session to end - and a
@@ -1228,12 +1231,48 @@ class SimklRepository(
         saveWatchedActivityAll(
             latest
         )
+        // The per-section stamps travel with the account-wide one (2026-11-21,
+        // rule 5): they are what lets the next preload fetch only the half of
+        // the markers that moved.
+        SimklActivityStamps.of(activities)?.let { saveWatchedActivityStamps(it) }
 
         Log.e(
             "SIMKL_REPO",
             "markWatchedActivitySynced " +
                 "saved activity all=$latest"
         )
+    }
+
+    /**
+     * Which marker half the account changed since the last stamp (rule 5).
+     *
+     * The delta sibling of [hasWatchedActivityChanged], which answered one
+     * boolean for the whole account. Answers [SimklSectionChanges.none] for
+     * every state that is not a usable answer - not configured, parked, a failed
+     * poll - exactly as the boolean did, so a caller that only knows the old
+     * question behaves as it always did: no refresh this pass, retry later.
+     */
+    internal suspend fun watchedActivityChanges(): SimklSectionChanges {
+        if (!isConfigured() || !hasToken()) return SimklSectionChanges.none
+        if (readsAreParked()) return SimklSectionChanges.none
+
+        val activities =
+            runCatchingCancellable {
+                getActivities()
+            }
+                .onFailure {
+                    Log.e(
+                        "SIMKL_REPO",
+                        "watchedActivityChanges getActivities failed: " + it.message,
+                        it
+                    )
+                    parkAfterActivitiesFailure(it)
+                }
+                .getOrNull()
+                ?: return SimklSectionChanges.none
+
+        val latest = SimklActivityStamps.of(activities) ?: return SimklSectionChanges.none
+        return latest.changesSince(getSavedWatchedActivityStamps())
     }
 
     /**
@@ -1617,6 +1656,9 @@ class SimklRepository(
             ?.remove(
                 KEY_LAST_WATCHED_ACTIVITY_ALL
             )
+            ?.remove(
+                KEY_LAST_WATCHED_ACTIVITY_STAMPS
+            )
             ?.apply()
     }
 
@@ -1626,6 +1668,15 @@ class SimklRepository(
             null
         )
     }
+
+    /** The per-section stamps saved with the last sync (see [SimklActivityStamps]). */
+    internal fun getSavedWatchedActivityStamps(): SimklActivityStamps? =
+        SimklActivityStamps.parse(
+            prefs?.getString(
+                KEY_LAST_WATCHED_ACTIVITY_STAMPS,
+                null
+            )
+        )
 
     /**
      * When this device last wrote watched state on this profile, or 0 when it
@@ -4251,6 +4302,13 @@ class SimklRepository(
             ?.apply()
     }
 
+    private fun saveWatchedActivityStamps(stamps: SimklActivityStamps) {
+        prefs
+            ?.edit()
+            ?.putString(KEY_LAST_WATCHED_ACTIVITY_STAMPS, stamps.wire())
+            ?.apply()
+    }
+
     private fun bearer(
         token: String
     ): String =
@@ -4311,6 +4369,15 @@ class SimklRepository(
 
         private const val KEY_LAST_WATCHED_ACTIVITY_ALL =
             "last_watched_activity_all"
+
+        /**
+         * The per-section stamps that make a delta possible (2026-11-21).
+         *
+         * Its own key, not a replacement for the one above: a build that rolls
+         * back must still find the account-wide stamp it has always written.
+         */
+        private const val KEY_LAST_WATCHED_ACTIVITY_STAMPS =
+            "last_watched_activity_stamps"
 
         private const val ALL_SHOW_ITEMS_TTL_MS =
             15L * 60L * 1000L

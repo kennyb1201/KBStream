@@ -12,6 +12,7 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.trakt.TraktIdKeys
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
+import com.kennyb1201.kbstream.data.simkl.SimklSectionChanges
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import kotlinx.coroutines.CoroutineScope
@@ -586,26 +587,31 @@ class WatchedStatusRepository(
             return
         }
 
-        val activityChanged =
+        // Rule 5 (2026-11-21): the poll answers WHICH half moved, not just
+        // "something did". One boolean was the whole of the old gate, so a
+        // rating on a movie re-read the show markers and an episode tick re-read
+        // the movie set - two full reads to carry one change.
+        val sectionChanges =
             if (
                 forceRemoteRefresh
             ) {
-                true
+                SimklSectionChanges.all
             } else {
                 try {
                     simklRepository
-                        .hasWatchedActivityChanged()
+                        .watchedActivityChanges()
                 } catch (e: Exception) {
                     Log.e(
                         "WATCHED_REPO",
-                        "hasWatchedActivityChanged failed: " +
+                        "watchedActivityChanges failed: " +
                             e.message,
                         e
                     )
 
-                    false
+                    SimklSectionChanges.none
                 }
             }
+        val activityChanged = sectionChanges.any
 
         // The sets this device HOLDS right now travel with the staleness stamp,
         // because a refresh that fails has to leave them exactly as they are
@@ -645,6 +651,14 @@ class WatchedStatusRepository(
                 remoteSetsCold ||
                 remoteSetsStale
 
+        // A cold or stale cache owes BOTH halves; a delta owes only the half
+        // whose stamps moved. The other half keeps the sets this device already
+        // holds - which is the point: they are still right.
+        val refreshMovieSets =
+            forceRemoteRefresh || remoteSetsCold || remoteSetsStale || sectionChanges.movies
+        val refreshShowSets =
+            forceRemoteRefresh || remoteSetsCold || remoteSetsStale || sectionChanges.shows
+
         if (
             shouldRefreshRemoteSets
         ) {
@@ -664,62 +678,72 @@ class WatchedStatusRepository(
                 )
             }
 
-            val movieAttempt =
-                SimklMarkerRefreshRules.keepPreviousOnFailure(
-                    previousCompletedMovieKeys
-                ) {
-                    simklRepository
-                        .getCompletedMovieKeys()
-                }
-            noteFailure("getCompletedMovieKeys", movieAttempt)
-            val refreshedMovieKeys = movieAttempt.keys
+            var refreshedMovieKeys = previousCompletedMovieKeys
+            if (refreshMovieSets) {
+                val movieAttempt =
+                    SimklMarkerRefreshRules.keepPreviousOnFailure(
+                        previousCompletedMovieKeys
+                    ) {
+                        simklRepository
+                            .getCompletedMovieKeys()
+                    }
+                noteFailure("getCompletedMovieKeys", movieAttempt)
+                refreshedMovieKeys = movieAttempt.keys
+            }
 
             // This reads one cached/all-show SIMKL response, not one request
-            // for each poster.
-            val showAttempt =
-                SimklMarkerRefreshRules.keepPreviousOnFailure(
-                    previousCompletedShowImdbIds
-                ) {
-                    simklRepository
-                        .getCompletedShowImdbIds()
-                }
-            noteFailure("getCompletedShowImdbIds", showAttempt)
-            val refreshedShowImdbIds = showAttempt.keys
+            // for each poster. All four show sets come out of it, which is why
+            // they share ONE gate: fetching any of them is the same read.
+            var refreshedShowImdbIds = previousCompletedShowImdbIds
+            var refreshedPartialShowImdbIds = previousPartialShowImdbIds
+            var refreshedShowTmdbKeys = previousCompletedShowTmdbKeys
+            var refreshedPartialShowTmdbKeys = previousPartialShowTmdbKeys
+            if (refreshShowSets) {
+                val showAttempt =
+                    SimklMarkerRefreshRules.keepPreviousOnFailure(
+                        previousCompletedShowImdbIds
+                    ) {
+                        simklRepository
+                            .getCompletedShowImdbIds()
+                    }
+                noteFailure("getCompletedShowImdbIds", showAttempt)
+                refreshedShowImdbIds = showAttempt.keys
 
-            // Same cached all-shows response as the completed set, so this
-            // resolves the eye-badge set for free alongside the checkmarks.
-            val partialAttempt =
-                SimklMarkerRefreshRules.keepPreviousOnFailure(
-                    previousPartialShowImdbIds
-                ) {
-                    simklRepository
-                        .getPartiallyWatchedShowImdbIds()
-                }
-            noteFailure("getPartiallyWatchedShowImdbIds", partialAttempt)
-            val refreshedPartialShowImdbIds = partialAttempt.keys
+                // Same cached all-shows response as the completed set, so this
+                // resolves the eye-badge set for free alongside the checkmarks.
+                val partialAttempt =
+                    SimklMarkerRefreshRules.keepPreviousOnFailure(
+                        previousPartialShowImdbIds
+                    ) {
+                        simklRepository
+                            .getPartiallyWatchedShowImdbIds()
+                    }
+                noteFailure("getPartiallyWatchedShowImdbIds", partialAttempt)
+                refreshedPartialShowImdbIds = partialAttempt.keys
 
-            // TMDB-id twins of the two show sets. Same cached response, so
-            // these add no network round-trip — they only close the gap for
-            // rails whose items carry "tmdb:<n>" ids instead of "tt…".
-            val showTmdbAttempt =
-                SimklMarkerRefreshRules.keepPreviousOnFailure(
-                    previousCompletedShowTmdbKeys
-                ) {
-                    simklRepository
-                        .getCompletedShowTmdbKeys()
-                }
-            noteFailure("getCompletedShowTmdbKeys", showTmdbAttempt)
-            val refreshedShowTmdbKeys = showTmdbAttempt.keys
+                // TMDB-id twins of the two show sets. Same cached response, so
+                // these add no network round-trip — they only close the gap for
+                // rails whose items carry "tmdb:<n>" ids instead of "tt…".
+                val showTmdbAttempt =
+                    SimklMarkerRefreshRules.keepPreviousOnFailure(
+                        previousCompletedShowTmdbKeys
+                    ) {
+                        simklRepository
+                            .getCompletedShowTmdbKeys()
+                    }
+                noteFailure("getCompletedShowTmdbKeys", showTmdbAttempt)
+                refreshedShowTmdbKeys = showTmdbAttempt.keys
 
-            val partialTmdbAttempt =
-                SimklMarkerRefreshRules.keepPreviousOnFailure(
-                    previousPartialShowTmdbKeys
-                ) {
-                    simklRepository
-                        .getPartiallyWatchedShowTmdbKeys()
-                }
-            noteFailure("getPartiallyWatchedShowTmdbKeys", partialTmdbAttempt)
-            val refreshedPartialShowTmdbKeys = partialTmdbAttempt.keys
+                val partialTmdbAttempt =
+                    SimklMarkerRefreshRules.keepPreviousOnFailure(
+                        previousPartialShowTmdbKeys
+                    ) {
+                        simklRepository
+                            .getPartiallyWatchedShowTmdbKeys()
+                    }
+                noteFailure("getPartiallyWatchedShowTmdbKeys", partialTmdbAttempt)
+                refreshedPartialShowTmdbKeys = partialTmdbAttempt.keys
+            }
 
             cacheMutex.withLock {
                 completedMovieKeys =

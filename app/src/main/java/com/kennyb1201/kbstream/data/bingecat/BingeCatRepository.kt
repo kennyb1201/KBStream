@@ -45,36 +45,6 @@ data class BingeCatPollResult(
 )
 
 /**
- * Everything the Library section needs, in one read.
- *
- * [profileId] is the KBStream profile the numbers were read FOR and [mappedId]
- * the BingeCat profile they came from. Both are compared on every use, so a
- * mapping change or a profile switch can never serve the previous account's
- * rows out of this cache (spec F2's Mom trap, closed in the cache as well as on
- * the wire).
- */
-data class BingeCatSnapshot(
-    val watchlist: List<BingeCatRow>,
-    val saved: List<BingeCatRow>,
-    val lists: List<BingeCatList>,
-    val watched: Set<String>,
-    val refreshedAtMs: Long,
-    val profileId: String?,
-    val mappedId: Long,
-    /**
-     * Whether [lists] is the account's whole list set as of [refreshedAtMs].
-     *
-     * False when the lists leg failed - [lists] then carries the rows this
-     * device already had, or nothing at all on a cold snapshot. The freshness
-     * stamp cannot say this on its own: a partial refresh re-stamps the
-     * snapshot, so a caller that only compared [refreshedAtMs] against its own
-     * read time would treat one failed request as "the account has no lists"
-     * and prune every pinned BingeCat rail on the strength of it.
-     */
-    val listsComplete: Boolean = true
-)
-
-/**
  * One public-list discovery read's answer.
  *
  * The gates are states, not errors, exactly as they are for the reads and
@@ -203,6 +173,21 @@ class BingeCatRepository private constructor(private val context: Context?) {
         /** Revalidate at most once per half hour per profile (spec F3). */
         const val CACHE_TTL_MS = 30L * 60L * 1_000L
 
+        /**
+         * How long a FAILED refresh keeps the next caller away (2026-11-21, rule 3).
+         *
+         * The park is the server's instruction and lives in seconds; this is
+         * ours, and it exists for the failures that carry no park at all - a
+         * timeout, a dropped connection, a 5xx. Without it the only thing that
+         * stopped a re-fire was the read park, so a refresh that failed for any
+         * OTHER reason was retried by the very next caller: Home's rails, then
+         * Library, then the picker, then the next rail, each paying the whole
+         * four-leg fan-out to learn the same thing. Five minutes is longer than
+         * the park and far shorter than the TTL, so a transient fault costs one
+         * refresh rather than one per screen.
+         */
+        const val FAILURE_BACKOFF_MS = 5L * 60L * 1_000L
+
         private const val PAGE_SIZE = 100
 
         /** Public-list discovery pages: the contract's own SearchLimit ceiling. */
@@ -272,8 +257,44 @@ class BingeCatRepository private constructor(private val context: Context?) {
 
     private val cacheMutex = Mutex()
 
+    /**
+     * The snapshot and per-list rows that survive a launch (2026-11-21).
+     *
+     * Lazy for the same reason [pendingHistory] is: a profile that never reads
+     * BingeCat never pays for the file.
+     */
+    internal val diskCache by lazy { BingeCatCache(context) }
+
     @Volatile
     private var cached: BingeCatSnapshot? = null
+
+    /**
+     * Drops the memory copy and everything on disk.
+     *
+     * A session or mapping change means the stored rows were read for somebody
+     * else - another account's token, or the same app profile mapped to a
+     * different BingeCat profile - so neither the snapshot nor a list's rows may
+     * survive it (spec F2's Mom trap, one layer further down than the memory
+     * copy the guards already covered).
+     */
+    private fun forgetCache() {
+        cached = null
+        diskCache.clear()
+    }
+
+    /**
+     * Drops the snapshot but keeps the rows - a write that changed the account's
+     * HISTORY.
+     *
+     * The next Library open must re-read to badge the play that was just
+     * written, which is why the memory copy went here before 2026-11-21. What a
+     * play does not change is what a list CONTAINS, so the rows stay and the
+     * pinned rails do not go back to one paged walk per Home load.
+     */
+    private fun forgetSnapshot() {
+        cached = null
+        diskCache.clearSnapshot()
+    }
 
     // ── Connection state ─────────────────────────────────────────────────
 
@@ -344,7 +365,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
      * history and resume rows are not BingeCat's to touch.
      */
     fun onSyncedSessionChanged() {
-        cached = null
+        forgetCache()
         // The same honesty the gates use: a refused pair the applier left in
         // place is not a connection, and the screen must not read as one.
         BingeCatTrace.recordSession(store.read() != null && !store.needsReconnect())
@@ -361,7 +382,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
      * session, the local library and the watched markers are not touched.
      */
     fun onSyncedMappingChanged() {
-        cached = null
+        forgetCache()
         BingeCatTrace.recordMapping(mapping.mappedProfileId(), mapping.mappedProfileName())
     }
 
@@ -616,7 +637,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
             // A new grant is a new read: the snapshot held by the lost (or
             // refused) session must not keep the Library empty for a TTL after
             // the viewer reconnects (spec F3).
-            cached = null
+            forgetCache()
             BingeCatTrace.recordSession(true)
             // A fresh grant is the way OUT of a reconnect state, so the two
             // flags are cleared by the save that just retired the marker.
@@ -675,7 +696,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
      */
     private fun clearStaleMapping() {
         mapping.clear()
-        cached = null
+        forgetCache()
         BingeCatTrace.recordMapping(null, null)
         PrefsPayloadBuilder.recordBingeCatMappingChanged(context, cleared = true)
         publishMappingToSync()
@@ -698,7 +719,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
         // already filters those out, and this is the one place that decides.)
         if (!mapping.set(profile)) return
         BingeCatTrace.recordMapping(profile.id, profile.name)
-        cached = null
+        forgetCache()
         PrefsPayloadBuilder.recordBingeCatMappingChanged(context, cleared = false)
         publishMappingToSync()
     }
@@ -763,7 +784,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
         if (BingeCatAccountRules.shouldClearAccountToken(otherProfilesMapped)) {
             runCatching { BingeCatAccountStore(context).clear() }
         }
-        cached = null
+        forgetCache()
         BingeCatTrace.recordSession(false)
         BingeCatTrace.recordNeedsReconnect(false)
         BingeCatTrace.recordNeedsReapproval(false)
@@ -1020,7 +1041,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
                     // A 401 refuses the ACCESS token, not the grant: keep the pair and
                     // flag a reconnect, so the state says so and nothing prompts for it.
                     store.markNeedsReconnect()
-                    cached = null
+                    forgetCache()
                     BingeCatTrace.recordSession(false)
                     BingeCatTrace.recordWriteFailure("401")
                     Log.e(TAG, "write failed: 401 after refresh, session dropped ($label)")
@@ -1029,9 +1050,12 @@ class BingeCatRepository private constructor(private val context: Context?) {
             }
             when {
                 response.isSuccessful -> {
-                    // ONLY BingeCat's own cache: the play is now in the profile's
-                    // history, so the next open re-reads and badges it.
-                    cached = null
+                    // ONLY BingeCat's snapshot: the play is now in the profile's
+                    // history, so the next open re-reads and badges it. The list
+                    // ROWS stay - a play changes no list's contents, and dropping
+                    // them here would re-walk every pinned rail after every
+                    // episode (2026-11-21, rule 4).
+                    forgetSnapshot()
                     BingeCatTrace.recordWriteSuccess(writeResultLabel(response.body()))
                     Log.i(TAG, "write ok: $label ${writeResultLabel(response.body())}")
                     BingeCatWriteOutcome.LANDED
@@ -1533,7 +1557,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
                     // A 401 refuses the ACCESS token, not the grant: keep the pair and
                     // flag a reconnect, so the state says so and nothing prompts for it.
                     store.markNeedsReconnect()
-                    cached = null
+                    forgetCache()
                     BingeCatTrace.recordSession(false)
                     BingeCatTrace.recordListWriteFailure("401")
                     Log.e(TAG, "list write failed: 401 after refresh, session dropped ($label)")
@@ -1545,7 +1569,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
                     // ONLY BingeCat's own snapshot: the next Library open re-reads
                     // the watchlist and lists, which is what makes the toggle,
                     // the suffix and the picker ticks reflect this write.
-                    cached = null
+                    forgetCache()
                     BingeCatTrace.recordListWriteSuccess(listWriteResultLabel(response.body()))
                     Log.i(TAG, "list write ok: $label ${listWriteResultLabel(response.body())}")
                     ListWriteResult.Accepted(response.body())
@@ -1658,7 +1682,12 @@ class BingeCatRepository private constructor(private val context: Context?) {
         val mapped = mappedProfileId() ?: return null
         if (!hasToken()) return null
         val activeProfile = context?.let { ProfileStorage.activeProfileId(it) }
-        val fresh = cached
+        // Hydrated BEFORE the TTL check (2026-11-21, rule 1). A cold start used
+        // to have nothing in memory and therefore re-read the whole account no
+        // matter how recently another launch had read it; the last good read is
+        // on disk, and if it is still inside the TTL this launch makes no
+        // BingeCat call at all.
+        val fresh = cached ?: restoreFromDisk(mapped, activeProfile)
         if (
             fresh != null &&
             fresh.mappedId == mapped &&
@@ -1672,18 +1701,18 @@ class BingeCatRepository private constructor(private val context: Context?) {
         // refresh never advanced `refreshedAtMs`, so every caller after it (Home
         // rails, Library, the picker, taste adds) re-fired the whole four-leg
         // fan-out straight back into the limit.
-        if (bingeCatReadParkMs() > 0L) {
+        if (bingeCatReadParkMs() > 0L || failedRecently(nowMs)) {
             return fresh?.takeIf { it.mappedId == mapped && it.profileId == activeProfile }
         }
         return cacheMutex.withLock {
             // Re-checked inside the lock: a 429 from another caller can land
             // while this one queues, and the fan-out it already stopped must not
             // be started again here.
-            if (bingeCatReadParkMs() > 0L) {
-                return@withLock cached
+            if (bingeCatReadParkMs() > 0L || failedRecently(nowMs)) {
+                return@withLock (cached ?: restoreFromDisk(mapped, activeProfile))
                     ?.takeIf { it.mappedId == mapped && it.profileId == activeProfile }
             }
-            val current = cached
+            val current = cached ?: restoreFromDisk(mapped, activeProfile)
             if (
                 current != null &&
                 current.mappedId == mapped &&
@@ -1695,6 +1724,10 @@ class BingeCatRepository private constructor(private val context: Context?) {
             val refreshed = refresh(mapped, activeProfile, nowMs, current)
             if (refreshed != null) {
                 cached = refreshed
+                // Rule 1: the read that just answered is the next launch's
+                // first paint, and rule 3's clock starts over with it.
+                cacheToken()?.let { diskCache.writeSnapshot(it, refreshed) }
+                diskCache.writeFailureAtMs(0L)
                 BingeCatTrace.recordRefresh(
                     watchlist = refreshed.watchlist.size,
                     saved = refreshed.saved.size,
@@ -1704,28 +1737,87 @@ class BingeCatRepository private constructor(private val context: Context?) {
                 )
                 return@withLock refreshed
             }
+            // Rule 3: every leg failed, so the next caller does not get to spend
+            // the same four legs to learn the same thing. The stale read below
+            // is still the answer - the clamp is only on the next ATTEMPT.
+            diskCache.writeFailureAtMs(nowMs)
             // Keep whatever this device already had - for THIS mapping only.
             current?.takeIf { it.mappedId == mapped && it.profileId == activeProfile }
         }
     }
 
     /**
+     * The last good snapshot on disk, accepted only for THIS mapping and profile.
+     *
+     * The two guards are the ones every use of the memory copy already applies:
+     * one app profile can be re-mapped to a different BingeCat profile, and the
+     * rows read for the old one must never paint the new one's rails.
+     */
+    private fun restoreFromDisk(mapped: Long, activeProfile: String?): BingeCatSnapshot? {
+        val token = cacheToken() ?: return null
+        val restored = diskCache.readSnapshot(token) ?: return null
+        if (restored.mappedId != mapped || restored.profileId != activeProfile) return null
+        cached = restored
+        return restored
+    }
+
+    /** The access token a cache record is fingerprinted by. Never stored. */
+    private fun cacheToken(): String? =
+        store.read()?.accessToken?.takeIf { it.isNotBlank() }
+
+    /** Whether the last refresh or rows walk failed recently (rule 3). */
+    private fun failedRecently(nowMs: Long): Boolean {
+        val failedAt = diskCache.readFailureAtMs()
+        return failedAt > 0L && nowMs - failedAt < FAILURE_BACKOFF_MS
+    }
+
+    /**
      * A list's entries, fetched on selection rather than with the snapshot.
      *
-     * Null when the walk failed, exactly as [readSavedPages] does: the pages
-     * already fetched are not the list, and every caller draws what it gets as
-     * the whole thing (`orEmpty()` at the rail, the picker and the list pane), so
-     * a truncated answer would be served as a complete one.
+     * Stored per list and per profile since 2026-11-21 (rule 1). A pinned Home
+     * rail asked for these rows on EVERY load, so one launch could spend a whole
+     * paged walk per pinned list (`bingecat=422` in six minutes); inside the TTL
+     * the stored walk answers instead, and a cold start reads the last launch's.
+     *
+     * A walk that fails - a page that did not answer, a park, the backoff from
+     * the last failure - serves the STORED rows (rule 2: a rail never empties
+     * because a refresh failed). Null now means the walk failed AND this device
+     * holds nothing: exactly as [readSavedPages] does, the pages already fetched
+     * are not the list, and every caller draws what it gets as the whole thing
+     * (`orEmpty()` at the rail, the picker and the list pane), so a truncated
+     * answer must never be served as a complete one - nor stored as one.
      */
     suspend fun listRows(ref: String): List<BingeCatRow>? {
         if (!isReady()) return null
+        val nowMs = System.currentTimeMillis()
+        val token = cacheToken()
+        val stored = token?.let { diskCache.readRows(it, ref) }
+        // Rule 1: a list's rows are the expensive half of this file (one paged
+        // walk per page, up to fifty of them), and a pinned Home rail asked for
+        // them on every load. Inside the TTL the stored walk is the answer.
+        if (stored != null && nowMs - stored.savedAtMs < CACHE_TTL_MS) {
+            return stored.rows
+        }
+        // Rules 2 and 3: a parked or recently-failed leg serves the last good
+        // walk. A rail must not empty because a refresh failed, and the next
+        // screen must not re-fire the walk that just failed.
+        if (bingeCatReadParkMs() > 0L || failedRecently(nowMs)) {
+            return stored?.rows
+        }
         val rows = mutableListOf<BingeCatRow>()
         var page = 1
         var truncated = true
         while (page <= MAX_PAGES) {
             val body = authorizedBody { auth ->
                 service.listItems(authorization = auth, ref = ref, page = page, limit = PAGE_SIZE)
-            } ?: return null
+            }
+            if (body == null) {
+                // A page that did not answer is not the list: abandon the walk,
+                // serve the stored one, and arm the backoff so the next screen
+                // does not re-walk the same pages into the same failure.
+                diskCache.writeFailureAtMs(nowMs)
+                return stored?.rows
+            }
             rows += body.items.mapNotNull { bingecatListRow(it) }
             if (body.items.size < PAGE_SIZE) {
                 truncated = false
@@ -1736,13 +1828,34 @@ class BingeCatRepository private constructor(private val context: Context?) {
         // m24: a walk that stopped because MAX_PAGES ran out is NOT the list -
         // it is the first 1,000 entries of it, and callers draw what they get as
         // the whole thing. Null is this file's own answer for "not the complete
-        // set" (see the failure arm below and readLists' doc), so a >1,000-item
-        // list now reads as unavailable instead of as a silently short one.
-        return if (truncated) null else rows
+        // set" (see the failure arm above and readLists' doc), so a >1,000-item
+        // list now reads as unavailable instead of as a silently short one -
+        // and, since 2026-11-21, as the STORED complete walk when there is one.
+        if (truncated) {
+            // Not a failure of the leg, so no backoff: another list's walk is
+            // not this one being over the ceiling.
+            return stored?.rows
+        }
+        // Rule 1: only a COMPLETE walk replaces the stored one (the
+        // all-or-nothing rule the walk already keeps for its callers).
+        token?.let { diskCache.writeRows(it, ref, rows, nowMs) }
+        return rows
     }
 
-    /** The cached snapshot, for a screen that cannot wait (never a network read). */
-    fun cachedSnapshot(): BingeCatSnapshot? = cached
+    /**
+     * The cached snapshot, for a screen that cannot wait (never a network read).
+     *
+     * Since 2026-11-21 "cached" includes the last launch's read, so the first
+     * frame after a cold start paints the Library instead of blanking it while
+     * the four legs run.
+     */
+    fun cachedSnapshot(): BingeCatSnapshot? {
+        val memory = cached
+        if (memory != null) return memory
+        val mapped = mapping.mappedProfileId() ?: return null
+        val active = context?.let { ProfileStorage.activeProfileId(it) }
+        return restoreFromDisk(mapped, active)
+    }
 
     /**
      * One full revalidation. Partial answers are kept: a lists read that failed
@@ -2102,7 +2215,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
                 // A 401 refuses the ACCESS token, not the grant: keep the pair and
                 // flag a reconnect, so the state says so and nothing prompts for it.
                 store.markNeedsReconnect()
-                cached = null
+                forgetCache()
                 BingeCatTrace.recordSession(false)
                 return BingeCatTitleProbe.Failed("401")
             }
@@ -2193,7 +2306,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
                     // A 401 refuses the ACCESS token, not the grant: keep the pair and
                     // flag a reconnect, so the state says so and nothing prompts for it.
                     store.markNeedsReconnect()
-                    cached = null
+                    forgetCache()
                     BingeCatTrace.recordSession(false)
                     BingeCatTrace.recordImportFailure("401")
                     return BingeCatImportAttempt.Failed("401")
@@ -2213,7 +2326,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
                     // The imported list only reaches Library through the
                     // profile's own list read, so that read must not be served
                     // from the pre-import snapshot.
-                    cached = null
+                    forgetCache()
                     val feedback = BingeCatPublicListRules.feedbackFor(accepted, importId)
                     // Diagnostics names the REASON CLASS for each verdict: a
                     // started/already-imported import is a success, and the two
@@ -2314,7 +2427,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
                 // A 401 refuses the ACCESS token, not the grant: keep the pair and
                 // flag a reconnect, so the state says so and nothing prompts for it.
                 store.markNeedsReconnect()
-                cached = null
+                forgetCache()
                 BingeCatTrace.recordSession(false)
                 return BingeCatJobPoll.Failed("401")
             }
@@ -2381,7 +2494,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
                 // A 401 refuses the ACCESS token, not the grant: keep the pair and
                 // flag a reconnect, so the state says so and nothing prompts for it.
                 store.markNeedsReconnect()
-                cached = null
+                forgetCache()
                 BingeCatTrace.recordSession(false)
                 BingeCatTrace.recordPublicListError("401")
                 return BingeCatPublicBrowse.Failed("401")
@@ -2455,7 +2568,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
                 // A 401 refuses the ACCESS token, not the grant: keep the pair and
                 // flag a reconnect, so the state says so and nothing prompts for it.
                 store.markNeedsReconnect()
-                cached = null
+                forgetCache()
                 BingeCatTrace.recordSession(false)
                 BingeCatTrace.recordError("401")
                 return null
@@ -2710,7 +2823,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
         // has nothing to refuse, and must not be given a marker that would then
         // ask it to reconnect out of a clean "not connected" state.
         if (store.read() != null) store.markNeedsReconnect()
-        cached = null
+        forgetCache()
         val reconnect = needsReconnect()
         BingeCatTrace.recordSession(false)
         BingeCatTrace.recordNeedsReconnect(reconnect)

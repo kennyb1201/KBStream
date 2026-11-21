@@ -530,7 +530,13 @@ object LibraryHomeRailItems {
         }
 
         LibrarySource.BINGECAT_WATCHLIST -> {
-            BingeCatRepository.getInstance(context).snapshot()?.watchlist.orEmpty().map { row ->
+            // The stored snapshot FIRST (2026-11-21, rule 1): a launch used to
+            // wait on the four-leg refresh before this rail could draw anything,
+            // and a failed refresh drew nothing. `cachedSnapshot` now also means
+            // "the last launch's read", so the rail paints from disk and the
+            // Library screen's own reconcile pass is what revalidates.
+            val repository = BingeCatRepository.getInstance(context)
+            (repository.cachedSnapshot() ?: repository.snapshot())?.watchlist.orEmpty().map { row ->
                 LibraryItem(
                     source = source,
                     mediaType = row.mediaType,

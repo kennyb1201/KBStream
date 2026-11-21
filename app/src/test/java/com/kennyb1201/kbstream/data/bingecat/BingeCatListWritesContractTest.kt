@@ -186,8 +186,10 @@ class BingeCatListWritesContractTest {
         )
         val success = submit.substringAfter("response.isSuccessful ->")
         assertTrue(
-            "success drops ONLY BingeCat's snapshot, so the next Library open re-reads",
-            success.contains("cached = null")
+            "success drops BingeCat's cache, snapshot AND rows, so the next Library " +
+                "open re-reads - a list write is the one write that changes what a " +
+                "list contains (2026-11-21)",
+            success.contains("forgetCache()")
         )
         listOf(
             "LocalLibraryStore",
