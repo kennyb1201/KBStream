@@ -64,6 +64,7 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
@@ -90,7 +91,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kennyb1201.kbstream.data.reporting.SeasonRowRevealTrace
+import com.kennyb1201.kbstream.ui.components.GlobalLandscapeArtCache
+import com.kennyb1201.kbstream.ui.components.LandscapeArtRequest
 import com.kennyb1201.kbstream.ui.components.rememberIdleLazyListState
+import com.kennyb1201.kbstream.ui.home.HomeScreensaver
 import kotlinx.coroutines.android.awaitFrame
 import androidx.tv.material3.Border
 import androidx.tv.material3.Card
@@ -110,6 +114,7 @@ import coil3.size.Size
 import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Meta
+import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
@@ -147,6 +152,9 @@ import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_WAIT_MS
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
+import com.kennyb1201.kbstream.ui.screensaver.ScreensaverRelated
+import com.kennyb1201.kbstream.ui.screensaver.detailScreensaverCandidates
+import com.kennyb1201.kbstream.ui.screensaver.rememberScreensaver
 import com.kennyb1201.kbstream.ui.components.WarmRowAhead
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
 import com.kennyb1201.kbstream.ui.components.KB_ALPHA_FADE_MS
@@ -5401,8 +5409,93 @@ fun DetailScreen(
                 )
             }
 
+            // ── The screensaver ───────────────────────────────────────
+            //
+            // The same overlay Home shows, armed by the same shared host (see
+            // rememberScreensaver): the idle pref, the resumed screen, the menu
+            // gate, the frozen pool and the art gate are one implementation, so
+            // the two screens cannot drift. What is this page's own is the pool
+            // and the hand-back.
+            //
+            // Detail's TV trailers open the fullscreen player rather than a
+            // surface on this page, so there is never one on screen here to
+            // hold the gate: leaving for the player pauses Detail, which is the
+            // host's resumed gate, and coming back restarts the full wait.
+            val screensaverPool = remember(tmdbDetail?.id, normalizedType, recommendations) {
+                detailScreensaverCandidates(
+                    tmdbId = tmdbDetail?.id,
+                    title = tmdbDetail?.title ?: tmdbDetail?.name ?: m.name,
+                    type = normalizedType,
+                    // The rail's own order and its own ceiling - the page's
+                    // recommendations have already been through this screen's
+                    // filters, and this adds nothing on top.
+                    related = recommendations.map { rec ->
+                        ScreensaverRelated(
+                            tmdbId = rec.id,
+                            name = rec.title ?: rec.name,
+                            // The same field the rail's own rows read.
+                            series = rec.title.isNullOrBlank()
+                        )
+                    }
+                )
+            }
+            val screensaverContext = LocalContext.current
+
+            // The art gate, once, for both passes: the clean (textless-first)
+            // card backdrop and a clearlogo, or the title is not a slide. The
+            // shared landscape resolver is what the page's own cards use, so a
+            // slide's picture is the same artwork its card shows.
+            suspend fun screensaverSlideOf(item: MetaPreview): MetaPreview? {
+                val art = GlobalLandscapeArtCache.resolve(
+                    context = screensaverContext,
+                    request = LandscapeArtRequest(id = item.id, type = item.type, tmdbOnly = true)
+                )
+                val backdrop = art.first?.takeIf { it.isNotBlank() }
+                val logo = art.second?.takeIf { it.isNotBlank() }
+                if (backdrop == null || logo == null) return null
+                return item.copy(background = backdrop, logo = logo)
+            }
+
+            val screensaver = rememberScreensaver(
+                pool = screensaverPool,
+                // Anything the viewer has open is them mid-task, not idle: the
+                // two header long-press menus, the rating dialog, the studio
+                // chip menu, and the poster/season/episode/image menus.
+                blocked = studioChipMenu != null ||
+                    posterMenu != null ||
+                    seasonMenu != null ||
+                    episodeMenu != null ||
+                    mediaImageMenu != null ||
+                    playButtonMenu ||
+                    libraryButtonMenu ||
+                    ratingDialog,
+                trailerPlaying = false,
+                warmPool = { items -> items.forEach { screensaverSlideOf(it) } },
+                resolveSlides = { items -> items.mapNotNull { screensaverSlideOf(it) } },
+                // Everything focused here stays composed underneath the
+                // overlay, so the page keeps its own focus state; the restorer
+                // on the page's root is what lands the dismissing press back
+                // on the control that held it.
+                captureFocus = { null },
+                restoreFocus = {}
+            )
+
             Box(
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier
+                    .fillMaxSize()
+                    // Any press is activity for the screensaver's idle clock -
+                    // a focus move, a select, a menu key. Never consumed: the
+                    // press still has to reach the focus system.
+                    .onPreviewKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown) {
+                            screensaver.onActivity()
+                        }
+                        false
+                    }
+                    // The page's controls never leave composition while the
+                    // show is up, so this is what puts focus back on the one
+                    // that held it when the overlay goes.
+                    .focusRestorer()
             ) {
                 // Zero-size focus sink for season swaps (see declaration).
                 // A child, not a modifier on this Box: children of a Box
@@ -9190,6 +9283,25 @@ fun DetailScreen(
                         onDismiss = {
                             dismissEpisodeMenu()
                         }
+                    )
+                }
+
+                // The screensaver is drawn LAST, over the page and every menu
+                // it can raise: it is the whole screen for as long as it is
+                // up. A composable of this page, not a route, so the back
+                // stack, the scroll position and the rails' focus state are
+                // untouched by the show.
+                BackHandler(enabled = screensaver.visible) {
+                    screensaver.dismiss()
+                }
+                if (screensaver.visible && screensaver.slides.isNotEmpty()) {
+                    HomeScreensaver(
+                        slides = screensaver.slides,
+                        // No genre line here: the page has no warmed genre for
+                        // the related titles, and a lookup per slide is a
+                        // fetch the overlay must never make.
+                        genreOf = { null },
+                        onExit = { screensaver.dismiss() }
                     )
                 }
             }

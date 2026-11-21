@@ -247,7 +247,7 @@ class SpotlightHomeContractTest {
         assertTrue(
             "and the overlay is drawn over the rails, under the screensaver",
             home.indexOf("SpotlightPreviewHost(") in
-                (home.indexOf("if (screensaverVisible") - 4_000) until home.indexOf("if (screensaverVisible")
+                (home.indexOf("if (screensaver.visible") - 4_000) until home.indexOf("if (screensaver.visible")
         )
         assertTrue(
             "the cards report themselves through the one component rails already " +

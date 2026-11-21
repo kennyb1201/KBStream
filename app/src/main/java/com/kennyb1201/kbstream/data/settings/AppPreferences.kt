@@ -1873,7 +1873,7 @@ object AppPreferences {
         BILLBOARD_CYCLE_OPTIONS_MS.minByOrNull { option -> abs(option - raw) }
             ?: DEFAULT_BILLBOARD_CYCLE_MS
 
-    // ── TV screensaver (Home's idle ambient overlay) ─────────────────
+    // ── TV screensaver (the TV screens' idle ambient overlay) ────────
     //
     // Device-local and sync-excluded on purpose (the same decision the
     // screen-geometry prefs made): how long THIS television sits idle before

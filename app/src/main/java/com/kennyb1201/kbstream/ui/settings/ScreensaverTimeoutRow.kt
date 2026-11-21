@@ -60,10 +60,11 @@ internal fun ScreensaverTimeoutRow(
         }
     }
     Text(
-        text = "How long Home must sit untouched before the screensaver takes the " +
-            "screen. Any press on the remote brings Home straight back, exactly where " +
-            "it was. Trailers stop while it is up, and a title without both a backdrop " +
-            "and a logo is skipped rather than shown as a poster.",
+        text = "How long Home or a title's page must sit untouched before the " +
+            "screensaver takes the screen. Any press on the remote brings the screen " +
+            "straight back, exactly where it was. Trailers stop while it is up, and a " +
+            "title without both a backdrop and a logo is skipped rather than shown as " +
+            "a poster.",
         color = KBTextLo,
         style = MaterialTheme.typography.labelSmall,
         modifier = Modifier

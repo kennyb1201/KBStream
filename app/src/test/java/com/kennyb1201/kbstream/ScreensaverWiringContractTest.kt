@@ -50,6 +50,10 @@ class ScreensaverWiringContractTest {
     private val timeoutRow =
         source("com/kennyb1201/kbstream/ui/settings/ScreensaverTimeoutRow.kt")
     private val home = source("com/kennyb1201/kbstream/ui/home/HomeScreen.kt")
+    private val detail = source("com/kennyb1201/kbstream/ui/detail/DetailScreen.kt")
+    private val host = source("com/kennyb1201/kbstream/ui/screensaver/ScreensaverHost.kt")
+    private val pool =
+        source("com/kennyb1201/kbstream/ui/screensaver/DetailScreensaverPool.kt")
     private val overlay = source("com/kennyb1201/kbstream/ui/home/HomeScreensaver.kt")
     private val rules = source("com/kennyb1201/kbstream/ui/home/ScreensaverRules.kt")
     private val homeVm = source("com/kennyb1201/kbstream/ui/home/HomeViewModel.kt")
@@ -155,62 +159,95 @@ class ScreensaverWiringContractTest {
     }
 
     @Test
-    fun `Home arms the timer from real keys, gates it on its own overlays, and re-reads the pref`() {
+    fun `the host arms the timer from real keys, gates it, and re-reads the pref`() {
+        val block = squash(host)
         assertTrue(
             "a key press has to push the deadline out",
-            squash(home).contains(
-                "screensaverLastKeyAt = SystemClock.uptimeMillis()"
-            )
+            block.contains("onActivity = { lastKeyAt = SystemClock.uptimeMillis() }")
         )
         assertTrue(
             "idle is measured from the LAST press, not from a fixed deadline",
-            squash(home).contains("val idleFor = SystemClock.uptimeMillis() - screensaverLastKeyAt")
+            block.contains("val idleFor = SystemClock.uptimeMillis() - lastKeyAt")
         )
         assertTrue(
-            "a modal open means the viewer is mid-task: every Home overlay has to gate arming",
+            "the gate is one expression, and every hold is in it: $block",
+            block.contains(
+                "val armed = enabled && resumed && !visible && pool.isNotEmpty() && " +
+                    "!blocked && !trailerPlaying"
+            )
+        )
+        assertTrue(
+            "a PLAYING trailer gates it too: watching one produces no key presses, " +
+                "so the overlay used to arm over the trailer and stop it",
+            block.contains("!trailerPlaying")
+        )
+        assertTrue(
+            "returning to a screen (from Settings included) has to pick up a changed pref",
+            block.contains("LifecycleEventEffect(Lifecycle.Event.ON_RESUME)") &&
+                block.contains("enabled = AppPreferences.getScreensaverEnabled(context)")
+        )
+        val paused = block
+            .substringAfter("LifecycleEventEffect(Lifecycle.Event.ON_PAUSE)")
+            .substringBefore("// Armed only while")
+        assertTrue(
+            "a paused screen (sleep, HDMI switch, background) is not an idle one, so " +
+                "the overlay drops: $paused",
+            paused.contains("resumed = false") &&
+                paused.contains("visible = false")
+        )
+    }
+
+    @Test
+    fun `Home and Detail each hand the host their own gate, without a second copy`() {
+        assertTrue(
+            "a key press on Home is activity for the host's clock",
+            squash(home).contains("screensaver.onActivity()")
+        )
+        assertTrue(
+            "a modal open means the viewer is mid-task: every Home overlay gates arming",
             squash(home).contains(
                 squash(
                     """
-                    val screensaverArmed =
-                        screensaverEnabled &&
-                            homeResumed &&
-                            !screensaverVisible &&
-                            screensaverPool.isNotEmpty() &&
-                            !showTopBar &&
-                            continueWatchingMenu == null &&
-                            upcomingMenu == null &&
-                            posterMenu == null &&
-                            browseShortcutMenu == null &&
-                            !anyTrailerPlaying
+                    blocked = showTopBar ||
+                        continueWatchingMenu != null ||
+                        upcomingMenu != null ||
+                        posterMenu != null ||
+                        browseShortcutMenu != null,
                     """
                 )
             )
         )
         assertTrue(
-            "and a PLAYING trailer gates it too: watching one produces no key " +
-                "presses, so the overlay used to arm over the trailer and stop it",
-            squash(home).contains("!anyTrailerPlaying")
-        )
-        assertTrue(
-            "the gate's flag is every surface's: the Modern hero, the Spotlight " +
-                "billboard and the expanded card",
-            squash(home).contains("heroTrailerPlaying || spotlightBillboardTrailerPlaying ||") &&
+            "the gate's trailer flag is every Home surface's: the Modern hero, the " +
+                "Spotlight billboard and the expanded card",
+            squash(home).contains("trailerPlaying = anyTrailerPlaying,") &&
+                squash(home).contains("heroTrailerPlaying || spotlightBillboardTrailerPlaying ||") &&
                 squash(home).contains("spotlightPanelTrailerPlaying")
         )
         assertTrue(
-            "returning to Home (from Settings included) has to pick up a changed pref",
-            squash(home).contains("LifecycleEventEffect(Lifecycle.Event.ON_RESUME)") &&
-                squash(home).contains("screensaverEnabled = AppPreferences.getScreensaverEnabled(context)")
+            "Detail hands over its own modal state, not a shared guess",
+            squash(detail).contains(
+                squash(
+                    """
+                    blocked = studioChipMenu != null ||
+                        posterMenu != null ||
+                        seasonMenu != null ||
+                        episodeMenu != null ||
+                        mediaImageMenu != null ||
+                        playButtonMenu ||
+                        libraryButtonMenu ||
+                        ratingDialog,
+                    """
+                )
+            )
         )
-        val paused = squash(home)
-            .substringAfter("LifecycleEventEffect(Lifecycle.Event.ON_PAUSE)")
-            .substringBefore("// Armed only while")
-        assertTrue(
-            "a paused Home (sleep, HDMI switch, background) is not an idle Home, so " +
-                "the overlay drops: $paused",
-            paused.contains("homeResumed = false") &&
-                paused.contains("screensaverVisible = false")
-        )
+        listOf(home, detail).forEach { screen ->
+            assertFalse(
+                "neither screen may keep its own copy of the wait: the host owns it",
+                squash(screen).contains("LaunchedEffect(screensaverArmed") ||
+                    squash(screen).contains("val screensaverArmed =")
+            )
+        }
     }
 
     @Test
@@ -232,9 +269,45 @@ class ScreensaverWiringContractTest {
         )
         assertTrue(
             "and what the overlay shows is built at arm time from the clean art",
-            squash(home).contains("val arming = screensaverCleanSlides(latestScreensaverPool)") &&
-                squash(home).contains("if (arming.isEmpty()) return@LaunchedEffect") &&
-                squash(home).contains("screensaverSlidesShown = arming.shuffled()")
+            squash(host).contains("val arming = latestResolveSlides(latestPool)") &&
+                squash(host).contains("if (arming.isEmpty()) return@LaunchedEffect") &&
+                squash(host).contains("slidesShown = arming.shuffled()")
+        )
+    }
+
+    @Test
+    fun `Detail's pool is the title being viewed, then the rail's own related titles`() {
+        assertTrue(
+            "the pool is built from the page's own state, current title first",
+            squash(detail).contains(
+                "val screensaverPool = remember(tmdbDetail?.id, normalizedType, recommendations) " +
+                    "{ detailScreensaverCandidates("
+            ) &&
+                squash(detail).contains("title = tmdbDetail?.title ?: tmdbDetail?.name ?: m.name,")
+        )
+        assertTrue(
+            "the related titles are the page's filtered recommendations, in rail order",
+            squash(pool).contains("related.asSequence()") &&
+                squash(detail).contains("related = recommendations.map { rec ->")
+        )
+        assertTrue(
+            "the current title is only added when the page has one to show",
+            squash(pool).contains("if (tmdbId != null && tmdbId > 0 && !title.isNullOrBlank()) {")
+        )
+        assertTrue(
+            "no second filter may narrow the pool beyond what the rail drew - the rule " +
+                "knows nothing but the model its test pins: " +
+                pool.lines().filter { it.startsWith("import ") }.joinToString(),
+            pool.lines().filter { it.startsWith("import ") }
+                .all { it.contains("data.addon.MetaPreview") }
+        )
+        assertTrue(
+            "and the art gate is the same one: a clean backdrop AND a clearlogo, or no slide",
+            squash(detail).contains(
+                "val backdrop = art.first?.takeIf { it.isNotBlank() } " +
+                    "val logo = art.second?.takeIf { it.isNotBlank() } " +
+                    "if (backdrop == null || logo == null) return null"
+            )
         )
     }
 
@@ -243,15 +316,16 @@ class ScreensaverWiringContractTest {
         assertTrue(
             "the resolved slides are dealt a fresh order at the one place a show " +
                 "is armed, or every idle evening is the same tour in rail order",
-            squash(home).contains("screensaverSlidesShown = arming.shuffled()")
+            squash(host).contains("slidesShown = arming.shuffled()")
         )
         assertTrue(
             "the shuffle is of the SHOWN snapshot, after the clean-art filter, so " +
                 "the resolve pass and its ordered prefix are untouched",
-            squash(home).contains(
-                "val arming = screensaverCleanSlides(latestScreensaverPool) { meta -> " +
-                    "viewModel.screensaverCleanBackdrop(meta.id, meta.type) }"
-            )
+            squash(host).contains("val arming = latestResolveSlides(latestPool)") &&
+                squash(home).contains(
+                    "resolveSlides = { items -> screensaverCleanSlides(items) { meta -> " +
+                        "viewModel.screensaverCleanBackdrop(meta.id, meta.type) } }"
+                )
         )
         assertFalse(
             "and the rules stay order-preserving: a shuffled clean-slide list or " +
@@ -296,20 +370,27 @@ class ScreensaverWiringContractTest {
         )
         assertTrue(
             "nothing resolved is no show at all, not an empty overlay",
-            squash(home).contains("if (arming.isEmpty()) return@LaunchedEffect")
+            squash(host).contains("if (arming.isEmpty()) return@LaunchedEffect")
         )
     }
 
     @Test
     fun `the pool is resolved during the idle wait, never while the show arms`() {
-        val pass = squash(home)
-            .substringAfter("LaunchedEffect(screensaverArmed, screensaverPool)")
+        val pass = squash(host)
+            .substringAfter("LaunchedEffect(armed, pool)")
             .substringBefore("// The wait itself")
         assertTrue(
             "the pass lives on the arm gate, so exiting the overlay, opening a menu " +
-                "or pausing Home cancels it: $pass",
-            pass.contains("if (!screensaverArmed) return@LaunchedEffect") &&
-                pass.contains("viewModel.warmScreensaverPool(screensaverPool)")
+                "or pausing the screen cancels it: $pass",
+            pass.contains("if (!armed) return@LaunchedEffect") &&
+                pass.contains("latestWarmPool(pool)")
+        )
+        assertTrue(
+            "and each screen supplies its own pool's resolve",
+            squash(home).contains("warmPool = { items -> viewModel.warmScreensaverPool(items) }") &&
+                squash(detail).contains(
+                    "warmPool = { items -> items.forEach { screensaverSlideOf(it) } }"
+                )
         )
         assertTrue(
             "the pass is a suspend function over the pool, capped by the rules' bound",
@@ -420,16 +501,16 @@ class ScreensaverWiringContractTest {
         assertTrue(
             "the overlay is drawn from Home, last enough to cover the rails",
             squash(home).contains(
-                "if (screensaverVisible && screensaverSlidesShown.isNotEmpty()) { HomeScreensaver("
+                "if (screensaver.visible && screensaver.slides.isNotEmpty()) { HomeScreensaver("
             )
         )
         assertTrue(
             "what it shows is the snapshot it armed with, not the live rails",
-            squash(home).contains("screensaverSlidesShown = arming.shuffled()")
+            squash(host).contains("slidesShown = arming.shuffled()")
         )
         assertTrue(
             "Back exits the overlay instead of leaving Home",
-            squash(home).contains("BackHandler(enabled = screensaverVisible)")
+            squash(home).contains("BackHandler(enabled = screensaver.visible)")
         )
         // Comments sit between the exit call and the return, so this is read
         // structurally: the handler calls onExit() on the key-down and then
@@ -455,19 +536,28 @@ class ScreensaverWiringContractTest {
     fun `focus goes back to the card it armed on, with a fallback when that card is gone`() {
         assertTrue(
             "the target is captured when the overlay arms",
-            squash(home).contains(
-                "screensaverRestoreTarget = focusedCardRequester ?: lastPosterFocusRequester"
-            )
+            squash(host).contains("restoreTarget = latestCaptureFocus()") &&
+                squash(home).contains(
+                    "captureFocus = { focusedCardRequester ?: lastPosterFocusRequester }"
+                )
         )
-        val exit = squash(home).substringAfter("fun exitScreensaver()")
-            .substringBefore("// The wait itself")
+        val exit = squash(host).substringAfter("fun exit()")
+            .substringBefore("// The resolve pass")
         assertTrue(
-            "exit must hand focus back through Home's own registry, never leave it nowhere: $exit",
-            exit.contains("restoreFocus(") &&
-                exit.contains("screensaverRestoreTarget") &&
-                exit.contains("railFocusRequesters[viewModel.lastFocusedRailItemKey]") &&
-                exit.contains("focusedCardRequester") &&
-                exit.contains("lastPosterFocusRequester")
+            "exit must hand focus back through the screen's own registry: $exit",
+            exit.contains("latestRestoreFocus(restoreTarget)")
+        )
+        assertTrue(
+            "Home's hand-back keeps every rung of its fallback ladder",
+            squash(home).contains("target ?: railFocusRequesters[viewModel.lastFocusedRailItemKey] " +
+                "?: focusedCardRequester ?: lastPosterFocusRequester")
+        )
+        assertTrue(
+            "and Detail's page keeps its focus state under the overlay, so it restores " +
+                "to the control that held it",
+            squash(detail).contains("captureFocus = { null },") &&
+                squash(detail).contains("restoreFocus = {}") &&
+                squash(detail).contains("focusRestorer()")
         )
     }
 
@@ -475,7 +565,7 @@ class ScreensaverWiringContractTest {
     fun `the hero trailer stops underneath, through its own switch`() {
         assertTrue(
             "the overlay tells the hero it is covered",
-            squash(home).contains("trailerSuppressed = screensaverVisible")
+            squash(home).contains("trailerSuppressed = screensaver.visible")
         )
         assertTrue(
             "and suppression is the hero's own autoPlayTrailer switch, not a second stop path",
@@ -542,6 +632,52 @@ class ScreensaverWiringContractTest {
             squash(homeVm).contains(
                 "internal fun resolvedHeroGenre( id: String, type: String ): String? ="
             )
+        )
+    }
+
+    @Test
+    fun `TV Detail draws the same overlay, gated and dismissed like Home`() {
+        assertTrue(
+            "the overlay is drawn over the page, last, from the shared composable",
+            squash(detail).contains("if (screensaver.visible && screensaver.slides.isNotEmpty()) {") &&
+                squash(detail).contains("HomeScreensaver( slides = screensaver.slides,")
+        )
+        assertTrue(
+            "a key press is activity for the idle clock",
+            squash(detail).contains("screensaver.onActivity()")
+        )
+        assertTrue(
+            "and Back exits the overlay instead of leaving the title",
+            squash(detail).contains("BackHandler(enabled = screensaver.visible)") &&
+                squash(detail).contains("screensaver.dismiss()")
+        )
+        assertFalse(
+            "the phone's Detail owns its own screen timeout, so it must not learn about this",
+            source("com/kennyb1201/kbstream/ui/mobile/DetailScreenMobile.kt")
+                .contains("creensaver")
+        )
+    }
+
+    @Test
+    fun `the settings copy names both screens, without promising the phone one`() {
+        assertTrue(
+            "the timeout row's first sentence is the two screens, not Home alone",
+            timeoutRow.contains(
+                "\"How long Home or a title's page must sit untouched before the \" +"
+            ) &&
+                timeoutRow.contains("\"screensaver takes the screen. Any press on the remote ")
+        )
+        assertTrue(
+            "and the second promises the SCREEN back, not Home",
+            timeoutRow.contains("\"straight back, exactly where it was. Trailers stop while ")
+        )
+        assertFalse(
+            "no Home-only phrasing is left in the copy",
+            timeoutRow.contains("brings Home straight back")
+        )
+        assertTrue(
+            "the toggle's description agrees",
+            squash(settings).contains("When Home or a title's page is left idle, fill the screen ")
         )
     }
 

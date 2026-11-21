@@ -3697,20 +3697,21 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 // ── THE TV SCREENSAVER ──────────────────────────────
-                // Home's own idle overlay, not the platform's daydream: the
+                // The TVs' own idle overlay, not the platform's daydream: the
                 // toggle lives here because a fullscreen takeover has to be
-                // opted into, and it is on the TV page only (the phone has no
-                // Home that idles). Device-local, like the panel geometry
-                // prefs: this TV's wait applies to whoever is watching it.
+                // opted into, and it is on the TV page only (the phone's own
+                // screen timeout owns that surface). It covers Home and a
+                // title's page. Device-local, like the panel geometry prefs:
+                // this TV's wait applies to whoever is watching it.
                 SettingsSectionHeader("Screensaver")
 
                 ToggleRow(
                     label = "TV Screensaver",
-                    description = "When Home is left idle, fill the screen with the artwork of " +
-                        "the titles on it (backdrop, logo and genre), moving gently from one to " +
-                        "the next. Any button brings Home back exactly where it was. On by " +
-                        "default, and this switch turns it off; a title without both a " +
-                        "backdrop and a logo is skipped.",
+                    description = "When Home or a title's page is left idle, fill the screen " +
+                        "with the artwork of its titles (backdrop, logo and genre), moving " +
+                        "gently from one to the next. Any button brings the screen back exactly " +
+                        "where it was. On by default, and this switch turns it off; a title " +
+                        "without both a backdrop and a logo is skipped.",
                     checked = screensaverEnabled,
                     onToggle = { enabled ->
                         screensaverEnabled = enabled

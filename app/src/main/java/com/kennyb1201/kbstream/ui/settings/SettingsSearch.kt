@@ -53,8 +53,8 @@ internal const val SECTION_KEY_PREFIX = "section."
 internal val TV_ONLY_SEARCH_KEYS: Set<String> = setOf(
     "playback.match-frame-rate",
     "playback.prefer-whole-frame-rate",
-    // The screensaver is Home's TV overlay: the phone screen draws neither its
-    // toggle nor its timeout row, so the phone's results must not name it.
+    // The screensaver is the TV screens' overlay: the phone screen draws neither
+    // its toggle nor its timeout row, so the phone's results must not name it.
     "interface.tv-screensaver",
     // The Spotlight layout is a TV Home: its rail cards expand from D-pad focus,
     // which a phone does not have, and its rows are drawn in this pane only. The
@@ -602,7 +602,7 @@ internal object SettingsSearchIndex {
             SettingsPane.INTERFACE,
             "TV Screensaver",
             "screensaver screensaver ambient idle daydream burn in slideshow backdrop " +
-                "logo timeout home tv"
+                "logo timeout home detail title tv"
         ),
         SettingSearchEntry(
             "interface.24h-clock",

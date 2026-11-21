@@ -67,7 +67,6 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -112,6 +111,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import com.kennyb1201.kbstream.ui.player.SplitModeRenderersFactory
+import com.kennyb1201.kbstream.ui.screensaver.rememberScreensaver
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
@@ -6185,32 +6185,9 @@ fun HomeScreen(
     //
     // Home's own idle overlay (see HomeScreensaver), not a platform Daydream:
     // it is a composable here, so the back stack, the rail focus chains and
-    // every callback above stay exactly as they are. The two prefs are
-    // device-local, read here and re-read on every resume, so the wait the
-    // viewer just picked in Settings is the one this screen uses when they come
-    // back rather than the one it was built with.
-    var screensaverEnabled by remember {
-        mutableStateOf(AppPreferences.getScreensaverEnabled(context))
-    }
-    var screensaverIdleMs by remember {
-        mutableStateOf(
-            screensaverIdleTimeoutMs(AppPreferences.getScreensaverTimeoutMinutes(context))
-        )
-    }
-    // The last press the remote delivered to Home. Uptime, not wall clock: a TV
-    // whose clock is corrected while the overlay is armed must not idle for
-    // either seconds or hours because of it.
-    var screensaverLastKeyAt by remember {
-        mutableLongStateOf(SystemClock.uptimeMillis())
-    }
-    var screensaverVisible by remember {
-        mutableStateOf(false)
-    }
-    // The card focus was on when the overlay armed: where the dismissing press
-    // puts it back (see exitScreensaver).
-    var screensaverRestoreTarget by remember {
-        mutableStateOf<FocusRequester?>(null)
-    }
+    // every callback above stay exactly as they are. The wait, the gates and
+    // the dismiss hand-back live in ONE shared host (see rememberScreensaver),
+    // so the TV Detail page runs the same rules rather than a second copy.
 
     // Whether the hero is PLAYING a trailer right now, reported by the hero
     // itself (see its onTrailerPlayingChange). Two jobs, and they are the two
@@ -6242,146 +6219,47 @@ fun HomeScreen(
     val screensaverPool = remember(rails) {
         screensaverSlides(rails.flatMap { rail -> rail.items })
     }
-    // ...and what the overlay is SHOWING, frozen at the moment it armed: rails
-    // reloading under a running show must never reshuffle it - the next arming
-    // re-snapshots.
-    var screensaverSlidesShown by remember {
-        mutableStateOf(emptyList<MetaPreview>())
-    }
-    // So the timer below arms with the pool as it stands at that moment, not
-    // the one it was launched with (rails can land while the viewer idles).
-    val latestScreensaverPool by rememberUpdatedState(screensaverPool)
 
-    // Whether this screen is the one being looked at. A paused activity means
-    // the TV is asleep, the input switched or the app is in the background -
-    // none of which is "idle on Home".
-    var homeResumed by remember {
-        mutableStateOf(true)
-    }
-
-    // Coming back to Home (from Settings, from a title) is activity, and it is
-    // also the moment a changed pref has to be picked up.
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-        homeResumed = true
-        screensaverEnabled = AppPreferences.getScreensaverEnabled(context)
-        screensaverIdleMs =
-            screensaverIdleTimeoutMs(AppPreferences.getScreensaverTimeoutMinutes(context))
-        screensaverLastKeyAt = SystemClock.uptimeMillis()
-    }
-    LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) {
-        // Drops silently: no hand-back, because nobody is looking at the screen
-        // to be landed on. The next Home entry starts the wait from zero.
-        homeResumed = false
-        screensaverVisible = false
-        screensaverLastKeyAt = SystemClock.uptimeMillis()
-    }
-
-    // Armed only while Home is the screen being looked at, with something to
-    // show and nothing of the viewer's in the way: an open menu or top bar
-    // means they are mid-task, not idle. A pool with no backdrop+clearlogo
-    // title (all of them, on an add-on that ships neither) is the same answer
-    // as switched off - Home simply stays Home, with no empty state to explain.
+    // The shared host owns the wait, the gates, the resolve pass and the
+    // dismiss hand-back (see rememberScreensaver); Home only says what it could
+    // show and what counts as being in the viewer's way.
     //
-    // And not while the hero is PLAYING a trailer: watching one is the opposite
-    // of idle, and it produces no key presses to push the deadline out, so the
-    // overlay used to arm over it and then stop it (field, TV, 2026-11-05).
-    val screensaverArmed =
-        screensaverEnabled &&
-            homeResumed &&
-            !screensaverVisible &&
-            screensaverPool.isNotEmpty() &&
-            !showTopBar &&
-            continueWatchingMenu == null &&
-            upcomingMenu == null &&
-            posterMenu == null &&
-            browseShortcutMenu == null &&
-            !anyTrailerPlaying
-
-    // The falling edge of the trailer is activity that produced no key press:
-    // the wait restarts from the moment the picture returns to its backdrop
-    // rather than arming the overlay the instant the trailer ends (F2). One
-    // write, and only on that edge - see screensaverIdleClockAfterTrailer.
-    // Written in a side effect rather than in a LaunchedEffect on purpose: the
-    // wait loop below reads this clock on its very first statement, and the
-    // restart has to have landed before that loop relaunches on the same frame
-    // the gate opens again. Effects are dispatched after the composition's side
-    // effects, so the edge is reset before the wait reads it, whatever order
-    // the two are declared in.
-    var screensaverTrailerWasPlaying by remember {
-        mutableStateOf(false)
-    }
-    SideEffect {
-        if (screensaverTrailerWasPlaying != anyTrailerPlaying) {
-            screensaverLastKeyAt = screensaverIdleClockAfterTrailer(
-                wasPlaying = screensaverTrailerWasPlaying,
-                playing = anyTrailerPlaying,
-                nowMs = SystemClock.uptimeMillis(),
-                lastKeyAtMs = screensaverLastKeyAt
+    // An open menu or top bar means they are mid-task, not idle. A pool with no
+    // backdrop+clearlogo title (all of them, on an add-on that ships neither)
+    // is the same answer as switched off - Home simply stays Home, with no
+    // empty state to explain. And not while the hero is PLAYING a trailer:
+    // watching one is the opposite of idle, and it produces no key presses to
+    // push the deadline out, so the overlay used to arm over it and then stop it
+    // (field, TV, 2026-11-05).
+    //
+    // The hand-back is Home's own: the card focus was on, then the remembered
+    // rail key (a rail can have reloaded and taken that card with it), then the
+    // generic last-focused one - and the shared hand-back is what retries a card
+    // that has not composed yet (see rememberFocusHandBack).
+    val screensaver = rememberScreensaver(
+        pool = screensaverPool,
+        blocked = showTopBar ||
+            continueWatchingMenu != null ||
+            upcomingMenu != null ||
+            posterMenu != null ||
+            browseShortcutMenu != null,
+        trailerPlaying = anyTrailerPlaying,
+        warmPool = { items -> viewModel.warmScreensaverPool(items) },
+        resolveSlides = { items ->
+            screensaverCleanSlides(items) { meta ->
+                viewModel.screensaverCleanBackdrop(meta.id, meta.type)
+            }
+        },
+        captureFocus = { focusedCardRequester ?: lastPosterFocusRequester },
+        restoreFocus = { target ->
+            restoreFocus(
+                target
+                    ?: railFocusRequesters[viewModel.lastFocusedRailItemKey]
+                    ?: focusedCardRequester
+                    ?: lastPosterFocusRequester
             )
-            screensaverTrailerWasPlaying = anyTrailerPlaying
         }
-    }
-
-    fun exitScreensaver() {
-        screensaverVisible = false
-        // The dismissing press is activity: the next show starts its wait over
-        // rather than flashing back the moment the last one ends.
-        screensaverLastKeyAt = SystemClock.uptimeMillis()
-        // Exactly where they were. Home's own focus never moved under the
-        // overlay, but a rail can have reloaded and taken that card with it, so
-        // the remembered rail key is the fallback before the generic
-        // last-focused one - and the shared hand-back is what retries a card
-        // that has not composed yet (see rememberFocusHandBack).
-        restoreFocus(
-            screensaverRestoreTarget
-                ?: railFocusRequesters[viewModel.lastFocusedRailItemKey]
-                ?: focusedCardRequester
-                ?: lastPosterFocusRequester
-        )
-    }
-
-    // The resolve pass, run DURING the wait rather than at its end: the show is
-    // armed by a timer, and the moment it arms has to be a picture, not a spin.
-    // It follows the latest pool (rails landing mid-wait restart the walk from
-    // the new order, which costs nothing - everything already resolved is a
-    // cache hit), and it dies with the same gate that stops the countdown:
-    // exiting the overlay, opening a menu, or Home pausing. It is independent of
-    // the focused hero's own resolve and never delays one.
-    LaunchedEffect(screensaverArmed, screensaverPool) {
-        if (!screensaverArmed) return@LaunchedEffect
-        viewModel.warmScreensaverPool(screensaverPool)
-    }
-
-    // The wait itself: polled rather than slept, so a key press pushes the
-    // deadline out and the check inside the final second still counts.
-    LaunchedEffect(screensaverArmed, screensaverIdleMs) {
-        if (!screensaverArmed) return@LaunchedEffect
-        while (true) {
-            val idleFor = SystemClock.uptimeMillis() - screensaverLastKeyAt
-            val remaining = screensaverIdleMs - idleFor
-            if (remaining <= 0L) break
-            delay(minOf(remaining, SCREENSAVER_IDLE_POLL_MS))
-        }
-        // Only the titles with a clean backdrop resolved are slides, in rail
-        // order; the rail item's own art is never a fallback. Nothing resolved
-        // (no TMDB key, nothing reachable) is the same answer as an empty pool:
-        // Home stays Home, with no empty state to explain.
-        val arming = screensaverCleanSlides(latestScreensaverPool) { meta ->
-            viewModel.screensaverCleanBackdrop(meta.id, meta.type)
-        }
-        if (arming.isEmpty()) return@LaunchedEffect
-        screensaverRestoreTarget = focusedCardRequester ?: lastPosterFocusRequester
-        // Shuffled ONCE per show, and only here. The pool is in rail order, so
-        // an unshuffled show is the same titles in the same sequence every
-        // time it arms - the viewer who idles three times in an evening gets
-        // the same tour three times. The SHOWN snapshot is what shuffles, not
-        // the pool: the resolve pass keeps warming the same ordered prefix it
-        // always did (its order decides nothing but which titles finish first),
-        // and the next arming deals a fresh order from whatever resolved by
-        // then.
-        screensaverSlidesShown = arming.shuffled()
-        screensaverVisible = true
-    }
+    )
 
     // KB-style focus landing (ported from KBTV's ModernHomeContent /
     // ModernHomeRowsList). No snap scrolls anywhere: the rows LazyColumn is
@@ -7139,7 +7017,7 @@ fun HomeScreen(
                     // a focus move, a select, a menu key: the viewer is at the
                     // remote. The overlay itself consumes its own press below
                     // (see HomeScreensaver), this only stops the countdown.
-                    screensaverLastKeyAt = SystemClock.uptimeMillis()
+                    screensaver.onActivity()
                     if (isHomeFocusMoveKey(event.key)) {
                         viewerMovedFocusSinceEntry = true
                     }
@@ -7204,7 +7082,7 @@ fun HomeScreen(
                 // A trailer heard under the overlay would be audio from a
                 // screen the viewer is not looking at: the hero's own stop
                 // path, not a second player control.
-                trailerSuppressed = screensaverVisible,
+                trailerSuppressed = screensaver.visible,
                 // ...and the reverse signal: a playing trailer holds the
                 // overlay off until it ends (see screensaverArmed).
                 onTrailerPlayingChange = { heroTrailerPlaying = it }
@@ -8160,8 +8038,8 @@ fun HomeScreen(
         // the path for one that arrives through the dispatcher instead, and it
         // is registered after the bar's so it wins while the overlay is up
         // (the bar cannot be open behind it - see screensaverArmed).
-        BackHandler(enabled = screensaverVisible) {
-            exitScreensaver()
+        BackHandler(enabled = screensaver.visible) {
+            screensaver.dismiss()
         }
 
         // The bar drops from the top edge, so the motion should say so - and
@@ -8591,14 +8469,14 @@ fun HomeScreen(
         // it is the whole screen for as long as it is up. It is a composable of
         // this screen, not a route, so nothing about the back stack, the rails'
         // focus chains or the tray changes while it shows.
-        if (screensaverVisible && screensaverSlidesShown.isNotEmpty()) {
+        if (screensaver.visible && screensaver.slides.isNotEmpty()) {
             HomeScreensaver(
-                slides = screensaverSlidesShown,
+                slides = screensaver.slides,
                 // The genre comes from the hero resolve that has ALREADY
                 // happened for this title, never from a new fetch: a slide the
                 // focus never reached shows its logo alone.
                 genreOf = { meta -> viewModel.resolvedHeroGenre(meta.id, meta.type) },
-                onExit = { exitScreensaver() }
+                onExit = { screensaver.dismiss() }
             )
         }
 

@@ -136,10 +136,10 @@ class SpotlightFixesContractTest {
                 home.contains("spotlightPanelTrailerPlaying")
         )
         assertTrue(
-            "and the arm condition reads that OR",
-            between(home, "val screensaverArmed =", "// The falling edge").contains(
-                "!anyTrailerPlaying"
-            )
+            "and the shared arm gate reads that OR, handed over as the screen's trailer flag",
+            home.contains("trailerPlaying = anyTrailerPlaying,") &&
+                source("com/kennyb1201/kbstream/ui/screensaver/ScreensaverHost.kt")
+                    .contains("!trailerPlaying")
         )
         assertTrue(
             "the panel reports through its own player",
