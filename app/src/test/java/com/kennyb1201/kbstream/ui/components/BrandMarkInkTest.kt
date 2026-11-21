@@ -271,8 +271,8 @@ class BrandMarkInkTest {
         )
         assertTrue(
             "one sampling call site: a second would be a second pass per composition",
-            Regex("sampleBrandMark\\(state").findAll(mark).count() == 0 &&
-                Regex("sampleBrandMark\\(image\)").findAll(mark).count() == 1
+            !mark.contains("sampleBrandMark(state") &&
+                mark.split("sampleBrandMark(image)").size == 2
         )
         assertTrue(
             "the transform must be remembered from the sample and the slot, not " +
