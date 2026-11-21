@@ -3375,12 +3375,33 @@ class TmdbRepository private constructor(context: Context) :
                     // `catalogFilter=14491ms` of one-per-movie detail reads at six
                     // permits, running under the first walk, beside
                     // `artLookup p95=1247ms` (the posters waiting behind it) and a
-                    // walk at `p50=83ms`. Sleeping one step per item does not make
-                    // the pass cheaper - it makes it give way: the walk's frames,
-                    // decodes and art get the disk and the CPU, and the verdicts
-                    // land a little later on rows that are already drawn.
+                    // walk at `p50=83ms`. Giving way does not make the pass
+                    // cheaper - it makes the walk's frames, decodes and art get
+                    // the disk and the CPU first, and the verdicts land a little
+                    // later on rows that are already drawn.
                     if (yieldBetweenItems()) {
-                        kotlinx.coroutines.delay(FOREGROUND_YIELD_MS)
+                        // Wait the walk OUT, not one step of it (0.9.425).
+                        //
+                        // A single sleep per item is a token: the pass takes its
+                        // permit and starts the read anyway, so at six permits a
+                        // walking viewer gets a steady stream of disk and network
+                        // reads landing inside the frames. The 0.9.425
+                        // cold-launch paste priced that: `frame: home-walk
+                        // p50=33ms` beside `image: decode duringFrame=380` of 589
+                        // and a slowest decode of 2026 ms for a 640x360 read from
+                        // the disk cache - a decode waiting on disk and CPU, not
+                        // on the decoder. A verdict nobody can see for another
+                        // second should not be buying that wait.
+                        //
+                        // Bounded, though, because a viewer who keeps walking
+                        // must still get verdicts: one item stands aside for at
+                        // most FOREGROUND_YIELD_MAX_MS and then goes, so a long
+                        // walk slows the pass instead of starving it.
+                        var waited = 0L
+                        while (waited < FOREGROUND_YIELD_MAX_MS && yieldBetweenItems()) {
+                            kotlinx.coroutines.delay(FOREGROUND_YIELD_MS)
+                            waited += FOREGROUND_YIELD_MS
+                        }
                     }
 
                     val permits =
@@ -5166,16 +5187,26 @@ class TmdbRepository private constructor(context: Context) :
     companion object {
 
         /**
-         * How long an already-published row's verdict pass backs off before its
-         * next item, while the viewer is walking.
+         * One step of the back-off an already-published row's verdict pass takes
+         * while the viewer is walking: how long it waits before asking again.
          *
-         * One frame's worth of a slow TV frame (60 ms, where the walk itself
-         * measures a p50 of 83 ms) is enough to take the pass out of the frame's
-         * way without turning a 15-second pass into a minute-long one: the cost
-         * is paid per ITEM, and the items are read at six permits, so the pace
-         * falls from a continuous stream to one item per step per permit.
+         * One frame's worth of a slow TV frame (60 ms, where the walk measures a
+         * p50 of 33-83 ms) is the cadence the frame meter itself is sampled on,
+         * so the pass checks often enough to resume the moment the gesture
+         * closes rather than when a longer timer says so.
          */
         private const val FOREGROUND_YIELD_MS = 60L
+
+        /**
+         * How long ONE item stands aside for a walk before it reads anyway.
+         *
+         * The yield is a wait for the gesture to close, not a fixed pause, so
+         * this is the ceiling on how much of a pass a continuous walk can
+         * defer - enough to let a normal walk finish untouched, short enough
+         * that a viewer parked on the D-pad still sees unreleased titles leave
+         * their rows within a build or two.
+         */
+        private const val FOREGROUND_YIELD_MAX_MS = 1_000L
 
         /**
          * How many answered verdicts the session memo holds before it is

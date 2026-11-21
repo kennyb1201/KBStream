@@ -771,6 +771,77 @@ class LibraryListSyncContractTest {
     }
 
     @Test
+    fun `the launch pass and the verdict pass wait out a metered walk`() {
+        val reconcile = source("com/kennyb1201/kbstream/data/library/LibraryHomeRailReconcile.kt")
+        val repository = source("com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt")
+
+        // The 0.9.425 cold launch: `firstFrame=976ms`, then
+        // `homeRailReconcile=5213ms` - 2.5 s of settle and 2.7 s of reads landing
+        // under a walk at `frame: home-walk p50=33ms` with
+        // `image: decode duringFrame=380` of 589 and a slowest decode of 2026 ms
+        // for a 640x360 out of the disk cache. The settle is not enough on its
+        // own, because the walk starts after it.
+        assertContains(
+            reconcile,
+            "while (waited < WALK_YIELD_MAX_MS && UiFrameTrace.inWalkWindow())",
+            "the launch pass waits a walk out instead of reading under it"
+        )
+        assertContains(
+            reconcile,
+            "import com.kennyb1201.kbstream.data.reporting.UiFrameTrace",
+            "and it asks the frame meter, so 'the walk' means one thing in the app"
+        )
+        // The catalog filter's cadence, so the two background legs concede at
+        // the same rate instead of inventing one each.
+        assertContains(
+            reconcile,
+            "private const val WALK_YIELD_STEP_MS = 60L",
+            "same 60ms step as the behind-the-row verdict pass"
+        )
+        // Bounded, or a meter that never closed would keep every pin on the
+        // device unreconciled for the life of the process.
+        assertContains(
+            reconcile,
+            "private const val WALK_YIELD_MAX_MS = 20_000L",
+            "a bounded wait, not a pure one"
+        )
+        // Every source leg, not just the first: the reads are what must give way.
+        assertContains(
+            reconcile,
+            "if (LibrarySource.TRAKT_LIST.name in wanted) { yieldToWalk()",
+            "the Trakt leg waits"
+        )
+        assertContains(
+            reconcile,
+            "if (LibrarySource.MDBLIST_LIST.name in wanted && " +
+                "MdbListClient.isConfigured(context)) { yieldToWalk()",
+            "the MDBList leg waits"
+        )
+        assertContains(
+            reconcile,
+            "if (LibrarySource.BINGECAT_LIST.name in wanted) { yieldToWalk()",
+            "the BingeCat leg waits"
+        )
+        assertContains(
+            reconcile,
+            "if (animeWanted.isNotEmpty()) { yieldToWalk()",
+            "and so does the anime leg"
+        )
+        // Same rule on the other background pass that runs under the walk: one
+        // 60 ms sleep was a token, because the read started anyway.
+        assertContains(
+            repository,
+            "while (waited < FOREGROUND_YIELD_MAX_MS && yieldBetweenItems())",
+            "the catalog verdict pass waits the walk out too"
+        )
+        assertContains(
+            repository,
+            "private const val FOREGROUND_YIELD_MAX_MS = 1_000L",
+            "and bounds the wait so a long walk slows the pass instead of starving it"
+        )
+    }
+
+    @Test
     fun `an MDBList outage is not an empty account`() {
         val client = source("com/kennyb1201/kbstream/data/mdblist/MdbListClient.kt")
         val orNull = client

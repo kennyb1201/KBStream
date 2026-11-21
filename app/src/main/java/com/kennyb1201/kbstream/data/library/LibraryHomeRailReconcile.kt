@@ -8,6 +8,7 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListUserList
 import com.kennyb1201.kbstream.data.publiclists.PublicListCard
 import com.kennyb1201.kbstream.data.publiclists.PublicListsAnswer
+import com.kennyb1201.kbstream.data.reporting.UiFrameTrace
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import kotlinx.coroutines.delay
@@ -29,6 +30,16 @@ import kotlinx.coroutines.delay
  * launch path - and it waits [STARTUP_DELAY_MS] first so the first frame, the
  * Home rails and the catalog warm have the connection to themselves.
  *
+ * The settle is not the whole story, because the walk usually starts after it:
+ * the 0.9.425 cold-launch paste put the first Home step a second in
+ * (`firstFrame=976ms`) and this pass finishing at `homeRailReconcile=5213ms` -
+ * 2.5 s of settle and then 2.7 s of reads landing exactly under the first walk
+ * (`frame: home-walk p50=33ms`, `image: decode duringFrame=380` of 589). So every
+ * source waits the walk out before it reads (see [yieldToWalk]). Nothing here is
+ * urgent enough to buy its own latency with the viewer's frames: a pin that
+ * vanished at a website is a rail that should disappear, not one that has to
+ * disappear this second.
+ *
  * Everything here is best-effort: a failed or unconfigured source is left out
  * of [liveListIds] and prunes nothing (see [withoutVanishedPins]), because an
  * outage reported as "these lists are gone" would delete a working rail on this
@@ -42,6 +53,26 @@ object LibraryHomeRailReconcile {
 
     /** Housekeeping, not launch work: let the app settle before asking anyone. */
     const val STARTUP_DELAY_MS = 2_500L
+
+    /**
+     * One yield step: how long to wait before asking again whether a walk is on.
+     *
+     * The same 60 ms the catalog filter's behind-the-row pass sleeps, so the two
+     * background legs concede on the same cadence instead of inventing one each.
+     */
+    private const val WALK_YIELD_STEP_MS = 60L
+
+    /**
+     * The longest one source will stand aside for a walk before it goes anyway.
+     *
+     * A bound rather than a pure wait, because the walk's own meter ends 350 ms
+     * after its last step and a session that never closed would otherwise keep
+     * every pin on this device unreconciled for the life of the process. Twenty
+     * seconds is longer than any Home walk a viewer makes and shorter than a
+     * launch, so the common case is "waited for the walk, then read", and the
+     * stuck one is "read late" rather than "never read".
+     */
+    private const val WALK_YIELD_MAX_MS = 20_000L
 
     /** The sources a pin can name whose lists live at a service. */
     private val REMOTE_LIST_SOURCES = setOf(
@@ -71,6 +102,31 @@ object LibraryHomeRailReconcile {
         val wanted = remoteSourcesPinned(appContext)
         if (wanted.isEmpty()) return false
         return LibraryHomeRails.reconcilePins(appContext, liveListIds(appContext, wanted))
+    }
+
+    /**
+     * Stands aside while a metered walk is on screen.
+     *
+     * The walk is the viewer's own work and this pass is housekeeping, so the
+     * contention has one correct direction: these reads are what should wait.
+     * On the 0.9.425 launch paste the pass ran 2.7 s of reads beside a walk at
+     * `p50=33ms` with `decode duringFrame=380` of 589 decodes and a slowest
+     * decode of 2026 ms for a 640x360 out of the disk cache - a decode that is
+     * waiting on the disk and the CPU, not on the decoder. Six GETs and their
+     * JSON parses are exactly that kind of neighbour.
+     *
+     * Read through [UiFrameTrace.inWalkWindow], the same question the catalog
+     * filter asks, so "the walk" means one thing in the whole app: a metered
+     * gesture open, or closed within its 350 ms tail. The tail matters here for
+     * the same reason it does there - the art a step asked for finishes after
+     * the last step.
+     */
+    private suspend fun yieldToWalk() {
+        var waited = 0L
+        while (waited < WALK_YIELD_MAX_MS && UiFrameTrace.inWalkWindow()) {
+            delay(WALK_YIELD_STEP_MS)
+            waited += WALK_YIELD_STEP_MS
+        }
     }
 
     /** The remote sources this profile has a pin for. */
@@ -104,6 +160,7 @@ object LibraryHomeRailReconcile {
         val live = mutableMapOf<String, List<LibraryHomeRailLiveList>>()
 
         if (LibrarySource.TRAKT_LIST.name in wanted) {
+            yieldToWalk()
             val trakt = TraktRepository.getInstance(context)
             if (trakt.isConfigured() && trakt.hasToken()) {
                 val own = runCatchingCancellable { trakt.userLists() }.getOrNull()
@@ -142,6 +199,7 @@ object LibraryHomeRailReconcile {
         }
 
         if (LibrarySource.MDBLIST_LIST.name in wanted && MdbListClient.isConfigured(context)) {
+            yieldToWalk()
             // OrNull: a failed MDBList read answers empty from the plain call,
             // and an empty answer here would be read as "every list is gone".
             val own = runCatchingCancellable { MdbListClient.getUserListsOrNull(context) }.getOrNull()
@@ -156,6 +214,7 @@ object LibraryHomeRailReconcile {
         }
 
         if (LibrarySource.BINGECAT_LIST.name in wanted) {
+            yieldToWalk()
             val bingecat = BingeCatRepository.getInstance(context)
             if (bingecat.isReady()) {
                 // Stale-while-revalidate, and it keeps its cache after a FAILED
@@ -204,6 +263,7 @@ object LibraryHomeRailReconcile {
             runCatching { LibrarySource.valueOf(name) }.getOrNull()?.takeIf { it.isAnimeList }
         }
         if (animeWanted.isNotEmpty()) {
+            yieldToWalk()
             val own = runCatchingCancellable { AnimeLists.own(context) }.getOrNull()
             own?.answered?.forEach { source ->
                 if (source in animeWanted) {
