@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.detail
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -138,16 +139,16 @@ class DetailTabsWiringContractTest {
     @Test
     fun `the chain is narrowed to the selected tab`() {
         assertTrue(
-            "the toggle stop is the Details tab's own first stop, never another tab's",
-            screen.contains("activeTab == DetailTab.DETAILS &&") &&
-                screen.contains("from == firstListRow(settledRows)")
-        )
-        assertTrue(
-            "and 'the first row inside the list' is read under the strip now",
+            "the chain a press is answered with is the SELECTED tab's row presence, " +
+                "so a press inside a tab can never walk into a row painted in another",
             screen.contains(
-                "DetailFocusChain.nextRow( DetailRow.TABS, " +
-                    "DetailFocusDirection.DOWN, presence )"
-            )
+                "DetailTabChain.rowPresence(activeTab, pageRowPresence)"
+            ) && screen.contains("DetailTabChain.rowPresence(activeTab, page)")
+        )
+        assertFalse(
+            "and the overview's toggle is not a Details-tab-only stop any more: it " +
+                "lives in the fixed header above the strip, on every tab (2026-11-21)",
+            screen.contains("from == firstListRow(")
         )
         assertTrue(
             "the page declares one tab list, and DetailTab.DETAILS is always in it",

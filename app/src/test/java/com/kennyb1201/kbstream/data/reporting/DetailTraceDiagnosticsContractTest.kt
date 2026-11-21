@@ -103,9 +103,11 @@ class DetailTraceDiagnosticsContractTest {
         // and placed it nowhere is `blocked`; one a newer press cancelled is
         // `cancelled`; one the chain had no row for is `none` (the default, and
         // the one build 322's paste mistook for a verdict).
+        // 2026-11-21: `toggle` leaves the vocabulary with the special case it
+        // named - the overview's toggle is a chain row now, so its landing is a
+        // `chain` landing like any other row's.
         val vias =
             listOf(
-                "\"toggle\"",
                 "\"chain\"",
                 "\"geometry\"",
                 "\"blocked\"",
@@ -135,9 +137,11 @@ class DetailTraceDiagnosticsContractTest {
                 )
         )
         assertTrue(
-            "E3: both arms of the toggle, named by direction",
-            detail.contains("detail toggle UP landed=\$landed") &&
-                detail.contains("detail toggle DOWN landed=\$kept")
+            "E3: both arms of the toggle, named by direction - and since 2026-11-21 " +
+                "by TARGET too, because the toggle is a chain row with an answer of " +
+                "its own rather than a borrow of HEADER's",
+            detail.contains("detail toggle UP -> \$target landed=\$landed") &&
+                detail.contains("detail toggle DOWN -> TABS landed=\$landed")
         )
     }
 

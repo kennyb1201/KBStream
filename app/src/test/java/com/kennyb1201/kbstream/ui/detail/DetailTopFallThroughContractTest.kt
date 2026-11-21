@@ -65,9 +65,12 @@ class DetailTopFallThroughContractTest {
         genres: Boolean = false,
         keywords: Boolean = false,
         episodes: Boolean = false,
-        media: Boolean = false
+        media: Boolean = false,
+        /** The overview's toggle, off unless a case is about it. */
+        overviewToggle: Boolean = false
     ) = DetailRowPresence(
         hasGenreRow = genres,
+        hasOverviewRow = overviewToggle,
         hasKeywordsRow = keywords,
         hasEpisodesRow = episodes,
         hasPeopleRow = false,
@@ -131,19 +134,20 @@ class DetailTopFallThroughContractTest {
     @Test
     fun `the toggle's UP falls through when the header will not take it`() {
         assertTrue(
-            "F1b: the toggle's UP is the strip above the content (the header is its " +
-                "fallback), and a failure moves",
+            "F1b: the toggle's UP is the row the chain places above it, with the " +
+                "page's own header landing as the fallback - and a failure moves",
             toggleHandler.contains(
-                "onUp = { startFocusMove(DetailRow.TABS, DetailFocusDirection.UP, " +
-                    "presence) { val landed = focusTabStrip() || focusTopOfPage() || " +
-                    "focusByGeometry(DetailFocusDirection.UP)"
-            )
+                "onUp = { startFocusMove(DetailRow.OVERVIEW, DetailFocusDirection.UP, " +
+                    "presence)"
+            ) && toggleHandler.contains("|| focusTopOfPage()")
         )
         assertTrue(
             "F1c: it runs INSIDE the move coroutine - the handler consumed the key, " +
                 "so \"return false and let the default search run\" is not available " +
                 "any more (see focusByGeometry's own doc)",
-            toggleHandler.contains("startFocusMove(DetailRow.TABS, DetailFocusDirection.UP, presence) { val landed = focusTabStrip()")
+            toggleHandler.contains(
+                "startFocusMove(DetailRow.OVERVIEW, DetailFocusDirection.UP, presence) { val rows = latestRowPresence.value ?: presence"
+            )
         )
         assertTrue(
             "and UP is still consumed by the page: the toggle has no unowned UP to " +
@@ -167,8 +171,8 @@ class DetailTopFallThroughContractTest {
             )
         )
         assertTrue(
-            "F1d: and the edge rule is untouched - UP off the header is a real edge, " +
-                "consumed by the header's own handler",
+            "F1d: and the edge rule is untouched - UP off the header is a real edge " +
+                "with nothing above it in the chain",
             DetailFocusChain.isPageEdge(
                 DetailRow.HEADER,
                 DetailFocusDirection.UP,
@@ -176,8 +180,12 @@ class DetailTopFallThroughContractTest {
             )
         )
         assertTrue(
-            "the header's buttons still keep their UP where they always did",
-            detail.contains("onUp = {},")
+            "2026-11-21: the edge is no longer EATEN. The page has nothing above " +
+                "the action row, so the press goes back to the app shell, whose " +
+                "dead-press handler raises the TV top bar - consuming it here is " +
+                "exactly why the bar could never be reached from this page",
+            detail.contains("detail header UP -> top bar") &&
+                !detail.contains("onUp = {},")
         )
     }
 
@@ -201,9 +209,10 @@ class DetailTopFallThroughContractTest {
             )
         )
         assertEquals(
-            "and the page's eleven content rows are untouched - the strip is the one " +
-                "row added, and it is the route into them",
-            12,
+            "and the page's eleven content rows are untouched - the strip is the " +
+                "route into them and the overview's toggle is the one row added above " +
+                "it (2026-11-21)",
+            13,
             DetailRow.entries.size
         )
     }
@@ -232,10 +241,14 @@ class DetailTopFallThroughContractTest {
             )
         )
         assertTrue(
-            "and the toggle is still the UP-only stop ahead of the chain, read in " +
-                "one place, so this spec did not move it",            move.contains("direction == DetailFocusDirection.UP && " +
-                "activeTab == DetailTab.DETAILS && " +
-                "from == firstListRow(settledRows) && focusOverviewToggle()")
+            "and the toggle is a chain row above the strip now (2026-11-21), so the " +
+                "same walk reaches it from the strip's own UP - no special case in " +
+                "the move, and the strip's UP passes the chips first when they exist",
+            DetailFocusChain.nextRow(
+                DetailRow.TABS,
+                DetailFocusDirection.UP,
+                presence(overviewToggle = true)
+            ) == DetailRow.OVERVIEW && !move.contains("focusOverviewToggle()")
         )
     }
 
@@ -259,10 +272,11 @@ class DetailTopFallThroughContractTest {
         )
         assertTrue(
             "T7: both callers of that false move on - the chain arm through the " +
-                "geometric search, the toggle through its own arm - so a failed " +
-                "landing is never a dead press",
+                "geometric search, the toggle through its own row and the header " +
+                "landing - so a failed landing is never a dead press",
             move.contains("focusByGeometry(DetailFocusDirection.UP)") &&
-                toggleHandler.contains("focusByGeometry(DetailFocusDirection.UP)")
+                toggleHandler.contains("focusRow(target, 0, DetailRow.OVERVIEW, " +
+                    "DetailFocusDirection.UP, rows) || focusTopOfPage()")
         )
         assertTrue(
             "and the exhaustion reaches the diagnostics ring as E2, which is the " +
@@ -300,9 +314,10 @@ class DetailTopFallThroughContractTest {
                 )
         )
         assertTrue(
-            "and the toggle's DOWN keeps the rule it gained earlier, unchanged",
+            "and the toggle's DOWN keeps its rule, now asked from the toggle's own " +
+                "row: the strip is under it, so the press is always placeable",
             chainSource().contains(
-                "rowsStillArriving || nextRow(DetailRow.HEADER, DetailFocusDirection.DOWN, " +
+                "rowsStillArriving || nextRow(DetailRow.OVERVIEW, DetailFocusDirection.DOWN, " +
                     "presence) != null"
             )
         )

@@ -166,22 +166,24 @@ class DetailVerticalAuditContractTest {
     // ── F7: the toggle stop is computed from the settled rows ─────────────
 
     @Test
-    fun `the toggle stop reads the presence that landed`() {
+    fun `the move still reads the presence that landed`() {
         assertTrue(
-            "F7: the settled presence, the same one the toggle's DOWN already reads",
-            move.contains("val settledRows = latestRowPresence.value ?: presence") &&
-                move.contains("from == firstListRow(settledRows)")
+            "F7: the settled presence, the same one the toggle's own presses read",
+            move.contains("val settledRows = latestRowPresence.value ?: presence")
         )
         assertFalse(
-            "the composition-time presence no longer decides the toggle stop: a rail " +
-                "composed before a higher row landed computed the wrong first row and " +
-                "skipped the stop",
-            move.contains("from == firstListRow(presence)")
+            "the composition-time presence never decides the target: a rail composed " +
+                "before a higher row landed computed the wrong row in that window",
+            move.contains("nextRow(from, direction, presence)")
         )
         assertTrue(
-            "and the stop is still UP-only and still the toggle",
-            move.contains("direction == DetailFocusDirection.UP &&") &&
-                move.contains("focusOverviewToggle()")
+            "and the move's target is still read from the chain's one list",
+            move.contains("DetailFocusChain.nextRow(from, direction, settledRows)")
+        )
+        assertFalse(
+            "the toggle's UP no longer has a special case here (2026-11-21): it is a " +
+                "chain row now, so content UP passes through the strip first",
+            move.contains("focusOverviewToggle()")
         )
     }
 
@@ -195,16 +197,18 @@ class DetailVerticalAuditContractTest {
                 0 until move.indexOf("val fellThrough = fallThroughIfMidPage(")
         )
         assertTrue(
-            "F2: the toggle's UP still falls through",
+            "F2: the toggle's UP still falls through - to the header - when the row " +
+                "above it will not take the focus",
             detail.contains(
-                "onUp = { startFocusMove(DetailRow.TABS, DetailFocusDirection.UP, " +
-                    "presence) { val landed = focusTabStrip() || focusTopOfPage() ||"
-            )
+                "onUp = { startFocusMove(DetailRow.OVERVIEW, DetailFocusDirection.UP, " +
+                    "presence)"
+            ) && detail.contains("|| focusTopOfPage()")
         )
         assertEquals(
-            "T6: the page's eleven content rows are untouched - the strip is the one " +
-                "row added, and it is the route INTO them rather than around a miss",
-            12,
+            "T6: the page's eleven content rows are untouched - the strip is the " +
+                "route INTO them, and the overview's toggle is the one row added above " +
+                "it (2026-11-21), rather than around a miss",
+            13,
             DetailRow.entries.size
         )
         assertTrue(

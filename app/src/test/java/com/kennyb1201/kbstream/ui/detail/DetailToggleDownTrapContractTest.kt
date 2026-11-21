@@ -67,84 +67,80 @@ class DetailToggleDownTrapContractTest {
     // ── F1: the press is answered with the rows that landed ────────────────
 
     @Test
-    fun `the toggle's DOWN resolves the presence at press time`() {
+    fun `both of the toggle's presses resolve the presence at press time`() {
         assertTrue(
-            "the captured presence becomes only the FALLBACK - the shape " +
-                "awaitRowsThenMove already uses, for the same reason: a press for " +
-                "a still-arriving section has to re-ask the chain with the " +
-                "presence that landed",
+            "the captured presence is only the FALLBACK - the shape " +
+                "awaitRowsThenMove already uses, for the same reason: a press that " +
+                "outlives the composition the handler was made with has to re-ask " +
+                "the chain with the rows that landed",
             toggleHandler.contains(
-                "val settled = latestRowPresence.value ?: presence"
+                "val rows = latestRowPresence.value ?: presence"
             )
         )
     }
 
     @Test
-    fun `the resolved presence is what the move itself reads`() {
+    fun `the resolved presence is what the UP move itself reads`() {
         assertTrue(
-            "the chain and the landing are asked with the settled presence, not the " +
-                "composition-time one - with the stale list, HEADER+DOWN read as a " +
-                "page edge and the press had nowhere to go",
+            "UP asks the chain for the row above OVERVIEW with the settled rows, " +
+                "so the chips are found when they exist and PLAY when they do not",
             toggleHandler.contains(
-                "val rows = latestRowPresence.value ?: settled"
+                "DetailFocusChain.nextRow( DetailRow.OVERVIEW, DetailFocusDirection.UP, rows )"
             )
         )
         assertTrue(
-            "and 2026-11-14 changes WHERE that DOWN lands: the row under the toggle, " +
-                "not the genre chips painted above it - see DetailFocusChainTest," +
-                "toggleDownRow",
-            toggleHandler.contains("val target = DetailFocusChain.toggleDownRow(rows)")
+            "and the landing is the chain's target, through the same focusRow every " +
+                "other row uses - not a hand-rolled list of stops",
+            toggleHandler.contains(
+                "focusRow(target, 0, DetailRow.OVERVIEW, DetailFocusDirection.UP, rows)"
+            )
         )
     }
 
     // ── F2: a DOWN the page cannot place is not consumed ──────────────────
 
     @Test
-    fun `the toggle's DOWN decides whether the press is the page's to keep`() {
+    fun `the toggle's DOWN is always placeable, because the strip is under it`() {
         assertTrue(
-            "the toggle goes through the wrapper that returns the DOWN's " +
-                "outcome instead of a constant true",
+            "the toggle still goes through the wrapper that returns the DOWN's own " +
+                "outcome rather than a constant true",
             toggleHandler.contains("nonRailVerticalFocusWithDownOutcome(")
         )
         assertTrue(
-            "and the decision is the chain's, made from the settled presence plus " +
-                "whether rows are still on the way: absence while loading is " +
-                "\"not yet\", never an edge",
-            toggleHandler.contains(
-                "DetailFocusChain.toggleDownIsConsumed( presence = settled, " +
-                    "rowsStillArriving = rowsStillArriving() )"
+            "and since the overview moved above the strip (2026-11-21) that outcome " +
+                "is reachable on every page: the strip is the row directly under " +
+                "the toggle, and it is painted whatever the payload is",
+            DetailFocusChain.toggleDownIsConsumed(
+                presence(episodes = false),
+                rowsStillArriving = false
             )
         )
     }
 
     @Test
-    fun `a press the page cannot place starts nothing and is handed back`() {
-        val notKept = toggleHandler
-            .substringAfter("toggle DOWN not kept")
-            .substringBefore("} else {")
-        assertFalse(
-            "no move may be started for a press the page is about to hand back",
-            notKept.contains("startFocusMove")
+    fun `the toggle's DOWN starts the move to the strip`() {
+        assertTrue(
+            "DOWN is a real move, started from the toggle's own chain row",
+            toggleHandler.contains(
+                "startFocusMove(DetailRow.OVERVIEW, DetailFocusDirection.DOWN, rows)"
+            )
         )
         assertTrue(
-            "and the branch RETURNS false, which is what gives the press to the " +
-                "platform's default search - the rule moveFocusVertical itself " +
-                "states, rather than a key the page took and did nothing with",
-            notKept.contains("false")
+            "and it lands on the strip, with the geometric search as the arm for the " +
+                "one frame the strip is being re-keyed by a tab switch",
+            toggleHandler.contains(
+                "focusTabStrip() || focusByGeometry(DetailFocusDirection.DOWN)"
+            )
         )
     }
 
     @Test
     fun `a press the page can place is consumed and moved`() {
         assertTrue(
-            "the kept branch starts a move, lands ON the row the chain named (a " +
-                "move FROM that row would skip it), and returns true",
-            toggleHandler.contains(
-                "startFocusMove(DetailRow.HEADER, DetailFocusDirection.DOWN, settled)"
-            ) &&
-                toggleHandler.contains("val landed = when (target)") &&
-                toggleHandler.contains("else -> focusRow( target, 0, DetailRow.TABS, " +
-                    "DetailFocusDirection.DOWN, rows )")
+            "the handler consumes the DOWN it can always place, and traces where it " +
+                "went so the next paste can read it",
+            toggleHandler.contains("detail toggle DOWN -> TABS landed=") &&
+                toggleHandler.contains("true")
         )
     }
 
@@ -170,10 +166,11 @@ class DetailToggleDownTrapContractTest {
     @Test
     fun `the other non-rail surfaces keep the consuming wrapper`() {
         assertEquals(
-            "the header's action buttons and the season chips still use the plain " +
-                "wrapper, plus its definition - one control's DOWN does not " +
-                "redefine the others'",
-            3,
+            "the season chips still use the plain wrapper, plus its definition - " +
+                "one control's DOWN does not redefine the others'. The header's " +
+                "buttons left it on 2026-11-21 for a handler of their own, because " +
+                "their UP is released to the shell (see the top bar test)",
+            2,
             Regex("nonRailVerticalFocus\\(").findAll(detail).count()
         )
         assertTrue(
@@ -197,36 +194,54 @@ class DetailToggleDownTrapContractTest {
                 presence(episodes = true)
             )
         )
-        assertTrue(
-            "and the UP route onto the toggle is still the page's single handoff, " +
-                "read from the chain, so no rail can disagree about it - the toggle " +
-                "is the Details tab's own first stop",
-            move.contains(
-                "direction == DetailFocusDirection.UP && " +
-                    "activeTab == DetailTab.DETAILS && " +
-                    "from == firstListRow(settledRows) && focusOverviewToggle()"
+        assertFalse(
+            "and the UP route onto the toggle is the CHAIN's now (2026-11-21), not a " +
+                "special case in the move: content UP passes through the strip first, " +
+                "so a first-row press that jumped straight onto the toggle would skip " +
+                "the row painted directly above it",
+            move.contains("focusOverviewToggle()")
+        )
+        assertEquals(
+            "the row above the strip is the toggle, which is where the strip's own UP " +
+                "lands",
+            DetailRow.OVERVIEW,
+            DetailFocusChain.nextRow(
+                DetailRow.TABS,
+                DetailFocusDirection.UP,
+                DetailRowPresence(
+                    hasGenreRow = true,
+                    hasOverviewRow = true,
+                    hasKeywordsRow = false,
+                    hasEpisodesRow = true,
+                    hasPeopleRow = false,
+                    hasNetworkRow = false,
+                    hasProductionRow = false,
+                    hasReviewsRow = false,
+                    hasCollectionRow = false,
+                    hasMediaRow = false,
+                    hasMoreLikeThisRow = false
+                )
             )
         )
     }
 
     @Test
-    fun `UP out of the first row still lands on the toggle`() {
+    fun `UP out of the toggle is the chips, and it is reached only through the chain`() {
         assertEquals(
-            "the declaration and the UP route: the toggle is the UP-only stop for " +
-                "ARRIVAL, and the DOWN last resort is gone (spec 2026-11-14, F2 - a " +
-                "mid-page DOWN no longer ends on the toggle, which is what closed the " +
-                "genre/View-more cycle)",
+            "one place lands on the toggle: focusRow's OVERVIEW arm. The move no longer " +
+                "carries an extra route, and the handler is the other caller",
             2,
             Regex("focusOverviewToggle\\(\\)").findAll(detail).count()
         )
         assertTrue(
-            "and UP still leaves it for the header - and a header that will not take " +
-                "the focus now moves the press anyway instead of keeping it (the UP " +
-                "trap's F1b, see DetailTopFallThroughContractTest)",
+            "and UP leaves it for the row the chain names above it - the chips when " +
+                "the page has them, PLAY when it does not - with the header as the " +
+                "failure arm (the UP trap's F1b, see DetailTopFallThroughContractTest)",
             toggleHandler.contains(
-                "onUp = { startFocusMove(DetailRow.TABS, DetailFocusDirection.UP, " +
-                    "presence) { val landed = focusTabStrip() || focusTopOfPage() || " +
-                    "focusByGeometry(DetailFocusDirection.UP)"
+                "onUp = { startFocusMove(DetailRow.OVERVIEW, DetailFocusDirection.UP, " +
+                    "presence) { val rows = latestRowPresence.value ?: presence val " +
+                    "target = DetailFocusChain.nextRow( DetailRow.OVERVIEW, " +
+                    "DetailFocusDirection.UP, rows ) ?: DetailRow.HEADER"
             )
         )
         assertTrue(

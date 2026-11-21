@@ -55,11 +55,31 @@ internal enum class DetailRow {
     GENRE,
 
     /**
+     * The overview block's "View more" toggle, painted under the genre chips
+     * and above the tab strip (2026-11-21, first-page overview).
+     *
+     * The overview itself is not focusable - it is prose - but its toggle is,
+     * so the block is a real chain stop whenever the text overflows its four
+     * collapsed lines. Presence, not a constant: an overview that fits has no
+     * toggle, and a row that is not on screen must never be landed on (the
+     * press would be consumed and the focus would not move, which is the trap
+     * this page keeps re-learning).
+     *
+     * It moved into this gap rather than borrowing a neighbour's position: the
+     * toggle used to borrow [HEADER]'s for its UP and ask the chain from below
+     * the genres for its DOWN, which is how DOWN out of it once climbed back up
+     * to the chips - two stops, both honest on their own, and no way out of the
+     * pair. Sitting between the chips and the strip makes both of its presses
+     * the same question the chain answers for every other row.
+     */
+    OVERVIEW,
+
+    /**
      * The tab strip, pinned under the genre chips and above the list.
      *
-     * It is the page's third stop and the only way into the content: LEFT/RIGHT
-     * switch tabs, DOWN enters the selected tab's first row, UP is the genre
-     * chips above it. Naming it in the chain is what replaced the eleven-row
+     * It is the page's only way into the content: LEFT/RIGHT switch tabs, DOWN
+     * enters the selected tab's first row, UP is the overview toggle above it
+     * when the overview overflows and the genre chips when it does not. Naming it in the chain is what replaced the eleven-row
      * walk whose misses were the reported "trapped on details pages": a press
      * out of the strip has one row to reach instead of a page's worth.
      *
@@ -127,6 +147,15 @@ internal enum class DetailRow {
  */
 internal data class DetailRowPresence(
     val hasGenreRow: Boolean,
+    /**
+     * Whether the overview's "View more" toggle is on the page: true only when
+     * the description actually overflows its collapsed lines.
+     *
+     * Defaulted so the presence literals written before the overview moved
+     * above the strip keep compiling unchanged; the screen sets it explicitly
+     * from the block's own overflow measurement.
+     */
+    val hasOverviewRow: Boolean = false,
     val hasKeywordsRow: Boolean,
     val hasEpisodesRow: Boolean,
     val hasPeopleRow: Boolean,
@@ -162,6 +191,7 @@ internal object DetailFocusChain {
         // a press land while the page is still filling in.
         DetailRow.TABS -> true
         DetailRow.GENRE -> presence.hasGenreRow
+        DetailRow.OVERVIEW -> presence.hasOverviewRow
         DetailRow.KEYWORDS -> presence.hasKeywordsRow
         DetailRow.EPISODES -> presence.hasEpisodesRow
         DetailRow.PEOPLE -> presence.hasPeopleRow
@@ -279,7 +309,7 @@ internal object DetailFocusChain {
         rowsStillArriving: Boolean
     ): Boolean =
         rowsStillArriving ||
-            nextRow(DetailRow.HEADER, DetailFocusDirection.DOWN, presence) != null
+            nextRow(DetailRow.OVERVIEW, DetailFocusDirection.DOWN, presence) != null
 
     /**
      * Where a DOWN out of the overview's "View more" toggle goes: the first row
@@ -307,8 +337,11 @@ internal object DetailFocusChain {
      * there is a real move rather than a key taken and nothing done with it.
      */
     fun toggleDownRow(presence: DetailRowPresence): DetailRow =
-        nextRow(DetailRow.TABS, DetailFocusDirection.DOWN, presence)
-            ?: nextRow(DetailRow.HEADER, DetailFocusDirection.DOWN, presence)
+        // From the toggle's OWN row now that it has one (2026-11-21): the strip
+        // is always the next stop, and the fallbacks survive only for the
+        // presence values written before the row existed.
+        nextRow(DetailRow.OVERVIEW, DetailFocusDirection.DOWN, presence)
+            ?: nextRow(DetailRow.TABS, DetailFocusDirection.DOWN, presence)
             ?: DetailRow.TABS
 }
 

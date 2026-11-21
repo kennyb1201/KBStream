@@ -8,8 +8,10 @@ package com.kennyb1201.kbstream.ui.detail
  * vertical chain used to be eleven rows long (see [DetailRow]), so DOWN from
  * the genre chips had to walk past rows that were still loading to reach the
  * episodes, and a press that could not land spent its time in geometric search.
- * With the sections behind tabs the chain is HEADER -> GENRE -> TABS -> the
- * selected tab's own rows, which is at most three presses to any of them.
+ * With the sections behind tabs the chain is HEADER -> GENRE -> (OVERVIEW) ->
+ * TABS -> the selected tab's own rows, which is at most four presses to any of
+ * them. The overview is bracketed because it is only on the chain when its text
+ * overflows its four collapsed lines.
  *
  * [EPISODES] is first because it is the default tab on a series and the strip
  * reads left to right from the thing most viewers open the page for.
@@ -31,9 +33,10 @@ internal enum class DetailTab(val label: String) {
  * same answer: a series with no seasons has no Episodes tab, a title with no
  * reviews has no Reviews tab, and there is no empty tab to press into.
  *
- * [DetailTab.DETAILS] has no field because it cannot be absent: the overview,
- * the facts and the ratings are the page's own description of the title, and a
- * title with no keywords and no networks still has those.
+ * [DetailTab.DETAILS] has no field because it cannot be absent: the facts, the
+ * ratings and the title's own rows are its content, and a title with no
+ * keywords and no networks still has those. The OVERVIEW is not here at all -
+ * it lives in the fixed header, above the strip, on every tab (2026-11-21).
  */
 internal data class DetailTabPresence(
     val hasEpisodesTab: Boolean,
@@ -169,8 +172,13 @@ internal object DetailTabChain {
  */
 private object DetailTabPresenceScope {
 
-    /** Every row absent except the genre chips in the fixed header. */
+    /**
+     * Every list row absent, the two rows painted in the fixed header kept:
+     * the genre chips and the overview toggle are above the strip on every tab,
+     * so a tab's own presence must never take them away.
+     */
     private fun bare(rows: DetailRowPresence): DetailRowPresence = rows.copy(
+        hasOverviewRow = rows.hasOverviewRow,
         hasKeywordsRow = false,
         hasEpisodesRow = false,
         hasPeopleRow = false,
@@ -184,7 +192,7 @@ private object DetailTabPresenceScope {
 
     /** Only [row] survives, alongside the header chips. */
     fun only(rows: DetailRowPresence, row: DetailRow): DetailRowPresence = when (row) {
-        DetailRow.HEADER, DetailRow.GENRE, DetailRow.TABS -> bare(rows)
+        DetailRow.HEADER, DetailRow.GENRE, DetailRow.OVERVIEW, DetailRow.TABS -> bare(rows)
         DetailRow.KEYWORDS -> bare(rows).copy(hasKeywordsRow = rows.hasKeywordsRow)
         DetailRow.EPISODES -> bare(rows).copy(hasEpisodesRow = rows.hasEpisodesRow)
         DetailRow.PEOPLE -> bare(rows).copy(hasPeopleRow = rows.hasPeopleRow)

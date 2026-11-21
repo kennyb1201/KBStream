@@ -42,7 +42,7 @@ class DetailFocusGraphContractTest {
     }
 
     @Test
-    fun `every header button answers DOWN through the chain and swallows UP`() {
+    fun `every header button answers DOWN through the chain and releases UP to the shell`() {
         assertEquals(
             "the seven action buttons - Play, Random episode, Trailer, Library, " +
                 "the two thumbs and the rating - each carry the handler, plus its " +
@@ -61,10 +61,21 @@ class DetailFocusGraphContractTest {
             )
         )
         assertTrue(
-            "and UP is consumed and STAYS - the action row is the top of the " +
-                "page, so an UP that walked off it would leave the page rather " +
-                "than move in it",
-            headerHandler.contains("onUp = {},")
+            "and UP is RELEASED, not swallowed (2026-11-21): the action row is the " +
+                "top of the page, so the shell's dead-press handler is the thing " +
+                "that should answer it - and it answers with the TV top bar. A " +
+                "screen that keeps a dead Up is a screen the shell never gets to " +
+                "answer, which is why the bar was unreachable from this page",
+            headerHandler.contains("Key.DirectionUp -> {") &&
+                headerHandler.contains("detail header UP -> top bar") &&
+                Regex("Key.DirectionUp -> \\{[^}]*false")
+                    .containsMatchIn(headerHandler) &&
+                !headerHandler.contains("onUp = {},")
+        )
+        assertTrue(
+            "the press is noted and THEN released, so the paste distinguishes " +
+                "\"the shell was asked\" from \"the handler ate it\"",
+            headerHandler.contains("\"detail header UP -> top bar\") false }")
         )
     }
 
@@ -130,41 +141,54 @@ class DetailFocusGraphContractTest {
     }
 
     @Test
-    fun `the View-more toggle borrows HEADER's position instead of adding a row`() {
+    fun `the View-more toggle is a chain row of its own, between the chips and the strip`() {
         assertTrue(
-            "the toggle is the topmost focusable INSIDE the list, so it is the " +
-                "node a DOWN from the header meets first - it answers both presses",
+            "the toggle answers both presses through the page's one chain handler",
             detail.contains("overviewToggleVerticalFocus( detailRowPresence )")
         )
         assertTrue(
-            "UP is the tab strip, which is the row painted above the content " +
-                "now, with the header as its fallback",
-            toggleHandler.contains("focusTabStrip()") &&
-                toggleHandler.contains("focusTopOfPage()")
+            "UP is whatever the chain puts above OVERVIEW - the chips when the page " +
+                "has them, PLAY when it does not - with the header landing as the " +
+                "failure arm",
+            toggleHandler.contains(
+                "DetailFocusChain.nextRow( DetailRow.OVERVIEW, DetailFocusDirection.UP, rows )"
+            ) && toggleHandler.contains("|| focusTopOfPage()")
         )
         assertTrue(
-            "DOWN is the row BELOW the toggle, on a keyword-less title included, " +
-                "where the default search found nothing at all - and it is asked " +
-                "with the presence that LANDED, not the one this handler was " +
-                "composed with, which is the trap",
-            toggleHandler.contains("val rows = latestRowPresence.value ?: settled") &&
-                toggleHandler.contains("val target = DetailFocusChain.toggleDownRow(rows)")
+            "DOWN is the strip painted directly under it, asked with the presence " +
+                "that LANDED rather than the one this handler was composed with",
+            toggleHandler.contains("val rows = latestRowPresence.value ?: presence") &&
+                toggleHandler.contains("focusTabStrip()")
         )
         assertTrue(
-            "2026-11-14: and that row is the one UNDER the toggle, not HEADER's " +
-                "first row above it. The toggle is drawn inside the list below the " +
-                "genre chips, so HEADER's position sent its DOWN up the screen and " +
-                "back to the chips a DOWN from them had just left - the reported " +
-                "genre / View-more cycle (see DetailFocusChain.toggleDownRow)",
-            !toggleHandler.contains("moveFocusVertical( DetailRow.HEADER") &&
+            "and the chain DOES name the row now (2026-11-21): the overview moved " +
+                "out of the list and above the strip, so its toggle sits between the " +
+                "chips and the strip instead of borrowing HEADER's position - which " +
+                "is what closes the genre / View-more cycle for good",
+            chain.contains("OVERVIEW") &&
                 chain.contains("fun toggleDownRow(presence: DetailRowPresence): DetailRow") &&
-                chain.contains("nextRow(DetailRow.TABS, DetailFocusDirection.DOWN, presence)")
+                chain.contains("nextRow(DetailRow.OVERVIEW, DetailFocusDirection.DOWN, presence)")
         )
-        assertFalse(
-            "and the chain gains no row for it: one would put the toggle between " +
-                "PLAY and the genre chips, moving the common DOWN out of Play onto " +
-                "a text button",
-            chain.contains("INFOBLOCK")
+        assertTrue(
+            "and it did NOT land between PLAY and the chips: the common DOWN out of " +
+                "Play must still reach the chips, not a text button",
+            DetailFocusChain.nextRow(
+                DetailRow.HEADER,
+                DetailFocusDirection.DOWN,
+                DetailRowPresence(
+                    hasGenreRow = true,
+                    hasOverviewRow = true,
+                    hasKeywordsRow = false,
+                    hasEpisodesRow = false,
+                    hasPeopleRow = false,
+                    hasNetworkRow = false,
+                    hasProductionRow = false,
+                    hasReviewsRow = false,
+                    hasCollectionRow = false,
+                    hasMoreLikeThisRow = false,
+                    hasMediaRow = false
+                )
+            ) == DetailRow.GENRE
         )
     }
 

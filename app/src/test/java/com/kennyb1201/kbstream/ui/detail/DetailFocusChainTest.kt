@@ -27,6 +27,10 @@ class DetailFocusChainTest {
     /** The rows a page has, by the name used in each case below. */
     private fun presence(
         genre: Boolean = false,
+        // The overview's "View more" toggle, painted between the chips and the
+        // strip since 2026-11-21. Off by default, which is the page whose text
+        // fits its four collapsed lines.
+        overview: Boolean = false,
         keywords: Boolean = false,
         episodes: Boolean = false,
         people: Boolean = false,
@@ -38,6 +42,7 @@ class DetailFocusChainTest {
         moreLikeThis: Boolean = false
     ) = DetailRowPresence(
         hasGenreRow = genre,
+        hasOverviewRow = overview,
         hasKeywordsRow = keywords,
         hasEpisodesRow = episodes,
         hasPeopleRow = people,
@@ -77,6 +82,7 @@ class DetailFocusChainTest {
     fun `a row exists exactly when the page paints it`() {
         val all = presence(
             genre = true,
+            overview = true,
             keywords = true,
             episodes = true,
             people = true,
@@ -439,6 +445,7 @@ class DetailFocusChainTest {
             // A page whose only row is this one.
             val only = presence(
                 genre = row == DetailRow.GENRE,
+                overview = row == DetailRow.OVERVIEW,
                 keywords = row == DetailRow.KEYWORDS,
                 episodes = row == DetailRow.EPISODES,
                 people = row == DetailRow.PEOPLE,
@@ -451,10 +458,10 @@ class DetailFocusChainTest {
             )
             val expected = when (row) {
                 DetailRow.HEADER -> null
-                // The chips are painted between the header and the strip, and
-                // the strip itself has only the header above it when the page
-                // has no chips.
-                DetailRow.GENRE, DetailRow.TABS -> DetailRow.HEADER
+                // The chips and the overview toggle are painted between the
+                // header and the strip, and the strip itself has only the
+                // header above it when the page has neither.
+                DetailRow.GENRE, DetailRow.OVERVIEW, DetailRow.TABS -> DetailRow.HEADER
                 // Every list row's UP is the strip above it.
                 else -> DetailRow.TABS
             }
@@ -598,29 +605,68 @@ class DetailFocusChainTest {
             )
         )
 
-        // The toggle is the first focusable INSIDE the Details tab, so its DOWN
-        // is the first row under the strip - the reported Dark Marvels press.
+        // The toggle is painted directly ABOVE the strip since 2026-11-21, so
+        // its DOWN is the strip - on every page, whatever the tab holds. The
+        // rows below are then one more press away, through the strip's own
+        // DOWN (see the case below).
         assertEquals(
-            DetailRow.EPISODES,
+            DetailRow.TABS,
             DetailFocusChain.toggleDownRow(presence(episodes = true))
         )
         assertEquals(
-            "a title with keywords goes through them first - the fix does not " +
-                "narrow the toggle's DOWN to episodes",
-            DetailRow.KEYWORDS,
-            DetailFocusChain.toggleDownRow(presence(keywords = true, episodes = true))
+            "and on a title with chips and tags as well: the strip is the row " +
+                "physically under the toggle, not the first rail",
+            DetailRow.TABS,
+            DetailFocusChain.toggleDownRow(presence(genre = true, keywords = true, episodes = true))
         )
         assertEquals(
-            "a movie's cast is the first row below the toggle when there are no " +
-                "chips, tags or episodes to step to",
-            DetailRow.PEOPLE,
+            "a movie is the same - the toggle is not in the cast rail's neighbourhood",
+            DetailRow.TABS,
             DetailFocusChain.toggleDownRow(presence(people = true))
         )
         assertEquals(
-            "a page whose content is all leaf surfaces has nothing below the " +
-                "toggle, so the strip itself is the honest answer",
+            "and a page with nothing loaded still moves, because the strip is " +
+                "always painted under it",
             DetailRow.TABS,
             DetailFocusChain.toggleDownRow(presence())
+        )
+    }
+
+    @Test
+    fun `the summary toggle is the chain stop between the chips and the strip`() {
+        // 2026-11-21: DOWN out of the genre chips lands on the overview's
+        // toggle when the text overflows, and the strip is one press below it.
+        val withOverview = presence(genre = true, overview = true, episodes = true)
+        assertEquals(
+            "DOWN out of the chips is the toggle that is painted under them",
+            DetailRow.OVERVIEW,
+            DetailFocusChain.nextRow(DetailRow.GENRE, DetailFocusDirection.DOWN, withOverview)
+        )
+        assertEquals(
+            "DOWN again is the strip",
+            DetailRow.TABS,
+            DetailFocusChain.nextRow(DetailRow.OVERVIEW, DetailFocusDirection.DOWN, withOverview)
+        )
+        assertEquals(
+            "and UP from the strip is the toggle, step by step - not the chips in " +
+                "one press",
+            DetailRow.OVERVIEW,
+            DetailFocusChain.nextRow(DetailRow.TABS, DetailFocusDirection.UP, withOverview)
+        )
+        assertEquals(
+            "UP from the toggle is the chips",
+            DetailRow.GENRE,
+            DetailFocusChain.nextRow(DetailRow.OVERVIEW, DetailFocusDirection.UP, withOverview)
+        )
+        assertEquals(
+            "an overview that fits has no toggle, so the chips and the strip stay " +
+                "adjacent exactly as they were",
+            DetailRow.TABS,
+            DetailFocusChain.nextRow(
+                DetailRow.GENRE,
+                DetailFocusDirection.DOWN,
+                presence(genre = true, episodes = true)
+            )
         )
     }
 
@@ -662,26 +708,25 @@ class DetailFocusChainTest {
     // ── DOWN out of the toggle goes DOWN (spec 2026-11-14) ────────────────
 
     @Test
-    fun `DOWN out of the toggle is the row below it, not the genres above it`() {
+    fun `DOWN out of the toggle is the strip, never the genres above it`() {
         assertEquals(
-            "the reported cycle: DOWN from the genres fell through to the toggle, " +
-                "and DOWN from the toggle climbed back to the genres. The toggle is " +
-                "drawn under the genre chips, so the row BELOW it is the tag rail - " +
-                "the row the press that landed there was aiming at",
-            DetailRow.KEYWORDS,
+            "the reported cycle (2026-11-14) was DOWN from the genres falling " +
+                "through to the toggle and DOWN from the toggle climbing back to " +
+                "the genres. The toggle is drawn UNDER the chips, so the row below " +
+                "it can never be a row painted above it",
+            DetailRow.TABS,
             DetailFocusChain.toggleDownRow(presence(genre = true, keywords = true))
         )
         assertEquals(
-            "and on a title with no tags it is the episode section, which is where a " +
-                "DOWN from the genres would have gone anyway - the Dark Marvels page " +
-                "walks the same rows, one stop further down",
-            DetailRow.EPISODES,
+            "and on a title with no tags it is still the strip, not the episode " +
+                "section: the toggle is above the strip now, and asking it for a " +
+                "list row would skip the strip on the way in",
+            DetailRow.TABS,
             DetailFocusChain.toggleDownRow(presence(genre = true, episodes = true))
         )
         assertEquals(
-            "past the rails the chain steps over: a page with no tags and no episodes " +
-                "lands on its next real row rather than skipping it",
-            DetailRow.PEOPLE,
+            "a page whose only rows are rails below the strip is the same answer",
+            DetailRow.TABS,
             DetailFocusChain.toggleDownRow(presence(genre = true, people = true))
         )
     }
@@ -689,15 +734,15 @@ class DetailFocusChainTest {
     @Test
     fun `a page with nothing below the genres still moves DOWN off the toggle`() {
         assertEquals(
-            "the one page this would otherwise strand: genres and nothing else. The " +
-                "fallback is the genres themselves - a real move, not a key taken and " +
-                "nothing done with it",
-            DetailRow.GENRE,
+            "the one page this would otherwise strand: genres and nothing else - " +
+                "the strip is still painted under the toggle",
+            DetailRow.TABS,
             DetailFocusChain.toggleDownRow(presence(genre = true))
         )
         assertEquals(
-            "and on a page with no genre row either, the first row the page does have",
-            DetailRow.MEDIA,
+            "and on a page with no genre row either, the same answer: a real move, " +
+                "not a key taken and nothing done with it",
+            DetailRow.TABS,
             DetailFocusChain.toggleDownRow(presence(media = true))
         )
     }

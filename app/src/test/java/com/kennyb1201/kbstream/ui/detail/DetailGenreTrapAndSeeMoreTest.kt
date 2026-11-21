@@ -39,9 +39,12 @@ class DetailGenreTrapAndSeeMoreTest {
     private fun presence(
         keywords: Boolean = false,
         episodes: Boolean = true,
-        people: Boolean = false
+        people: Boolean = false,
+        /** The overview's toggle, off unless a case is about it. */
+        overviewToggle: Boolean = false
     ) = DetailRowPresence(
         hasGenreRow = true,
+        hasOverviewRow = overviewToggle,
         hasKeywordsRow = keywords,
         hasEpisodesRow = episodes,
         hasPeopleRow = people,
@@ -201,14 +204,13 @@ class DetailGenreTrapAndSeeMoreTest {
     fun `a DOWN press the chain cannot place no longer lands on the overview toggle`() {
         val move = member("suspend fun moveFocusVertical(", "fun detailRowVerticalFocus(")
         assertTrue(
-            "F2: the DOWN last resort onto the toggle is gone. It was what closed " +
-                "the reported cycle - the toggle is drawn INSIDE the list, below the " +
-                "genre chips, and its own DOWN climbs back up to them, so the pair " +
-                "was genre -> View more -> genre with the tag rail one press below. " +
-                "The UP route is the one that stays, so the toggle is asked exactly " +
-                "once in this function",
+            "F2: the DOWN last resort onto the toggle is gone, and so is the special " +
+                "UP route that replaced it. Since the overview moved above the strip " +
+                "(2026-11-21) the toggle is an ordinary chain row, so this handoff " +
+                "asks nothing about it at all - UP out of a row is the chain's answer " +
+                "and the strip's own UP reaches the toggle",
             !move.contains("val toggleLanded = focusOverviewToggle()") &&
-                Regex("focusOverviewToggle\\(\\)").findAll(move).count() == 1
+                Regex("focusOverviewToggle\\(\\)").findAll(move).count() == 0
         )
         val secondAsk = move.indexOf("val secondAsk =")
         val fallThrough =
@@ -252,11 +254,11 @@ class DetailGenreTrapAndSeeMoreTest {
                 "one",
             ask.contains("if (!overviewToggleAvailable) return false")
         )
-        assertTrue(
-            "the toggle's item is scrolled back before the ask is retried: a " +
-                "disposed toggle has no requester to take the focus",
-            ask.indexOf("revealRail(OVERVIEW_ROW_KEY, 0)") in 0 until
-                ask.indexOf("while (attempts < RETURN_FOCUS_STEPS)")
+        assertFalse(
+            "and no list reveal is needed any more: the toggle is in the fixed " +
+                "header, so there is no item the scroll can have disposed - the " +
+                "anchor key itself is gone, so no reveal can be aimed at one",
+            detail.contains("OVERVIEW_ROW_KEY")
         )
         assertTrue(
             "and the answer is the request's own report, not \"the call did not " +
@@ -271,35 +273,28 @@ class DetailGenreTrapAndSeeMoreTest {
     @Test
     fun `UP out of the first list row is the toggle, and only UP`() {
         val move = member("suspend fun moveFocusVertical(", "fun detailRowVerticalFocus(")
-        assertTrue(
-            "the route is one place, in the page's single vertical handoff: every " +
-                "first-list-row press (keywords, seasons, cast) goes through it, so " +
-                "no rail can disagree about it",
-            move.contains(
-                "direction == DetailFocusDirection.UP && " +
-                    "activeTab == DetailTab.DETAILS && " +
-                    "from == firstListRow(settledRows) && " +
-                    "focusOverviewToggle()"
-            )
+        assertFalse(
+            "UP out of a list row is the strip, never a jump onto the toggle: the " +
+                "first-row special case is gone with the move of the overview, so no " +
+                "press skips the row painted directly above it",
+            move.contains("focusOverviewToggle()") ||
+                move.contains("from == firstListRow(")
         )
         assertTrue(
-            "\"first list row\" is read from the chain, so it cannot drift from " +
-                "the row order",
-            detail.contains("fun firstListRow(presence: DetailRowPresence): DetailRow? =") &&
-                detail.contains(
-                    "DetailFocusChain.nextRow( DetailRow.TABS, " +
-                        "DetailFocusDirection.DOWN, presence )"
-                )
+            "the toggle is a chain row of its own now, between the chips and the " +
+                "strip, so UP onto it is the chain's answer rather than a route " +
+                "somewhere else",
+            DetailRow.entries.any { it.name == "OVERVIEW" } &&
+                DetailFocusChain.nextRow(
+                    DetailRow.TABS,
+                    DetailFocusDirection.UP,
+                    presence(overviewToggle = true)
+                ) == DetailRow.OVERVIEW
         )
         assertTrue(
-            "and the toggle gets the handle it never had",
+            "and the toggle still gets the handle it never had",
             detail.contains(".focusRequester(overviewToggleRequester)") &&
                 detail.contains("val overviewToggleRequester = remember { FocusRequester() }")
-        )
-        assertFalse(
-            "the toggle is NOT a chain row: no row's idea of what is above or " +
-                "below it moves, which is what keeps DOWN out of PLAY on the genres",
-            DetailRow.entries.any { it.name.contains("OVERVIEW") || it.name.contains("INFO") }
         )
         assertTrue(
             "DOWN out of PLAY is still HEADER's own chain move, untouched",
@@ -327,28 +322,32 @@ class DetailGenreTrapAndSeeMoreTest {
             "suspend fun focusFirstMediaCard("
         )
         assertTrue(
-            "UP is the header (PLAY), as it always was - and a landing the header " +
-                "refuses now runs the geometric search rather than keeping the key " +
-                "(the 2026-11-08 UP trap, see DetailTopFallThroughContractTest)",
+            "UP is the row the chain says is above the toggle - the chips when the " +
+                "page has them, PLAY when it does not - with the header as the " +
+                "failure arm (the 2026-11-08 UP trap, see " +
+                "DetailTopFallThroughContractTest)",
             toggleHandler.contains(
-                "onUp = { startFocusMove(DetailRow.TABS, DetailFocusDirection.UP, " +
-                    "presence) { val landed = focusTabStrip() || focusTopOfPage() || " +
-                    "focusByGeometry(DetailFocusDirection.UP)"
+                "onUp = { startFocusMove(DetailRow.OVERVIEW, DetailFocusDirection.UP, " +
+                    "presence) { val rows = latestRowPresence.value ?: presence val " +
+                    "target = DetailFocusChain.nextRow( DetailRow.OVERVIEW, " +
+                    "DetailFocusDirection.UP, rows ) ?: DetailRow.HEADER"
             )
         )
         assertTrue(
-            "and DOWN is the first row BELOW the toggle - asked with the presence " +
-                "that landed, the captured one being only the fallback for a press " +
-                "that arrives before anything has. It used to be the genres, through " +
-                "HEADER's borrowed position, which is a row painted ABOVE the toggle " +
-                "and the other half of the reported cycle",
-            toggleHandler.contains("val rows = latestRowPresence.value ?: settled") &&
-                toggleHandler.contains("val target = DetailFocusChain.toggleDownRow(rows)")
+            "and DOWN is the strip, which is painted directly under the toggle on " +
+                "every page - the move is always placeable, so the press is never " +
+                "one the page took and did nothing with",
+            toggleHandler.contains(
+                "startFocusMove(DetailRow.OVERVIEW, DetailFocusDirection.DOWN, rows)"
+            ) && toggleHandler.contains("focusTabStrip() || " +
+                "focusByGeometry(DetailFocusDirection.DOWN)")
         )
         assertTrue(
-            "the overview text itself is still not focusable - F2 routes onto the " +
-                "toggle, not onto the paragraph",
-            detail.contains("text = if (overviewExpanded) \"View less\" else \"View more\"")
+            "the overview text itself is still not focusable - the presses route onto " +
+                "the toggle, not onto the paragraph",
+            detail.contains(
+                "text = if (overviewExpanded) { \"View less\" } else { \"View more\" }"
+            )
         )
     }
 
@@ -365,9 +364,10 @@ class DetailGenreTrapAndSeeMoreTest {
             asks
         )
         assertEquals(
-            "and the requester is asked only inside the one function that owns it " +
-                "(its first ask and its retry loop)",
-            2,
+            "and the requester is asked only inside the one function that owns it - " +
+                "its retry loop, with no reveal's separate first ask since the " +
+                "toggle stopped being a list item",
+            1,
             Regex("overviewToggleRequester\\.requestFocus\\(\\)").findAll(detail).count()
         )
         assertTrue(

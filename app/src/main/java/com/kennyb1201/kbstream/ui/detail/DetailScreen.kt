@@ -356,13 +356,21 @@ private const val SEASON_FOCUS_DWELL_MS = 140L
 private const val GENRE_ROW_KEY = "genrerow"
 
 /**
- * The overview/facts block: the list's FIRST item, which holds the "View more"
- * toggle.
- *
- * A reveal anchor like any rail key, because the toggle is a focus target now
- * and the scroll can have taken its item away (see [focusOverviewToggle]).
+ * Lines the overview shows before it is expanded. Four, as before the move into
+ * the fixed header: the collapsed treatment did not change, only where it sits.
  */
-private const val OVERVIEW_ROW_KEY = "infoblock"
+private const val OVERVIEW_COLLAPSED_LINES = 4
+
+/**
+ * Lines the overview may show ONCE EXPANDED, from the fixed header (2026-11-21).
+ *
+ * The block used to expand without a limit, which was safe because it grew
+ * inside the scrolling list. Above the strip it is header height: an unbounded
+ * expansion would eat the list's viewport and could push the strip itself off a
+ * 540dp-tall screen. Eight lines is ~160dp at this type scale, which leaves the
+ * list a row and keeps the strip where the spec says it must be.
+ */
+private const val OVERVIEW_EXPANDED_LINES = 8
 
 /**
  * The season chips' list item: the first half of the episode section.
@@ -996,16 +1004,27 @@ fun DetailScreen(
      * DOWN out of the toggle itself is the return to the first row the page has,
      * answered with the rows it has NOW (see [overviewToggleVerticalFocus]).
      *
-     * Declared at screen scope, not inside the list item that draws it, for the
-     * two reasons the field report exposed. It had NO handle at all - a
-     * focusable surface nothing could ask for - so there was no D-pad route
-     * onto it ("theres no way to click the see more"); and a lazy list item's
-     * own state dies with the item, so whether the toggle EXISTS has to outlive
-     * the item's composition. It is one press away from the first list row, and
-     * a press that has to scroll the overview back in first still needs to know
-     * there is a toggle to scroll to.
+     * Declared at screen scope, not inside the block that draws it, because the
+     * presses that target it are built at screen scope too - and because the
+     * field report that created it exposed a focusable surface nothing could
+     * ask for ("theres no way to click the see more"). The block has since moved
+     * above the strip, into the fixed header (2026-11-21), so the toggle is
+     * composed whenever the page is and no reveal is needed to reach it.
      */
     val overviewToggleRequester = remember { FocusRequester() }
+
+    /**
+     * The tab content region's own focus handle: the landing of last resort for
+     * a DOWN out of the strip (see `enterTabContent`'s container arm).
+     *
+     * Armed only while that press is asking - a container that could always take
+     * focus would win the geometric search against the cards inside it, and the
+     * rows that DO land on that press would stop landing. The sink disarms
+     * itself when the viewer leaves it (see the node's own `onFocusChanged`).
+     */
+    val tabContentFocusSink = remember { FocusRequester() }
+
+    var tabContentSinkArmed by remember { mutableStateOf(false) }
 
     /**
      * Whether the overview currently overflows its four collapsed lines - i.e.
@@ -2419,8 +2438,7 @@ fun DetailScreen(
     }
 
     /**
-     * Puts the focus on the overview's "View more" toggle, revealing it when
-     * the scroll has taken its item out of composition.
+     * Puts the focus on the overview's "View more" toggle.
      *
      * Answers false when this page has no toggle (the overview fits its four
      * lines), so a caller can fall back to its own landing - and false when the
@@ -2428,18 +2446,14 @@ fun DetailScreen(
      * than an assumed success (see [focusChipColumn] for why the request's own
      * report is the only answer worth trusting).
      *
-     * The reveal is what makes the toggle reachable at all from the rows below
-     * it: it is the topmost focusable INSIDE the list, and a viewer standing on
-     * the keywords or the seasons has usually scrolled its item off screen. Its
-     * own `scrollToTopOnFocus` then snaps the list, so a focus landing here is
-     * also the scroll the viewer asked for without saying so.
+     * NO REVEAL, since the overview moved above the strip (2026-11-21): the
+     * toggle lives in the fixed header, so it is composed whenever the page is -
+     * there is no list item the scroll can have disposed, and the reveal this
+     * used to do was addressing an item that no longer exists. The retry stays,
+     * for the one frame a tab switch or a text change re-keys the node.
      */
     suspend fun focusOverviewToggle(): Boolean {
         if (!overviewToggleAvailable) return false
-        if (runCatching { overviewToggleRequester.requestFocus() }.getOrDefault(false)) {
-            return true
-        }
-        detailListState.revealRail(OVERVIEW_ROW_KEY, 0)
         var attempts = 0
         while (attempts < RETURN_FOCUS_STEPS) {
             if (runCatching { overviewToggleRequester.requestFocus() }.getOrDefault(false)) {
@@ -2449,6 +2463,7 @@ fun DetailScreen(
             attempts++
         }
         Log.w(TAG, "the overview toggle exists but would not take the focus")
+        DetailTrace.note("detail overview toggle landing failed after $attempts attempts")
         return false
     }
 
@@ -3363,6 +3378,9 @@ fun DetailScreen(
         // The strip is painted outside the list, so it has no list item to
         // reveal or anchor on - it is never disposed, which is the point.
         DetailRow.TABS -> null
+        // Likewise the overview's toggle: fixed header, no list item (it moved
+        // out of the list on 2026-11-21), so nothing to reveal or anchor on.
+        DetailRow.OVERVIEW -> null
         DetailRow.GENRE -> GENRE_ROW_KEY
         DetailRow.KEYWORDS -> KEYWORDS_ROW_KEY
         DetailRow.EPISODES -> null
@@ -3491,6 +3509,8 @@ fun DetailScreen(
         DetailRow.HEADER -> focusTopOfPage()
         // The strip is a fixed row, not a list item: no reveal, no column.
         DetailRow.TABS -> focusTabStrip() || focusByGeometry(direction)
+        // And so is the overview's toggle, one row above it (2026-11-21).
+        DetailRow.OVERVIEW -> focusOverviewToggle() || focusByGeometry(direction)
         // F4: a section that will not take the focus is a miss, not a reason to
         // throw the viewer to the top of the page. The walk arm below already
         // states that rule - "a rail that will not take the focus must not
@@ -3660,13 +3680,58 @@ fun DetailScreen(
      * end while its data is still arriving.
      */
     suspend fun enterTabContent(): Boolean {
+        // Every exit from this function is traced (2026-11-21). The field paste
+        // that reopened this had eight `GENRE DOWN -> TABS` lines and not one
+        // `TABS DOWN ->` line: the press was reaching this function and leaving
+        // it without saying where it went, which made "the landing failed" and
+        // "nothing was ever asked" the same reading. It now says the target and
+        // which arm placed it.
+        fun trace(target: String, landed: Boolean, via: String) {
+            DetailTrace.note(
+                "detail move TABS DOWN -> $target landed=$landed via=$via"
+            )
+        }
+
+        // The last arm: the tab's content region takes the focus itself, so a
+        // tab whose rows are still arriving (or a Details tab with no keywords,
+        // networks or production companies below the strip) is entered rather
+        // than bounced. The sink is a 1dp transparent node at the top of the
+        // content region, armed only while this is asking - a permanently
+        // focusable container would be a nearer geometric target than the cards
+        // it holds and would take DOWN away from rows that DID land.
+        suspend fun landOnContainer(): Boolean {
+            tabContentSinkArmed = true
+            var attempts = 0
+            while (attempts < RETURN_FOCUS_STEPS) {
+                awaitFrame()
+                if (runCatching { tabContentFocusSink.requestFocus() }.getOrDefault(false)) {
+                    return true
+                }
+                delay(RETURN_FOCUS_DELAY_MS)
+                attempts++
+            }
+            tabContentSinkArmed = false
+            return false
+        }
+
         val page = latestPageRowPresence.value ?: latestRowPresence.value
-            ?: return focusByGeometry(DetailFocusDirection.DOWN)
+        if (page == null) {
+            val landed = focusByGeometry(DetailFocusDirection.DOWN)
+            trace("geometry", landed, "geometry")
+            if (landed) return true
+            val container = landOnContainer()
+            trace("container", container, "container")
+            return container
+        }
         val rows = DetailTabChain.rowPresence(activeTab, page)
         val remembered = tabLastRow[activeTab]
+        // OVERVIEW joins the header rows: it is painted ABOVE the strip, so a
+        // remembered landing on it is not "inside the tab" and must not be
+        // honoured by a press that means to go in.
         val rememberedPresent = remembered != null &&
             remembered != DetailRow.TABS &&
             remembered != DetailRow.GENRE &&
+            remembered != DetailRow.OVERVIEW &&
             remembered != DetailRow.HEADER &&
             DetailFocusChain.exists(remembered, rows)
         val target = if (rememberedPresent) remembered
@@ -3679,17 +3744,27 @@ fun DetailScreen(
             } else {
                 focusRow(target, 0, DetailRow.TABS, DetailFocusDirection.DOWN, rows)
             }
-            if (landed) return true
+            if (landed) {
+                trace(target.name, true, "chain")
+                return true
+            }
+            trace(target.name, false, "chain")
+        } else {
+            trace("none", false, "chain")
         }
-        return focusByGeometry(DetailFocusDirection.DOWN)
-    }
 
-    fun firstListRow(presence: DetailRowPresence): DetailRow? =
-        DetailFocusChain.nextRow(
-            DetailRow.TABS,
-            DetailFocusDirection.DOWN,
-            presence
-        )
+        // Mid-page, so this press is never the page's key to swallow: the
+        // platform's own search is what any non-chain surface would have got.
+        if (focusByGeometry(DetailFocusDirection.DOWN)) {
+            trace("geometry", true, "geometry")
+            return true
+        }
+
+        // And the last arm, the one that makes this press impossible to swallow.
+        val container = landOnContainer()
+        trace("container", container, "container")
+        return container
+    }
 
     /**
      * Whether this page is still waiting on the data that decides which rows it
@@ -3738,26 +3813,17 @@ fun DetailScreen(
         fromColumn: Int,
         presence: DetailRowPresence
     ): Boolean {
-        // UP out of the FIRST row inside the list is the overview's "View more"
-        // toggle when the overview overflows (see [focusOverviewToggle]).
-        //
-        // The toggle stays OUT of the chain: it is not a [DetailRow] and no row's
-        // idea of what is above or below it moves. It is an UP-ONLY stop on the
-        // way to the header, which is why the route lives here - one place every
-        // first-list-row press passes through (keywords, seasons, cast, all of
-        // them) - and not in a per-rail handler.
-        //
-        // The reported failure this answers: there was no D-pad route onto the
-        // toggle at all. DOWN out of PLAY skips it by design, so UP from the
-        // rows below is the way it was always meant to be reached (the toggle's
-        // own comment says "walking D-pad up from the rails") - it was simply
-        // never wired. A title whose overview fits has no toggle, and UP goes to
-        // the genres as it always has.
+        // UP out of a list row is the strip, always (2026-11-21). This used to
+        // carry a special case that jumped a first-list-row UP straight onto the
+        // overview's toggle, because the toggle had no chain row of its own. It
+        // has one now ([DetailRow.OVERVIEW], painted between the chips and the
+        // strip), so the chain's answer - strip first, then toggle - IS the
+        // move, and a special case that skipped the strip would send UP past the
+        // row the viewer can see directly above them.
         // F7: the rows the page has NOW, not the ones the pressing rail was
         // composed with - a rail composed before a higher row landed computes
-        // the wrong first row, and the toggle stop was skipped in that one
-        // recomposition window. This is the same settled presence the toggle's
-        // own DOWN already reads ([latestRowPresence]).
+        // the wrong target in that one recomposition window. This is the same
+        // settled presence the toggle's own presses read ([latestRowPresence]).
         val settledRows = latestRowPresence.value ?: presence
         // E1: one line per press, whatever the outcome - a dead press is a line
         // that says so, not an absence. The `finally` runs on every exit, the
@@ -3780,20 +3846,6 @@ fun DetailScreen(
         // arrived is a different story from one on a settled page.
         var tracedWaited = false
         try {
-            if (
-                direction == DetailFocusDirection.UP &&
-                // The toggle is painted inside the Details tab, so it is that
-                // tab's own first stop - in any other tab the first row's UP
-                // is the strip, not a control the viewer cannot see.
-                activeTab == DetailTab.DETAILS &&
-                from == firstListRow(settledRows) &&
-                focusOverviewToggle()
-            ) {
-                tracedVia = "toggle"
-                tracedLanded = true
-                return true
-            }
-
             // F2 (2026-11-14): the TARGET is read from the settled rows too, not
             // just the toggle stop above. The pressing rail is not always the one
             // composed last - the genre chips live in the fixed header and are
@@ -4153,10 +4205,10 @@ fun DetailScreen(
      *
      * Every other user of the wrapper above has a landing it can always ask for
      * (the header's PLAY, the season chips' own section), so keeping the key is
-     * right for them and their contract is unchanged. The toggle borrows
-     * [DetailRow.HEADER]'s position instead, and the page it is on may have no
-     * row at all below it - which is exactly the state the reported trap was
-     * made of: the key consumed, the focus unmoved, nothing asked.
+     * right for them and their contract is unchanged. The toggle asks instead:
+     * since 2026-11-21 the strip is always painted directly under it, so the
+     * answer is normally "kept" - but the question is still asked rather than
+     * assumed, because that is the rule the whole chain is built on.
      *
      * So this variant asks [onDown] whether the press was the page's to keep. It
      * answers synchronously, at press time, because the move itself is
@@ -4203,27 +4255,54 @@ fun DetailScreen(
      * no column (the network rail's own lesson), and the column is what decides
      * which chip the press lands on.
      *
-     * UP is consumed and stays here. The action row is the top of the page; the
-     * only thing above it is the system's own focus, so an UP that walked off it
-     * would be leaving the page rather than moving in it.
+     * UP is GIVEN BACK, not consumed (2026-11-21): "can we make up press from
+     * topmost buttons on detail bring up the top menu". The action row is the
+     * top of the page and nothing above it is focusable, so the press has no
+     * step to take here - and the app shell already answers exactly that press:
+     * its bubble-phase handler runs the default search and, when it finds
+     * nothing (which from this row it cannot), raises the TV top bar (see
+     * [com.kennyb1201.kbstream.ui.components.TvTopBarOverlay]).
+     *
+     * Consuming it here was the reason the bar never appeared from this page:
+     * a screen that keeps a dead Up is a screen the shell never gets to answer.
+     * The alternative - a private copy of the bar's summon inside this screen -
+     * would have meant a second route to the same window, and the shell's is the
+     * one that also serves SEARCH / TV GUIDE / LIBRARY / SETTINGS from every
+     * other screen.
+     *
+     * The press is traced before it is released so a paste can tell "the shell
+     * was asked" from "the key handler ate it", the same distinction the strip's
+     * DOWN trace exists for.
      */
     fun headerActionVerticalFocus(
         column: Int,
         presence: DetailRowPresence
-    ): (KeyEvent) -> Boolean =
-        nonRailVerticalFocus(
-            onUp = {},
-            onDown = {
-                startFocusMove(DetailRow.HEADER, DetailFocusDirection.DOWN, presence) {
-                    moveFocusVertical(
-                        DetailRow.HEADER,
-                        DetailFocusDirection.DOWN,
-                        column,
-                        presence
-                    )
+    ): (KeyEvent) -> Boolean = { keyEvent ->
+        if (keyEvent.type != KeyEventType.KeyDown) {
+            false
+        } else {
+            when (keyEvent.key) {
+                Key.DirectionUp -> {
+                    DetailTrace.note("detail header UP -> top bar")
+                    false
                 }
+
+                Key.DirectionDown -> {
+                    startFocusMove(DetailRow.HEADER, DetailFocusDirection.DOWN, presence) {
+                        moveFocusVertical(
+                            DetailRow.HEADER,
+                            DetailFocusDirection.DOWN,
+                            column,
+                            presence
+                        )
+                    }
+                    true
+                }
+
+                else -> false
             }
-        )
+        }
+    }
 
     /**
      * The season chips' vertical press.
@@ -4322,72 +4401,40 @@ fun DetailScreen(
             // is started here because the key is already ours (F1c) - UP from
             // the toggle finds the genres or PLAY above it in the fixed header.
             onUp = {
-                // The toggle is the top of the Details tab's CONTENT, and the
-                // strip is painted above it on every page now: UP is the tabs.
-                startFocusMove(DetailRow.TABS, DetailFocusDirection.UP, presence) {
+                // GENRE again, in the chain's own terms (2026-11-21). The
+                // toggle no longer borrows HEADER's position: it IS the
+                // OVERVIEW row, so UP is whatever is above that row - the genre
+                // chips when the page has them, PLAY when it does not.
+                startFocusMove(DetailRow.OVERVIEW, DetailFocusDirection.UP, presence) {
+                    val rows = latestRowPresence.value ?: presence
+                    val target =
+                        DetailFocusChain.nextRow(
+                            DetailRow.OVERVIEW,
+                            DetailFocusDirection.UP,
+                            rows
+                        ) ?: DetailRow.HEADER
                     val landed =
-                        focusTabStrip() ||
-                            focusTopOfPage() ||
-                            focusByGeometry(DetailFocusDirection.UP)
+                        focusRow(target, 0, DetailRow.OVERVIEW, DetailFocusDirection.UP, rows) ||
+                            focusTopOfPage()
                     // E3: the toggle's own outcome, readable without the move
-                    // line - the UP that lands here has no chain row of its own.
-                    DetailTrace.note("detail toggle UP landed=$landed")
+                    // line.
+                    DetailTrace.note("detail toggle UP -> $target landed=$landed")
                 }
             },
             onDown = {
-                // The rows that LANDED, not the ones this handler was made
-                // with: the same shape as [awaitRowsThenMove]'s, for the same
-                // reason.
-                val settled =
-                    latestRowPresence.value
-                        ?: presence
-
-                val kept = DetailFocusChain.toggleDownIsConsumed(
-                    presence = settled,
-                    rowsStillArriving = rowsStillArriving()
-                )
-                // E3: whether the toggle's DOWN was placed, on its own line -
-                // `landed=false` here is the press going back to the platform,
-                // not a dead key.
-                DetailTrace.note("detail toggle DOWN landed=$kept")
-                if (!kept) {
-                    // The page has nowhere to put this press, so it is not the
-                    // page's key to keep: it goes back to the platform's default
-                    // search, which is a visible no-op at a real edge rather than
-                    // a press taken and nothing done with it.
-                    Log.i(
-                        TAG,
-                        "toggle DOWN not kept: no row below and nothing arriving"
-                    )
-                    false
-                } else {
-                    // F2 (2026-11-14): the row UNDER the toggle, not the genres
-                    // painted above it. See [DetailFocusChain.toggleDownRow] for
-                    // the two-stop cycle this closes: a DOWN out of the toggle
-                    // used to climb back up to the genre chips, which sent the
-                    // next DOWN straight back to the toggle.
-                    startFocusMove(DetailRow.HEADER, DetailFocusDirection.DOWN, settled) {
-                        val rows = latestRowPresence.value ?: settled
-                        val target = DetailFocusChain.toggleDownRow(rows)
-                        // DOWN lands ON the row under the toggle - it used to
-                        // ask the chain to move DOWN FROM that row, which
-                        // skipped it (and now the strip sits above it, so the
-                        // walk would be one row too far again).
-                        val landed = when (target) {
-                            DetailRow.TABS -> focusTabStrip()
-                            DetailRow.MEDIA -> focusMediaStrip(DetailRow.HEADER)
-                            else -> focusRow(
-                                target,
-                                0,
-                                DetailRow.TABS,
-                                DetailFocusDirection.DOWN,
-                                rows
-                            )
-                        }
-                        if (!landed) focusByGeometry(DetailFocusDirection.DOWN)
-                    }
-                    true
+                // The strip, which is the row directly under the toggle: a fixed
+                // header node like the toggle itself, so this press always has
+                // somewhere real to land on every page and in every tab - the
+                // "DOWN does nothing" trap cannot be reached from here any
+                // more (see [DetailFocusChain.toggleDownIsConsumed] for what
+                // this used to have to ask before it could keep the key).
+                val rows = latestRowPresence.value ?: presence
+                startFocusMove(DetailRow.OVERVIEW, DetailFocusDirection.DOWN, rows) {
+                    val landed =
+                        focusTabStrip() || focusByGeometry(DetailFocusDirection.DOWN)
+                    DetailTrace.note("detail toggle DOWN -> TABS landed=$landed")
                 }
+                true
             }
         )
 
@@ -4708,6 +4755,11 @@ fun DetailScreen(
             val hasMediaRow = mediaTabs.isNotEmpty()
             val pageRowPresence = DetailRowPresence(
                 hasGenreRow = tmdbGenres.isNotEmpty(),
+                // The overview's toggle is in the fixed header now, above the
+                // strip: whether it EXISTS is the overflow measurement the
+                // block publishes, so the chain's OVERVIEW stop is on exactly
+                // while there is a toggle to land on.
+                hasOverviewRow = overviewToggleAvailable,
                 hasKeywordsRow = keywords.isNotEmpty(),
                 hasEpisodesRow = normalizedType == "series" && seasons.isNotEmpty(),
                 hasPeopleRow = hasPeopleRow,
@@ -6423,9 +6475,175 @@ fun DetailScreen(
                         }
                     }
 
-                    // The strip: pinned under the genre chips, above the
-                    // list, and composed whether or not the selected tab has
-                    // loaded - the row every press can land on.
+                    // The overview: the title's own description, on the FIRST
+                    // page and above the strip on every tab (2026-11-21,
+                    // "can we keep the overview on the first page not buried
+                    // behind details tab"). It used to be the first item of the
+                    // Details tab's list, which buried it behind a tab press
+                    // and made its position depend on which tab was open - the
+                    // field report asked for the opposite of both.
+                    //
+                    // Collapsed to four lines with the "View more" toggle it
+                    // always had, and capped when expanded
+                    // ([OVERVIEW_EXPANDED_LINES]): this header is FIXED, so the
+                    // block is the one thing above the strip whose height is
+                    // not already bounded by a layout weight. Uncapped, an
+                    // expanded overview would push the strip and the first
+                    // content row off a 540dp-tall screen, which is the one
+                    // thing the revamp spec says this page must never do - the
+                    // strip gives way only by collapsing the overview.
+                    run {
+                        val overviewText =
+                            tmdbDetail?.overview
+                                ?.takeIf { it.isNotBlank() }
+                                ?: m.description
+                        if (overviewText == null) {
+                            // No description: no toggle, so nothing may route
+                            // onto one (see [DetailRow.OVERVIEW]).
+                            SideEffect { overviewToggleAvailable = false }
+                        } else {
+                            // Keyed on the text, so the states reset when the
+                            // richer TMDB overview replaces the add-on's.
+                            var overviewExpanded by remember(overviewText) {
+                                mutableStateOf(false)
+                            }
+                            var overviewOverflows by remember(overviewText) {
+                                mutableStateOf(false)
+                            }
+                            Column(
+                                modifier = Modifier.padding(
+                                    start = 24.dp,
+                                    end = 24.dp,
+                                    bottom = 8.dp
+                                )
+                            ) {
+                                Text(
+                                    overviewText,
+                                    maxLines = if (overviewExpanded) {
+                                        OVERVIEW_EXPANDED_LINES
+                                    } else {
+                                        OVERVIEW_COLLAPSED_LINES
+                                    },
+                                    overflow = TextOverflow.Ellipsis,
+                                    onTextLayout = { textLayoutResult ->
+                                        if (
+                                            !overviewExpanded &&
+                                            textLayoutResult.hasVisualOverflow
+                                        ) {
+                                            overviewOverflows = true
+                                        }
+                                    },
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                                if (overviewOverflows) {
+                                    // The chain's OVERVIEW stop. Written from an
+                                    // effect so the presence the presses read
+                                    // and the toggle actually drawn cannot
+                                    // disagree: an overview that fits has no
+                                    // toggle, and a row that is not on screen
+                                    // must never be landed on.
+                                    SideEffect { overviewToggleAvailable = true }
+                                    Surface(
+                                        onClick = {
+                                            overviewExpanded = !overviewExpanded
+                                        },
+                                        shape = ClickableSurfaceDefaults.shape(
+                                            shape = KBShapeSmall
+                                        ),
+                                        colors = ClickableSurfaceDefaults.colors(
+                                            containerColor = Color.Transparent,
+                                            contentColor = KBTextLo,
+                                            focusedContainerColor = KBSurfaceRaised,
+                                            focusedContentColor = KBAccent,
+                                            pressedContainerColor = KBSurfaceRaised,
+                                            pressedContentColor = KBAccent
+                                        ),
+                                        scale = ClickableSurfaceDefaults.scale(
+                                            focusedScale = KBFocusChip,
+                                            pressedScale = KBFocusPressed
+                                        ),
+                                        border = ClickableSurfaceDefaults.border(
+                                            border = Border(
+                                                border = BorderStroke(
+                                                    1.dp,
+                                                    KBTextLo.copy(alpha = 0.35f)
+                                                ),
+                                                shape = KBShapeSmall
+                                            ),
+                                            focusedBorder = Border(
+                                                border = BorderStroke(
+                                                    2.dp,
+                                                    KBAccent
+                                                ),
+                                                shape = KBShapeSmall
+                                            )
+                                        ),
+                                        glow = ClickableSurfaceDefaults.glow(
+                                            focusedGlow = Glow(
+                                                elevationColor = KBAccent,
+                                                elevation = KBFocusGlowSmall
+                                            )
+                                        ),
+                                        // The same room the actor page's
+                                        // biography pill takes: the scale, ring
+                                        // and glow are drawn outside this
+                                        // Surface, so the room goes INSIDE it
+                                        // and the offset cancels it - the
+                                        // toggle is drawn where it was.
+                                        modifier = Modifier
+                                            .padding(KBFocusChipInset)
+                                            .offset(
+                                                x = -KBFocusChipInset,
+                                                y = -KBFocusChipInset
+                                            )
+                                            // The D-pad handle onto it. It is in
+                                            // the fixed header now, so no
+                                            // reveal is needed to reach it.
+                                            .focusRequester(overviewToggleRequester)
+                                            .onFocusChanged {
+                                                if (it.isFocused) {
+                                                    DetailTrace.note(
+                                                        "detail toggle took the focus"
+                                                    )
+                                                }
+                                            }
+                                            // UP is the genre chips, DOWN the
+                                            // strip (see
+                                            // overviewToggleVerticalFocus).
+                                            .onPreviewKeyEvent(
+                                                overviewToggleVerticalFocus(
+                                                    detailRowPresence
+                                                )
+                                            )
+                                            .padding(top = 8.dp)
+                                    ) {
+                                        Text(
+                                            text = if (overviewExpanded) {
+                                                "View less"
+                                            } else {
+                                                "View more"
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.Medium,
+                                            modifier = Modifier.padding(
+                                                horizontal = 10.dp,
+                                                vertical = 5.dp
+                                            )
+                                        )
+                                    }
+                                } else {
+                                    // An overview that fits has no toggle, so
+                                    // nothing may route onto one.
+                                    SideEffect { overviewToggleAvailable = false }
+                                }
+                            }
+                        }
+                    }
+
+                    // The strip: pinned under the overview and the genre
+                    // chips, above the list, and composed whether or not the
+                    // selected tab has loaded - the row every press can land
+                    // on.
                     DetailTabStrip(
                         tabs = availableTabs,
                         selected = activeTab,
@@ -6462,6 +6680,25 @@ fun DetailScreen(
                         }
                     )
 
+                    // The content region's focus sink: 1dp, transparent, and
+                    // focusable only while a DOWN out of the strip is looking
+                    // for a landing (see `enterTabContent`). Placed at the TOP
+                    // of the region so the platform's own search from it goes
+                    // DOWN into the tab's first row.
+                    Box(
+                        modifier = Modifier
+                            .size(1.dp)
+                            .alpha(0f)
+                            .focusRequester(tabContentFocusSink)
+                            .focusProperties { canFocus = tabContentSinkArmed }
+                            .focusable()
+                            .onFocusChanged { state ->
+                                if (!state.isFocused && tabContentSinkArmed) {
+                                    tabContentSinkArmed = false
+                                }
+                            }
+                    )
+
                     LazyColumn(
                         state = detailListState,
                         // Dig four: Detail had no pre-composition either, so the
@@ -6478,194 +6715,6 @@ fun DetailScreen(
                             top = 6.dp
                         )
                     ) {
-                        if (activeTab == DetailTab.DETAILS) {
-                        item(key = OVERVIEW_ROW_KEY, contentType = "infoblock") {
-                            Column(
-                                modifier = Modifier.padding(
-                                    start = 24.dp,
-                                    end = 24.dp,
-                                    bottom = 12.dp
-                                )
-                            ) {
-                                val descriptionText =
-                                    tmdbDetail?.overview
-                                        ?.takeIf {
-                                            it.isNotBlank()
-                                        }
-                                        ?: m.description
-
-                                descriptionText?.let { overview ->
-                                    // Same "View more" treatment as the actor
-                                    // biography: collapsed to 4 lines with a
-                                    // real focusable toggle that only appears
-                                    // when the text actually overflows. States
-                                    // are keyed on the text so they reset when
-                                    // the richer TMDB overview replaces the
-                                    // addon-provided one during load.
-                                    var overviewExpanded by remember(overview) {
-                                        mutableStateOf(false)
-                                    }
-                                    var overviewOverflows by remember(overview) {
-                                        mutableStateOf(false)
-                                    }
-                                    Text(
-                                        overview,
-                                        maxLines = if (overviewExpanded) Int.MAX_VALUE else 4,
-                                        overflow = TextOverflow.Ellipsis,
-                                        onTextLayout = { textLayoutResult ->
-                                            if (!overviewExpanded && textLayoutResult.hasVisualOverflow) {
-                                                overviewOverflows = true
-                                            }
-                                        },
-                                        modifier = Modifier.padding(
-                                            top = 4.dp
-                                        )
-                                    )
-                                    if (overviewOverflows) {
-                                        // Tell the page's presses that this
-                                        // toggle exists: it is the UP-only stop
-                                        // out of the first list row, and the
-                                        // landing a DOWN takes when the chain
-                                        // can place it nowhere (see
-                                        // [overviewToggleRequester]). Written
-                                        // from an effect so it lands with the
-                                        // composition that drew the toggle, and
-                                        // deliberately NOT reset when this item
-                                        // is disposed - the answer belongs to the
-                                        // overview text.
-                                        SideEffect { overviewToggleAvailable = true }
-                                        Surface(
-                                            onClick = { overviewExpanded = !overviewExpanded },
-                                            // The overview is the list's first item
-                                            // but is not focusable, so this toggle is
-                                            // the topmost focusable element in the
-                                            // list. Focusing it (e.g. walking D-pad up
-                                            // from the rails) snaps the list so the
-                                            // item's top is at the viewport top, which
-                                            // recovers a partially scrolled-out overview
-                                            // that the header hook below cannot fix (it
-                                            // only fires when item 0 scrolled fully out).
-                                            shape = ClickableSurfaceDefaults.shape(
-                                                shape = KBShapeSmall
-                                            ),
-                                            colors = ClickableSurfaceDefaults.colors(
-                                                containerColor = Color.Transparent,
-                                                contentColor = KBTextLo,
-                                                focusedContainerColor = KBSurfaceRaised,
-                                                focusedContentColor = KBAccent,
-                                                pressedContainerColor = KBSurfaceRaised,
-                                                pressedContentColor = KBAccent
-                                            ),
-                                            scale = ClickableSurfaceDefaults.scale(
-                                                focusedScale = KBFocusChip,
-                                                pressedScale = KBFocusPressed
-                                            ),
-                                            border = ClickableSurfaceDefaults.border(
-                                                border = Border(
-                                                    border = BorderStroke(
-                                                        1.dp,
-                                                        KBTextLo.copy(alpha = 0.35f)
-                                                    ),
-                                                    shape = KBShapeSmall
-                                                ),
-                                                focusedBorder = Border(
-                                                    border = BorderStroke(
-                                                        2.dp,
-                                                        KBAccent
-                                                    ),
-                                                    shape = KBShapeSmall
-                                                )
-                                            ),
-                                            glow = ClickableSurfaceDefaults.glow(
-                                                focusedGlow = Glow(
-                                                    elevationColor = KBAccent,
-                                                    elevation = KBFocusGlowSmall
-                                                )
-                                            ),
-                                            // The same room the actor page's
-                                            // biography pill takes (check, not a
-                                            // second spec: same control, same
-                                            // treatment): the 1.06x scale, 2dp ring
-                                            // and 8dp glow are drawn outside this
-                                            // Surface, and the list clips at its own
-                                            // edge, so the room goes INSIDE it and
-                                            // the offset cancels it on the outside -
-                                            // the toggle is drawn exactly where it
-                                            // was. Detail needed the fix rather than
-                                            // already having it.
-                                            modifier = Modifier
-                                                .padding(KBFocusChipInset)
-                                                .offset(
-                                                    x = -KBFocusChipInset,
-                                                    y = -KBFocusChipInset
-                                                )
-                                                // The same snap as the header's, with the
-                                                // same gates: this toggle is the topmost
-                                                // focusable INSIDE the list, so it is the
-                                                // other node a dismissing menu's transient
-                                                // focus can land on - and the ad-hoc
-                                                // `animateScrollToItem(0)` that used to sit
-                                                // here fired for that frame too. See
-                                                // [scrollToTopOnFocus].
-                                                .scrollToTopOnFocus(detailListState, scope) {
-                                                    handFocusBack.pending == null
-                                                }
-                                                // The handle the toggle never
-                                                // had: without it there was no
-                                                // D-pad route onto it at all (see
-                                                // [focusOverviewToggle]).
-                                                .focusRequester(overviewToggleRequester)
-                                                // E1 (2026-11-14): the arrival the
-                                                // reported cycle turned on. A DOWN
-                                                // from the genres that lands HERE
-                                                // reads in the move line as
-                                                // `via=geometry`, which cannot say
-                                                // WHICH view the search found - so
-                                                // the toggle says when it took the
-                                                // focus, and the next paste names
-                                                // the link in one line.
-                                                .onFocusChanged {
-                                                    if (it.isFocused) {
-                                                        DetailTrace.note(
-                                                            "detail toggle took the focus"
-                                                        )
-                                                    }
-                                                }
-                                                // UP is the header, DOWN is the
-                                                // first row BELOW the toggle, in
-                                                // this toggle's borrowed
-                                                // position (see
-                                                // overviewToggleVerticalFocus).
-                                                .onPreviewKeyEvent(
-                                                    overviewToggleVerticalFocus(
-                                                        detailRowPresence
-                                                    )
-                                                )
-                                                .padding(top = 8.dp)
-                                        ) {
-                                            Text(
-                                                text = if (overviewExpanded) "View less" else "View more",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                fontWeight = FontWeight.Medium,
-                                                modifier = Modifier.padding(
-                                                    horizontal = 10.dp,
-                                                    vertical = 5.dp
-                                                )
-                                            )
-                                        }
-                                    } else {
-                                        // An overview that fits has no toggle,
-                                        // so nothing may route onto one. Written
-                                        // only while this item is composed, which
-                                        // is the only time the answer can change.
-                                        SideEffect { overviewToggleAvailable = false }
-                                    }
-                                }
-                            }
-                        }
-
-                        }
-
                         val detailFacts = buildList {
                             tmdbDetail?.bestReleaseDate()
                                 ?.let {
