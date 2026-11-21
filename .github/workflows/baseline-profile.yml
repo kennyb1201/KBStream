@@ -8,23 +8,35 @@
 # committed.
 #
 # This job is how that file gets refreshed without a PC: it boots an Android
-# emulator on the runner, runs the generator against :app, and hands the file
-# back as an artifact. Download it and commit it - the release build picks it up
-# from the source tree, so the next tag ships it inside
-# assets/dexopt/baseline.prof.
+# emulator on the runner, runs the generator against :app, and puts the result
+# on a branch as a pull request. Merging that is what makes every later build
+# carry it - the release build picks the file up from the source tree, so the
+# next tag ships it inside assets/dexopt/baseline.prof.
 #
-# Dispatch only, deliberately: generating a profile is not part of every build,
-# and a release must not depend on an emulator being available. A TV box still
-# produces a more faithful traversal (D-pad focus is part of what is captured),
-# so with one attached `./gradlew :app:generateBaselineProfile` remains the
-# better path.
+# NOT part of every build, deliberately: a release must not depend on an emulator
+# being available, and the profile only moves when startup-path code moves. It
+# runs monthly instead, which is the cheap half of keeping it honest - no list of
+# "startup files" to maintain, no per-PR judgement about whether a change is big
+# enough to matter, and a diff to review when it does change.
+#
+# A TV box still produces a more faithful traversal (D-pad focus is part of what
+# is captured), so with one attached `./gradlew :app:generateBaselineProfile`
+# remains the better path - and the artifact is still uploaded if that is how you
+# want to take the file.
 name: Baseline profile
 
 on:
   workflow_dispatch:
+  # 04:00 UTC on the 1st of each month. An emulator run costs ~30-60 minutes, so
+  # this is not something to do more often; monthly is frequent enough that a
+  # startup-path change is never more than one release cycle away from a
+  # refreshed profile.
+  schedule:
+    - cron: '0 4 1 * *'
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
 
 jobs:
   generate:
@@ -107,3 +119,36 @@ jobs:
           name: baseline-profile
           path: app/src/release/generated/baselineProfiles/baseline-prof.txt
           if-no-files-found: error
+
+      # The file has to come BACK, or the schedule is pointless: an artifact
+      # nobody downloads is how this path stayed empty for every release so far.
+      # A branch + pull request rather than a commit to main, so the refreshed
+      # profile is a diff someone merges - and so a run can never rewrite main on
+      # its own.
+      - name: Open a pull request if the profile changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROFILE: app/src/release/generated/baselineProfiles/baseline-prof.txt
+          BASE: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          # Catches an untracked file as well as a modified one: the first run
+          # ever writes this path, so a plain `git diff` would see nothing.
+          if [ -z "$(git status --porcelain -- "$PROFILE")" ]; then
+            echo "The generated profile matches the committed one - nothing to refresh."
+            exit 0
+          fi
+          BRANCH="baseline-profile/refresh"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add -- "$PROFILE"
+          git commit -m "Refresh the baseline profile"
+          git push --force origin "$BRANCH"
+          if gh pr list --head "$BRANCH" --state open --json number --jq '.[].number' | grep -q .; then
+            echo "A refresh pull request is already open; this run's profile is on its branch."
+          else
+            gh pr create --base "$BASE" --head "$BRANCH" \
+              --title "Refresh the baseline profile" \
+              --body "Generated on the emulator by the Baseline profile workflow.\n\nMerging this is what makes the next build ship \`assets/dexopt/baseline.prof\`; without it the app still works, it just runs its first frames interpreted. A TV-captured profile is more faithful for D-pad traversal - run \`:app:generateBaselineProfile\` with the box attached if a capture matters more than freshness."
+          fi
