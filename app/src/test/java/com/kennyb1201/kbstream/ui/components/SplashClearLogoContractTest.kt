@@ -143,8 +143,10 @@ class SplashClearLogoContractTest {
         val apply = mpv.substringAfter("private fun applyClearLogo(url: String) {")
             .substringBefore("\n    private fun ")
         assertTrue(
-            "the splash logo view gets the art",
-            apply.contains("loadingLogoView?.load(url)") &&
+            "the splash logo view gets the art, built as logo art so it cannot " +
+                "decode as RGB_565 (see LogoArt)",
+            apply.contains("val request = logoRequest(this, url)") &&
+                apply.contains("loadingLogoView?.load(request)") &&
                 apply.contains("loadingLogoView?.visibility = View.VISIBLE")
         )
         assertTrue(

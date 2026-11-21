@@ -7271,7 +7271,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      * for the drawable rather than assuming it (see [startSplashLogoPulse]).
      */
     private fun applyClearLogo(url: String) {
-        loadingLogoView?.let { it.load(logoRequest(it.context, url)) }
+        // One request, built once: the splash wordmark is transparent art, so
+        // it decodes as 8888 (see [logoRequest]), never the loader's 565.
+        val request = logoRequest(this, url)
+        loadingLogoView?.load(request)
         loadingLogoView?.visibility = View.VISIBLE
         loadingTitle?.visibility = View.GONE
         startSplashLogoPulse()
