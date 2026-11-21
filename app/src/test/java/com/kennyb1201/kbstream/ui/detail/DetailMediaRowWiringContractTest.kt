@@ -29,10 +29,14 @@ class DetailMediaRowWiringContractTest {
 
     @Test
     fun `the section is painted last, under the reviews`() {
-        val collection = screen.indexOf("if (hasCollectionRow) {")
-        val media = screen.indexOf("if (hasMediaRow) {")
-        val recs = screen.indexOf("if (hasMoreLikeThisRow) {")
-        val reviews = screen.indexOf("if (reviews.isNotEmpty()) {")
+        // Each section now renders behind its tab as well as its own presence
+        // guard; the source order is still the paint order within a tab.
+        val collection = screen.indexOf("if (activeTab == DetailTab.MORE_LIKE_THIS && hasCollectionRow) {")
+        val media = screen.indexOf("if (activeTab == DetailTab.MEDIA && hasMediaRow) {")
+        val recs = screen.indexOf(
+            "if (activeTab == DetailTab.MORE_LIKE_THIS && hasMoreLikeThisRow) {"
+        )
+        val reviews = screen.indexOf("if (activeTab == DetailTab.REVIEWS && reviews.isNotEmpty()) {")
 
         assertTrue("the collection rail is painted on this page", collection >= 0)
         assertTrue("so is the Media row", media >= 0)

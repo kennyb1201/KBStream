@@ -61,10 +61,10 @@ class DetailGenreTrapAndSeeMoreTest {
     @Test
     fun `a keyword-less title hands DOWN straight to the episode section`() {
         assertEquals(
-            "with no keywords the chain steps over that row and the episode " +
-                "section is what DOWN from the genre chips means - the Dark " +
-                "Marvels case",
-            DetailRow.EPISODES,
+            "with no keywords the chain steps over that row; DOWN from the genre " +
+                "chips lands on the strip, which opens the episode tab - the Dark " +
+                "Marvels case, one press earlier than before",
+            DetailRow.TABS,
             DetailFocusChain.nextRow(
                 DetailRow.GENRE,
                 DetailFocusDirection.DOWN,
@@ -72,9 +72,9 @@ class DetailGenreTrapAndSeeMoreTest {
             )
         )
         assertEquals(
-            "and a title WITH keywords still stops on the tag rail first, so " +
-                "30 for 30 is untouched",
-            DetailRow.KEYWORDS,
+            "and a title WITH keywords stops on the same strip first, so 30 for 30 " +
+                "is one press from its tag rail",
+            DetailRow.TABS,
             DetailFocusChain.nextRow(
                 DetailRow.GENRE,
                 DetailFocusDirection.DOWN,
@@ -182,7 +182,7 @@ class DetailGenreTrapAndSeeMoreTest {
             "and it re-asks with the presence that LANDED, which is the whole " +
                 "point of waiting",
             wait.contains("val settled = latestRowPresence.value ?: presence") &&
-                detail.contains("SideEffect { latestRowPresence.value = detailRowPresence }")
+                detail.contains("latestRowPresence.value = detailRowPresence")
         )
         assertTrue(
             "a page that genuinely ends there still ends there: no row, no move",
@@ -277,6 +277,7 @@ class DetailGenreTrapAndSeeMoreTest {
                 "no rail can disagree about it",
             move.contains(
                 "direction == DetailFocusDirection.UP && " +
+                    "activeTab == DetailTab.DETAILS && " +
                     "from == firstListRow(settledRows) && " +
                     "focusOverviewToggle()"
             )
@@ -286,7 +287,7 @@ class DetailGenreTrapAndSeeMoreTest {
                 "the row order",
             detail.contains("fun firstListRow(presence: DetailRowPresence): DetailRow? =") &&
                 detail.contains(
-                    "DetailFocusChain.nextRow( DetailRow.GENRE, " +
+                    "DetailFocusChain.nextRow( DetailRow.TABS, " +
                         "DetailFocusDirection.DOWN, presence )"
                 )
         )
@@ -309,12 +310,13 @@ class DetailGenreTrapAndSeeMoreTest {
             ) == DetailRow.GENRE
         )
         assertTrue(
-            "and DOWN from the genres still lands on the first list row",
+            "and DOWN from the genres still steps toward the first list row - it " +
+                "stops on the strip, which is what opens it",
             DetailFocusChain.nextRow(
                 DetailRow.GENRE,
                 DetailFocusDirection.DOWN,
                 presence(keywords = true)
-            ) == DetailRow.KEYWORDS
+            ) == DetailRow.TABS
         )
     }
 
@@ -329,8 +331,8 @@ class DetailGenreTrapAndSeeMoreTest {
                 "refuses now runs the geometric search rather than keeping the key " +
                 "(the 2026-11-08 UP trap, see DetailTopFallThroughContractTest)",
             toggleHandler.contains(
-                "onUp = { startFocusMove(DetailRow.HEADER, DetailFocusDirection.UP, " +
-                    "presence) { val landed = focusTopOfPage() || " +
+                "onUp = { startFocusMove(DetailRow.TABS, DetailFocusDirection.UP, " +
+                    "presence) { val landed = focusTabStrip() || focusTopOfPage() || " +
                     "focusByGeometry(DetailFocusDirection.UP)"
             )
         )
@@ -340,10 +342,8 @@ class DetailGenreTrapAndSeeMoreTest {
                 "that arrives before anything has. It used to be the genres, through " +
                 "HEADER's borrowed position, which is a row painted ABOVE the toggle " +
                 "and the other half of the reported cycle",
-            toggleHandler.contains(
-                "moveFocusVertical( DetailFocusChain.toggleDownRow(settled), " +
-                    "DetailFocusDirection.DOWN, 0, latestRowPresence.value ?: settled )"
-            )
+            toggleHandler.contains("val rows = latestRowPresence.value ?: settled") &&
+                toggleHandler.contains("val target = DetailFocusChain.toggleDownRow(rows)")
         )
         assertTrue(
             "the overview text itself is still not focusable - F2 routes onto the " +

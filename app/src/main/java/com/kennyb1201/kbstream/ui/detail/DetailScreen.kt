@@ -46,6 +46,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
@@ -1350,7 +1351,55 @@ fun DetailScreen(
     // first composition on the landing frame.
     val episodesRowState = rememberIdleLazyListState()
     val seasonRowState = rememberIdleLazyListState()
-    val detailListState = rememberIdleLazyListState()
+    // ── Tabs (spec 2026-11-21, Detail tabbed revamp) ────────────────────────
+    //
+    // The page paints the same items it always did; a tab is only the name of
+    // the group they live in (see [DetailTabs]). The selection is declared up
+    // here, before the list it drives, so the list can have one scroll state
+    // PER TAB from the first composition: switching tabs must come back to
+    // where the viewer was, not to the top of the page.
+    //
+    // It starts on Details because nothing is known about the payload yet; the
+    // effect at the row presence below moves a series onto Episodes the moment
+    // its seasons land, and a remembered tab from the last visit wins over both
+    // (see [DetailTabMemory]).
+    // The tab the page should open on, read BEFORE the first composition of the
+    // content so a return from the player or a drill-down rebuilds with the
+    // right tab's rows already in place (and its rail-restoring effect then
+    // finds the rail it is looking for).
+    val detailKey = "$type:$id"
+    var activeTab by remember(detailKey) {
+        mutableStateOf(DetailTabMemory.read(detailKey) ?: DetailTab.DETAILS)
+    }
+    // Set the moment the viewer picks a tab, so the default (Episodes for a
+    // series) cannot pull the page out from under a choice made mid-watch.
+    var tabChosenByViewer by remember { mutableStateOf(false) }
+    // One requester per pill: the strip is the row the chain lands on, and the
+    // page asks for the SELECTED pill when a press arrives there from below.
+    val tabFocusRequesters = remember {
+        DetailTab.entries.associateWith { FocusRequester() }
+    }
+    // Where the viewer was standing inside each tab, so coming back to Cast
+    // lands on the rail they left rather than its header.
+    val tabLastRow = remember { mutableStateMapOf<DetailTab, DetailRow>() }
+    // The page's FULL row presence, before the selected tab narrows it. Held
+    // here because the strip's own handlers need to answer for the tab they
+    // just switched TO, whose scoped presence has not been published yet.
+    val latestPageRowPresence = remember { mutableStateOf<DetailRowPresence?>(null) }
+    val episodesTabListState = rememberIdleLazyListState()
+    val detailsTabListState = rememberIdleLazyListState()
+    val castTabListState = rememberIdleLazyListState()
+    val moreLikeThisTabListState = rememberIdleLazyListState()
+    val reviewsTabListState = rememberIdleLazyListState()
+    val mediaTabListState = rememberIdleLazyListState()
+    val detailListState = when (activeTab) {
+        DetailTab.EPISODES -> episodesTabListState
+        DetailTab.DETAILS -> detailsTabListState
+        DetailTab.CAST -> castTabListState
+        DetailTab.MORE_LIKE_THIS -> moreLikeThisTabListState
+        DetailTab.REVIEWS -> reviewsTabListState
+        DetailTab.MEDIA -> mediaTabListState
+    }
     // F3 of the 2026-11-17 detail spec: the poster row is kept whole from either
     // neighbour, so it can never be seen cut mid-poster at a viewport edge (see
     // [SeasonRowReveal]). Hoisted here because the asking rows are LazyColumn
@@ -3311,6 +3360,9 @@ fun DetailScreen(
      */
     fun detailRowKey(row: DetailRow): String? = when (row) {
         DetailRow.HEADER -> null
+        // The strip is painted outside the list, so it has no list item to
+        // reveal or anchor on - it is never disposed, which is the point.
+        DetailRow.TABS -> null
         DetailRow.GENRE -> GENRE_ROW_KEY
         DetailRow.KEYWORDS -> KEYWORDS_ROW_KEY
         DetailRow.EPISODES -> null
@@ -3401,6 +3453,34 @@ fun DetailScreen(
      * a row that was there. [presence] is what tells that apart from a row the
      * page does not have, which is stepped over with no wait.
      */
+    /**
+     * Puts the focus on the selected tab's pill.
+     *
+     * The strip is painted outside the list, so its pill is composed whenever
+     * the page is - a landing here cannot fail for the reason the rails' can
+     * (a lazy item the scroll disposed). It is retried anyway, because a press
+     * can arrive on the frame the strip is being re-keyed by a tab switch, and
+     * one frame's patience is cheaper than a press that goes nowhere.
+     *
+     * Answers whether the focus landed, so the caller can fall back to the
+     * geometric search rather than leave the press consumed with nothing moved.
+     */
+    suspend fun focusTabStrip(): Boolean {
+        var attempts = 0
+        while (attempts < RETURN_FOCUS_STEPS) {
+            val requester = tabFocusRequesters[activeTab]
+            if (requester != null &&
+                runCatching { requester.requestFocus() }.getOrDefault(false)
+            ) {
+                return true
+            }
+            delay(RETURN_FOCUS_DELAY_MS)
+            attempts += 1
+        }
+        DetailTrace.note("detail tab strip landing failed after $attempts attempts")
+        return false
+    }
+
     suspend fun focusRow(
         target: DetailRow,
         fromColumn: Int,
@@ -3409,6 +3489,8 @@ fun DetailScreen(
         presence: DetailRowPresence
     ): Boolean = when (target) {
         DetailRow.HEADER -> focusTopOfPage()
+        // The strip is a fixed row, not a list item: no reveal, no column.
+        DetailRow.TABS -> focusTabStrip() || focusByGeometry(direction)
         // F4: a section that will not take the focus is a miss, not a reason to
         // throw the viewer to the top of the page. The walk arm below already
         // states that rule - "a rail that will not take the focus must not
@@ -3562,9 +3644,49 @@ fun DetailScreen(
      * the rows this page does not have (keywords, then the episode section, then
      * the cast, and so on).
      */
+    /**
+     * DOWN out of the tab strip: into the selected tab's content.
+     *
+     * The landing is the row the viewer was last on inside this tab when that
+     * row still exists (coming back to Cast lands on the people rail, not its
+     * header), else the tab's first row - read from the chain, so the order the
+     * rows are painted in and the order the presses use cannot drift.
+     *
+     * A tab whose content is all leaf surfaces (Details with no keywords,
+     * networks or production companies) has no chain row to ask for; the
+     * geometric search below finds the overview toggle or the first fact card,
+     * which is the nearest thing below the strip. Either way the press lands
+     * somewhere real, which is the property that keeps a tab from being a dead
+     * end while its data is still arriving.
+     */
+    suspend fun enterTabContent(): Boolean {
+        val page = latestPageRowPresence.value ?: latestRowPresence.value
+            ?: return focusByGeometry(DetailFocusDirection.DOWN)
+        val rows = DetailTabChain.rowPresence(activeTab, page)
+        val remembered = tabLastRow[activeTab]
+        val rememberedPresent = remembered != null &&
+            remembered != DetailRow.TABS &&
+            remembered != DetailRow.GENRE &&
+            remembered != DetailRow.HEADER &&
+            DetailFocusChain.exists(remembered, rows)
+        val target = if (rememberedPresent) remembered
+        else DetailTabChain.firstRow(activeTab, rows)
+        if (target != null) {
+            // The Media row is entered at its own inner strip, never at a
+            // card: the strip is the row's selector (see focusMediaStrip).
+            val landed = if (target == DetailRow.MEDIA) {
+                focusMediaStrip(DetailRow.TABS)
+            } else {
+                focusRow(target, 0, DetailRow.TABS, DetailFocusDirection.DOWN, rows)
+            }
+            if (landed) return true
+        }
+        return focusByGeometry(DetailFocusDirection.DOWN)
+    }
+
     fun firstListRow(presence: DetailRowPresence): DetailRow? =
         DetailFocusChain.nextRow(
-            DetailRow.GENRE,
+            DetailRow.TABS,
             DetailFocusDirection.DOWN,
             presence
         )
@@ -3660,6 +3782,10 @@ fun DetailScreen(
         try {
             if (
                 direction == DetailFocusDirection.UP &&
+                // The toggle is painted inside the Details tab, so it is that
+                // tab's own first stop - in any other tab the first row's UP
+                // is the strip, not a control the viewer cannot see.
+                activeTab == DetailTab.DETAILS &&
                 from == firstListRow(settledRows) &&
                 focusOverviewToggle()
             ) {
@@ -3680,8 +3806,10 @@ fun DetailScreen(
             // The press's own intent, recorded where every chain move passes:
             // the episode effects stop placing the focus once the viewer has
             // steered to another row (see lastChainLandingRow and
-            // episodeAutoFocusAllowed).
+            // episodeAutoFocusAllowed). The tab's own memory is written here
+            // too: it is what DOWN out of the strip comes back to.
             lastChainLandingRow = target
+            tabLastRow[activeTab] = target
             // The GENRE -> KEYWORDS handoff, logged when it does NOT happen. The
             // chain steps over a row the page does not have by design, so a
             // title with no keywords skips the row and looks exactly like a
@@ -4194,9 +4322,13 @@ fun DetailScreen(
             // is started here because the key is already ours (F1c) - UP from
             // the toggle finds the genres or PLAY above it in the fixed header.
             onUp = {
-                startFocusMove(DetailRow.HEADER, DetailFocusDirection.UP, presence) {
+                // The toggle is the top of the Details tab's CONTENT, and the
+                // strip is painted above it on every page now: UP is the tabs.
+                startFocusMove(DetailRow.TABS, DetailFocusDirection.UP, presence) {
                     val landed =
-                        focusTopOfPage() || focusByGeometry(DetailFocusDirection.UP)
+                        focusTabStrip() ||
+                            focusTopOfPage() ||
+                            focusByGeometry(DetailFocusDirection.UP)
                     // E3: the toggle's own outcome, readable without the move
                     // line - the UP that lands here has no chain row of its own.
                     DetailTrace.note("detail toggle UP landed=$landed")
@@ -4235,13 +4367,24 @@ fun DetailScreen(
                     // used to climb back up to the genre chips, which sent the
                     // next DOWN straight back to the toggle.
                     startFocusMove(DetailRow.HEADER, DetailFocusDirection.DOWN, settled) {
-                        moveFocusVertical(
-                            DetailFocusChain.toggleDownRow(settled),
-                            DetailFocusDirection.DOWN,
-                            0,
-                            latestRowPresence.value
-                                ?: settled
-                        )
+                        val rows = latestRowPresence.value ?: settled
+                        val target = DetailFocusChain.toggleDownRow(rows)
+                        // DOWN lands ON the row under the toggle - it used to
+                        // ask the chain to move DOWN FROM that row, which
+                        // skipped it (and now the strip sits above it, so the
+                        // walk would be one row too far again).
+                        val landed = when (target) {
+                            DetailRow.TABS -> focusTabStrip()
+                            DetailRow.MEDIA -> focusMediaStrip(DetailRow.HEADER)
+                            else -> focusRow(
+                                target,
+                                0,
+                                DetailRow.TABS,
+                                DetailFocusDirection.DOWN,
+                                rows
+                            )
+                        }
+                        if (!landed) focusByGeometry(DetailFocusDirection.DOWN)
                     }
                     true
                 }
@@ -4563,7 +4706,7 @@ fun DetailScreen(
             // The Media row is painted LAST, under More Like This (see the
             // LazyColumn below and [DetailRow.MEDIA]).
             val hasMediaRow = mediaTabs.isNotEmpty()
-            val detailRowPresence = DetailRowPresence(
+            val pageRowPresence = DetailRowPresence(
                 hasGenreRow = tmdbGenres.isNotEmpty(),
                 hasKeywordsRow = keywords.isNotEmpty(),
                 hasEpisodesRow = normalizedType == "series" && seasons.isNotEmpty(),
@@ -4576,11 +4719,64 @@ fun DetailScreen(
                 hasMediaRow = hasMediaRow
             )
 
+            // ── The tabs those rows now live in (see [DetailTabs]) ───────────
+            //
+            // Presence comes from the SAME fields the rows render behind, so a
+            // tab exists exactly when its content does - a movie has no
+            // Episodes tab, a title with no reviews has none, and there is no
+            // empty tab to press into.
+            val tabPresence = remember(pageRowPresence) {
+                DetailTabPresence.of(pageRowPresence)
+            }
+            val availableTabs = remember(tabPresence) { DetailTabChain.tabs(tabPresence) }
+
+            // Open on the tab the viewer last had, else the page's default:
+            // Episodes for a series, Details for a movie. A viewer's own choice
+            // always wins (see tabChosenByViewer).
+            LaunchedEffect(detailKey, availableTabs, tabChosenByViewer) {
+                if (tabChosenByViewer) return@LaunchedEffect
+                val target = DetailTabMemory.read(detailKey)
+                    ?.takeIf { it in availableTabs }
+                    ?: DetailTabChain.defaultTab(
+                        isSeries = normalizedType == "series",
+                        presence = tabPresence
+                    )
+                // The default is only allowed to move a page that has not been
+                // navigated: a viewer standing on anything but the initial
+                // Details tab made that choice before the seasons landed.
+                if (activeTab !in availableTabs ||
+                    (activeTab == DetailTab.DETAILS && target != DetailTab.DETAILS)
+                ) {
+                    activeTab = target
+                }
+            }
+            // A tab can also lose its content while it is open (a review load
+            // that came back empty): fall back to the default rather than leave
+            // the strip pointing at nothing.
+            LaunchedEffect(availableTabs) {
+                if (activeTab !in availableTabs) {
+                    activeTab = DetailTabChain.defaultTab(
+                        isSeries = normalizedType == "series",
+                        presence = tabPresence
+                    )
+                }
+            }
+
+            // The rows of the SELECTED tab, in the shape the vertical chain
+            // reads: everything outside the tab answers absent, so a press
+            // inside a tab can never walk into a row painted in another one.
+            val detailRowPresence = remember(activeTab, pageRowPresence) {
+                DetailTabChain.rowPresence(activeTab, pageRowPresence)
+            }
+
             // The rows this page has, published for the presses that outlive a
             // composition: a wait for a still-arriving section has to re-ask the
             // chain with the presence that LANDED, not the one the handler was
             // made with (see [awaitRowsThenMove]).
-            SideEffect { latestRowPresence.value = detailRowPresence }
+            SideEffect {
+                latestPageRowPresence.value = pageRowPresence
+                latestRowPresence.value = detailRowPresence
+            }
 
             // The title's art, in two shapes, because two consumers want
             // different things from it.
@@ -6227,6 +6423,45 @@ fun DetailScreen(
                         }
                     }
 
+                    // The strip: pinned under the genre chips, above the
+                    // list, and composed whether or not the selected tab has
+                    // loaded - the row every press can land on.
+                    DetailTabStrip(
+                        tabs = availableTabs,
+                        selected = activeTab,
+                        requesters = tabFocusRequesters,
+                        onSelect = { tab ->
+                            tabChosenByViewer = true
+                            activeTab = tab
+                            DetailTabMemory.record(detailKey, tab)
+                        },
+                        onStep = { delta ->
+                            val next = DetailTabChain.step(activeTab, delta, tabPresence)
+                            tabChosenByViewer = true
+                            activeTab = next
+                            DetailTabMemory.record(detailKey, next)
+                            scope.launch {
+                                runCatching {
+                                    tabFocusRequesters.getValue(next).requestFocus()
+                                }
+                            }
+                        },
+                        onUp = {
+                            scope.launch {
+                                // The genre chips are painted directly above
+                                // the strip; the search is the honest way to
+                                // reach whichever one is in the viewer's
+                                // column, and PLAY above them is its fallback.
+                                if (!focusByGeometry(DetailFocusDirection.UP)) {
+                                    focusTopOfPage()
+                                }
+                            }
+                        },
+                        onDown = {
+                            scope.launch { enterTabContent() }
+                        }
+                    )
+
                     LazyColumn(
                         state = detailListState,
                         // Dig four: Detail had no pre-composition either, so the
@@ -6243,6 +6478,7 @@ fun DetailScreen(
                             top = 6.dp
                         )
                     ) {
+                        if (activeTab == DetailTab.DETAILS) {
                         item(key = OVERVIEW_ROW_KEY, contentType = "infoblock") {
                             Column(
                                 modifier = Modifier.padding(
@@ -6428,6 +6664,8 @@ fun DetailScreen(
                             }
                         }
 
+                        }
+
                         val detailFacts = buildList {
                             tmdbDetail?.bestReleaseDate()
                                 ?.let {
@@ -6518,7 +6756,9 @@ fun DetailScreen(
                             tmdbDetail
                                 ?.voteAverage
                                 ?.takeIf { it > 0.0 }
-                        if (mdbListRatings?.hasAny == true || tmdbScore != null) {
+                        if (activeTab == DetailTab.DETAILS &&
+                            (mdbListRatings?.hasAny == true || tmdbScore != null)
+                        ) {
                             item(key = RATINGS_ROW_KEY, contentType = "section-row") {
                                 MdbListRatingsStrip(
                                     ratings = mdbListRatings,
@@ -6535,7 +6775,7 @@ fun DetailScreen(
                             }
                         }
 
-                        if (detailFacts.isNotEmpty()) {
+                        if (activeTab == DetailTab.DETAILS && detailFacts.isNotEmpty()) {
                             item(key = DETAIL_FACTS_ROW_KEY, contentType = "section-row") {
                                 LazyRow(
                                     contentPadding =
@@ -6570,7 +6810,7 @@ fun DetailScreen(
                             }
                         }
 
-                        if (keywords.isNotEmpty()) {
+                        if (activeTab == DetailTab.DETAILS && keywords.isNotEmpty()) {
                             item(key = KEYWORDS_ROW_KEY, contentType = "section-row") {
                                 LazyRow(
                                     state = keywordsRowState,
@@ -6667,6 +6907,7 @@ fun DetailScreen(
                         }
 
                         if (
+                            activeTab == DetailTab.EPISODES &&
                             normalizedType == "series" &&
                             seasons.isNotEmpty()
                         ) {
@@ -7403,7 +7644,7 @@ fun DetailScreen(
                         }
 
 
-                        if (hasPeopleRow) {
+                        if (activeTab == DetailTab.CAST && hasPeopleRow) {
                             item(key = "peopleheader", contentType = "section-header") {
                                 // Plain label, NOT focusable: the movie DOWN
                                 // path (keywords row) jumps straight into the
@@ -7548,7 +7789,7 @@ fun DetailScreen(
                                     }
                                 }
                             }
-                        } else if (!m.cast.isNullOrEmpty()) {
+                        } else if (activeTab == DetailTab.CAST && !m.cast.isNullOrEmpty()) {
                             item(key = "castfallback", contentType = "status") {
                                 Text(
                                     "Cast ${m.cast.orEmpty().joinToString(", ")}",
@@ -7559,7 +7800,7 @@ fun DetailScreen(
                                     )
                                 )
                             }
-                        } else {
+                        } else if (activeTab == DetailTab.CAST) {
                             m.director
                                 ?.takeIf { it.isNotEmpty() }
                                 ?.let { directors ->
@@ -7578,7 +7819,7 @@ fun DetailScreen(
                                 }
                         }
 
-                        if (hasNetworkRow) {
+                        if (activeTab == DetailTab.DETAILS && hasNetworkRow) {
                             item(key = "networkheader", contentType = "section-header") {
                                 KBSectionHeader(
                                     title = "NETWORK",
@@ -7697,7 +7938,7 @@ fun DetailScreen(
                             }
                         }
 
-                        if (hasProductionRow) {
+                        if (activeTab == DetailTab.DETAILS && hasProductionRow) {
                             item(key = "productionheader", contentType = "section-header") {
                                 KBSectionHeader(
                                     title = "PRODUCTION",
@@ -7799,7 +8040,7 @@ fun DetailScreen(
                             }
                         }
 
-                        if (hasCollectionRow) {
+                        if (activeTab == DetailTab.MORE_LIKE_THIS && hasCollectionRow) {
                             item(key = "collectionheader", contentType = "section-header") {
                                 KBSectionHeader(
                                     title = collection?.name?.uppercase()
@@ -7983,7 +8224,7 @@ fun DetailScreen(
                             }
                         }
 
-                        if (hasMoreLikeThisRow) {
+                        if (activeTab == DetailTab.MORE_LIKE_THIS && hasMoreLikeThisRow) {
                             item(key = "recsheader", contentType = "section-header") {
                                 KBSectionHeader(
                                     title = "MORE LIKE THIS",
@@ -8191,7 +8432,7 @@ fun DetailScreen(
                         // title the viewer has already decided about, while the
                         // collection and the recommendations are how they find
                         // the next one (see DetailRow's painted order).
-                        if (reviews.isNotEmpty()) {
+                        if (activeTab == DetailTab.REVIEWS && reviews.isNotEmpty()) {
                             item(key = "reviewsheader", contentType = "section-header") {
                                 KBSectionHeader(
                                     title = "REVIEWS",
@@ -8289,7 +8530,7 @@ fun DetailScreen(
                         // backdrops and its posters - is painted LAST, under
                         // More Like This and the reviews: one row of the chain,
                         // several rails inside it.
-                        if (hasMediaRow) {
+                        if (activeTab == DetailTab.MEDIA && hasMediaRow) {
                             item(key = "mediaheader", contentType = "section-header") {
                                 KBSectionHeader(
                                     title = "MEDIA",
@@ -11090,6 +11331,126 @@ private fun MediaThumbCard(
                         maxLines = 1
                     )
                 }
+            }
+        }
+    }
+}
+
+/**
+ * The page's tab strip: one pill per tab that has content, pinned under the
+ * genre chips and above the list.
+ *
+ * It is the page's third vertical stop and the only route into the content, so
+ * it owns its presses:
+ *
+ *  - LEFT/RIGHT switch tabs, and are CLAMPED at the ends (see
+ *    [DetailTabChain.step]) - the strip is a list the viewer can see, so
+ *    wrapping from the last tab to the first would contradict its geometry.
+ *  - DOWN enters the selected tab's content, at the row the viewer last had
+ *    there ([enterTabContent]).
+ *  - UP is the genre chips above it.
+ *
+ * Composed whether or not the selected tab has data: the strip is the row a
+ * press can always land on, which is the direct fix for the reported six-second
+ * dead zone while the episodes loaded.
+ *
+ * Selected is drawn with the accent, not only with the focused ring: a viewer
+ * coming BACK from the content (focus on the strip, but on a different pill's
+ * neighbour) must still be able to see which tab is open.
+ */
+@Composable
+private fun DetailTabStrip(
+    tabs: List<DetailTab>,
+    selected: DetailTab,
+    requesters: Map<DetailTab, FocusRequester>,
+    onSelect: (DetailTab) -> Unit,
+    onStep: (Int) -> Unit,
+    onUp: () -> Unit,
+    onDown: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = KBScreenEdge, end = KBScreenEdge, top = 2.dp, bottom = 8.dp)
+            // THE strip is one focus group: LEFT/RIGHT are answered by the pills
+            // themselves (see below), so the group only keeps the focus
+            // traversal from leaving the strip sideways.
+            .focusGroup(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        tabs.forEach { tab ->
+            val isSelected = tab == selected
+            Surface(
+                onClick = { onSelect(tab) },
+                shape = ClickableSurfaceDefaults.shape(shape = KBShapeChip),
+                colors = ClickableSurfaceDefaults.colors(
+                    containerColor = if (isSelected) KBSurfaceRaised else Color.Transparent,
+                    contentColor = if (isSelected) KBTextHi else KBTextLo,
+                    focusedContainerColor = KBSurfaceRaised,
+                    focusedContentColor = KBAccent,
+                    pressedContainerColor = KBSurfaceRaised,
+                    pressedContentColor = KBAccent
+                ),
+                scale = ClickableSurfaceDefaults.scale(
+                    focusedScale = KBFocusChip,
+                    pressedScale = KBFocusPressed
+                ),
+                border = ClickableSurfaceDefaults.border(
+                    border = Border(
+                        border = BorderStroke(
+                            1.dp,
+                            if (isSelected) KBAccent.copy(alpha = 0.7f)
+                            else KBTextLo.copy(alpha = 0.25f)
+                        ),
+                        shape = KBShapeChip
+                    ),
+                    focusedBorder = Border(
+                        border = BorderStroke(2.dp, KBAccent),
+                        shape = KBShapeChip
+                    )
+                ),
+                glow = ClickableSurfaceDefaults.glow(
+                    focusedGlow = Glow(
+                        elevationColor = KBAccent,
+                        elevation = KBFocusGlowSmall
+                    )
+                ),
+                modifier = Modifier
+                    .focusRequester(requesters.getValue(tab))
+                    .onPreviewKeyEvent { event ->
+                        if (event.type != KeyEventType.KeyDown) {
+                            return@onPreviewKeyEvent false
+                        }
+                        when (event.key) {
+                            Key.DirectionLeft -> {
+                                onStep(-1)
+                                true
+                            }
+                            Key.DirectionRight -> {
+                                onStep(1)
+                                true
+                            }
+                            Key.DirectionDown -> {
+                                onDown()
+                                true
+                            }
+                            Key.DirectionUp -> {
+                                onUp()
+                                true
+                            }
+                            else -> false
+                        }
+                    }
+            ) {
+                Text(
+                    text = tab.label,
+                    color = if (isSelected) KBTextHi else KBTextLo,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                    maxLines = 1,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                )
             }
         }
     }

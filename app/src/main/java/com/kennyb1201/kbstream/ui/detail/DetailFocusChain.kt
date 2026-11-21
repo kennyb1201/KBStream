@@ -54,6 +54,21 @@ internal enum class DetailRow {
      */
     GENRE,
 
+    /**
+     * The tab strip, pinned under the genre chips and above the list.
+     *
+     * It is the page's third stop and the only way into the content: LEFT/RIGHT
+     * switch tabs, DOWN enters the selected tab's first row, UP is the genre
+     * chips above it. Naming it in the chain is what replaced the eleven-row
+     * walk whose misses were the reported "trapped on details pages": a press
+     * out of the strip has one row to reach instead of a page's worth.
+     *
+     * It always exists, like [HEADER]: the strip is painted whether or not a
+     * given section is loaded, which is the other half of the fix - a press can
+     * always land somewhere real while the rows below are still arriving.
+     */
+    TABS,
+
     /** The tag rail, the first focusable row inside the list. */
     KEYWORDS,
 
@@ -143,6 +158,9 @@ internal object DetailFocusChain {
      */
     fun exists(row: DetailRow, presence: DetailRowPresence): Boolean = when (row) {
         DetailRow.HEADER -> true
+        // Painted whether or not any tab has loaded: this is the stop that makes
+        // a press land while the page is still filling in.
+        DetailRow.TABS -> true
         DetailRow.GENRE -> presence.hasGenreRow
         DetailRow.KEYWORDS -> presence.hasKeywordsRow
         DetailRow.EPISODES -> presence.hasEpisodesRow
@@ -289,9 +307,9 @@ internal object DetailFocusChain {
      * there is a real move rather than a key taken and nothing done with it.
      */
     fun toggleDownRow(presence: DetailRowPresence): DetailRow =
-        nextRow(DetailRow.GENRE, DetailFocusDirection.DOWN, presence)
+        nextRow(DetailRow.TABS, DetailFocusDirection.DOWN, presence)
             ?: nextRow(DetailRow.HEADER, DetailFocusDirection.DOWN, presence)
-            ?: DetailRow.GENRE
+            ?: DetailRow.TABS
 }
 
 /**

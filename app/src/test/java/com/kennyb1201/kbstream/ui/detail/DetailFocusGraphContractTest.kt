@@ -137,18 +137,18 @@ class DetailFocusGraphContractTest {
             detail.contains("overviewToggleVerticalFocus( detailRowPresence )")
         )
         assertTrue(
-            "UP is the header, which is the row above the list",
-            toggleHandler.contains("focusTopOfPage()")
+            "UP is the tab strip, which is the row painted above the content " +
+                "now, with the header as its fallback",
+            toggleHandler.contains("focusTabStrip()") &&
+                toggleHandler.contains("focusTopOfPage()")
         )
         assertTrue(
             "DOWN is the row BELOW the toggle, on a keyword-less title included, " +
                 "where the default search found nothing at all - and it is asked " +
                 "with the presence that LANDED, not the one this handler was " +
                 "composed with, which is the trap",
-            toggleHandler.contains(
-                "moveFocusVertical( DetailFocusChain.toggleDownRow(settled), " +
-                    "DetailFocusDirection.DOWN, 0, latestRowPresence.value ?: settled )"
-            )
+            toggleHandler.contains("val rows = latestRowPresence.value ?: settled") &&
+                toggleHandler.contains("val target = DetailFocusChain.toggleDownRow(rows)")
         )
         assertTrue(
             "2026-11-14: and that row is the one UNDER the toggle, not HEADER's " +
@@ -158,7 +158,7 @@ class DetailFocusGraphContractTest {
                 "genre / View-more cycle (see DetailFocusChain.toggleDownRow)",
             !toggleHandler.contains("moveFocusVertical( DetailRow.HEADER") &&
                 chain.contains("fun toggleDownRow(presence: DetailRowPresence): DetailRow") &&
-                chain.contains("nextRow(DetailRow.GENRE, DetailFocusDirection.DOWN, presence)")
+                chain.contains("nextRow(DetailRow.TABS, DetailFocusDirection.DOWN, presence)")
         )
         assertFalse(
             "and the chain gains no row for it: one would put the toggle between " +

@@ -197,14 +197,14 @@ class DetailVerticalAuditContractTest {
         assertTrue(
             "F2: the toggle's UP still falls through",
             detail.contains(
-                "onUp = { startFocusMove(DetailRow.HEADER, DetailFocusDirection.UP, " +
-                    "presence) { val landed = focusTopOfPage() ||"
+                "onUp = { startFocusMove(DetailRow.TABS, DetailFocusDirection.UP, " +
+                    "presence) { val landed = focusTabStrip() || focusTopOfPage() ||"
             )
         )
         assertEquals(
-            "T6: the page still has its eleven rows - no row was added to route around " +
-                "a miss",
-            11,
+            "T6: the page's eleven content rows are untouched - the strip is the one " +
+                "row added, and it is the route INTO them rather than around a miss",
+            12,
             DetailRow.entries.size
         )
         assertTrue(

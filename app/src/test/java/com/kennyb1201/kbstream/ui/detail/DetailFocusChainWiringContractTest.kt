@@ -367,28 +367,29 @@ class DetailFocusChainWiringContractTest {
         )
         assertTrue(
             "the production rail, by the same expression the row renders on",
-            detail.contains("hasProductionRow = companies.isNotEmpty()") &&
-                detail.contains("if (hasProductionRow) {")
+                            detail.contains("hasProductionRow = companies.isNotEmpty()") &&
+                detail.contains("if (activeTab == DetailTab.DETAILS && hasProductionRow) {")
         )
         assertTrue(
             "and the people and network render guards read the same names",
-            detail.contains("if (hasPeopleRow) {") && detail.contains("if (hasNetworkRow) {")
+            detail.contains("if (activeTab == DetailTab.CAST && hasPeopleRow) {") &&
+                detail.contains("if (activeTab == DetailTab.DETAILS && hasNetworkRow) {")
         )
         assertTrue(
             "the collection rail exists exactly when it renders",
-            detail.contains("hasCollectionRow = collectionParts.isNotEmpty()") &&
-                detail.contains("if (hasCollectionRow) {")
+                            detail.contains("hasCollectionRow = collectionParts.isNotEmpty()") &&
+                detail.contains("if (activeTab == DetailTab.MORE_LIKE_THIS && hasCollectionRow) {")
         )
         assertTrue(
             "the Media row is on the page exactly when its strip has a page to " +
                 "offer, which is the same expression that renders it",
             detail.contains("hasMediaRow = mediaTabs.isNotEmpty()") &&
-                detail.contains("if (hasMediaRow) {")
+                detail.contains("if (activeTab == DetailTab.MEDIA && hasMediaRow) {")
         )
         assertTrue(
             "and More Like This by the expression that renders it",
             detail.contains("hasMoreLikeThisRow = recommendations.isNotEmpty()") &&
-                detail.contains("if (hasMoreLikeThisRow) {")
+                detail.contains("if (activeTab == DetailTab.MORE_LIKE_THIS && hasMoreLikeThisRow) {")
         )
         assertTrue(
             "the genre rail exists exactly when it renders - it is the header's " +
@@ -399,7 +400,7 @@ class DetailFocusChainWiringContractTest {
         assertTrue(
             "and the review rail by the expression that renders it",
             detail.contains("hasReviewsRow = reviews.isNotEmpty()") &&
-                detail.contains("if (reviews.isNotEmpty()) {")
+                detail.contains("if (activeTab == DetailTab.REVIEWS && reviews.isNotEmpty()) {")
         )
     }
 
@@ -412,6 +413,7 @@ class DetailFocusChainWiringContractTest {
         listOf(
             "HEADER",
             "GENRE",
+            "TABS",
             "KEYWORDS",
             "EPISODES",
             "PEOPLE",

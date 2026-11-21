@@ -131,10 +131,11 @@ class DetailTopFallThroughContractTest {
     @Test
     fun `the toggle's UP falls through when the header will not take it`() {
         assertTrue(
-            "F1b: the toggle's UP is still the header, and its failure now moves",
+            "F1b: the toggle's UP is the strip above the content (the header is its " +
+                "fallback), and a failure moves",
             toggleHandler.contains(
-                "onUp = { startFocusMove(DetailRow.HEADER, DetailFocusDirection.UP, " +
-                    "presence) { val landed = focusTopOfPage() || " +
+                "onUp = { startFocusMove(DetailRow.TABS, DetailFocusDirection.UP, " +
+                    "presence) { val landed = focusTabStrip() || focusTopOfPage() || " +
                     "focusByGeometry(DetailFocusDirection.UP)"
             )
         )
@@ -142,7 +143,7 @@ class DetailTopFallThroughContractTest {
             "F1c: it runs INSIDE the move coroutine - the handler consumed the key, " +
                 "so \"return false and let the default search run\" is not available " +
                 "any more (see focusByGeometry's own doc)",
-            toggleHandler.contains("startFocusMove(DetailRow.HEADER, DetailFocusDirection.UP, presence) { val landed = focusTopOfPage()")
+            toggleHandler.contains("startFocusMove(DetailRow.TABS, DetailFocusDirection.UP, presence) { val landed = focusTabStrip()")
         )
         assertTrue(
             "and UP is still consumed by the page: the toggle has no unowned UP to " +
@@ -200,9 +201,9 @@ class DetailTopFallThroughContractTest {
             )
         )
         assertEquals(
-            "and the page still has exactly the eleven rows it had - no row was " +
-                "added to route around the miss",
-            11,
+            "and the page's eleven content rows are untouched - the strip is the one " +
+                "row added, and it is the route into them",
+            12,
             DetailRow.entries.size
         )
     }
@@ -212,8 +213,9 @@ class DetailTopFallThroughContractTest {
     @Test
     fun `a title with no genres still walks UP to the toggle or the header`() {
         assertEquals(
-            "no genre row: UP out of the first list row is the header",
-            DetailRow.HEADER,
+            "no genre row: UP out of the first list row is the strip painted above " +
+                "it - the page's third stop",
+            DetailRow.TABS,
             DetailFocusChain.nextRow(
                 DetailRow.KEYWORDS,
                 DetailFocusDirection.UP,
@@ -221,8 +223,8 @@ class DetailTopFallThroughContractTest {
             )
         )
         assertEquals(
-            "with genres, it is the chip rail, as always",
-            DetailRow.GENRE,
+            "with genres, it is still the strip: the chips hang above IT now",
+            DetailRow.TABS,
             DetailFocusChain.nextRow(
                 DetailRow.KEYWORDS,
                 DetailFocusDirection.UP,
@@ -232,6 +234,7 @@ class DetailTopFallThroughContractTest {
         assertTrue(
             "and the toggle is still the UP-only stop ahead of the chain, read in " +
                 "one place, so this spec did not move it",            move.contains("direction == DetailFocusDirection.UP && " +
+                "activeTab == DetailTab.DETAILS && " +
                 "from == firstListRow(settledRows) && focusOverviewToggle()")
         )
     }

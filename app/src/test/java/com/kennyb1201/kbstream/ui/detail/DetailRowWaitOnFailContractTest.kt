@@ -218,7 +218,16 @@ class DetailRowWaitOnFailContractTest {
         )
         assertTrue(
             "and the chain itself is not touched by this spec - the edge verdict is " +
-                "still the chain's",
+                "still the chain's, so the top edge is where it always was",
+            DetailFocusChain.isPageEdge(
+                DetailRow.GENRE,
+                DetailFocusDirection.UP,
+                presence(hasEpisodesRow = false)
+            )
+        )
+        assertFalse(
+            "DOWN out of the genres is no longer the bottom edge even on an empty " +
+                "page: the strip is painted below it whatever the payload is",
             DetailFocusChain.isPageEdge(
                 DetailRow.GENRE,
                 DetailFocusDirection.DOWN,

@@ -82,19 +82,18 @@ class DetailToggleDownTrapContractTest {
     @Test
     fun `the resolved presence is what the move itself reads`() {
         assertTrue(
-            "the chain and the fall-through are asked with the settled presence, " +
-                "not the composition-time one - with the stale list, HEADER+DOWN " +
-                "read as a page edge and the press had nowhere to go",
+            "the chain and the landing are asked with the settled presence, not the " +
+                "composition-time one - with the stale list, HEADER+DOWN read as a " +
+                "page edge and the press had nowhere to go",
             toggleHandler.contains(
-                "moveFocusVertical( DetailFocusChain.toggleDownRow(settled), " +
-                    "DetailFocusDirection.DOWN, 0, latestRowPresence.value ?: settled )"
+                "val rows = latestRowPresence.value ?: settled"
             )
         )
         assertTrue(
             "and 2026-11-14 changes WHERE that DOWN lands: the row under the toggle, " +
                 "not the genre chips painted above it - see DetailFocusChainTest," +
                 "toggleDownRow",
-            toggleHandler.contains("DetailFocusChain.toggleDownRow(settled)")
+            toggleHandler.contains("val target = DetailFocusChain.toggleDownRow(rows)")
         )
     }
 
@@ -138,13 +137,14 @@ class DetailToggleDownTrapContractTest {
     @Test
     fun `a press the page can place is consumed and moved`() {
         assertTrue(
-            "the kept branch runs the move from the row BELOW the toggle and " +
-                "returns true",
+            "the kept branch starts a move, lands ON the row the chain named (a " +
+                "move FROM that row would skip it), and returns true",
             toggleHandler.contains(
-                "} else { startFocusMove(DetailRow.HEADER, DetailFocusDirection.DOWN, " +
-                    "settled) { moveFocusVertical( DetailFocusChain.toggleDownRow(settled), " +
-                    "DetailFocusDirection.DOWN, 0, latestRowPresence.value ?: settled )"
-            )
+                "startFocusMove(DetailRow.HEADER, DetailFocusDirection.DOWN, settled)"
+            ) &&
+                toggleHandler.contains("val landed = when (target)") &&
+                toggleHandler.contains("else -> focusRow( target, 0, DetailRow.TABS, " +
+                    "DetailFocusDirection.DOWN, rows )")
         )
     }
 
@@ -188,8 +188,9 @@ class DetailToggleDownTrapContractTest {
     fun `the genre chips still hand DOWN to the episode section`() {
         assertEquals(
             "588dc5b86's handoff is intact - DOWN off a genre chip still steps " +
-                "over the tags to the episodes on a title that has none",
-            DetailRow.EPISODES,
+                "over the tags: it now stops on the strip, which is what opens the " +
+                "episode tab",
+            DetailRow.TABS,
             DetailFocusChain.nextRow(
                 DetailRow.GENRE,
                 DetailFocusDirection.DOWN,
@@ -198,9 +199,11 @@ class DetailToggleDownTrapContractTest {
         )
         assertTrue(
             "and the UP route onto the toggle is still the page's single handoff, " +
-                "read from the chain, so no rail can disagree about it",
+                "read from the chain, so no rail can disagree about it - the toggle " +
+                "is the Details tab's own first stop",
             move.contains(
                 "direction == DetailFocusDirection.UP && " +
+                    "activeTab == DetailTab.DETAILS && " +
                     "from == firstListRow(settledRows) && focusOverviewToggle()"
             )
         )
@@ -221,8 +224,8 @@ class DetailToggleDownTrapContractTest {
                 "the focus now moves the press anyway instead of keeping it (the UP " +
                 "trap's F1b, see DetailTopFallThroughContractTest)",
             toggleHandler.contains(
-                "onUp = { startFocusMove(DetailRow.HEADER, DetailFocusDirection.UP, " +
-                    "presence) { val landed = focusTopOfPage() || " +
+                "onUp = { startFocusMove(DetailRow.TABS, DetailFocusDirection.UP, " +
+                    "presence) { val landed = focusTabStrip() || focusTopOfPage() || " +
                     "focusByGeometry(DetailFocusDirection.UP)"
             )
         )

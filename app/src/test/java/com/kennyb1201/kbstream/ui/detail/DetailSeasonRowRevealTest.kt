@@ -276,7 +276,7 @@ class DetailSeasonRowRevealTest {
         val detail = normalized(stripComments(detailSource()))
         val facts = detail
             .substringAfter("item(key = DETAIL_FACTS_ROW_KEY")
-            .substringBefore("if (keywords.isNotEmpty())")
+            .substringBefore("if (activeTab == DetailTab.DETAILS && keywords.isNotEmpty())")
         assertTrue("no leading gap above the facts", facts.contains("top = 0.dp"))
         assertTrue("and a tighter trailing gap", facts.contains(".padding(bottom = 4.dp)"))
     }
