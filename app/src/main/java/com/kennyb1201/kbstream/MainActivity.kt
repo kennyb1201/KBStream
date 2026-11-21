@@ -1143,6 +1143,12 @@ private suspend fun recoveredEpisodeAlreadyWatched(
         }
         recordStartupPhase("startup.setContent", composeStartedMs)
         observeFirstFrame()
+        // The frame meter's third half (2026-11-21): where a metered gesture's
+        // frames spent their time. Installed here because a Window is the only
+        // thing FrameMetrics can be read from, and this is the window every
+        // scroll and walk is measured in - the player is a separate Activity and
+        // has its own frame-rate work. See FrameMetricsMeter.
+        com.kennyb1201.kbstream.data.reporting.FrameMetricsMeter.install(window)
     }
 
     /**

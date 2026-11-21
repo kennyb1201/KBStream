@@ -54,10 +54,26 @@ object FrameHistogram {
      * Summarises the first [count] deltas of [deltas], or null when the sample is
      * too short to mean anything.
      */
-    fun of(deltas: IntArray, count: Int = deltas.size): FrameStats? {
-        val usable = deltas.take(count.coerceIn(0, deltas.size)).filter { it > 0 }
-        if (usable.size < MIN_FRAMES) return null
-        val sorted = usable.sorted()
+    fun of(deltas: IntArray, count: Int = deltas.size): FrameStats? =
+        summarise(deltas.take(count.coerceIn(0, deltas.size)).filter { it > 0 })
+
+    /**
+     * The same summary for a FRAME PHASE sample, where zero is a reading rather
+     * than a missing one.
+     *
+     * [of] drops non-positive values because a zero frame DELTA is the first
+     * frame measured against nothing, and letting it into the median would
+     * understate the scroll. A phase duration has no such defect: a frame that
+     * spent 0 ms on the UI thread really did, and dropping those frames would
+     * answer "how long did the frames that worked take" instead of "how long did
+     * this phase take".
+     */
+    fun phases(values: IntArray, count: Int = values.size): FrameStats? =
+        summarise(values.take(count.coerceIn(0, values.size)).map { it.coerceAtLeast(0) })
+
+    private fun summarise(values: List<Int>): FrameStats? {
+        if (values.size < MIN_FRAMES) return null
+        val sorted = values.sorted()
         return FrameStats(
             frames = sorted.size,
             p50Ms = percentile(sorted, 50),
@@ -128,6 +144,52 @@ object FrameHistogram {
                 " decodeFrames=${stats.frames} decodeP50=${stats.p50Ms}ms " +
                     "decodeP95=${stats.p95Ms}ms decode>33=${stats.over33Ms}"
         }
+
+    /**
+     * The third half of a walk's line: WHERE the frame time went.
+     *
+     * `frame:` says how the frames went and `decodeFrames` says which of them
+     * carried a bitmap - and the 2026-11-21 warm walk left the next question
+     * open: 250 frames at p50=16ms with only 26 carrying a decode, so 79 of the
+     * 105 slow frames had nothing to do with the loader. "Not the loader" is not
+     * a fix; which thread held them is.
+     *
+     * Three aggregates, per frame, from the platform's own FrameMetrics:
+     *
+     *  - `ui` - `animation + layout/measure + draw`, i.e. the app's own work on
+     *    the frame thread. A large `uiP95` is composition, layout or
+     *    recordDisplayList, and the fix is in the composables.
+     *  - `render` - `sync + command`, i.e. the display lists being pushed and the
+     *    draw commands issued on the render thread. A large `renderP95` with a
+     *    small `ui` is draw cost (layers, alpha, oversized surfaces), not
+     *    composition.
+     *  - `total` - the frame's own measured duration. Read BESIDE the deltas: a
+     *    `p50=33ms` frame line with `totalP50=16ms` means the frame's work fits a
+     *    budget and the 33 ms is the frame not being scheduled - vsync pacing,
+     *    a compositor holding a buffer, or another surface owning the display -
+     *    which is a different bug from any of the above and the one no amount of
+     *    app-side work can fix.
+     *
+     * Same budgets and percentiles as the rest of the line, so the three are read
+     * against each other. A session whose phases were never sampled (a device
+     * that never delivers them) prints `phaseFrames=0` rather than a blank that
+     * reads as a broken instrument - the same rule `decodeFrames` follows.
+     */
+    fun phaseSplit(
+        ui: FrameStats?,
+        render: FrameStats?,
+        total: FrameStats?,
+        phaseFrames: Int,
+        sessionFrames: Int
+    ): String = when {
+        sessionFrames <= 0 -> ""
+        ui == null || render == null || total == null -> " phaseFrames=$phaseFrames"
+        else ->
+            " phaseFrames=$phaseFrames" +
+                " uiP50=${ui.p50Ms}ms uiP95=${ui.p95Ms}ms" +
+                " renderP50=${render.p50Ms}ms renderP95=${render.p95Ms}ms" +
+                " totalP50=${total.p50Ms}ms totalP95=${total.p95Ms}ms"
+    }
 
     /** Nearest-rank percentile over an ascending list. */
     private fun percentile(sorted: List<Int>, percent: Int): Int {

@@ -67,6 +67,21 @@ object UiFrameTrace {
          */
         val decodeDeltas = IntArray(MAX_FRAMES)
         var decodeCount = 0
+
+        /**
+         * The same frames filed by WHERE their time went (2026-11-21).
+         *
+         * Pushed by [noteFramePhases] from the platform's FrameMetrics, on the
+         * frame thread like everything else here, so the three arrays share one
+         * count and one index: they are the same frame, measured three ways.
+         * See [FrameHistogram.phaseSplit] for what the three aggregates mean and
+         * which fix each one points at.
+         */
+        val phaseUi = IntArray(MAX_FRAMES)
+        val phaseRender = IntArray(MAX_FRAMES)
+        val phaseTotal = IntArray(MAX_FRAMES)
+        var phaseCount = 0
+
         var lastFrameNs = 0L
         var callback: Choreographer.FrameCallback? = null
     }
@@ -154,6 +169,33 @@ object UiFrameTrace {
     fun isRunning(): Boolean = active != null
 
     /**
+     * One frame's time, split by the thread that spent it.
+     *
+     * The caller is FrameMetricsMeter, which is the only place that can read the
+     * platform's per-frame breakdown. It passes three ints rather than the
+     * FrameMetrics object so this file keeps its single Android dependency (the
+     * Choreographer above) and the arithmetic stays in [FrameHistogram].
+     *
+     * Ignored when no session is open: the listener runs for every frame of the
+     * window, including the thousands that are not a metered gesture, and a
+     * session's sample has to be the gesture's own frames or the percentiles
+     * describe the session rather than the walk.
+     *
+     * A frame with nothing at all to report is dropped, because a FrameMetrics
+     * metric the platform does not have comes back as METRIC_UNKNOWN and would
+     * otherwise be filed as a real 0 ms.
+     */
+    fun noteFramePhases(uiMs: Int, renderMs: Int, totalMs: Int) {
+        val session = active ?: return
+        if (uiMs <= 0 && renderMs <= 0 && totalMs <= 0) return
+        if (session.phaseCount >= MAX_FRAMES) return
+        session.phaseUi[session.phaseCount] = uiMs.coerceAtLeast(0)
+        session.phaseRender[session.phaseCount] = renderMs.coerceAtLeast(0)
+        session.phaseTotal[session.phaseCount] = totalMs.coerceAtLeast(0)
+        session.phaseCount++
+    }
+
+    /**
      * Whether a metered gesture is open, or closed within [WALK_TAIL_MS].
      *
      * The image trace's question, not the scroll surface's: a decode belongs to
@@ -201,6 +243,13 @@ object UiFrameTrace {
             FrameHistogram.decodeSplit(
                 FrameHistogram.of(session.decodeDeltas, session.decodeCount),
                 decodeFrames = session.decodeCount,
+                sessionFrames = stats.frames
+            ) +
+            FrameHistogram.phaseSplit(
+                ui = FrameHistogram.phases(session.phaseUi, session.phaseCount),
+                render = FrameHistogram.phases(session.phaseRender, session.phaseCount),
+                total = FrameHistogram.phases(session.phaseTotal, session.phaseCount),
+                phaseFrames = session.phaseCount,
                 sessionFrames = stats.frames
             )
         synchronized(entries) {
