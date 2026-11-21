@@ -75,7 +75,7 @@ internal object FrameMetricsMeter {
                     metrics.millis(FrameMetrics.LAYOUT_MEASURE_DURATION) +
                     metrics.millis(FrameMetrics.DRAW_DURATION),
                 renderMs = metrics.millis(FrameMetrics.SYNC_DURATION) +
-                    metrics.millis(FrameMetrics.COMMAND_DURATION),
+                    metrics.millis(FrameMetrics.COMMAND_ISSUE_DURATION),
                 totalMs = metrics.millis(FrameMetrics.TOTAL_DURATION)
             )
         }

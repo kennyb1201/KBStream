@@ -66,7 +66,7 @@ class FramePhaseMeterWiringContractTest {
         assertTrue(
             "render = the display lists going out and the commands being issued",
             meter.contains("metrics.millis(FrameMetrics.SYNC_DURATION)") &&
-                meter.contains("metrics.millis(FrameMetrics.COMMAND_DURATION)")
+                meter.contains("metrics.millis(FrameMetrics.COMMAND_ISSUE_DURATION)")
         )
         assertTrue(
             "and total is read beside the delta the Choreographer meter reports: a " +
