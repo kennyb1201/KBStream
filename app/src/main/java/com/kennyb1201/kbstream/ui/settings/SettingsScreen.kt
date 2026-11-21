@@ -3835,13 +3835,13 @@ fun SettingsScreen(
                 // that gave it half its name left for their own section below.
                 SettingsSectionHeader("Posters")
 
-                // F6 experiment (2026-11-20): decode art in software instead of
-                // as hardware bitmaps. Hardware bitmaps are normally the faster
-                // thing to draw, so this defaults OFF (today's behaviour) and
-                // exists to A/B the theory on the TV that reported jank: a weak
-                // SoC stalling on GPU upload, and the copy-back dynamic colour
-                // reads. If the walk does not improve with it on, the row and
-                // its preference are deleted together.
+                // F6 experiment (2026-11-20), rescoped 2026-11-21: the switch
+                // now covers the two full-bleed heroes only. A global one was
+                // measured on the TCL and lost - hardware decoded faster per
+                // image but an evicted hardware bitmap's pixels are native, so
+                // nothing collected them and 53MB of dead art sat outside the
+                // cache budget until the system trimmed the rail mid-scroll
+                // (see data/image/BackdropArt).
                 //
                 // Read when the image loader is built, so the change lands on
                 // the next launch - which is how the A/B is measured.
@@ -3851,10 +3851,11 @@ fun SettingsScreen(
                 ToggleRow(
                     label = "Software Image Decoding",
                     description = if (softwareImageBitmaps) {
-                        "Art is decoded in software. Applies from the next launch."
+                        "Home and Detail backdrops decode in software. Posters and " +
+                            "rails are software either way. Applies from the next launch."
                     } else {
-                        "Art is decoded as hardware bitmaps. Turn on if this device " +
-                            "stutters while posters and backdrops load."
+                        "Home and Detail backdrops decode as hardware bitmaps. Posters " +
+                            "and rails are software either way. Applies from the next launch."
                     },
                     checked = softwareImageBitmaps,
                     onToggle = { enabled ->

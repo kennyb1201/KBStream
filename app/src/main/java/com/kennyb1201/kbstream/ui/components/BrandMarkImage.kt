@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.IntSize
 import coil3.Image
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.request.allowHardware
 
 /**
  * ONE brand mark drawn for a dark surface, with the treatment
@@ -119,12 +120,15 @@ internal fun BrandMarkImage(
             // unchanged - the decode and the retained bitmap are an order of
             // magnitude smaller.
             //
-            // Deliberately NOT `.allowHardware(false)` any more: that forced
-            // Coil to decode every one of these on the CPU and keep a software
-            // bitmap per card, which is exactly the scroll cost this decode
-            // cap exists to bound. The luminance sample makes its own readable
-            // copy instead ([sampleBrandMark]), so the drawn bitmap can stay on
-            // the GPU path.
+            // Stated, not inherited (2026-11-21). The loader default is software
+            // now that hardware bitmaps are scoped to the full-bleed backdrops,
+            // and this request must never wander back onto the GPU path: the
+            // [BrandMark.WHITEN] verdict is read from the pixels, and a hardware
+            // bitmap cannot be sampled that way ([sampleBrandMark] makes its own
+            // readable copy for exactly that reason). The decode stays tiny (256
+            // px, above), so one per card is the cheap half of the scroll cost
+            // this cap exists to bound.
+            .allowHardware(false)
             .size(BRAND_MARK_DECODE_PX)
             .build()
     }

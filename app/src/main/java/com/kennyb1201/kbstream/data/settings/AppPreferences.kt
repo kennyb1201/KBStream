@@ -235,7 +235,10 @@ object AppPreferences {
     private const val KEY_SPOILER_FREE = "spoiler_free"
     private const val KEY_HIDE_UPCOMING = "home_rail_hide_upcoming"
 
-    /** F6 experiment: decode art in software instead of as hardware bitmaps. */
+    /**
+     * F6 experiment: decode the full-bleed heroes in software instead of as
+     * hardware bitmaps. Rails are software regardless (see getSoftwareImageBitmaps).
+     */
     private const val KEY_SOFTWARE_IMAGE_BITMAPS = "software_image_bitmaps"
     // Hide finished titles from every Home rail (not from Up Next or the
     // Library). Synced like the digital filter beside it: it is a statement
@@ -2660,13 +2663,15 @@ object AppPreferences {
         syncDisplayPrefsBlob(context)
     }
 
-    // ── Art: software bitmaps (F6 experiment, 2026-11-20) ────────────
+    // ── Art: software bitmaps (F6 experiment, 2026-11-20; rescoped 2026-11-21) ──
     //
-    // OFF is the current behaviour: hardware bitmaps are normally the faster
-    // thing to draw, and the theory that they are not on a weak TV SoC (GPU
-    // upload stalls, the copy-back dynamic colour needs) is unproven here. The
-    // switch exists so one build can A/B it on the TCL; if the walk paste does
-    // not improve with it on, the switch is deleted rather than kept.
+    // OFF means the two full-bleed heroes (Home, Detail) decode in hardware;
+    // every rail tile, poster and logo stays software either way. It began as a
+    // global switch, and the A/B on the TCL showed why it cannot be one:
+    // hardware decoding was faster per image (worst decode 2647ms -> 1258ms) but
+    // an evicted hardware bitmap's pixels are native, so nothing collects them -
+    // 53MB of dead art sat outside the 48MB cache budget and the system trimmed
+    // the rail mid-scroll (see data/image/BackdropArt).
     //
     // Read once, when the image loader is built, so a change applies on the next
     // launch - which is exactly how an A/B is measured.

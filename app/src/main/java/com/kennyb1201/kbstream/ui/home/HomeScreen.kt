@@ -156,6 +156,7 @@ import com.kennyb1201.kbstream.data.youtube.heroTrailerRetryPlan
 import com.kennyb1201.kbstream.data.youtube.signedUrl
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.data.youtube.isYouTubeIdentityBlocked
+import com.kennyb1201.kbstream.data.image.allowBackdropHardware
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
@@ -1356,6 +1357,11 @@ private fun HeroBackdropArt(url: String?) {
             ImageRequest.Builder(context)
                 .data(url)
                 .size(Size(1280, 720))
+                // The one surface on this screen that may use hardware bitmaps:
+                // the loader default is software, and a rail's worth of hardware
+                // tiles is what left 53MB of dead-but-alive pixels outside the
+                // cache budget on the TCL (see BackdropArt).
+                .allowBackdropHardware(context)
                 // F6 (spec 2026-11-16, scrolling round three): ONE buffer.
                 //
                 // Coil's crossfade blends the OUTGOING and INCOMING drawables,

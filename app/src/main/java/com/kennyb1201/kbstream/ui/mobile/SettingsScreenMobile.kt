@@ -3187,10 +3187,11 @@ private fun InterfacePaneMobile() {
             // Same spelling as the TV row: the search index is keyed on it.
             label = "Software Image Decoding",
             description = if (softwareImageBitmaps) {
-                "Art is decoded in software. Applies from the next launch."
+                "Home and Detail backdrops decode in software. Posters and rails " +
+                    "are software either way. Applies from the next launch."
             } else {
-                "Art is decoded as hardware bitmaps. Turn on if this device " +
-                    "stutters while posters and backdrops load."
+                "Home and Detail backdrops decode as hardware bitmaps. Posters and " +
+                    "rails are software either way. Applies from the next launch."
             },
             checked = softwareImageBitmaps,
             onChange = { enabled ->

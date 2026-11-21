@@ -79,6 +79,7 @@ import android.widget.Toast
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.download.DownloadIdentity
+import com.kennyb1201.kbstream.data.image.allowBackdropHardware
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.remote.RemoteClientProvider
 import com.kennyb1201.kbstream.data.remote.RemotePhase
@@ -3248,6 +3249,10 @@ private fun MobileDetailHeader(
                 .crossfade(true)
                 // Hero-class: stays 8888 (see newImageLoader).
                 .allowRgb565(false)
+                // The phone's hero is one of the two surfaces that may use
+                // hardware bitmaps; every tile on the screen behind it is
+                // software (see BackdropArt).
+                .allowBackdropHardware(context)
                 .build()
         }
         AsyncImage(

@@ -104,7 +104,6 @@ import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
-import coil3.request.allowHardware
 import coil3.request.allowRgb565
 import coil3.request.crossfade
 import coil3.size.Size
@@ -137,6 +136,7 @@ import com.kennyb1201.kbstream.data.tmdb.list
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.TasteSignals
+import com.kennyb1201.kbstream.data.image.allowBackdropHardware
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.tmdb.tmdbImage
 import com.kennyb1201.kbstream.data.tmdb.writers
@@ -5421,7 +5421,12 @@ fun DetailScreen(
                 ImageRequest.Builder(context)
                     .data(heroBackdropUrl)
                     .size(Size(1280, 720))
-                    .allowHardware(true)
+                    // The detail hero is one of the two surfaces that may use
+                    // hardware bitmaps, and it follows the setting rather than
+                    // overriding it: this used to be a hard `true`, which is
+                    // how the "software" setting still left the biggest bitmap
+                    // on the screen decoded in hardware (see BackdropArt).
+                    .allowBackdropHardware(context)
                     // The full-bleed hero is one of the few surfaces that
                     // keeps the fade: it is a single image the user is
                     // looking at, not a tile in a rail, so the handover

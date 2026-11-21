@@ -15,6 +15,7 @@ import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
+import com.kennyb1201.kbstream.data.image.allowBackdropHardware
 import com.kennyb1201.kbstream.data.airdates.TvmazeAirDateRepository
 import com.kennyb1201.kbstream.data.anime.AnimeTrackerEntry
 import com.kennyb1201.kbstream.data.anime.AnimeTrackerLegs
@@ -3046,6 +3047,14 @@ Log.d(
                 coil3.request.ImageRequest.Builder(application)
                     .data(url)
                     .size(HERO_LOOKAHEAD_BITMAP_WIDTH, HERO_LOOKAHEAD_BITMAP_HEIGHT)
+                    // The SAME bitmap config as the draw this exists to serve
+                    // (2026-11-21). Coil keys the memory cache by the decoded
+                    // config as well as by url and size, so a warm that asks for
+                    // software while [HeroBackdropArt] asks for hardware writes
+                    // an entry the hero never reads - the 0.9.393 url bug again,
+                    // one field further along, and it would show up as `image:
+                    // hero hits=0` with every backdrop decoding twice.
+                    .allowBackdropHardware(application)
                     .build()
             )
             // Dig four §1c: a warm is counted only when it actually decoded.

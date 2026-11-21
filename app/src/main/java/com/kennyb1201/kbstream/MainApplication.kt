@@ -614,13 +614,23 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             // thread on this class of hardware; four keeps a fill moving while
             // leaving the frame alone.
             .bitmapFactoryMaxParallelism(4)
-            // F6 experiment (2026-11-20): software bitmaps, OFF by default.
+            // Software bitmaps by DEFAULT, with hardware as a per-request opt-in
+            // (2026-11-21).
             //
-            // Hardware bitmaps are normally the faster thing to draw, so this
-            // is not borrowed blind - the setting exists so one build can A/B it
-            // on the TCL. If the walk paste does not improve with it on, the
-            // setting and this line go away together (see AppPreferences).
-            .allowHardware(!AppPreferences.getSoftwareImageBitmaps(context))
+            // This was `.allowHardware(!getSoftwareImageBitmaps(context))` - a
+            // global switch - until the TCL A/B showed what a global one costs:
+            // hardware decoding was faster per image (worst decode 2647ms ->
+            // 1258ms) but took back the app's ability to reclaim memory, because
+            // an evicted hardware bitmap's pixels are native and no GC pressure
+            // follows its eviction. 53MB of evicted-but-alive art sat outside the
+            // 48MB budget and the system trimmed the rail mid-scroll.
+            //
+            // The rails are the volume, so they are what stays software; the
+            // full-bleed backdrops opt in through
+            // `ImageRequest.allowBackdropHardware(context)` (see BackdropArt),
+            // which is where the decode actually shows and where churn is a few
+            // images per screen.
+            .allowHardware(false)
             // TV browsing shows hundreds of posters/backdrops; a generous
             // memory cache keeps tiles resident so re-scrolling a rail never
             // re-decodes (the default is a small fraction of free RAM).

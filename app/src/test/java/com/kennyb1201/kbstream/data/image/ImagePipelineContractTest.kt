@@ -21,6 +21,13 @@ class ImagePipelineContractTest {
         const val APPLICATION = "com/kennyb1201/kbstream/MainApplication.kt"
         const val IMAGE_HTTP = "com/kennyb1201/kbstream/data/image/ImageHttp.kt"
         const val PREFS = "com/kennyb1201/kbstream/data/settings/AppPreferences.kt"
+        const val BACKDROP_ART = "com/kennyb1201/kbstream/data/image/BackdropArt.kt"
+        const val HOME_SCREEN = "com/kennyb1201/kbstream/ui/home/HomeScreen.kt"
+        const val DETAIL_SCREEN = "com/kennyb1201/kbstream/ui/detail/DetailScreen.kt"
+        const val DETAIL_MOBILE =
+            "com/kennyb1201/kbstream/ui/mobile/DetailScreenMobile.kt"
+        const val HOME_VIEW_MODEL =
+            "com/kennyb1201/kbstream/ui/home/HomeViewModel.kt"
         const val GENERATOR =
             "com/kennyb1201/kbstream/baselineprofile/BaselineProfileGenerator.kt"
     }
@@ -63,8 +70,9 @@ class ImagePipelineContractTest {
             loader.contains(".bitmapFactoryMaxParallelism(4)")
         )
         assertTrue(
-            "F6: software bitmaps are a switch whose default is today's behaviour",
-            loader.contains(".allowHardware(!AppPreferences.getSoftwareImageBitmaps(context))")
+            "F6: the loader default is software - hardware is a per-request opt-in",
+            loader.contains(".allowHardware(false)") &&
+                !loader.contains(".allowHardware(!AppPreferences")
         )
         assertTrue(
             "F4: art must use its own client, not the default one sized for API calls",
@@ -130,12 +138,50 @@ class ImagePipelineContractTest {
         assertTrue("F1: no crossfade site found at all - did the scan break?", checked > 0)
     }
 
+    /**
+     * The rescope (2026-11-21): a global hardware switch left 53MB of evicted
+     * hardware bitmaps outside the cache budget, because an evicted hardware
+     * bitmap's pixels are native and nothing collects them. Hardware is now
+     * allowed on the surfaces a screen holds exactly one of - and those are the
+     * only places allowed to ask for it.
+     */
+    @Test
+    fun `hardware bitmaps are scoped to the full-bleed backdrops`() {
+        val optIn = source(BACKDROP_ART)
+        assertTrue(
+            "the opt-in must follow the setting, or the row does nothing",
+            optIn.contains("allowHardware(!AppPreferences.getSoftwareImageBitmaps(context))")
+        )
+
+        mapOf(
+            HOME_SCREEN to "the Home hero",
+            DETAIL_SCREEN to "the TV Detail hero",
+            DETAIL_MOBILE to "the phone Detail hero"
+        ).forEach { (file, surface) ->
+            assertTrue(
+                "$surface is the surface this applies to, and must opt in",
+                source(file).contains(".allowBackdropHardware(context)")
+            )
+        }
+
+        assertTrue(
+            "the TV hero used to hard-code `.allowHardware(true)`, which is how the " +
+                "software setting still left the biggest bitmap decoded in hardware",
+            !source(DETAIL_SCREEN).contains(".allowHardware(true)")
+        )
+        assertTrue(
+            "the hero's lookahead warm must ask for the SAME config as the draw it " +
+                "serves, or it warms a cache entry the hero never reads",
+            source(HOME_VIEW_MODEL).contains(".allowBackdropHardware(application)")
+        )
+    }
+
     @Test
     fun `the software-bitmap switch reads off by default`() {
         val prefs = source(PREFS)
 
         assertTrue(
-            "F6: hardware bitmaps stay the default until the A/B says otherwise",
+            "F6: the backdrops stay hardware until the A/B says otherwise",
             prefs.contains("getBoolean(KEY_SOFTWARE_IMAGE_BITMAPS, false)")
         )
         assertTrue(
