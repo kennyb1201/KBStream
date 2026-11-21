@@ -107,6 +107,15 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             com.kennyb1201.kbstream.data.library.TasteRatingSubmission
                 .requestDrain(applicationContext)
         }
+        // And the same door for Simkl's COMPLETIONS (spec 2026-11-20, F2): a
+        // completion queued during a playback park outlives the session that
+        // watched the episode, and app start is the one place the app can see
+        // that a park recorded before the last exit may now be over. Silent when
+        // nothing is queued.
+        runCatching {
+            com.kennyb1201.kbstream.data.simkl.SimklCompletionSubmission
+                .requestDrain(applicationContext)
+        }
         // The same door for BingeCat's completions (spec audit 2026-11-18, Data
         // M2): a play that failed offline / during a 429 in the last session is
         // replayed here instead of dying with that player. Silent when the queue

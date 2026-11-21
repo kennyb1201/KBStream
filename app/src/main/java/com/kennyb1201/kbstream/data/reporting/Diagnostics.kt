@@ -376,6 +376,15 @@ object Diagnostics {
         // closed, because "my ratings never reach Simkl" is exactly the report
         // this line exists to answer (see TasteRatingSubmission.statusLines).
         TasteRatingSubmission.statusLines(app).forEach { report.appendLine(it) }
+        // Simkl's history-write half (spec 2026-11-20, F3), which the taste line
+        // cannot see: the PLAYBACK park the completion writes are held behind
+        // (only the ratings park printed before) and how many completions are
+        // waiting on it. The field paste that prompted this had six
+        // `completion leg failed` lines and no way to tell a spent quota from a
+        // broken write.
+        report.appendLine(
+            com.kennyb1201.kbstream.data.simkl.SimklCompletionSubmission.statusLine(app)
+        )
         // Where the time goes: startup + per-service HTTP + home refresh, with
         // the slowest samples named. Empty on a session that recorded nothing.
         PerfTrace.summary().takeIf { it.isNotEmpty() }?.let { perf ->

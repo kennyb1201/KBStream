@@ -27,7 +27,11 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
 suspend fun SimklRepository.pushWatchedMovieImpl(
     imdbId: String,
     title: String? = null,
-    tmdbId: Int? = null
+    tmdbId: Int? = null,
+    // False while a drain is replaying a queued entry (see
+    // SimklCompletionSubmission): a parked impl must then answer "not sent"
+    // instead of queueing itself again.
+    queueWhenParked: Boolean = true
 ): Boolean {
 
     if (!isConfigured() || !hasToken()) {
@@ -39,6 +43,25 @@ suspend fun SimklRepository.pushWatchedMovieImpl(
     if (ids == null) {
         Log.i("SIMKL_REPO", "pushWatchedMovie skipped: unparseable id=$imdbId")
         return false
+    }
+
+    // F1 (spec 2026-11-20): a park is checked BEFORE the request, exactly as the
+    // scrobble path has done since spec C14. Without this gate every completion
+    // retry spent a request to earn the same bare 429 for the whole session - and
+    // the players' latch re-posts the completion on the next tick, so one parked
+    // episode produced a stream of them. F2 is the other half: the write is
+    // QUEUED rather than lost, and true tells the latch it was accepted.
+    val parkedMs = simklPlaybackParkMs()
+    if (parkedMs > 0L) {
+        Log.i("SIMKL_REPO", "pushWatchedMovie skipped: parked for ${parkedMs}ms after a 429")
+        return queueWhenParked && queueSimklCompletion(
+            simklCompletionEntry(
+                kind = SimklCompletionKind.PUSH_MOVIE,
+                imdbId = imdbId,
+                tmdbId = tmdbId,
+                title = title
+            )
+        )
     }
 
     return try {
@@ -74,6 +97,22 @@ suspend fun SimklRepository.pushWatchedMovieImpl(
                 "pushWatchedMovie " + (if (rateLimited) "rate-limited " else "failed ") +
                     "code=${response.code()} body=$errorText"
             )
+            // A 429 is a park, not a failure: the completion is still owed, so it
+            // is queued for the drain and reported as accepted (F2).
+            if (rateLimited && queueWhenParked) {
+                if (
+                    queueSimklCompletion(
+                        simklCompletionEntry(
+                            kind = SimklCompletionKind.PUSH_MOVIE,
+                            imdbId = imdbId,
+                            tmdbId = tmdbId,
+                            title = title
+                        )
+                    )
+                ) {
+                    return true
+                }
+            }
         } else {
             // A fresh watched write invalidates the completed-movie
             // snapshot and the Continue Watching feed so watched markers
@@ -91,6 +130,10 @@ suspend fun SimklRepository.pushWatchedMovieImpl(
             }
 
             Log.i("SIMKL_REPO", "pushWatchedMovie ok imdb=$imdbId")
+            // A write that actually went out means the leg is open again, which is
+            // the one moment a completion queued during a park can be delivered
+            // (F2 drain trigger). Silent when nothing is queued.
+            requestSimklCompletionDrain()
         }
 
         response.isSuccessful
@@ -114,7 +157,8 @@ suspend fun SimklRepository.pushWatchedMovieImpl(
 suspend fun SimklRepository.pushWatchedShowImpl(
     showImdbId: String,
     title: String? = null,
-    tmdbId: Int? = null
+    tmdbId: Int? = null,
+    queueWhenParked: Boolean = true
 ): Boolean {
 
     if (!isConfigured() || !hasToken()) {
@@ -126,6 +170,20 @@ suspend fun SimklRepository.pushWatchedShowImpl(
     if (ids == null) {
         Log.i("SIMKL_REPO", "pushWatchedShow skipped: unparseable id=$showImdbId")
         return false
+    }
+
+    // F1: pre-fire park gate, as in pushWatchedMovie.
+    val parkedMs = simklPlaybackParkMs()
+    if (parkedMs > 0L) {
+        Log.i("SIMKL_REPO", "pushWatchedShow skipped: parked for ${parkedMs}ms after a 429")
+        return queueWhenParked && queueSimklCompletion(
+            simklCompletionEntry(
+                kind = SimklCompletionKind.PUSH_SHOW,
+                imdbId = showImdbId,
+                tmdbId = tmdbId,
+                title = title
+            )
+        )
     }
 
     return try {
@@ -157,6 +215,20 @@ suspend fun SimklRepository.pushWatchedShowImpl(
                 "pushWatchedShow " + (if (rateLimited) "rate-limited " else "failed ") +
                     "code=${response.code()} body=$errorText"
             )
+            if (rateLimited && queueWhenParked) {
+                if (
+                    queueSimklCompletion(
+                        simklCompletionEntry(
+                            kind = SimklCompletionKind.PUSH_SHOW,
+                            imdbId = showImdbId,
+                            tmdbId = tmdbId,
+                            title = title
+                        )
+                    )
+                ) {
+                    return true
+                }
+            }
         } else {
             // A fresh watched write invalidates the cached show library
             // and the Continue Watching feed so episode-watched filters
@@ -174,6 +246,7 @@ suspend fun SimklRepository.pushWatchedShowImpl(
             }
 
             Log.i("SIMKL_REPO", "pushWatchedShow ok show=$showImdbId")
+            requestSimklCompletionDrain()
         }
 
         response.isSuccessful
@@ -205,6 +278,21 @@ suspend fun SimklRepository.removeWatchedMovieImpl(
     val ids = parsePlaybackIds(imdbId, tmdbId)
     if (ids == null) {
         Log.i("SIMKL_REPO", "removeWatchedMovie skipped: unparseable id=$imdbId")
+        return false
+    }
+
+    // An unmark takes back a queued push for the same title: a completion queued
+    // during a park must never land after the viewer unmarked it (F2). Done
+    // before the gate and before the request, because the intent - this title is
+    // not watched - is what cancels the queue, not whether the removal itself
+    // succeeds.
+    cancelQueuedSimklCompletions(imdbId, SimklCompletionKind.PUSH_MOVIE)
+
+    // F1: removals are gated too. Fired into a park they earn the same bare 429,
+    // and a removal is never queued - a failed one is visible and user-retryable.
+    val parkedMs = simklPlaybackParkMs()
+    if (parkedMs > 0L) {
+        Log.i("SIMKL_REPO", "removeWatchedMovie skipped: parked for ${parkedMs}ms after a 429")
         return false
     }
 
@@ -275,6 +363,16 @@ suspend fun SimklRepository.removeWatchedShowImpl(
         return false
     }
 
+    // A whole-show unmark cancels everything queued for that show (F2).
+    cancelQueuedSimklCompletions(showImdbId, SimklCompletionKind.PUSH_SHOW)
+
+    // F1: removals are gated too, and never queued.
+    val parkedMs = simklPlaybackParkMs()
+    if (parkedMs > 0L) {
+        Log.i("SIMKL_REPO", "removeWatchedShow skipped: parked for ${parkedMs}ms after a 429")
+        return false
+    }
+
     return try {
         val response = api.removeFromWatchedHistory(
             authorization = trackedAuthHeader(),
@@ -323,7 +421,8 @@ suspend fun SimklRepository.pushWatchedEpisodeImpl(
     season: Int,
     episode: Int,
     title: String? = null,
-    tmdbId: Int? = null
+    tmdbId: Int? = null,
+    queueWhenParked: Boolean = true
 ): Boolean {
 
     if (!isConfigured() || !hasToken()) {
@@ -340,6 +439,29 @@ suspend fun SimklRepository.pushWatchedEpisodeImpl(
     if (ids == null) {
         Log.i("SIMKL_REPO", "pushWatchedEpisode skipped: unparseable id=$showImdbId")
         return false
+    }
+
+    // F1 + F2: the completion that used to be lost with the session. Parked, it
+    // is queued (and answered true, which releases the player's latch); a 429
+    // below queues it too. The episode is identified by (parent, season,
+    // episode) so a re-queue collapses and an unmark can cancel it.
+    val parkedMs = simklPlaybackParkMs()
+    if (parkedMs > 0L) {
+        Log.i(
+            "SIMKL_REPO",
+            "pushWatchedEpisode skipped: parked for ${parkedMs}ms after a 429 " +
+                "show=$showImdbId s=$season e=$episode"
+        )
+        return queueWhenParked && queueSimklCompletion(
+            simklCompletionEntry(
+                kind = SimklCompletionKind.PUSH_EPISODE,
+                imdbId = showImdbId,
+                tmdbId = tmdbId,
+                title = title,
+                season = season,
+                episodes = listOf(episode)
+            )
+        )
     }
 
     return try {
@@ -376,6 +498,22 @@ suspend fun SimklRepository.pushWatchedEpisodeImpl(
                 "pushWatchedEpisode " + (if (rateLimited) "rate-limited " else "failed ") +
                     "code=${response.code()} body=$errorText"
             )
+            if (rateLimited && queueWhenParked) {
+                if (
+                    queueSimklCompletion(
+                        simklCompletionEntry(
+                            kind = SimklCompletionKind.PUSH_EPISODE,
+                            imdbId = showImdbId,
+                            tmdbId = tmdbId,
+                            title = title,
+                            season = season,
+                            episodes = listOf(episode)
+                        )
+                    )
+                ) {
+                    return true
+                }
+            }
         } else {
             // A fresh watched write invalidates the cached show library
             // and the Continue Watching feed so episode-watched filters
@@ -395,6 +533,7 @@ suspend fun SimklRepository.pushWatchedEpisodeImpl(
             }
 
             Log.i("SIMKL_REPO", "pushWatchedEpisode ok show=$showImdbId s=$season e=$episode")
+            requestSimklCompletionDrain()
         }
 
         response.isSuccessful
@@ -419,7 +558,8 @@ suspend fun SimklRepository.pushWatchedSeasonImpl(
     season: Int,
     episodes: List<Int>,
     title: String? = null,
-    tmdbId: Int? = null
+    tmdbId: Int? = null,
+    queueWhenParked: Boolean = true
 ): Boolean {
 
     if (!isConfigured() || !hasToken()) {
@@ -437,6 +577,26 @@ suspend fun SimklRepository.pushWatchedSeasonImpl(
     if (ids == null) {
         Log.i("SIMKL_REPO", "pushWatchedSeason skipped: unparseable id=$showImdbId")
         return false
+    }
+
+    // F1 + F2: one season mark is one queued write, carrying its episode list.
+    val parkedMs = simklPlaybackParkMs()
+    if (parkedMs > 0L) {
+        Log.i(
+            "SIMKL_REPO",
+            "pushWatchedSeason skipped: parked for ${parkedMs}ms after a 429 " +
+                "show=$showImdbId s=$season eps=${validEpisodes.size}"
+        )
+        return queueWhenParked && queueSimklCompletion(
+            simklCompletionEntry(
+                kind = SimklCompletionKind.PUSH_SEASON,
+                imdbId = showImdbId,
+                tmdbId = tmdbId,
+                title = title,
+                season = season,
+                episodes = validEpisodes
+            )
+        )
     }
 
     return try {
@@ -475,6 +635,22 @@ suspend fun SimklRepository.pushWatchedSeasonImpl(
                 "pushWatchedSeason " + (if (rateLimited) "rate-limited " else "failed ") +
                     "code=${response.code()} body=$errorText"
             )
+            if (rateLimited && queueWhenParked) {
+                if (
+                    queueSimklCompletion(
+                        simklCompletionEntry(
+                            kind = SimklCompletionKind.PUSH_SEASON,
+                            imdbId = showImdbId,
+                            tmdbId = tmdbId,
+                            title = title,
+                            season = season,
+                            episodes = validEpisodes
+                        )
+                    )
+                ) {
+                    return true
+                }
+            }
         } else {
             // Drop the in-memory show snapshot so the next detail load
             // re-fetches fresh per-episode state from Simkl instead of
@@ -497,6 +673,7 @@ suspend fun SimklRepository.pushWatchedSeasonImpl(
             }
 
             Log.i("SIMKL_REPO", "pushWatchedSeason ok show=$showImdbId s=$season eps=${validEpisodes.size}")
+            requestSimklCompletionDrain()
         }
 
         response.isSuccessful
@@ -537,6 +714,25 @@ suspend fun SimklRepository.removeWatchedSeasonImpl(
     val ids = parsePlaybackIds(showImdbId, tmdbId)
     if (ids == null) {
         Log.i("SIMKL_REPO", "removeWatchedSeason skipped: unparseable id=$showImdbId")
+        return false
+    }
+
+    // A season unmark cancels that season's queued pushes - the season write and
+    // any single-episode ones inside it (F2).
+    cancelQueuedSimklCompletions(
+        imdbId = showImdbId,
+        kind = SimklCompletionKind.PUSH_SEASON,
+        season = season
+    )
+
+    // F1: removals are gated too, and never queued.
+    val parkedMs = simklPlaybackParkMs()
+    if (parkedMs > 0L) {
+        Log.i(
+            "SIMKL_REPO",
+            "removeWatchedSeason skipped: parked for ${parkedMs}ms after a 429 " +
+                "show=$showImdbId s=$season eps=${validEpisodes.size}"
+        )
         return false
     }
 
@@ -601,4 +797,87 @@ suspend fun SimklRepository.removeWatchedSeasonImpl(
         Log.e("SIMKL_REPO", "removeWatchedSeason error: ${e.message}", e)
         false
     }
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * The completion queue's side of the contract (spec 2026-11-20, F1 + F2)
+ * ---------------------------------------------------------------------------
+ *
+ * The gate and the queue live AT THE IMPLS rather than at the call sites, so the
+ * two things that write history - the players' completion sync and a manual
+ * "marked watched" from a poster long-press - are covered by one rule. Nothing
+ * that calls these functions had to change.
+ *
+ * Audit rule for this file: every `noteSimklPlaybackRateLimit` site (the seven
+ * write impls and the scrobble path) has a matching `simklPlaybackParkMs()` gate
+ * before it fires. A future write that notes the park gets the gate in the same
+ * commit, or the class regrows the defect the field found.
+ */
+
+/** The write a parked impl hands to the queue, in the queue's own shape. */
+private fun simklCompletionEntry(
+    kind: SimklCompletionKind,
+    imdbId: String,
+    tmdbId: Int?,
+    title: String?,
+    season: Int = 0,
+    episodes: List<Int> = emptyList()
+): SimklCompletionEntry = SimklCompletionEntry(
+    kind = kind.name,
+    imdbId = imdbId,
+    tmdbId = tmdbId,
+    title = title,
+    season = season,
+    episodes = episodes,
+    profileId = com.kennyb1201.kbstream.data.sync.ProfileManager
+        .activeProfile.value?.id
+        ?: "",
+    enqueuedAt = System.currentTimeMillis()
+)
+
+/**
+ * Queues [entry]. True only when it is now safely on disk.
+ *
+ * The caller answers that true to the player's latch, which is the point: the
+ * write is ACCEPTED, not merely failed, so the completion stops being re-posted
+ * every tick and `trackers: completion` reads ok (F2's return contract).
+ */
+private fun queueSimklCompletion(entry: SimklCompletionEntry): Boolean {
+    val app = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext ?: return false
+    val queued = SimklCompletionQueue.enqueue(app, entry)
+    if (queued) {
+        Log.i(
+            "SIMKL_REPO",
+            "${entry.kind} queued for ${entry.title ?: entry.imdbId}: the playback leg is " +
+                "parked, so this drains after the park instead of being lost with the session"
+        )
+        // Cheap and useful: the drain sees the park and schedules the wake.
+        SimklCompletionSubmission.requestDrain(app)
+    }
+    return queued
+}
+
+/** Asks the drain to run; it returns immediately when nothing is queued. */
+private fun requestSimklCompletionDrain() {
+    val app = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext ?: return
+    if (SimklCompletionQueue.depth(app) == 0) return
+    SimklCompletionSubmission.requestDrain(app)
+}
+
+/** An unmark cancels the queued pushes it takes back (F2). */
+private fun cancelQueuedSimklCompletions(
+    imdbId: String,
+    kind: SimklCompletionKind,
+    season: Int = 0,
+    episodes: List<Int> = emptyList()
+) {
+    val app = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext ?: return
+    SimklCompletionQueue.cancelQueuedPushes(
+        context = app,
+        imdbId = imdbId,
+        kind = kind,
+        season = season,
+        episodes = episodes
+    )
 }

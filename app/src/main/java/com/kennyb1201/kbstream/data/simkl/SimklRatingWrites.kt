@@ -103,6 +103,17 @@ private val simklPlaybackGuard = SimklRatingGuard()
 internal fun simklPlaybackParkMs(): Long = simklPlaybackGuard.parkedForMs()
 
 /**
+ * The quota class of the playback park in force, or null when the leg is not
+ * parked (spec 2026-11-20, F3).
+ *
+ * The ratings leg has had this word since the quota spec; the history leg did
+ * not, so a paste could show a 397-minute park with no way to tell this
+ * account's own quota from the app's. Same classifier, same two words.
+ */
+internal fun simklPlaybackParkLimitLabel(): String? =
+    simklPlaybackGuard.parkLimitLabel()
+
+/**
  * Gives both legs a park that survives process death (spec 2026-11-19, F1).
  *
  * Called once at app start. Two separate keys, because the two guards are
