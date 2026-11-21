@@ -2265,17 +2265,69 @@ class LibraryViewModel(
      * plain LOCAL rows were not. A local row whose TMDB id never resolved is
      * treated like any other unrated title, by [KidsMode]'s known-unknown rule
      * (kept on PG-13, dropped on the strict ceilings).
+     *
+     * The digital-release switch rides here too (2026-11-20), because this is
+     * the ONE entry every row set goes through - the watchlist, the canonical
+     * rows, a list's own items and the merged set all call it. Kenny, on the
+     * pinned-rail report: "if that filter's in it should apply everywhere". A
+     * theatrical-only movie used to draw in a Library list with the filter on
+     * while the same title was hidden on every Home rail.
+     *
+     * Both passes are view-only, in the same way the WATCHED HIDDEN filter is:
+     * membership is untouched, nothing leaves a list, sync is unaffected, and
+     * switching the toggle off reveals every row again. The order between the
+     * two does not matter - the ceiling drops titles by certification, the
+     * release pass drops movies by availability, and neither can rescue a row
+     * the other removed.
      */
     private suspend fun kidsFiltered(items: List<LibraryItem>): List<LibraryItem> {
-        if (tmdbRepository.kidsMaxAge() == null || items.isEmpty()) return items
-        return tmdbRepository.kidsFilter(items) { row ->
-            val type = when (row.mediaType.lowercase()) {
-                "tv", "series" -> "series"
-                else -> "movie"
+        if (items.isEmpty()) return items
+        val ceilinged = if (tmdbRepository.kidsMaxAge() == null) {
+            items
+        } else {
+            tmdbRepository.kidsFilter(items) { row ->
+                (row.tmdbId ?: -1) to row.libraryMediaType()
             }
-            (row.tmdbId ?: -1) to type
         }
+        return releaseFiltered(ceilinged)
     }
+
+    /**
+     * Drops movie rows the digital-release switch says are not at home yet.
+     *
+     * The shared raw-id entry point, the same one the KB folder, add-on search
+     * and now the pinned Home rails use - there is no second verdict path here.
+     * It is gated on the Settings switch itself, so filter-off costs nothing,
+     * and verdicts are process-cached, so the same title in two lists (or two
+     * rebuilds) is asked once.
+     */
+    private suspend fun releaseFiltered(items: List<LibraryItem>): List<LibraryItem> {
+        if (items.isEmpty()) return items
+        // Only rows that can be asked about take the pass. A row with no id at
+        // all has no verdict to reach, and it stays visible - which is exactly
+        // what the filter's own unknown-verdict rule would give it anyway.
+        val identified = items.filter { row -> row.navigationId != null }
+        if (identified.isEmpty()) return items
+        val kept = tmdbRepository.filterByHomeAvailabilityById(
+            items = identified,
+            id = { row -> row.navigationId.orEmpty() },
+            type = { row -> row.libraryMediaType() },
+            releasedYear = { row -> row.year }
+        )
+        if (kept.size == identified.size) return items
+        // Rebuilt in the caller's order: these rows feed display lists whose
+        // order the viewer set with the sort chips, and this is a membership
+        // question, not a re-sort.
+        val keptSet = kept.toHashSet()
+        return items.filter { row -> row.navigationId == null || row in keptSet }
+    }
+
+    /** The type string the kids and release passes both key on. */
+    private fun LibraryItem.libraryMediaType(): String =
+        when (mediaType.lowercase()) {
+            "tv", "series" -> "series"
+            else -> "movie"
+        }
 
     /**
      * The display lists [pushDisplay] can rebuild, one per canonical source.

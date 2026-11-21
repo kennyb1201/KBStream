@@ -99,7 +99,38 @@ internal fun rememberLibraryHomeRailsState(): State<LibraryHomeRailsState> {
                     unreadable += pin.name
                     return@forEach
                 }
-                val items = tmdb.kidsFilterMetas(rows.mapNotNull { it.homeRailMeta() })
+                val ceilinged = tmdb.kidsFilterMetas(rows.mapNotNull { it.homeRailMeta() })
+                // The digital-release switch applies to a pinned Library list
+                // exactly as it applies to every other rail on Home.
+                //
+                // It did not, and that was the field report of 2026-11-20: The
+                // Hunger Games: Sunrise on the Reaping - theatrical that same
+                // day, no digital date - drew on Home inside a pinned list with
+                // the filter switched on, and on no other surface. The catalog
+                // rails get this pass at publish (filterCatalogRowBehind) and
+                // the pinned "Top … Today" rails get it by deferral, but this
+                // loader, which is the ONLY source of pinned Library rails for
+                // both Home screens, applied the kids ceiling and nothing else.
+                //
+                // The shared raw-id entry point, not a second verdict path: the
+                // rows carry an IMDb id or `tmdb:<n>` (see homeRailMeta), which
+                // is the id shape it resolves. It is gated on the Settings
+                // switch itself, so the toggle-off case costs nothing, and it
+                // is inline rather than deferred because this load is already
+                // off the main thread and the rail cannot draw until it lands -
+                // there is no published row here to get out of the way of.
+                // Verdicts are process-cached, so re-pinning or recomposing does
+                // not ask again.
+                val items = tmdb.filterByHomeAvailabilityById(
+                    items = ceilinged,
+                    id = { meta -> meta.id },
+                    type = { meta -> meta.type },
+                    // The same year source HomeViewModel's rails pass: it
+                    // reads a plain "2026" and a full "2026-12-25" alike, so
+                    // the age gate can answer "definitely released" without a
+                    // detail fetch per card.
+                    releasedYear = { meta -> meta.yearOrNull }
+                )
                 // A list that answered with nothing is not a rail: an empty
                 // heading is a promise Home cannot keep.
                 if (items.isNotEmpty()) rails += LibraryHomeRailUi(pin, items)
