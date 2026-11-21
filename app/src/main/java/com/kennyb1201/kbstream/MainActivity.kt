@@ -2799,14 +2799,19 @@ fun AppRoot(
     // other TV screen had no route to SEARCH / TV GUIDE / LIBRARY / SETTINGS /
     // HOME at all except one Back per step.
     //
-    // Left from an item with nothing to its left is the summon, on every screen -
-    // the same press Home's rail heads already answer with the bar, and the one
-    // direction key that is a dead press at the start of a row. There is no hold
-    // to learn and no second gesture: Left either steps along the row or, when
-    // there is no step to take, opens the bar.
+    // A dead press is the summon, on every screen: Left with nothing to its left
+    // (the start of a row, which Home's rail heads already answer) or Up with
+    // nothing above it (the first row of the screen). Neither press has a step
+    // to take there, so there is nothing to preserve and no hold to learn: the
+    // key either moves focus or, when the search finds no target, opens the bar.
+    //
+    // The pair matters on a rail-heavy screen because Left and Up are the two
+    // directions a viewer tries to get back to the top: from the head of a rail
+    // Left is dead, and from the top rail Up is dead. Both now go where the
+    // viewer meant, and a press that DOES have a target still just moves.
     var appTopBarVisible by remember { mutableStateOf(false) }
-    // Running a Left search is how you ask whether a Left press has anywhere to
-    // go: the search either moves focus or answers that it cannot.
+    // Running the search is how you ask whether the press has anywhere to go:
+    // it either moves focus or answers that it cannot.
     val appTopBarFocus = LocalFocusManager.current
 
     // Not over the kids-time lock: the veil swallows every press, and a bar
@@ -2878,22 +2883,25 @@ fun AppRoot(
     Column(modifier = Modifier.fillMaxSize()) {
     Box(modifier = Modifier.weight(1f).fillMaxWidth()
             // Bubble phase, not preview: the screen gets the press first. A
-            // screen that gives Left a job of its own (TV Guide's channel
-            // column switches groups, Library's calendar pages months, each in
-            // its own handler) consumes it and this never runs - what reaches
-            // here is a Left nobody wanted.
+            // screen that gives Left or Up a job of its own (TV Guide's channel
+            // column switches groups, Library's calendar pages months, Spotlight
+            // returns Up to its pills, each in its own handler) consumes it and
+            // this never runs - what reaches here is a press nobody wanted.
             .onKeyEvent { event ->
-                if (!appTopBarArmed ||
-                    event.type != KeyEventType.KeyDown ||
-                    event.key != Key.DirectionLeft
-                ) {
+                if (!appTopBarArmed || event.type != KeyEventType.KeyDown) {
                     return@onKeyEvent false
+                }
+                val direction = when (event.key) {
+                    Key.DirectionLeft -> FocusDirection.Left
+                    Key.DirectionUp -> FocusDirection.Up
+                    else -> return@onKeyEvent false
                 }
                 // The press is answered here rather than left to the focus
                 // system: running the search the press would have run both
-                // takes the ordinary step along a row and tells apart the dead
-                // press - nothing to the left - that opens the bar.
-                if (!appTopBarFocus.moveFocus(FocusDirection.Left)) {
+                // takes the ordinary step (along the row, or up to the row
+                // above) and tells apart the dead press - nothing that way -
+                // that opens the bar.
+                if (!appTopBarFocus.moveFocus(direction)) {
                     appTopBarVisible = true
                 }
                 true
