@@ -145,6 +145,55 @@ internal fun chipRevealTarget(
 }
 
 /**
+ * The reveal decision for a row the grid has COMPOSED but not measured.
+ *
+ * [chipRevealTarget] needs the row's own geometry, and the only place that
+ * carries it is `visibleItemsInfo` - which lists the items intersecting the
+ * viewport, not the items in the composition. Focus lands on cells the lazy
+ * grid composed ahead of the viewport (the cache window, the pre-composition
+ * the Search screen grew for focus), so the row holding focus can be absent
+ * from that list. Asking `chipRevealTarget` about it was not possible and the
+ * caller returned instead, which meant nothing scrolled: [NO_CHIP_REVEAL_SPEC]
+ * has already turned the framework's own reveal off inside this grid, so the
+ * focused chip walked off-screen and kept walking (field, 2026-11-20).
+ *
+ * Direction comes from the layout instead of from geometry: an index past the
+ * last visible one is below, before the first is above. [proxyRowHeight] is a
+ * VISIBLE row's height standing in for the target's - rows share a height
+ * within a row, and a constant would be wrong the moment a curated chip wraps
+ * to two lines - so the bottom landing is the same arithmetic
+ * [chipRevealTarget] does, with the proxy in place of a measurement it does not
+ * have.
+ *
+ * Degenerate layouts answer [ChipReveal.None] rather than guessing: no visible
+ * row to take a height or an index from, a non-positive proxy, or a viewport
+ * with no height. The caller's fallback for that case is a plain
+ * top-aligned `scrollToItem`, which is still better than focus off-screen, but
+ * this function does not pretend to know a direction from nothing.
+ *
+ * [index] inside `firstVisibleIndex..lastVisibleIndex` is also None: that row
+ * IS measured, so the measured rule owns it and must keep deciding.
+ */
+internal fun chipRevealTargetUnmeasured(
+    index: Int,
+    firstVisibleIndex: Int,
+    lastVisibleIndex: Int,
+    viewportHeight: Int,
+    proxyRowHeight: Int,
+    edgeInset: Int = 0
+): ChipReveal {
+    if (index < 0) return ChipReveal.None
+    if (firstVisibleIndex < 0 || lastVisibleIndex < firstVisibleIndex) return ChipReveal.None
+    if (index in firstVisibleIndex..lastVisibleIndex) return ChipReveal.None
+    if (viewportHeight <= 0 || proxyRowHeight <= 0) return ChipReveal.None
+    return if (index > lastVisibleIndex) {
+        ChipReveal.Bottom(index, proxyRowHeight - viewportHeight + edgeInset)
+    } else {
+        ChipReveal.Top(index, -edgeInset)
+    }
+}
+
+/**
  * The index that takes a removed item's place: the next one, or the one before
  * it when the removed item was the last.
  *

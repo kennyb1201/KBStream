@@ -248,6 +248,76 @@ class BrowseRulesTest {
         )
     }
 
+    private fun revealUnmeasured(
+        index: Int,
+        firstVisible: Int = 4,
+        lastVisible: Int = 7,
+        viewportHeight: Int = 600,
+        proxyRowHeight: Int = 120,
+        edgeInset: Int = 0
+    ) = chipRevealTargetUnmeasured(
+        index = index,
+        firstVisibleIndex = firstVisible,
+        lastVisibleIndex = lastVisible,
+        viewportHeight = viewportHeight,
+        proxyRowHeight = proxyRowHeight,
+        edgeInset = edgeInset
+    )
+
+    @Test
+    fun `a chip focus reached below the composed window scrolls to it`() {
+        // The field bug (2026-11-20): focus lands on a composed-but-not-visible
+        // cell, visibleItemsInfo does not list it, and nothing scrolls. Below the
+        // last visible index, the landing is the bottom one - the same arithmetic
+        // chipRevealTarget does, with the nearest visible row's height standing
+        // in for the measurement that does not exist.
+        assertEquals(ChipReveal.Bottom(12, 120 - 600), revealUnmeasured(index = 12))
+        assertEquals(
+            "and the cue room is kept off the bottom edge",
+            ChipReveal.Bottom(12, 120 - 600 + 10),
+            revealUnmeasured(index = 12, edgeInset = 10)
+        )
+    }
+
+    @Test
+    fun `a chip focus reached above the composed window scrolls up`() {
+        assertEquals(ChipReveal.Top(1, 0), revealUnmeasured(index = 1))
+        assertEquals(
+            "the cue room above a top landing is negative, as the measured rule's is",
+            ChipReveal.Top(1, -10),
+            revealUnmeasured(index = 1, edgeInset = 10)
+        )
+    }
+
+    @Test
+    fun `a row inside the composed window belongs to the measured rule`() {
+        // Not this rule's business: if the layout listed it, the measured
+        // decision has geometry and must keep deciding.
+        (4..7).forEach { index ->
+            assertEquals(ChipReveal.None, revealUnmeasured(index = index))
+        }
+    }
+
+    @Test
+    fun `an unmeasured layout never guesses a direction`() {
+        assertEquals(
+            "nothing visible: no index and no height to infer from",
+            ChipReveal.None,
+            revealUnmeasured(index = 12, firstVisible = -1, lastVisible = -1)
+        )
+        assertEquals(
+            "a proxy row with no height cannot size a bottom landing",
+            ChipReveal.None,
+            revealUnmeasured(index = 12, proxyRowHeight = 0)
+        )
+        assertEquals(
+            "a viewport with no height cannot either",
+            ChipReveal.None,
+            revealUnmeasured(index = 12, viewportHeight = 0)
+        )
+        assertEquals(ChipReveal.None, revealUnmeasured(index = -1))
+    }
+
     @Test
     fun `every browse category has a noun and a blurb`() {
         val keys = BROWSE_CATEGORIES.map { it.key }

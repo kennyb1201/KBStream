@@ -1021,9 +1021,16 @@ private fun ChipRevealScope(content: @Composable () -> Unit) {
  *    landed on ([edgeInsetPx]), so a row the viewer is ON is revealed with its
  *    whole cue instead of flush with the clip.
  *
- * A row that is not composed cannot be measured, and a cell that is not
- * composed cannot be focused either, so that case simply does nothing rather
- * than guessing a scroll from a constant.
+ * A row that is not composed cannot be focused, and a cell that is not
+ * composed cannot be measured - but those are two different sets. Focus reaches
+ * cells the lazy grid composed OUTSIDE the viewport (its cache window, and the
+ * pre-composition the Search screen grew so focus has somewhere to land), while
+ * `visibleItemsInfo` lists only what intersects the viewport. Returning on the
+ * misses is what let the focused chip walk off-screen with nothing scrolling:
+ * the framework's own reveal is off inside this grid ([NO_CHIP_REVEAL_SPEC]), so
+ * this function is the only scroll there is. The unmeasured case therefore
+ * scrolls BY INDEX instead - see [chipRevealTargetUnmeasured] for the decision
+ * and why a visible row's height stands in for the target's.
  */
 private suspend fun revealFocusedChipRow(
     state: LazyGridState,
@@ -1031,8 +1038,47 @@ private suspend fun revealFocusedChipRow(
     /** The cue room in raw pixels, resolved by the caller from the theme. */
     edgeInsetPx: Int
 ) {
-    val info = state.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
-        ?: return
+    val layout = state.layoutInfo
+    val visible = layout.visibleItemsInfo
+    val info = visible.firstOrNull { it.index == index }
+
+    if (info == null) {
+        val firstVisible = visible.firstOrNull()?.index ?: -1
+        val lastVisible = visible.lastOrNull()?.index ?: -1
+        // The nearest visible row's height stands in for the target's: rows
+        // share a height within a row, and the reveal's own contract is that a
+        // size never comes from a constant.
+        val proxyRowHeight = visible
+            .minByOrNull { item -> kotlin.math.abs(item.index - index) }
+            ?.size
+            ?.height
+            ?: 0
+
+        when (
+            val target = chipRevealTargetUnmeasured(
+                index = index,
+                firstVisibleIndex = firstVisible,
+                lastVisibleIndex = lastVisible,
+                viewportHeight = layout.viewportEndOffset - layout.viewportStartOffset,
+                proxyRowHeight = proxyRowHeight,
+                edgeInset = edgeInsetPx
+            )
+        ) {
+            // Nothing measured at all (a grid that has not laid out yet): align
+            // the row to the top rather than leave focus where nothing can see
+            // it. Top-aligned beats off-screen, and it is the one case with no
+            // direction to infer.
+            ChipReveal.None -> runCatching { state.scrollToItem(index, 0) }
+            is ChipReveal.Top -> runCatching {
+                state.animateScrollToItem(target.index, target.scrollOffset)
+            }
+            is ChipReveal.Bottom -> runCatching {
+                state.animateScrollToItem(target.index, target.scrollOffset)
+            }
+        }
+        return
+    }
+
     when (
         val target = chipRevealTarget(
             index = index,
