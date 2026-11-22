@@ -149,11 +149,12 @@ class DetailTraceDiagnosticsContractTest {
                 )
         )
         assertTrue(
-            "E3: both arms of the toggle, named by direction - and since 2026-11-21 " +
-                "by TARGET too, because the toggle is a chain row with an answer of " +
-                "its own rather than a borrow of HEADER's",
+            "E3: both arms of the toggle, named by direction - and since 2026-11-22 " +
+                "DOWN names the next chain row, or geometry when the facts/ratings " +
+                "cards are the only content left",
             detail.contains("detail toggle UP -> \$target landed=\$landed") &&
-                detail.contains("detail toggle DOWN -> TABS landed=\$landed")
+                detail.contains("detail toggle DOWN -> \${target?.name ?: \"geometry\"} ") &&
+                detail.contains("landed=\$landed")
         )
     }
 

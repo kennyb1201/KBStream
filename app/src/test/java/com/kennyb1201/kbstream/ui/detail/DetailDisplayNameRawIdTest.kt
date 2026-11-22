@@ -113,7 +113,7 @@ class DetailDisplayNameRawIdTest {
             startMarker = "val displayName = remember(m, tmdbDetail) {",
             // The keywords line now also remembers the kids ceiling (spec
             // 2026-11-18, F2) - it is still the block's end marker.
-            endMarker = "val keywords = remember(tmdbDetail, kidsCeiling)"
+            endMarker = "val keywords = remember(tmdbDetail?.keywords, kidsCeiling)"
         )
         assertTrue(
             "the display name must go through detailDisplayName, not a raw meta name",

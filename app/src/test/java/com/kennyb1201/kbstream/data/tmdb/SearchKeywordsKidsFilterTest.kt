@@ -210,7 +210,7 @@ class SearchKeywordsKidsFilterTest {
                 "the render both read this one value, so the row and its chain entry " +
                 "cannot disagree",
             screen.contains(
-                "val keywords = remember(tmdbDetail, kidsCeiling) {\n" +
+                "val keywords = remember(tmdbDetail?.keywords, kidsCeiling) {\n" +
                     "                if (kidsCeiling != null) {\n" +
                     "                    emptyList()\n" +
                     "                } else {\n" +
@@ -237,7 +237,7 @@ class SearchKeywordsKidsFilterTest {
         )
         assertTrue(
             "and empties the keyword chips, keeping the genres (a fixed vocabulary)",
-            mobile.contains("val keywords = remember(tmdbDetail, kidsCeiling) {") &&
+            mobile.contains("val keywords = remember(tmdbDetail?.keywords, kidsCeiling) {") &&
                 mobile.contains(
                     "if (kidsCeiling != null) emptyList() else tmdbDetail?.keywords?.list().orEmpty()"
                 )

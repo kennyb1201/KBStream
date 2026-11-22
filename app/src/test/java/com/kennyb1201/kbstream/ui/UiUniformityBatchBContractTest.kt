@@ -141,15 +141,14 @@ class UiUniformityBatchBContractTest {
             source("ui/home/HomeScreen.kt").contains("KBSectionHeader( title = text,")
         )
         val detail = source("ui/detail/DetailScreen.kt")
-        // Seven, not eight: the EPISODES heading is gone with the season chips it
-        // named - the seasons are a poster row now, and the row carries no
-        // heading of its own (Kenny's season-picker spec, 2026-11-15). Every
-        // heading Detail still has is the shared one.
+        // Three: the headers that repeated the tab strip were removed on
+        // 2026-11-21, leaving the fixed section headings the tabs do not name
+        // (NETWORK, PRODUCTION, COLLECTION). Every heading Detail still has is
+        // the shared one.
         assertEquals(
-            "Detail's rail headings are all the shared heading - including the " +
-                "Media row's, whose tab strip sits UNDER the heading rather " +
-                "than replacing it",
-            7,
+            "Detail's rail headings are all the shared heading - the remaining " +
+                "section headings, with the tab-named ones gone",
+            3,
             count(detail, "KBSectionHeader(")
         )
         // The file-wide "no titleSmall in Detail" check this replaces was
@@ -158,13 +157,19 @@ class UiUniformityBatchBContractTest {
         // old treatment actually was is a heading drawn at its own 14sp
         // Medium, so pin the headings themselves - reintroducing a hand-rolled
         // one fails these, and the cards are free to name a title a title.
-        listOf("PEOPLE", "NETWORK", "PRODUCTION", "REVIEWS", "MEDIA", "MORE LIKE THIS")
-            .forEach { label ->
-                assertTrue(
-                    "Detail's \"$label\" heading is not the shared section header",
-                    detail.contains("KBSectionHeader( title = \"$label\",")
-                )
-            }
+        val normalized = detail.replace(Regex("\\s+"), " ")
+        listOf("NETWORK", "PRODUCTION").forEach { label ->
+            assertTrue(
+                "Detail's \"$label\" heading is not the shared section header",
+                normalized.contains("KBSectionHeader( title = \"$label\",")
+            )
+        }
+        assertTrue(
+            "Detail's collection heading is the shared section header too",
+            normalized.contains(
+                "KBSectionHeader( title = collection?.name?.uppercase() ?: \"COLLECTION\","
+            )
+        )
         assertTrue(
             "and Home's collection rail is not a fourth heading treatment of " +
                 "its own",
