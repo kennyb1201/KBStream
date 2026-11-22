@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -116,6 +117,8 @@ import com.kennyb1201.kbstream.data.sports.EspnGameSummary
 import com.kennyb1201.kbstream.data.sports.GameState
 import com.kennyb1201.kbstream.data.sports.Leader
 import com.kennyb1201.kbstream.data.sports.PointsColumn
+import com.kennyb1201.kbstream.data.format.DateFormats
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.sports.SportsGame
 import com.kennyb1201.kbstream.data.sports.SportsLeague
 import com.kennyb1201.kbstream.data.sports.SportsLeagues
@@ -155,6 +158,7 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.InterFamily
 import kotlin.math.abs
 import kotlinx.coroutines.android.awaitFrame
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** The gap between the two cards of a grid row. */
@@ -1190,7 +1194,10 @@ private fun SportsHeader(
             )
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             HeaderIconButton(
                 icon = Icons.Filled.Search,
                 contentDescription = "Search",
@@ -1208,9 +1215,71 @@ private fun SportsHeader(
                 contentDescription = "Leagues",
                 onClick = onLeaguesClick,
             )
+            // The wall clock, LAST so its right edge is the header's right
+            // edge and a wider time extends leftward instead of nudging the
+            // controls. Display-only, so the D-pad's order across the three
+            // glyphs is untouched.
+            SportsHeaderClock()
         }
     }
 }
+
+/**
+ * The hub header's wall clock: the current local time, right-aligned beside the
+ * header controls.
+ *
+ * The player's clock and this one read the SAME source of truth - the app's own
+ * 12/24-hour toggle ([AppPreferences.getUse24HourClock]), not the device
+ * setting - and the same formatter pair, so the two cannot disagree. The pref is
+ * read when each tick is FORMATTED rather than remembered, so flipping the
+ * toggle in Settings takes effect by the next minute at the latest.
+ *
+ * One tick per minute boundary, never per second: the delay is computed to the
+ * next minute and the state is written once. The state lives here, in the
+ * header's composition, so leaving the hub cancels it. Tabular figures and a
+ * reserved width keep `9:59 -> 10:00` from moving anything: the text is
+ * right-aligned inside a box that is already wide enough for the longest
+ * reading.
+ *
+ * Display-only by construction: no card, no focusable modifier, so it is not a
+ * stop in the page's D-pad walk.
+ */
+@Composable
+private fun SportsHeaderClock(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+
+    fun readClock(): String {
+        val formatter = if (AppPreferences.getUse24HourClock(context)) {
+            DateFormats.clock24h()
+        } else {
+            DateFormats.clock12h()
+        }
+        return DateFormats.now(formatter)
+    }
+
+    var time by remember { mutableStateOf(readClock()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(millisUntilNextMinute(System.currentTimeMillis()))
+            time = readClock()
+        }
+    }
+
+    Text(
+        text = time,
+        color = KBTextHi,
+        style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
+        textAlign = TextAlign.End,
+        maxLines = 1,
+        modifier = modifier.widthIn(min = SPORTS_CLOCK_MIN_WIDTH)
+    )
+}
+
+/**
+ * Reserved width for the header clock: wide enough for `12:00 PM` and `23:59`
+ * at the header's own type size, so the minute roll never resizes the box.
+ */
+private val SPORTS_CLOCK_MIN_WIDTH = 84.dp
 
 /**
  * One header control: the word buttons' [KBCard] with a glyph in place of the
