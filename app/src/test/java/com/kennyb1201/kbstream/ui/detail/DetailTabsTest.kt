@@ -19,6 +19,7 @@ class DetailTabsTest {
 
     private fun rows(
         genre: Boolean = false,
+        overview: Boolean = false,
         keywords: Boolean = false,
         episodes: Boolean = false,
         people: Boolean = false,
@@ -30,6 +31,7 @@ class DetailTabsTest {
         moreLikeThis: Boolean = false
     ) = DetailRowPresence(
         hasGenreRow = genre,
+        hasOverviewRow = overview,
         hasKeywordsRow = keywords,
         hasEpisodesRow = episodes,
         hasPeopleRow = people,
@@ -160,6 +162,7 @@ class DetailTabsTest {
     fun `a tab owns only its own rows, and the strip exists on every page`() {
         val page = rows(
             genre = true,
+            overview = true,
             keywords = true,
             episodes = true,
             people = true,
@@ -172,6 +175,7 @@ class DetailTabsTest {
         )
 
         val details = DetailTabChain.rowPresence(DetailTab.DETAILS, page)
+        assertTrue("the overview is the first row of Details", details.hasOverviewRow)
         assertTrue(details.hasKeywordsRow)
         assertTrue(details.hasNetworkRow)
         assertTrue(details.hasProductionRow)
@@ -187,6 +191,7 @@ class DetailTabsTest {
 
         val episodes = DetailTabChain.rowPresence(DetailTab.EPISODES, page)
         assertTrue(episodes.hasEpisodesRow)
+        assertFalse("the overview is Details content only", episodes.hasOverviewRow)
         assertFalse(episodes.hasKeywordsRow)
         assertFalse(episodes.hasPeopleRow)
 
@@ -212,6 +217,7 @@ class DetailTabsTest {
     @Test
     fun `each tab's first row is the row under the strip`() {
         val page = rows(
+            overview = true,
             keywords = true,
             episodes = true,
             people = true,
@@ -225,9 +231,14 @@ class DetailTabsTest {
             DetailTabChain.firstRow(DetailTab.EPISODES, page)
         )
         assertEquals(
-            "Details enters at its first chip rail",
-            DetailRow.KEYWORDS,
+            "Details enters at the overview toggle when it is there",
+            DetailRow.OVERVIEW,
             DetailTabChain.firstRow(DetailTab.DETAILS, page)
+        )
+        assertEquals(
+            "without an overview, Details enters at its first chip rail",
+            DetailRow.KEYWORDS,
+            DetailTabChain.firstRow(DetailTab.DETAILS, rows(keywords = true))
         )
         assertEquals(DetailRow.PEOPLE, DetailTabChain.firstRow(DetailTab.CAST, page))
         assertEquals(
@@ -237,9 +248,10 @@ class DetailTabsTest {
         assertEquals(DetailRow.REVIEWS, DetailTabChain.firstRow(DetailTab.REVIEWS, page))
         assertEquals(DetailRow.MEDIA, DetailTabChain.firstRow(DetailTab.MEDIA, page))
 
-        // Details with no chip rows at all: nothing in the chain below the
-        // strip, so the screen falls back to the geometric search (the overview
-        // toggle or the first fact card) rather than pressing into nothing.
+        // Details with no overview toggle and no chip rows: nothing in the
+        // chain below the strip, so the screen falls back to the geometric
+        // search (the first fact or rating card) rather than pressing into
+        // nothing.
         assertNull(DetailTabChain.firstRow(DetailTab.DETAILS, rows()))
     }
 
@@ -263,6 +275,11 @@ class DetailTabsTest {
         // tab a title CAN have is painted from the first frame. Nothing here
         // reads the loaded rows, so no pill can pop in or out mid-load.
         assertEquals(DetailTab.entries, DetailTabChain.stableTabs(isSeries = true))
+        assertEquals(
+            "the strip paints Details first and Episodes second",
+            listOf(DetailTab.DETAILS, DetailTab.EPISODES, DetailTab.CAST),
+            DetailTabChain.stableTabs(isSeries = true).take(3)
+        )
         assertEquals(
             listOf(
                 DetailTab.DETAILS,

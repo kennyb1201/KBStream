@@ -419,6 +419,7 @@ class DetailFocusChainWiringContractTest {
             "HEADER",
             "GENRE",
             "TABS",
+            "OVERVIEW",
             "KEYWORDS",
             "EPISODES",
             "PEOPLE",

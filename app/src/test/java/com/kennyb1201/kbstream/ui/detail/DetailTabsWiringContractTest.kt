@@ -147,10 +147,10 @@ class DetailTabsWiringContractTest {
                 "DetailTabChain.rowPresence(activeTab, pageRowPresence)"
             ) && screen.contains("DetailTabChain.rowPresence(activeTab, page)")
         )
-        assertFalse(
-            "and the overview's toggle is not a Details-tab-only stop any more: it " +
-                "lives in the fixed header above the strip, on every tab (2026-11-21)",
-            screen.contains("from == firstListRow(")
+        assertTrue(
+            "the overview toggle is a Details-tab-only stop again (2026-11-22), " +
+                "so it is part of that tab's row presence",
+            screen.contains("hasOverviewRow = overviewToggleAvailable")
         )
         assertTrue(
             "the page declares one tab list, and DetailTab.DETAILS is always in it",
@@ -183,7 +183,7 @@ class DetailTabsWiringContractTest {
     @Test
     fun `the six labels are the ones the page names`() {
         assertEquals(
-            listOf("Episodes", "Details", "Cast", "More Like This", "Reviews", "Media"),
+            listOf("Details", "Episodes", "Cast", "More Like This", "Reviews", "Media"),
             DetailTab.entries.map { it.label }
         )
     }

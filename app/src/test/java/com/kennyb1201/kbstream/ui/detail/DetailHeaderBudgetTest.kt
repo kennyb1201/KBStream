@@ -5,12 +5,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Rule 6 of the 2026-11-21 Detail spec: the fixed header must never push the
- * tab strip off the screen, and its collapsed height must leave the first
- * content row.
+ * The overview's line caps on a 960x540dp television.
  *
- * The overview is the only unbounded part of that header, so its line budget is
- * the rule. These are the numbers a 960x540dp television gets.
+ * The block scrolls inside the Details tab now, so this is no longer a
+ * fixed-header guarantee; the caps still keep the collapsed summary short and
+ * the expanded form bounded, and expanding never shows fewer lines.
  */
 class DetailHeaderBudgetTest {
 

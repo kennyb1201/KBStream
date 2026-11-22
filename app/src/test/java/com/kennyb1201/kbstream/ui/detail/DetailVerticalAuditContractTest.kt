@@ -206,8 +206,8 @@ class DetailVerticalAuditContractTest {
         )
         assertEquals(
             "T6: the page's eleven content rows are untouched - the strip is the " +
-                "route INTO them, and the overview's toggle is the one row added above " +
-                "it (2026-11-21), rather than around a miss",
+                "route INTO them, and the overview's toggle is the first row below " +
+                "it (2026-11-22), rather than around a miss",
             13,
             DetailRow.entries.size
         )

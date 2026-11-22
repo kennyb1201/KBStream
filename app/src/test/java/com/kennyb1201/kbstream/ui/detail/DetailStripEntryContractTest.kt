@@ -6,8 +6,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * DOWN out of the detail page's tab strip, and the overview above it
- * (2026-11-21 revision).
+ * DOWN out of the detail page's tab strip, and the overview below it
+ * (2026-11-22 revision).
  *
  * The field report: "i cant scroll down to the new revamped tabs on detail…
  * the detail trap is still there" - with a paste that showed `HEADER DOWN ->
@@ -117,36 +117,32 @@ class DetailStripEntryContractTest {
         )
     }
 
-    // ── The overview is above the strip, on every tab ─────────────────────
+    // ── The overview is the first Details row, under the strip ─────────────
 
     @Test
-    fun `the overview paints in the fixed header, above the strip`() {
-        val header = detail.substringAfter("val overviewText =")
-            .substringBefore("DetailTabStrip(")
+    fun `the overview paints as the first item of the Details tab`() {
+        val overviewItem = detail
+            .substringAfter("if (activeTab == DetailTab.DETAILS && overviewText != null)")
+            .substringBefore("val detailFacts")
         assertTrue(
-            "the block is composed before the strip, so it is above it on every " +
-                "tab instead of living in the Details tab's list",
-            detail.contains("DetailHeaderBudget.collapsedLines") &&
-                detail.contains("DetailHeaderBudget.expandedLines") &&
-                header.contains("overviewExpandedLines") &&
-                header.contains("overviewCollapsedLines")
+            "the block is gated on Details and is the first content item",
+            detail.contains("if (activeTab == DetailTab.DETAILS && overviewText != null)") &&
+                overviewItem.contains("overviewExpandedLines") &&
+                overviewItem.contains("overviewCollapsedLines")
         )
-        assertFalse(
-            "and it is no longer a list item of the Details tab",
-            detail.contains("OVERVIEW_ROW_KEY")
-        )
-        assertFalse(
-            "nor gated on a tab: switching tabs must never move or recompose it",
-            header.contains("activeTab == DetailTab.DETAILS")
+        assertTrue(
+            "the overview list item is painted below the strip",
+            detail.indexOf("item(key = OVERVIEW_ROW_KEY") >
+                detail.indexOf("DetailTabStrip(")
         )
         assertTrue(
             "the toggle still publishes its presence from the block that draws it",
-            header.contains("overviewToggleAvailable = true")
+            overviewItem.contains("overviewToggleAvailable = overviewOverflows")
         )
     }
 
     @Test
-    fun `the overview's toggle is the chain stop between the chips and the strip`() {
+    fun `the overview's toggle is the chain stop under the strip`() {
         assertTrue(
             "the toggle is what publishes the OVERVIEW row's presence",
             detail.contains("hasOverviewRow = overviewToggleAvailable")
@@ -158,8 +154,12 @@ class DetailStripEntryContractTest {
                 detail.contains("if (focusOverviewToggle()) {")
         )
         assertTrue(
-            "a remembered landing above the strip is not a landing INSIDE the tab, " +
-                "so the strip's DOWN never re-enters onto it",
+            "the overview item has a list key again, so the landing can reveal it",
+            detail.contains("DetailRow.OVERVIEW -> OVERVIEW_ROW_KEY") &&
+                detail.contains("detailListState.revealRail(OVERVIEW_ROW_KEY")
+        )
+        assertFalse(
+            "and a remembered landing on it is inside Details, so it is honoured",
             entry.contains("remembered != DetailRow.OVERVIEW")
         )
     }

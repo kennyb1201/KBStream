@@ -640,13 +640,11 @@ private fun LazyListScope.detailBodyItems(
             // the case this exists for: only the rows on screen are composed.
             // No `key`: a provider's list may legitimately name the same title
             // twice, and duplicate keys would fail the list outright.
-            // A 1,000-title list must not re-run this derivation on every
-            // save-phase change or notice update in the same composition scope.
-            // The rows themselves are the whole input.
-            val openable = remember(titles) {
-                titles.rows.mapNotNull { row ->
-                    row.detailId?.let { detailId -> row to detailId }
-                }
+            // Derived here, in the list body rather than a @Composable scope:
+            // this helper is a LazyListScope extension and cannot call
+            // remember. The rows themselves are still the only input.
+            val openable = titles.rows.mapNotNull { row ->
+                row.detailId?.let { detailId -> row to detailId }
             }
             items(openable.size) { index ->
                 val (row, detailId) = openable[index]

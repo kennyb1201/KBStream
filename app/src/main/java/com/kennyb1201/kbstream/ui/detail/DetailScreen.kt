@@ -358,10 +358,10 @@ private const val SEASON_FOCUS_DWELL_MS = 140L
 private const val GENRE_ROW_KEY = "genrerow"
 
 /**
- * The overview's line budgets are [DetailHeaderBudget]'s (spec 2026-11-21, rule
- * 6): the block is part of the fixed header, so its height is measured against
- * the viewport rather than fixed at four/eight lines. See the object for why
- * collapsed and expanded answer different questions.
+ * The overview's line caps are [DetailHeaderBudget]'s. The block now scrolls
+ * with the Details tab instead of living in the fixed header, so the caps no
+ * longer protect the strip; they keep the collapsed summary and its expanded
+ * form readable at this page's type scale on short screens.
  */
 
 /**
@@ -386,6 +386,7 @@ private const val EPISODES_ROW_KEY = "episodesrow"
  * fact cards, the tag rail and the episode-order chips; below it, the episode
  * cards.
  */
+private const val OVERVIEW_ROW_KEY = "overviewrow"
 private const val RATINGS_ROW_KEY = "ratingsrow"
 private const val DETAIL_FACTS_ROW_KEY = "detailfacts"
 private const val EPISODE_ORDER_ROW_KEY = "episode-order"
@@ -1093,9 +1094,9 @@ fun DetailScreen(
      * Declared at screen scope, not inside the block that draws it, because the
      * presses that target it are built at screen scope too - and because the
      * field report that created it exposed a focusable surface nothing could
-     * ask for ("theres no way to click the see more"). The block has since moved
-     * above the strip, into the fixed header (2026-11-21), so the toggle is
-     * composed whenever the page is and no reveal is needed to reach it.
+     * ask for ("theres no way to click the see more"). The block is the first
+     * item of the Details tab now (2026-11-22), so the landing reveals that
+     * list item before asking for the toggle.
      */
     val overviewToggleRequester = remember { FocusRequester() }
 
@@ -1212,10 +1213,11 @@ fun DetailScreen(
      * Whether the overview currently overflows its four collapsed lines - i.e.
      * whether the "View more" toggle is on this page at all.
      *
-     * Written where the toggle composes (see the overview block), read by the
-     * presses that target it. Sticky across the list item's disposal on purpose:
-     * the answer belongs to the OVERVIEW TEXT, which does not change when the
-     * item scrolls away.
+     * Written where the overview item composes (see the Details list), read by
+     * the presses that target it. Sticky across the list item's disposal on
+     * purpose: the answer belongs to the OVERVIEW TEXT, which does not change
+     * when the item scrolls away. DetailTabChain.rowPresence masks it outside
+     * the Details tab.
      */
     var overviewToggleAvailable by remember { mutableStateOf(false) }
 
@@ -1594,10 +1596,9 @@ fun DetailScreen(
     val availableTabs = remember(isSeriesTitle) {
         DetailTabChain.stableTabs(isSeriesTitle)
     }
-    // The overview's line budgets, measured against this viewport (spec
-    // 2026-11-21, rule 6). The block is in the fixed header, so these are what
-    // keep the strip visible instead of pushing it under the fold on a
-    // 960x540dp television.
+    // The overview's line caps. The block scrolls inside the Details tab, so
+    // these are no longer a header-height guarantee; they keep the collapsed
+    // summary short and the expanded form bounded on a 960x540dp television.
     val screenHeightDp = LocalConfiguration.current.screenHeightDp
     val overviewCollapsedLines = remember(screenHeightDp) {
         DetailHeaderBudget.collapsedLines(screenHeightDp)
@@ -2675,17 +2676,25 @@ fun DetailScreen(
      * than an assumed success (see [focusChipColumn] for why the request's own
      * report is the only answer worth trusting).
      *
-     * NO REVEAL, since the overview moved above the strip (2026-11-21): the
-     * toggle lives in the fixed header, so it is composed whenever the page is -
-     * there is no list item the scroll can have disposed, and the reveal this
-     * used to do was addressing an item that no longer exists. The retry stays,
-     * for the one frame a tab switch or a text change re-keys the node.
+     * The toggle is the first item of the Details tab now (2026-11-22), so a
+     * scroll can have disposed it. [OVERVIEW_ROW_KEY] is revealed before the
+     * focus is asked for, exactly like the card rails, and the request is held
+     * back until the row is composed again.
      */
     suspend fun focusOverviewToggle(): Boolean {
         if (!overviewToggleAvailable) return false
+        val hint = detailListState.layoutInfo.visibleItemsInfo
+            .firstOrNull { it.key == OVERVIEW_ROW_KEY }?.index
+            ?: 0
+        detailListState.revealRail(OVERVIEW_ROW_KEY, hint)
         var attempts = 0
         while (attempts < RETURN_FOCUS_STEPS) {
-            if (runCatching { overviewToggleRequester.requestFocus() }.getOrDefault(false)) {
+            val composed = detailListState.layoutInfo.visibleItemsInfo
+                .any { it.key == OVERVIEW_ROW_KEY }
+            if (
+                composed &&
+                runCatching { overviewToggleRequester.requestFocus() }.getOrDefault(false)
+            ) {
                 return true
             }
             delay(RETURN_FOCUS_DELAY_MS)
@@ -3601,15 +3610,15 @@ fun DetailScreen(
      *
      * The only place the chain's names ([DetailRow]) meet the list's keys: the
      * chain decides WHERE a press goes, and this decides which rail that is.
+     * The overview is a list item again (the first one in Details), so it has a
+     * key just like every other list row.
      */
     fun detailRowKey(row: DetailRow): String? = when (row) {
         DetailRow.HEADER -> null
         // The strip is painted outside the list, so it has no list item to
         // reveal or anchor on - it is never disposed, which is the point.
         DetailRow.TABS -> null
-        // Likewise the overview's toggle: fixed header, no list item (it moved
-        // out of the list on 2026-11-21), so nothing to reveal or anchor on.
-        DetailRow.OVERVIEW -> null
+        DetailRow.OVERVIEW -> OVERVIEW_ROW_KEY
         DetailRow.GENRE -> GENRE_ROW_KEY
         DetailRow.KEYWORDS -> KEYWORDS_ROW_KEY
         DetailRow.EPISODES -> null
@@ -4046,9 +4055,9 @@ fun DetailScreen(
      * header), else the tab's first row - read from the chain, so the order the
      * rows are painted in and the order the presses use cannot drift.
      *
-     * A tab whose content is all leaf surfaces (Details with no keywords,
-     * networks or production companies) has no chain row to ask for; the
-     * geometric search below finds the overview toggle or the first fact card,
+     * A tab whose content is all leaf surfaces (Details with no overview
+     * toggle, keywords, networks or production companies) has no chain row to
+     * ask for; the geometric search below finds the first fact or rating card,
      * which is the nearest thing below the strip. Either way the press lands
      * somewhere real, which is the property that keeps a tab from being a dead
      * end while its data is still arriving.
@@ -4107,13 +4116,11 @@ fun DetailScreen(
         }
         val rows = DetailTabChain.rowPresence(activeTab, page)
         val remembered = tabLastRow[activeTab]
-        // OVERVIEW joins the header rows: it is painted ABOVE the strip, so a
-        // remembered landing on it is not "inside the tab" and must not be
-        // honoured by a press that means to go in.
+        // Only TABS/GENRE/HEADER sit above the tab content; every other remembered
+        // row, including the overview, is inside the tab and may be returned to.
         val rememberedPresent = remembered != null &&
             remembered != DetailRow.TABS &&
             remembered != DetailRow.GENRE &&
-            remembered != DetailRow.OVERVIEW &&
             remembered != DetailRow.HEADER &&
             DetailFocusChain.exists(remembered, rows)
         val target = if (rememberedPresent) remembered
@@ -4574,11 +4581,11 @@ fun DetailScreen(
      * The vertical handler for the page's NON-RAIL focusables.
      *
      * The rails answer through [detailRowVerticalFocus], which reads the chain
-     * for the row the press is standing on. Three surfaces are not rows and
-     * cannot use it: the header's action buttons and the overview's "View more"
-     * toggle each BORROW a chain position rather than owning one, and the season
-     * chips are one half of the EPISODES row, whose DOWN has to stay inside the
-     * section instead of stepping to the row beneath it. So the press is read
+     * for the row the press is standing on. The header's action buttons are not
+     * rows and borrow a chain position; the overview's "View more" toggle owns
+     * OVERVIEW now; and the season chips are one half of the EPISODES row, whose
+     * DOWN has to stay inside the section instead of stepping to the row beneath
+     * it. So the press is read
      * here, in one place, and [onUp] / [onDown] say what this surface's press
      * means. Consuming it is the point: left to the default search, each of the
      * three could be a press into empty space - a genre-less title has nothing
@@ -4776,48 +4783,36 @@ fun DetailScreen(
         )
 
     /**
-     * The overview's "View more" toggle: the topmost focusable INSIDE the list,
-     * above every chain row.
+     * The overview's "View more" toggle: the first focusable row inside the
+     * Details tab, directly under the strip.
      *
-     * UP is the header, which is the row above the list. DOWN borrows HEADER's
-     * own chain position instead of adding an INFOBLOCK row of its own: a row for
-     * the overview would put the toggle between PLAY and the genre chips, so the
-     * common press - DOWN out of Play - would land on a text button instead of
-     * the genres, and every row's idea of what is above it would move with it.
-     *
-     * UP is consumed always (it is the header, above the list). DOWN is
-     * consumed only when this page has a row to put it on: on a title with no
-     * keywords (the common movie, where the toggle is also the only focusable
-     * thing in the info block) the default search under this toggle found
-     * nothing at all, and the press read as dead with the whole list one press
-     * below it - so the page routes that press through the chain instead. What
-     * it does NOT do is keep a press it cannot place (see the reported trap
-     * below).
+     * UP is the strip, which is the fixed row above the tab content. DOWN is
+     * the next row inside Details (the tag rail, then the network/production
+     * rails) or, when the tab has only its leaf fact and rating cards, the
+     * platform's geometric search.
      *
      * The reported trap: "DOWN does nothing after going up" (Dark Marvels).
-     * Two things made it. The handler asked the chain with the [presence] it was
-     * COMPOSED with - the overview item draws before the seasons stream in, so
-     * that list said the page had no rows below, the chain answered null, and
-     * the fall-through called HEADER+DOWN a page edge, since a page with no row
-     * below really is one. And the press was consumed regardless. So the press
-     * is answered with the rows the page has NOW ([latestRowPresence], the
-     * captured presence being only the fallback for a press that arrives before
-     * anything has landed), and it is kept only when that answer has somewhere
-     * to go ([DetailFocusChain.toggleDownIsConsumed]).
+     * The handler asked the chain with the [presence] it was COMPOSED with - the
+     * overview item draws before the seasons stream in, so that list said the
+     * page had no rows below, the chain answered null, and the press was
+     * consumed regardless. The press is now answered with the rows the page has
+     * NOW ([latestRowPresence], the captured presence being only the fallback
+     * for a press that arrives before anything has landed), and it is kept only
+     * when that answer has somewhere to go
+     * ([DetailFocusChain.toggleDownIsConsumed]).
      */
     fun overviewToggleVerticalFocus(presence: DetailRowPresence): (KeyEvent) -> Boolean =
         nonRailVerticalFocusWithDownOutcome(
             // F1b: the same rule as the chain's head arm above, for the one
-            // surface that borrows HEADER's position instead of owning a row:
-            // the toggle consumed its UP unconditionally, so a landing that
-            // failed left the key taken and the focus on the toggle. The search
-            // is started here because the key is already ours (F1c) - UP from
-            // the toggle finds the genres or PLAY above it in the fixed header.
+            // surface that owns the first content row: the toggle consumed its
+            // UP unconditionally, so a landing that failed left the key taken
+            // and the focus on the toggle. The search is started here because
+            // the key is already ours (F1c) - UP from the toggle finds the
+            // strip above it.
             onUp = {
-                // GENRE again, in the chain's own terms (2026-11-21). The
-                // toggle no longer borrows HEADER's position: it IS the
-                // OVERVIEW row, so UP is whatever is above that row - the genre
-                // chips when the page has them, PLAY when it does not.
+                // The strip, in the chain's own terms (2026-11-22). The
+                // toggle has its own OVERVIEW row immediately below TABS, so
+                // UP is the strip rather than the genre chips above it.
                 startFocusMove(DetailRow.OVERVIEW, DetailFocusDirection.UP, presence) {
                     val rows = latestRowPresence.value ?: presence
                     val target =
@@ -4835,19 +4830,36 @@ fun DetailScreen(
                 }
             },
             onDown = {
-                // The strip, which is the row directly under the toggle: a fixed
-                // header node like the toggle itself, so this press always has
-                // somewhere real to land on every page and in every tab - the
-                // "DOWN does nothing" trap cannot be reached from here any
-                // more (see [DetailFocusChain.toggleDownIsConsumed] for what
-                // this used to have to ask before it could keep the key).
                 val rows = latestRowPresence.value ?: presence
-                startFocusMove(DetailRow.OVERVIEW, DetailFocusDirection.DOWN, rows) {
-                    val landed =
-                        focusTabStrip() || focusByGeometry(DetailFocusDirection.DOWN)
-                    DetailTrace.note("detail toggle DOWN -> TABS landed=$landed")
+                if (!DetailFocusChain.toggleDownIsConsumed(rows, rowsStillArriving())) {
+                    // Nothing below and nothing still arriving: hand the press
+                    // back to the platform's search rather than taking a key
+                    // that cannot move.
+                    false
+                } else {
+                    startFocusMove(DetailRow.OVERVIEW, DetailFocusDirection.DOWN, rows) {
+                        val target = DetailFocusChain.nextRow(
+                            DetailRow.OVERVIEW,
+                            DetailFocusDirection.DOWN,
+                            rows
+                        )
+                        val landed =
+                            (target != null &&
+                                focusRow(
+                                    target,
+                                    0,
+                                    DetailRow.OVERVIEW,
+                                    DetailFocusDirection.DOWN,
+                                    rows
+                                )) ||
+                                focusByGeometry(DetailFocusDirection.DOWN)
+                        DetailTrace.note(
+                            "detail toggle DOWN -> ${target?.name ?: "geometry"} " +
+                                "landed=$landed"
+                        )
+                    }
+                    true
                 }
-                true
             }
         )
 
@@ -5150,6 +5162,20 @@ fun DetailScreen(
                 }
             }
 
+            // The title's own description, with TMDB's richer text replacing
+            // the add-on's when it lands. It is the first item of the Details
+            // tab, not a fixed header block (2026-11-22).
+            val overviewText = remember(tmdbDetail?.overview, m.description) {
+                tmdbDetail?.overview
+                    ?.takeIf { it.isNotBlank() }
+                    ?: m.description
+            }
+            LaunchedEffect(overviewText) {
+                // A new text has to earn its toggle again; the Details item
+                // republishes the measured answer when it composes.
+                overviewToggleAvailable = false
+            }
+
             // The rows this page actually paints, in one place: the chain
             // ([DetailFocusChain]) reads these and nothing else, and every field
             // is the same expression that renders its row below - so "the row
@@ -5185,10 +5211,10 @@ fun DetailScreen(
             val hasMediaRow = mediaTabs.isNotEmpty()
             val pageRowPresence = DetailRowPresence(
                 hasGenreRow = tmdbGenres.isNotEmpty(),
-                // The overview's toggle is in the fixed header now, above the
-                // strip: whether it EXISTS is the overflow measurement the
-                // block publishes, so the chain's OVERVIEW stop is on exactly
-                // while there is a toggle to land on.
+                // The overview's toggle is the first row inside Details:
+                // whether it EXISTS is the overflow measurement the block
+                // publishes, and DetailTabChain.rowPresence exposes it only
+                // while Details is the active tab.
                 hasOverviewRow = overviewToggleAvailable,
                 hasKeywordsRow = keywords.isNotEmpty(),
                 hasEpisodesRow = normalizedType == "series" && seasons.isNotEmpty(),
@@ -6160,7 +6186,6 @@ fun DetailScreen(
                 return when (row) {
                     DetailRow.HEADER,
                     DetailRow.TABS -> true
-                    DetailRow.OVERVIEW -> overviewToggleAvailable
                     else -> {
                         val rows = page?.let { DetailTabChain.rowPresence(activeTab, it) }
                         rows != null && DetailFocusChain.exists(row, rows)
@@ -7072,176 +7097,10 @@ fun DetailScreen(
                         }
                     }
 
-                    // The overview: the title's own description, on the FIRST
-                    // page and above the strip on every tab (2026-11-21,
-                    // "can we keep the overview on the first page not buried
-                    // behind details tab"). It used to be the first item of the
-                    // Details tab's list, which buried it behind a tab press
-                    // and made its position depend on which tab was open - the
-                    // field report asked for the opposite of both.
-                    //
-                    // Collapsed with the "View more" toggle it always had,
-                    // and capped when expanded. This header is FIXED, so the
-                    // block is the one thing above the strip whose height is
-                    // not already bounded by a layout weight. Its line counts
-                    // come from [DetailHeaderBudget], measured against the
-                    // viewport: collapsed must leave the strip and a content
-                    // row, expanded may push the content down but never the
-                    // strip off a 540dp-tall screen (rule 6).
-                    run {
-                        val overviewText =
-                            tmdbDetail?.overview
-                                ?.takeIf { it.isNotBlank() }
-                                ?: m.description
-                        if (overviewText == null) {
-                            // No description: no toggle, so nothing may route
-                            // onto one (see [DetailRow.OVERVIEW]).
-                            SideEffect { overviewToggleAvailable = false }
-                        } else {
-                            // Keyed on the text, so the states reset when the
-                            // richer TMDB overview replaces the add-on's.
-                            var overviewExpanded by remember(overviewText) {
-                                mutableStateOf(false)
-                            }
-                            var overviewOverflows by remember(overviewText) {
-                                mutableStateOf(false)
-                            }
-                            Column(
-                                modifier = Modifier
-                                    .padding(
-                                        start = 24.dp,
-                                        end = 24.dp,
-                                        bottom = 8.dp
-                                    )
-                                    .then(traceRowFocus(DetailRow.OVERVIEW))
-                            ) {
-                                Text(
-                                    overviewText,
-                                    maxLines = if (overviewExpanded) {
-                                        overviewExpandedLines
-                                    } else {
-                                        overviewCollapsedLines
-                                    },
-                                    overflow = TextOverflow.Ellipsis,
-                                    onTextLayout = { textLayoutResult ->
-                                        if (
-                                            !overviewExpanded &&
-                                            textLayoutResult.hasVisualOverflow
-                                        ) {
-                                            overviewOverflows = true
-                                        }
-                                    },
-                                    modifier = Modifier.padding(top = 4.dp)
-                                )
-                                if (overviewOverflows) {
-                                    // The chain's OVERVIEW stop. Written from an
-                                    // effect so the presence the presses read
-                                    // and the toggle actually drawn cannot
-                                    // disagree: an overview that fits has no
-                                    // toggle, and a row that is not on screen
-                                    // must never be landed on.
-                                    SideEffect { overviewToggleAvailable = true }
-                                    Surface(
-                                        onClick = {
-                                            overviewExpanded = !overviewExpanded
-                                        },
-                                        shape = ClickableSurfaceDefaults.shape(
-                                            shape = KBShapeSmall
-                                        ),
-                                        colors = ClickableSurfaceDefaults.colors(
-                                            containerColor = Color.Transparent,
-                                            contentColor = KBTextLo,
-                                            focusedContainerColor = KBSurfaceRaised,
-                                            focusedContentColor = KBAccent,
-                                            pressedContainerColor = KBSurfaceRaised,
-                                            pressedContentColor = KBAccent
-                                        ),
-                                        scale = ClickableSurfaceDefaults.scale(
-                                            focusedScale = KBFocusChip,
-                                            pressedScale = KBFocusPressed
-                                        ),
-                                        border = ClickableSurfaceDefaults.border(
-                                            border = Border(
-                                                border = BorderStroke(
-                                                    1.dp,
-                                                    KBTextLo.copy(alpha = 0.35f)
-                                                ),
-                                                shape = KBShapeSmall
-                                            ),
-                                            focusedBorder = Border(
-                                                border = BorderStroke(
-                                                    2.dp,
-                                                    KBAccent
-                                                ),
-                                                shape = KBShapeSmall
-                                            )
-                                        ),
-                                        glow = ClickableSurfaceDefaults.glow(
-                                            focusedGlow = Glow(
-                                                elevationColor = KBAccent,
-                                                elevation = KBFocusGlowSmall
-                                            )
-                                        ),
-                                        // The same room the actor page's
-                                        // biography pill takes: the scale, ring
-                                        // and glow are drawn outside this
-                                        // Surface, so the room goes INSIDE it
-                                        // and the offset cancels it - the
-                                        // toggle is drawn where it was.
-                                        modifier = Modifier
-                                            .padding(KBFocusChipInset)
-                                            .offset(
-                                                x = -KBFocusChipInset,
-                                                y = -KBFocusChipInset
-                                            )
-                                            // The D-pad handle onto it. It is in
-                                            // the fixed header now, so no
-                                            // reveal is needed to reach it.
-                                            .focusRequester(overviewToggleRequester)
-                                            .onFocusChanged {
-                                                if (it.isFocused) {
-                                                    DetailTrace.note(
-                                                        "detail toggle took the focus"
-                                                    )
-                                                }
-                                            }
-                                            // UP is the genre chips, DOWN the
-                                            // strip (see
-                                            // overviewToggleVerticalFocus).
-                                            .onPreviewKeyEvent(
-                                                overviewToggleVerticalFocus(
-                                                    detailRowPresence
-                                                )
-                                            )
-                                            .padding(top = 8.dp)
-                                    ) {
-                                        Text(
-                                            text = if (overviewExpanded) {
-                                                "View less"
-                                            } else {
-                                                "View more"
-                                            },
-                                            style = MaterialTheme.typography.bodySmall,
-                                            fontWeight = FontWeight.Medium,
-                                            modifier = Modifier.padding(
-                                                horizontal = 10.dp,
-                                                vertical = 5.dp
-                                            )
-                                        )
-                                    }
-                                } else {
-                                    // An overview that fits has no toggle, so
-                                    // nothing may route onto one.
-                                    SideEffect { overviewToggleAvailable = false }
-                                }
-                            }
-                        }
-                    }
-
-                    // The strip: pinned under the overview and the genre
-                    // chips, above the list, and composed whether or not the
-                    // selected tab has loaded - the row every press can land
-                    // on.
+                    // The strip: pinned under the genre chips, above the
+                    // list, and composed whether or not the selected tab has
+                    // loaded - the row every press can land on. The overview
+                    // is the first row of the Details tab's content now.
                     DetailTabStrip(
                         tabs = availableTabs,
                         selected = activeTab,
@@ -7419,6 +7278,150 @@ fun DetailScreen(
                             top = 6.dp
                         )
                     ) {
+                        // The overview is the FIRST item of the Details tab,
+                        // directly under the strip (2026-11-22). It is no
+                        // longer fixed header content: switching to another
+                        // tab removes it, and the header is shorter on every
+                        // tab as a result. Collapsed/expanded and the View
+                        // more toggle are unchanged.
+                        if (activeTab == DetailTab.DETAILS && overviewText != null) {
+                            item(key = OVERVIEW_ROW_KEY, contentType = "section-row") {
+                                // Keyed on the text, so the states reset when the
+                                // richer TMDB overview replaces the add-on's.
+                                var overviewExpanded by remember(overviewText) {
+                                    mutableStateOf(false)
+                                }
+                                var overviewOverflows by remember(overviewText) {
+                                    mutableStateOf(false)
+                                }
+                                // The chain's OVERVIEW stop. Written from an
+                                // effect so the presence the presses read and
+                                // the toggle actually drawn cannot disagree: an
+                                // overview that fits has no toggle, and a row
+                                // that is not on screen must never be landed
+                                // on. The value is exposed only in the Details
+                                // tab by DetailTabChain.rowPresence.
+                                SideEffect { overviewToggleAvailable = overviewOverflows }
+                                Column(
+                                    modifier = Modifier
+                                        .padding(
+                                            start = 24.dp,
+                                            end = 24.dp,
+                                            bottom = 8.dp
+                                        )
+                                        .then(traceRowFocus(DetailRow.OVERVIEW))
+                                ) {
+                                    Text(
+                                        overviewText,
+                                        maxLines = if (overviewExpanded) {
+                                            overviewExpandedLines
+                                        } else {
+                                            overviewCollapsedLines
+                                        },
+                                        overflow = TextOverflow.Ellipsis,
+                                        onTextLayout = { textLayoutResult ->
+                                            if (
+                                                !overviewExpanded &&
+                                                textLayoutResult.hasVisualOverflow
+                                            ) {
+                                                overviewOverflows = true
+                                            }
+                                        },
+                                        modifier = Modifier.padding(top = 4.dp)
+                                    )
+                                    if (overviewOverflows) {
+                                        Surface(
+                                            onClick = {
+                                                overviewExpanded = !overviewExpanded
+                                            },
+                                            shape = ClickableSurfaceDefaults.shape(
+                                                shape = KBShapeSmall
+                                            ),
+                                            colors = ClickableSurfaceDefaults.colors(
+                                                containerColor = Color.Transparent,
+                                                contentColor = KBTextLo,
+                                                focusedContainerColor = KBSurfaceRaised,
+                                                focusedContentColor = KBAccent,
+                                                pressedContainerColor = KBSurfaceRaised,
+                                                pressedContentColor = KBAccent
+                                            ),
+                                            scale = ClickableSurfaceDefaults.scale(
+                                                focusedScale = KBFocusChip,
+                                                pressedScale = KBFocusPressed
+                                            ),
+                                            border = ClickableSurfaceDefaults.border(
+                                                border = Border(
+                                                    border = BorderStroke(
+                                                        1.dp,
+                                                        KBTextLo.copy(alpha = 0.35f)
+                                                    ),
+                                                    shape = KBShapeSmall
+                                                ),
+                                                focusedBorder = Border(
+                                                    border = BorderStroke(
+                                                        2.dp,
+                                                        KBAccent
+                                                    ),
+                                                    shape = KBShapeSmall
+                                                )
+                                            ),
+                                            glow = ClickableSurfaceDefaults.glow(
+                                                focusedGlow = Glow(
+                                                    elevationColor = KBAccent,
+                                                    elevation = KBFocusGlowSmall
+                                                )
+                                            ),
+                                            // The same room the actor page's
+                                            // biography pill takes: the scale,
+                                            // ring and glow are drawn outside
+                                            // this Surface, so the room goes
+                                            // INSIDE it and the offset cancels
+                                            // it - the toggle is drawn where it
+                                            // was.
+                                            modifier = Modifier
+                                                .padding(KBFocusChipInset)
+                                                .offset(
+                                                    x = -KBFocusChipInset,
+                                                    y = -KBFocusChipInset
+                                                )
+                                                .focusRequester(overviewToggleRequester)
+                                                .onFocusChanged {
+                                                    if (it.isFocused) {
+                                                        DetailTrace.note(
+                                                            "detail toggle took the focus"
+                                                        )
+                                                    }
+                                                }
+                                                // UP is the strip above it;
+                                                // DOWN is the next Details row
+                                                // (see overviewToggleVerticalFocus).
+                                                .onPreviewKeyEvent(
+                                                    overviewToggleVerticalFocus(
+                                                        detailRowPresence
+                                                    )
+                                                )
+                                                .padding(top = 8.dp)
+                                        ) {
+                                            Text(
+                                                text = if (overviewExpanded) {
+                                                    "View less"
+                                                } else {
+                                                    "View more"
+                                                },
+                                                style =
+                                                    MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.Medium,
+                                                modifier = Modifier.padding(
+                                                    horizontal = 10.dp,
+                                                    vertical = 5.dp
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         val detailFacts = buildList {
                             tmdbDetail?.bestReleaseDate()
                                 ?.let {

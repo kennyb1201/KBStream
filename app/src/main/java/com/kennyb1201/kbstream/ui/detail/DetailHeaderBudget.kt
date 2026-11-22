@@ -1,27 +1,23 @@
 package com.kennyb1201.kbstream.ui.detail
 
 /**
- * How many lines the overview may paint in the Detail page's FIXED header
- * (spec 2026-11-21, rule 6).
+ * How many lines the overview may paint in the Detail page's Details tab.
  *
- * The overview lives above the tab strip on every tab, so its height is header
- * height: every line it takes is a line the content no longer has. Uncapped, an
- * expanded overview on a 960x540dp television could push the strip itself off
- * the bottom of the screen - and a strip the viewer cannot see is a press that
- * lands where they are not looking.
+ * The overview scrolls with the tab now (2026-11-22), so its height is no
+ * longer a fixed-header budget. The caps still matter on a 960x540dp
+ * television: they keep the collapsed summary short enough to scan and the
+ * expanded form from becoming a page of its own.
  *
  * Two budgets, because the two states make different promises:
  *
- *  - COLLAPSED must leave the strip AND at least one content row. It is what
- *    every tab opens with, so it is the height that must not eat the page.
- *  - EXPANDED is the viewer asking for the text; it may push the content down,
- *    but it still may not push the strip off the screen.
+ *  - COLLAPSED is the summary the tab opens with.
+ *  - EXPANDED is the viewer asking for more text; it never shows fewer lines
+ *    than the collapsed state.
  *
  * Pure and kept out of the screen so a JVM test can pin the numbers. The
- * constants are the measured chrome around the overview (the top spacer, the
- * logo/title, the meta line, the action row, the genre chips and the strip
- * itself) at this page's type scale; [FIRST_CONTENT_DP] is roughly one episode
- * card, which is the row a viewer expects to see under the strip.
+ * constants are the measured chrome around the overview at this page's type
+ * scale; [FIRST_CONTENT_DP] is roughly one episode card, retained so the
+ * collapsed cap still leaves useful content visible on a short screen.
  */
 internal object DetailHeaderBudget {
 
@@ -31,10 +27,10 @@ internal object DetailHeaderBudget {
     /** The "View more"/"View less" toggle and its margin. */
     const val TOGGLE_DP = 34
 
-    /** Everything above the strip that is not the overview: spacer, art, meta, actions, genres, strip. */
+    /** The fixed page chrome around the scrolling tab content. */
     const val CHROME_DP = 300
 
-    /** The first content row the collapsed overview must leave visible. */
+    /** The content row the collapsed overview should leave visible. */
     const val FIRST_CONTENT_DP = 120
 
     /** Below this the overview is not worth showing; it stays a summary. */

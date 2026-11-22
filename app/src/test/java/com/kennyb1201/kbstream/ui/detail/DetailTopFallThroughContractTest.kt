@@ -210,8 +210,8 @@ class DetailTopFallThroughContractTest {
         )
         assertEquals(
             "and the page's eleven content rows are untouched - the strip is the " +
-                "route into them and the overview's toggle is the one row added above " +
-                "it (2026-11-21)",
+                "route into them and the overview's toggle is the first row below " +
+                "it (2026-11-22)",
             13,
             DetailRow.entries.size
         )
@@ -241,12 +241,11 @@ class DetailTopFallThroughContractTest {
             )
         )
         assertTrue(
-            "and the toggle is a chain row above the strip now (2026-11-21), so the " +
-                "same walk reaches it from the strip's own UP - no special case in " +
-                "the move, and the strip's UP passes the chips first when they exist",
+            "and the toggle is the first row BELOW the strip now (2026-11-22), so " +
+                "the strip's DOWN reaches it without a special case in the move",
             DetailFocusChain.nextRow(
                 DetailRow.TABS,
-                DetailFocusDirection.UP,
+                DetailFocusDirection.DOWN,
                 presence(overviewToggle = true)
             ) == DetailRow.OVERVIEW && !move.contains("focusOverviewToggle()")
         )
@@ -316,7 +315,7 @@ class DetailTopFallThroughContractTest {
         )
         assertTrue(
             "and the toggle's DOWN keeps its rule, now asked from the toggle's own " +
-                "row: the strip is under it, so the press is always placeable",
+                "row: the press is kept only when Details has a row below it",
             chainSource().contains(
                 "rowsStillArriving || nextRow(DetailRow.OVERVIEW, DetailFocusDirection.DOWN, " +
                     "presence) != null"

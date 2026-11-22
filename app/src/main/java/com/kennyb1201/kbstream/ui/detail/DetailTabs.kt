@@ -8,17 +8,18 @@ package com.kennyb1201.kbstream.ui.detail
  * vertical chain used to be eleven rows long (see [DetailRow]), so DOWN from
  * the genre chips had to walk past rows that were still loading to reach the
  * episodes, and a press that could not land spent its time in geometric search.
- * With the sections behind tabs the chain is HEADER -> GENRE -> (OVERVIEW) ->
- * TABS -> the selected tab's own rows, which is at most four presses to any of
- * them. The overview is bracketed because it is only on the chain when its text
- * overflows its four collapsed lines.
+ * With the sections behind tabs the chain is HEADER -> GENRE -> TABS -> the
+ * selected tab's own rows, which is at most four presses to any of them. In
+ * the Details tab the overview's toggle is the first row under the strip, when
+ * its text overflows the four collapsed lines.
  *
- * [EPISODES] is first because it is the default tab on a series and the strip
- * reads left to right from the thing most viewers open the page for.
+ * [DETAILS] is first because it describes the title and is the default tab on
+ * everything that is not a series. A series still OPENS on [EPISODES], but the
+ * strip itself reads Details first.
  */
 internal enum class DetailTab(val label: String) {
-    EPISODES("Episodes"),
     DETAILS("Details"),
+    EPISODES("Episodes"),
     CAST("Cast"),
     MORE_LIKE_THIS("More Like This"),
     REVIEWS("Reviews"),
@@ -35,8 +36,8 @@ internal enum class DetailTab(val label: String) {
  *
  * [DetailTab.DETAILS] has no field because it cannot be absent: the facts, the
  * ratings and the title's own rows are its content, and a title with no
- * keywords and no networks still has those. The OVERVIEW is not here at all -
- * it lives in the fixed header, above the strip, on every tab (2026-11-21).
+ * keywords and no networks still has those. The overview lives inside the
+ * Details tab; it is a row of that tab, not a separate tab.
  */
 internal data class DetailTabPresence(
     val hasEpisodesTab: Boolean,
@@ -142,7 +143,7 @@ internal object DetailTabChain {
      *
      * Clamped rather than wrapped: LEFT on the first tab and RIGHT on the last
      * are the ends of a list the viewer can see, and jumping from Media back to
-     * Episodes would be a move the strip's own geometry contradicts.
+     * Details would be a move the strip's own geometry contradicts.
      */
     fun step(from: DetailTab, delta: Int, presence: DetailTabPresence): DetailTab =
         step(from, delta, tabs(presence))
@@ -194,6 +195,7 @@ internal object DetailTabChain {
      */
     fun rowPresence(tab: DetailTab, rows: DetailRowPresence): DetailRowPresence = when (tab) {
         DetailTab.EPISODES -> rows.copy(
+            hasOverviewRow = false,
             hasKeywordsRow = false,
             hasPeopleRow = false,
             hasNetworkRow = false,
@@ -206,6 +208,7 @@ internal object DetailTabChain {
         DetailTab.DETAILS -> DetailTabPresenceScope.copyWithoutListSections(rows)
         DetailTab.CAST -> DetailTabPresenceScope.only(rows, DetailRow.PEOPLE)
         DetailTab.MORE_LIKE_THIS -> rows.copy(
+            hasOverviewRow = false,
             hasKeywordsRow = false,
             hasEpisodesRow = false,
             hasPeopleRow = false,
@@ -223,10 +226,12 @@ internal object DetailTabChain {
      * of the strip into [tab]: the row directly under the strip in that tab.
      *
      * Read from the chain, not written down here, so the answer cannot drift
-     * from the order the rows are painted in. Null only for a tab whose content
-     * is entirely leaf surfaces (the Details tab of a title with no keywords,
-     * networks or production companies); the screen then falls back to the
-     * geometric search, which is what reaches the overview and the fact cards.
+     * from the order the rows are painted in. In the Details tab that is the
+     * overview toggle when it is available, then the tags/network/production
+     * rails. Null only for a tab whose content is entirely leaf surfaces (the
+     * Details tab of a title with no overview toggle, keywords, networks or
+     * production companies); the screen then falls back to the geometric search,
+     * which is what reaches the fact and rating cards.
      */
     fun firstRow(tab: DetailTab, rows: DetailRowPresence): DetailRow? =
         DetailFocusChain.nextRow(
@@ -243,12 +248,13 @@ internal object DetailTabChain {
 private object DetailTabPresenceScope {
 
     /**
-     * Every list row absent, the two rows painted in the fixed header kept:
-     * the genre chips and the overview toggle are above the strip on every tab,
-     * so a tab's own presence must never take them away.
+     * Every list row absent, the genre chips kept: they are painted in the
+     * fixed header above the strip on every tab, so a tab's own presence must
+     * never take them away. The overview is CONTENT now, so its presence is
+     * added back only by the Details tab.
      */
     private fun bare(rows: DetailRowPresence): DetailRowPresence = rows.copy(
-        hasOverviewRow = rows.hasOverviewRow,
+        hasOverviewRow = false,
         hasKeywordsRow = false,
         hasEpisodesRow = false,
         hasPeopleRow = false,
@@ -275,8 +281,9 @@ private object DetailTabPresenceScope {
         DetailRow.MEDIA -> bare(rows).copy(hasMediaRow = rows.hasMediaRow)
     }
 
-    /** The Details tab: its chips and its header rows, nothing from rails. */
+    /** The Details tab: its overview, chips and fact rows, nothing from rails. */
     fun copyWithoutListSections(rows: DetailRowPresence): DetailRowPresence = bare(rows).copy(
+        hasOverviewRow = rows.hasOverviewRow,
         hasKeywordsRow = rows.hasKeywordsRow,
         hasNetworkRow = rows.hasNetworkRow,
         hasProductionRow = rows.hasProductionRow

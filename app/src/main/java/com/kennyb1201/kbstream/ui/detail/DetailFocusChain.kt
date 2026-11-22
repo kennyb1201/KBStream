@@ -55,8 +55,23 @@ internal enum class DetailRow {
     GENRE,
 
     /**
-     * The overview block's "View more" toggle, painted under the genre chips
-     * and above the tab strip (2026-11-21, first-page overview).
+     * The tab strip, pinned under the genre chips and above the list.
+     *
+     * It is the page's only way into the content: LEFT/RIGHT switch tabs, DOWN
+     * enters the selected tab's first row, and UP is the genre chips above it.
+     * Naming it in the chain is what replaced the eleven-row walk whose misses
+     * were the reported "trapped on details pages": a press out of the strip
+     * has one row to reach instead of a page's worth.
+     *
+     * It always exists, like [HEADER]: the strip is painted whether or not a
+     * given section is loaded, which is the other half of the fix - a press can
+     * always land somewhere real while the rows below are still arriving.
+     */
+    TABS,
+
+    /**
+     * The overview block's "View more" toggle: the first focusable row INSIDE
+     * the Details tab, directly under the strip (2026-11-22).
      *
      * The overview itself is not focusable - it is prose - but its toggle is,
      * so the block is a real chain stop whenever the text overflows its four
@@ -65,29 +80,11 @@ internal enum class DetailRow {
      * press would be consumed and the focus would not move, which is the trap
      * this page keeps re-learning).
      *
-     * It moved into this gap rather than borrowing a neighbour's position: the
-     * toggle used to borrow [HEADER]'s for its UP and ask the chain from below
-     * the genres for its DOWN, which is how DOWN out of it once climbed back up
-     * to the chips - two stops, both honest on their own, and no way out of the
-     * pair. Sitting between the chips and the strip makes both of its presses
-     * the same question the chain answers for every other row.
+     * UP is the strip above it. DOWN is the next row in the Details tab, or
+     * the platform's geometric search when the tab has only the leaf fact and
+     * rating rows below.
      */
     OVERVIEW,
-
-    /**
-     * The tab strip, pinned under the genre chips and above the list.
-     *
-     * It is the page's only way into the content: LEFT/RIGHT switch tabs, DOWN
-     * enters the selected tab's first row, UP is the overview toggle above it
-     * when the overview overflows and the genre chips when it does not. Naming it in the chain is what replaced the eleven-row
-     * walk whose misses were the reported "trapped on details pages": a press
-     * out of the strip has one row to reach instead of a page's worth.
-     *
-     * It always exists, like [HEADER]: the strip is painted whether or not a
-     * given section is loaded, which is the other half of the fix - a press can
-     * always land somewhere real while the rows below are still arriving.
-     */
-    TABS,
 
     /** The tag rail, the first focusable row inside the list. */
     KEYWORDS,
@@ -152,8 +149,9 @@ internal data class DetailRowPresence(
      * the description actually overflows its collapsed lines.
      *
      * Defaulted so the presence literals written before the overview moved
-     * above the strip keep compiling unchanged; the screen sets it explicitly
-     * from the block's own overflow measurement.
+     * keep compiling unchanged; the screen sets it explicitly from the block's
+     * own overflow measurement, and [DetailTabChain.rowPresence] exposes it
+     * only in the Details tab.
      */
     val hasOverviewRow: Boolean = false,
     val hasKeywordsRow: Boolean,
@@ -282,10 +280,10 @@ internal object DetailFocusChain {
     /**
      * Whether the overview's "View more" toggle may KEEP a DOWN press.
      *
-     * The toggle borrows [DetailRow.HEADER]'s chain position for its UP; its DOWN
-     * asks the chain from BELOW the genres - the first row this page has inside
-     * the list ([toggleDownRow]), not the chips painted above it. The reported
-     * trap - "DOWN does nothing after going up", Dark Marvels - was that press
+     * The toggle now sits at the top of the Details tab, so its DOWN asks the
+     * chain for the first row below it ([toggleDownRow]) and its UP is the
+     * strip above the list. The reported trap - "DOWN does nothing after going
+     * up", Dark Marvels - was that press
      * being kept unconditionally: the
      * toggle's handler was composed before the seasons landed, its captured
      * [presence] said the page had no rows below, the chain answered null, the
@@ -313,33 +311,18 @@ internal object DetailFocusChain {
 
     /**
      * Where a DOWN out of the overview's "View more" toggle goes: the first row
-     * BELOW the toggle, which is the first row INSIDE the list - the tag rail on
-     * a title with tags, the episode section on one without.
+     * BELOW the toggle inside the Details tab - the tag rail on a title with
+     * tags, the network or production rail on one without, and so on.
      *
-     * Not [DetailRow.GENRE], and that is the fix for the reported cycle. The
-     * toggle borrows [DetailRow.HEADER]'s chain position because UP out of it is
-     * the header (PLAY), and that is right. Its DOWN was borrowed too, and that
-     * was wrong: the toggle is not the header. It is drawn at the END of the
-     * overview block, INSIDE the list, so the genre chips it was sent back to are
-     * painted ABOVE it - the press moves up the screen while asking to go down.
+     * Not the strip, and that is the point of moving the overview into the tab
+     * (2026-11-22): the strip is painted ABOVE the toggle now, so sending DOWN
+     * there would move the focus up the screen while asking to go down.
      *
-     * The reported trap (TCL, 2026-11-14, History's Greatest Heists): DOWN from
-     * the genres could not land the tag rail and fell through to the toggle, and
-     * DOWN from the toggle climbed back to the genres - round and round, with the
-     * tag rail one press below and unreachable. Two stops, both honest on their
-     * own, and no way out of the pair. Whatever else is wrong with the genre ->
-     * tags landing, the pair cannot close any more: DOWN from the toggle is the
-     * row underneath it.
-     *
-     * Falls back to [DetailRow.HEADER]'s DOWN - today's answer, the genres - for
-     * the one page this would otherwise strand: a title with nothing at all below
-     * the genres. There the genres are the only row the page has, and landing
-     * there is a real move rather than a key taken and nothing done with it.
+     * Falls back to [DetailRow.TABS] only for the presence values that have no
+     * row below at all; the screen then hands the press to the geometric search
+     * for the Details tab's leaf fact and rating rows rather than swallowing it.
      */
     fun toggleDownRow(presence: DetailRowPresence): DetailRow =
-        // From the toggle's OWN row now that it has one (2026-11-21): the strip
-        // is always the next stop, and the fallbacks survive only for the
-        // presence values written before the row existed.
         nextRow(DetailRow.OVERVIEW, DetailFocusDirection.DOWN, presence)
             ?: nextRow(DetailRow.TABS, DetailFocusDirection.DOWN, presence)
             ?: DetailRow.TABS

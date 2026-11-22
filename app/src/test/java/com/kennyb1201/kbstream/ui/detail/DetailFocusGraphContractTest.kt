@@ -141,30 +141,28 @@ class DetailFocusGraphContractTest {
     }
 
     @Test
-    fun `the View-more toggle is a chain row of its own, between the chips and the strip`() {
+    fun `the View-more toggle is the first chain row inside Details`() {
         assertTrue(
             "the toggle answers both presses through the page's one chain handler",
             detail.contains("overviewToggleVerticalFocus( detailRowPresence )")
         )
         assertTrue(
-            "UP is whatever the chain puts above OVERVIEW - the chips when the page " +
-                "has them, PLAY when it does not - with the header landing as the " +
+            "UP is the strip above OVERVIEW, with the header landing as the " +
                 "failure arm",
             toggleHandler.contains(
                 "DetailFocusChain.nextRow( DetailRow.OVERVIEW, DetailFocusDirection.UP, rows )"
             ) && toggleHandler.contains("|| focusTopOfPage(\"toggle-up\")")
         )
         assertTrue(
-            "DOWN is the strip painted directly under it, asked with the presence " +
-                "that LANDED rather than the one this handler was composed with",
+            "DOWN is the next Details row, asked with the presence that LANDED " +
+                "rather than the one this handler was composed with",
             toggleHandler.contains("val rows = latestRowPresence.value ?: presence") &&
-                toggleHandler.contains("focusTabStrip()")
+                toggleHandler.contains("DetailFocusChain.nextRow(") &&
+                toggleHandler.contains("focusByGeometry(DetailFocusDirection.DOWN)")
         )
         assertTrue(
-            "and the chain DOES name the row now (2026-11-21): the overview moved " +
-                "out of the list and above the strip, so its toggle sits between the " +
-                "chips and the strip instead of borrowing HEADER's position - which " +
-                "is what closes the genre / View-more cycle for good",
+            "and the chain names the row (2026-11-22): the overview is the first " +
+                "item of Details, under the strip, with DOWN walking into the tab",
             chain.contains("OVERVIEW") &&
                 chain.contains("fun toggleDownRow(presence: DetailRowPresence): DetailRow") &&
                 chain.contains("nextRow(DetailRow.OVERVIEW, DetailFocusDirection.DOWN, presence)")
