@@ -154,6 +154,7 @@ import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_WAIT_MS
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
+import com.kennyb1201.kbstream.ui.home.screensaverGenre
 import com.kennyb1201.kbstream.ui.screensaver.ScreensaverRelated
 import com.kennyb1201.kbstream.ui.screensaver.detailScreensaverCandidates
 import com.kennyb1201.kbstream.ui.screensaver.rememberScreensaver
@@ -5794,6 +5795,19 @@ fun DetailScreen(
             }
             val screensaverContext = LocalContext.current
 
+            // The corner label's genres. This page already holds the CURRENT
+            // title's genres in its loaded detail, so its slide labels itself
+            // without asking anyone. The related slides use the persisted map
+            // the idle wait writes through - the same map Home reads - so a
+            // title resolved on any earlier evening still keeps its line here.
+            val screensaverPersistedGenres = remember(screensaverPool, screensaverContext) {
+                AppPreferences.getScreensaverGenres(screensaverContext)
+            }
+            val screensaverCurrentKey =
+                tmdbDetail?.id?.let { tmdbId -> "tmdb:$tmdbId:$normalizedType" }
+            val screensaverCurrentGenre =
+                screensaverGenre(tmdbDetail?.genres?.map { it.name })
+
             // The art gate, once, for both passes: the clean (textless-first)
             // card backdrop and a clearlogo, or the title is not a slide. The
             // shared landscape resolver is what the page's own cards use, so a
@@ -9880,10 +9894,21 @@ fun DetailScreen(
                 if (screensaver.visible && screensaver.slides.isNotEmpty()) {
                     HomeScreensaver(
                         slides = screensaver.slides,
-                        // No genre line here: the page has no warmed genre for
-                        // the related titles, and a lookup per slide is a
-                        // fetch the overlay must never make.
-                        genreOf = { null },
+                        // The current title's own genres come from the detail
+                        // this page already loaded; the related titles read the
+                        // persisted map (never a fetch the overlay has to wait
+                        // on). A related title nothing has resolved yet simply
+                        // shows its wordmark alone.
+                        genreOf = { meta ->
+                            if (
+                                screensaverCurrentKey != null &&
+                                "${meta.id}:${meta.type}" == screensaverCurrentKey
+                            ) {
+                                screensaverCurrentGenre
+                            } else {
+                                screensaverPersistedGenres["${meta.id}:${meta.type}"]
+                            }
+                        },
                         onExit = { screensaver.dismiss() }
                     )
                 }

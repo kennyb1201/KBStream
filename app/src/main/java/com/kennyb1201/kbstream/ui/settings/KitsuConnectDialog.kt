@@ -78,6 +78,7 @@ internal fun KitsuConnectDialog(
     val connectFocusRequester = remember { FocusRequester() }
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        SettingsModalHold()
         AnimeDialogPanel(phone = phone, title = "Kitsu") {
             val connectedAs = viewerName?.trim()?.takeIf { it.isNotEmpty() }
             Text(

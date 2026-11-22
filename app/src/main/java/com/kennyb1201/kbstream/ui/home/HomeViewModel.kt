@@ -1479,7 +1479,28 @@ class HomeViewModel(
      * around. Reads are still plain lookups - no I/O, no suspension.
      */
     private val resolvedHeroGenres =
-        androidx.compose.runtime.mutableStateMapOf<String, String>()
+        androidx.compose.runtime.mutableStateMapOf<String, String>().apply {
+            // SEEDED FROM DISK, per profile. This map used to start empty on
+            // every process, so a television that had been off for weeks drew
+            // its first shows with no genre line at all - only the titles the
+            // idle wait happened to warm grew labels, slowly. The Fire Stick
+            // report (2026-11-21) was exactly that: a cold process with an
+            // empty map, while the daily-driven TCL had accumulated one.
+            putAll(AppPreferences.getScreensaverGenres(getApplication()))
+        }
+
+    /**
+     * The resolve-on-slide lookup, and the title it is for.
+     *
+     * A slide with no known genre kicks the same cache-first detail lookup the
+     * idle wait uses, so its label can land mid-slide instead of waiting for a
+     * later evening's warm pass. Bounded to ONE lookup: a new slide cancels the
+     * previous one, and a title whose genre is already known never asks. This
+     * never blocks a slide change - the show keeps moving whether or not the
+     * answer arrives.
+     */
+    private var screensaverGenreJob: Job? = null
+    private var screensaverGenreLookupKey: String? = null
 
     /**
      * The CLEAN backdrop resolved for a pool title, keyed `"<id>:<type>"`.
@@ -1508,6 +1529,66 @@ class HomeViewModel(
         id: String,
         type: String
     ): String? = resolvedHeroGenres["$id:$type"]
+
+    /**
+     * Remembers one title's genre line in memory AND on disk.
+     *
+     * The one write path, so the two cannot disagree: the in-memory map is what
+     * a slide reads while composing, and the stored line is what makes the map
+     * non-empty on the next cold start. A null/blank line is not a resolved
+     * genre and writes nothing.
+     */
+    private fun rememberResolvedScreensaverGenre(key: String, genre: String?) {
+        val line = genre?.takeIf { it.isNotBlank() } ?: return
+        resolvedHeroGenres[key] = line
+        AppPreferences.setScreensaverGenre(getApplication(), key, line)
+    }
+
+    /**
+     * Resolves the genre for a slide that is being DRAWN with none.
+     *
+     * The idle wait can only warm so many titles, and a pool is wider than that
+     * prefix; a title the show happens to reach first would otherwise stay
+     * unlabelled for the whole evening. This is the same cache-first detail
+     * lookup the wait uses, kicked from the slide's own composition. At most one
+     * is in flight - a new slide cancels the old request - and nothing here is
+     * awaited by the overlay: a slide changes on its own clock whether the
+     * answer lands or not.
+     */
+    internal fun requestScreensaverGenre(item: MetaPreview) {
+        val key = "${item.id}:${item.type}"
+        if (resolvedHeroGenres[key] != null) return
+        if (screensaverGenreLookupKey == key) return
+        screensaverGenreLookupKey = key
+        screensaverGenreJob?.cancel()
+        screensaverGenreJob = viewModelScope.launch {
+            val detail = safeSuspend { screensaverDetailOf(item) }
+            rememberResolvedScreensaverGenre(
+                key,
+                screensaverGenre(detail?.genres?.map { it.name })
+            )
+            if (screensaverGenreLookupKey == key) screensaverGenreLookupKey = null
+        }
+    }
+
+    /**
+     * The pool Settings shows while it idles.
+     *
+     * Settings has no titles of its own, so it borrows Home's: the rails this
+     * profile would draw, put through the same clearlogo gate Home's pool uses
+     * and then through the ACTIVE profile's ceiling - the rule the billboard
+     * pool already applies. A kids profile therefore cannot be shown an adult
+     * title on the Settings screen any more than on Home.
+     *
+     * Suspended because the ceiling is a per-title TMDB check; the Settings
+     * screen calls it off the composition and keeps `pool` empty until it
+     * answers, which simply means the host has nothing to arm.
+     */
+    internal suspend fun screensaverPoolForSettings(): List<MetaPreview> {
+        val pool = screensaverSlides(_rails.value.flatMap { rail -> rail.items })
+        if (tmdbRepository.kidsMaxAge() == null) return pool
+        return tmdbRepository.kidsFilterMetas(pool)
+    }
 
     /**
      * The clean backdrop resolved for this title, or null when it has not.
@@ -1587,8 +1668,10 @@ class HomeViewModel(
 
             // The overlay's own rule, so the caption cannot be spelled one way
             // here and another in the hero's resolve.
-            screensaverGenre(detail?.genres?.map { it.name })
-                ?.let { genre -> resolvedHeroGenres[key] = genre }
+            rememberResolvedScreensaverGenre(
+                key,
+                screensaverGenre(detail?.genres?.map { it.name })
+            )
         }
 
         // Diagnostics, not UI: a page whose art did not resolve is a network or
@@ -2030,9 +2113,10 @@ Log.d(
                     // corner label (see resolvedHeroGenres). The rule for
                     // "which genre" is the overlay's own, so the caption cannot
                     // spell it one way here and another there.
-                    screensaverGenre(finalMeta.genres)?.let { genre ->
-                        resolvedHeroGenres["$requestedId:$requestedType"] = genre
-                    }
+                    rememberResolvedScreensaverGenre(
+                        "$requestedId:$requestedType",
+                        screensaverGenre(finalMeta.genres)
+                    )
 
                     Log.d(
                         "HOME_HERO",
@@ -3717,6 +3801,23 @@ Log.d(
                     // A previous profile's error message must not sit under
                     // the new profile's rails while its build is in flight.
                     _error.value = null
+
+                    // Genres are cached per profile (see resolvedHeroGenres):
+                    // leaving the old profile's lines in the map would label
+                    // the incoming profile's slides with titles it never
+                    // resolved, and the next write would land in its file.
+                    // Drop, then seed from the profile now active - the same
+                    // read construction does, so a switch and a launch agree.
+                    // A lookup still running was started for the profile just
+                    // left; letting it land would write its genre into the new
+                    // profile's map and file.
+                    screensaverGenreJob?.cancel()
+                    screensaverGenreJob = null
+                    resolvedHeroGenres.clear()
+                    resolvedHeroGenres.putAll(
+                        AppPreferences.getScreensaverGenres(getApplication())
+                    )
+                    screensaverGenreLookupKey = null
 
                     dismissedContinueWatching.clear()
                     dismissedContinueWatching.putAll(loadDismissedContinueWatching())

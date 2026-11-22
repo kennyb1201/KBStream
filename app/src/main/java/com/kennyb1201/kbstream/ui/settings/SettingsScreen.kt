@@ -67,7 +67,9 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
+import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.debrid.CloudMatch
 import com.kennyb1201.kbstream.data.debrid.TORBOX_VERIFIED_MARKER
 import com.kennyb1201.kbstream.data.debrid.TorBoxReview
@@ -78,6 +80,9 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.ui.home.HomeExpandDelay
 import com.kennyb1201.kbstream.ui.home.HomeLayout
+import com.kennyb1201.kbstream.ui.home.HomeScreensaver
+import com.kennyb1201.kbstream.ui.home.HomeViewModel
+import com.kennyb1201.kbstream.ui.home.screensaverCleanSlides
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
@@ -88,6 +93,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -140,6 +146,7 @@ import com.kennyb1201.kbstream.ui.components.rememberKBFeedback
 import com.kennyb1201.kbstream.ui.library.LibraryFilterChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.player.PlayerAudioTuning
+import com.kennyb1201.kbstream.ui.screensaver.rememberScreensaver
 import com.kennyb1201.kbstream.ui.player.PlayerTrackBridge
 import com.kennyb1201.kbstream.ui.player.SubtitleModeRules
 import com.kennyb1201.kbstream.ui.player.FrameRateDiagnostics
@@ -954,9 +961,71 @@ fun SettingsScreen(
         }
     }
 
+    // ── The TV screensaver on this page ───────────────────────────────
+    //
+    // The same overlay, the same host, the same toggle and wait as Home and
+    // Detail (spec 2026-11-21): a Settings page left open is as static a
+    // picture as a Home page, and Kenny asked for it explicitly. Settings owns
+    // no titles, so its pool is Home's - borrowed from the activity-scoped
+    // view model Home itself uses, so this page never builds a second rail
+    // feed. [screensaverPoolForSettings] puts it through the active profile's
+    // ceiling, the same rule the billboard pool uses.
+    val screensaverHomeViewModel: HomeViewModel = viewModel()
+    val screensaverRails by screensaverHomeViewModel.rails.collectAsStateWithLifecycle()
+    val screensaverProfileId = com.kennyb1201.kbstream.data.sync.ProfileManager
+        .activeProfile.collectAsStateWithLifecycle().value?.id
+    var screensaverPool by remember { mutableStateOf(emptyList<MetaPreview>()) }
+    LaunchedEffect(screensaverRails, screensaverProfileId) {
+        screensaverPool = screensaverHomeViewModel.screensaverPoolForSettings()
+    }
+    // Every dialog, picker and focused text field on this page announces
+    // itself here, so `blocked` can see the ones raised from a section rather
+    // than from this function's own state.
+    val settingsModalGate = remember { SettingsModalGate() }
+    val screensaver = rememberScreensaver(
+        pool = screensaverPool,
+        blocked = settingsModalGate.blocked ||
+            showExternalPlayerPicker ||
+            showCustomPlayerPicker ||
+            pendingImportUri != null ||
+            showClearHistoryConfirm ||
+            torboxCloudOpen,
+        // Settings plays no trailers; leaving for the player pauses the
+        // activity, which the host's resumed gate already handles.
+        trailerPlaying = false,
+        warmPool = { items -> screensaverHomeViewModel.warmScreensaverPool(items) },
+        resolveSlides = { items ->
+            screensaverCleanSlides(items) { meta ->
+                screensaverHomeViewModel.screensaverCleanBackdrop(meta.id, meta.type)
+            }
+        },
+        // Nothing is captured: the page's rows never leave composition under
+        // the overlay, and the restorer on the rail+content row is what hands
+        // focus back to the row that held it (see the Row below).
+        captureFocus = { null },
+        restoreFocus = {}
+    )
+
+    CompositionLocalProvider(LocalSettingsModalGate provides settingsModalGate) {
     BackHandler { onBack() }
 
-    Row(modifier = Modifier.fillMaxSize().background(KBVoid)) {
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(KBVoid)
+            // Any press keeps the screensaver's idle clock pushed out. Never
+            // consumed: the press still has to reach the focus system.
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown) {
+                    screensaver.onActivity()
+                }
+                false
+            }
+            // The rows never leave composition while the show is up, so this
+            // is what restores focus to the settings row that held it before
+            // the overlay armed.
+            .focusRestorer()
+    ) {
         // The rail is taller than a 1080p TV once every section is on it:
         // the SETTINGS heading plus ten rows is ~620dp of content against
         // ~540dp of screen (1080p at 2px/dp), so its last entries - About -
@@ -1452,7 +1521,7 @@ fun SettingsScreen(
                                     mdbListKeySaved = false
                                 },
                                 placeholder = "Paste key (e.g. 12345)",
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).settingsTextEntryHold(),
                                 focusRequester = mdbListFocusRequester,
                                 onDone = {
                                     MdbListClient.saveApiKey(context, mdbListKeyInput)
@@ -1588,7 +1657,7 @@ fun SettingsScreen(
                                     omdbKeySaved = false
                                 },
                                 placeholder = "Paste key",
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).settingsTextEntryHold(),
                                 focusRequester = omdbFocusRequester,
                                 onDone = {
                                     AppPreferences.setOmdbApiKey(context, omdbKeyInput)
@@ -1676,7 +1745,7 @@ fun SettingsScreen(
                                     animeSkipKeySaved = false
                                 },
                                 placeholder = "Paste client ID",
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).settingsTextEntryHold(),
                                 focusRequester = animeSkipFocusRequester,
                                 onDone = {
                                     AppPreferences.setAnimeSkipClientId(context, animeSkipKeyInput)
@@ -1766,7 +1835,7 @@ fun SettingsScreen(
                                     theSportsDbKeySaved = false
                                 },
                                 placeholder = "Paste key",
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).settingsTextEntryHold(),
                                 focusRequester = theSportsDbFocusRequester,
                                 onDone = {
                                     AppPreferences.setTheSportsDbKey(context, theSportsDbKeyInput)
@@ -1850,7 +1919,7 @@ fun SettingsScreen(
                                     subsKeySaved = false
                                 },
                                 placeholder = "Paste key",
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).settingsTextEntryHold(),
                                 focusRequester = subsFocusRequester,
                                 onDone = {
                                     AppPreferences.setOpensubtitlesApiKey(context, subsKeyInput)
@@ -1935,7 +2004,7 @@ fun SettingsScreen(
                                     fanartKeySaved = false
                                 },
                                 placeholder = "Paste key",
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).settingsTextEntryHold(),
                                 focusRequester = fanartFocusRequester,
                                 onDone = { commitFanartKey(fanartKeyInput) },
                                 onFocusChanged = { focusedNow ->
@@ -2028,7 +2097,7 @@ fun SettingsScreen(
                                     torboxKeySaved = false
                                 },
                                 placeholder = "Paste key",
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).settingsTextEntryHold(),
                                 focusRequester = torboxFocusRequester,
                                 onDone = { commitTorboxKey(torboxKeyInput) },
                                 onFocusChanged = { focusedNow ->
@@ -3451,7 +3520,7 @@ fun SettingsScreen(
                                     badgeStatus = null
                                 },
                                 placeholder = "https://…/stream-badges.json",
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).settingsTextEntryHold(),
                                 focusRequester = badgeFocusRequester,
                                 onDone = { importBadgePack() }
                             )
@@ -3714,11 +3783,11 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "TV Screensaver",
-                    description = "When Home or a title's page is left idle, fill the screen " +
-                        "with the artwork of its titles (backdrop, logo and genre), moving " +
-                        "gently from one to the next. Any button brings the screen back exactly " +
-                        "where it was. On by default, and this switch turns it off; a title " +
-                        "without both a backdrop and a logo is skipped.",
+                    description = "When Home, a title's page or Settings is left idle, fill " +
+                        "the screen with the artwork of its titles (backdrop, logo and genre), " +
+                        "moving gently from one to the next. Any button brings the screen back " +
+                        "exactly where it was. On by default, and this switch turns it off; a " +
+                        "title without both a backdrop and a logo is skipped.",
                     checked = screensaverEnabled,
                     onToggle = { enabled ->
                         screensaverEnabled = enabled
@@ -4806,6 +4875,33 @@ fun SettingsScreen(
         )
     }
 
+    // The screensaver is drawn LAST, over the rail and the pane: it is the
+    // whole screen for as long as it is up. A window Dialog draws above this
+    // one, which is exactly why the gate keeps the show from arming while any
+    // of them is open (see SettingsModalHold). A composable of this screen, not
+    // a route, so the back stack, the rail's selection and the pane's scroll
+    // are untouched by the show.
+    BackHandler(enabled = screensaver.visible) {
+        screensaver.dismiss()
+    }
+    if (screensaver.visible && screensaver.slides.isNotEmpty()) {
+        HomeScreensaver(
+            slides = screensaver.slides,
+            // Genres come from the same warm pass Home runs (the Settings host
+            // supplies it), so the labels are the ones this device already
+            // resolved; a slide drawn without one asks for it below.
+            genreOf = { meta ->
+                screensaverHomeViewModel.resolvedHeroGenre(meta.id, meta.type)
+            },
+            onMissingGenre = { meta ->
+                screensaverHomeViewModel.requestScreensaverGenre(meta)
+            },
+            onExit = { screensaver.dismiss() }
+        )
+    }
+
+    }
+
 }
 
 // ── Two-pane scaffolding ────────────────────────────────────────
@@ -4850,7 +4946,7 @@ private fun SettingsNavRail(
             value = searchQuery,
             onValueChange = onSearchQueryChange,
             placeholder = "Search settings",
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().settingsTextEntryHold(),
             // A picked result hands focus back here (see the jump), so the
             // field needs a requester of its own.
             focusRequester = searchFocus,
@@ -5926,6 +6022,7 @@ private fun SettingsImportBackupDialog(
         }
     }
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        SettingsModalHold()
         KBDialogPanel(title = "Import this backup?") {
             Text(
                 text = "Importing replaces this profile's watch history, watched " +
@@ -5987,6 +6084,7 @@ private fun SettingsClearHistoryDialog(
         }
     }
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        SettingsModalHold()
         // The app's one dialog plate (see KBDialogPanel), not a hand-rolled
         // Column: this drew its own fill, its own 38% ring, 22x20 padding and a
         // heading that was headlineSmall but NOT SemiBold, so the dialog sat
@@ -6049,6 +6147,7 @@ private fun TorBoxRemoveSyncedDialog(
         }
     }
     androidx.compose.ui.window.Dialog(onDismissRequest = onKeep) {
+        SettingsModalHold()
         KBDialogPanel(title = "Remove the synced titles?") {
             Text(
                 text = "The TorBox library sync added $count " +
@@ -6108,6 +6207,7 @@ private fun SettingsExternalPlayerDialog(
     onDismiss: () -> Unit
 ) {
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        SettingsModalHold()
         // The shared dialog plate, at this dialog's own width: it was drawn by
         // hand here too, which is where the 2dp-tighter vertical rhythm and the
         // lighter heading came from.
@@ -6178,6 +6278,7 @@ private fun SettingsCustomPlayerDialog(
     onDismiss: () -> Unit
 ) {
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        SettingsModalHold()
         KBDialogPanel(title = "Pick the app by hand", width = 640.dp) {
             Text(
                 text = "Every app installed on this device, including the one the picker " +
@@ -6572,6 +6673,7 @@ private fun BillboardCatalogsDialog(
 ) {
     var draft by remember { mutableStateOf(selected) }
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        SettingsModalHold()
         KBDialogPanel(title = "Billboard catalogs", width = 640.dp) {
             Text(
                 text = "Which catalogs feed the Spotlight hero. Pick several to merge them; " +

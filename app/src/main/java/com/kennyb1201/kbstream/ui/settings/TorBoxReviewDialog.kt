@@ -97,6 +97,7 @@ internal fun TorBoxReviewDialog(
     }
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onKeep) {
+        SettingsModalHold()
         KBDialogPanel(title = "Unowned cloud titles") {
             Text(
                 text = UNOWNED_REVIEW_BODY,

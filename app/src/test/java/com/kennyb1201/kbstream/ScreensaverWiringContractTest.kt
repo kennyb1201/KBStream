@@ -445,7 +445,7 @@ class ScreensaverWiringContractTest {
             "the idle-wait pass writes each resolved title's genre line, by the " +
                 "overlay's own rule",
             squash(homeVm).contains("screensaverGenre(detail?.genres?.map { it.name })") &&
-                squash(homeVm).contains("resolvedHeroGenres[key] = genre")
+                squash(homeVm).contains("resolvedHeroGenres[key] = line")
         )
         assertTrue(
             "which is the first two joined, so the label reads \"ACTION · DRAMA\"",
@@ -454,9 +454,10 @@ class ScreensaverWiringContractTest {
                 squash(rules).contains(".joinToString(SCREENSAVER_GENRE_SEPARATOR)")
         )
         assertEquals(
-            "the rule has exactly two callers, both of them screensaver memos - the " +
-                "hero draws its own genre from its detail state and keeps showing one",
-            2,
+            "the rule has exactly three callers, all of them screensaver memos: the " +
+                "hero's resolve, the idle wait, and the on-slide lookup for a title the " +
+                "wait never reached - the hero draws its own genre and keeps one",
+            3,
             homeVm.split("screensaverGenre(").size - 1
         )
         assertTrue(
@@ -473,9 +474,9 @@ class ScreensaverWiringContractTest {
             squash(overlay).contains("horizontalAlignment = Alignment.CenterHorizontally")
         )
         val label = squash(overlay)
-            .substringAfter("genreOf(slide)?.let { genre ->")
+            .substringAfter("genre?.let { line ->")
             .substringBefore("private val ScreensaverCornerPadding")
-        assertTrue("the genre is drawn as tracked capitals: $label", label.contains("genre.uppercase()"))
+        assertTrue("the genre is drawn as tracked capitals: $label", label.contains("line.uppercase()"))
         assertTrue("tracked", label.contains("letterSpacing = ScreensaverGenreTracking"))
         assertTrue(
             "at a small, dim label size rather than the title's near-white body text",
@@ -617,7 +618,7 @@ class ScreensaverWiringContractTest {
     }
 
     @Test
-    fun `the genre comes from an already-resolved hero, never from a new fetch`() {
+    fun `the genre comes from a resolved memo, with a bounded on-slide lookup for the rest`() {
         assertTrue(
             "the overlay asks the ViewModel for a resolved genre only",
             squash(home).contains("genreOf = { meta -> viewModel.resolvedHeroGenre(meta.id, meta.type) }")
@@ -659,13 +660,13 @@ class ScreensaverWiringContractTest {
     }
 
     @Test
-    fun `the settings copy names both screens, without promising the phone one`() {
+    fun `the settings copy names all three screens, without promising the phone one`() {
         assertTrue(
-            "the timeout row's first sentence is the two screens, not Home alone",
+            "the timeout row's first sentence is Home, a title's page AND Settings",
             timeoutRow.contains(
-                "\"How long Home or a title's page must sit untouched before the \" +"
+                "\"How long Home, a title's page or Settings must sit untouched before \" +"
             ) &&
-                timeoutRow.contains("\"screensaver takes the screen. Any press on the remote ")
+                timeoutRow.contains("\"the screensaver takes the screen. Any press on the remote ")
         )
         assertTrue(
             "and the second promises the SCREEN back, not Home",
@@ -677,7 +678,7 @@ class ScreensaverWiringContractTest {
         )
         assertTrue(
             "the toggle's description agrees",
-            squash(settings).contains("When Home or a title's page is left idle, fill the screen ")
+            squash(settings).contains("When Home, a title's page or Settings is left idle, fill ")
         )
     }
 

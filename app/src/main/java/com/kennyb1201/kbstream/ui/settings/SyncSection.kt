@@ -142,6 +142,9 @@ fun SyncSection() {
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp)
+                    // A focused credential field is a viewer about to type,
+                    // not a room left alone: hold the screensaver's gate.
+                    .settingsTextEntryHold()
             )
             // A masked KBSecretField rather than a hand-rolled password box:
             // every API key field in this app is a KBSecretField with a reveal
@@ -158,6 +161,7 @@ fun SyncSection() {
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp)
+                    .settingsTextEntryHold()
             )
 
             Row(

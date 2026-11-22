@@ -1940,6 +1940,37 @@ object AppPreferences {
             .apply()
     }
 
+    // ── Screensaver resolved genres ──────────────────────────────────
+    //
+    // Which genres each title resolved, keyed "<id>:<type>". Per PROFILE
+    // because prefs() is, and because a kids profile's Home resolves different
+    // titles than an adult one. This is a cache, not a setting: no row reads it,
+    // no blob publishes it, and it is written as a side effect of a detail
+    // lookup. It lives beside the switch because it exists only to keep the
+    // overlay's corner label honest across process restarts - see
+    // [decodeScreensaverGenres] for the format and the cap.
+    private const val KEY_SCREENSAVER_GENRES = "screensaver_genres"
+
+    /** Every genre line this profile has resolved, keyed "<id>:<type>". */
+    fun getScreensaverGenres(context: Context): Map<String, String> =
+        decodeScreensaverGenres(prefs(context).getString(KEY_SCREENSAVER_GENRES, null))
+
+    /**
+     * Records one resolved genre line, write-through, bounded to
+     * [SCREENSAVER_GENRE_CACHE_LIMIT] entries.
+     *
+     * A read-modify-write rather than a StringSet: the eviction order has to be
+     * defined, and SharedPreferences sets have none. The cost is one small
+     * string read and write per resolved title, which happens in the idle wait
+     * and on a hero focus - never on a slide's draw.
+     */
+    fun setScreensaverGenre(context: Context, key: String, genre: String) {
+        val next = putScreensaverGenre(getScreensaverGenres(context), key, genre)
+        prefs(context).edit()
+            .putString(KEY_SCREENSAVER_GENRES, encodeScreensaverGenres(next))
+            .apply()
+    }
+
     /** The chip's caption for a stored wait. */
     fun screensaverTimeoutLabel(minutes: Int): String = "$minutes min"
 

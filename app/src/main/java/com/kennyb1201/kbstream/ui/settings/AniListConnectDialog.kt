@@ -85,6 +85,7 @@ internal fun AniListConnectDialog(
     var browserUnavailable by remember { mutableStateOf(false) }
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        SettingsModalHold()
         AnimeDialogPanel(phone = phone, title = "AniList") {
             Text(
                 text = "AniList: ${state.label}. " +

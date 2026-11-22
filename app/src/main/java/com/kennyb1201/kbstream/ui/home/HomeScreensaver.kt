@@ -84,6 +84,14 @@ import kotlinx.coroutines.delay
 internal fun HomeScreensaver(
     slides: List<MetaPreview>,
     genreOf: (MetaPreview) -> String?,
+    /**
+     * Asks the caller to resolve a genre for a slide drawn WITHOUT one. Empty
+     * by default, for a screen with no lookup to offer (Detail uses the genres
+     * already on the page). Never suspends and never delays the slide: it is a
+     * request fired from the slide's own composition, and the label appears on
+     * that slide as soon as the snapshot map changes.
+     */
+    onMissingGenre: (MetaPreview) -> Unit = {},
     onExit: () -> Unit
 ) {
     if (slides.isEmpty()) return
@@ -204,6 +212,13 @@ internal fun HomeScreensaver(
             // below). Composition-time values, not state: the progress itself is
             // read INSIDE the layer, so the overlay does not recompose per frame.
             val current = shownCycle == cycle
+            // Read once: the label below and the request agree about what this
+            // slide knows. Keying the effect on the GENRE means a line landing
+            // mid-slide cancels the request instead of asking again.
+            val genre = genreOf(slide)
+            LaunchedEffect(shownCycle, slide.id, slide.type, genre) {
+                if (genre == null) onMissingGenre(slide)
+            }
 
             Box(modifier = Modifier.fillMaxSize()) {
                 AsyncImage(
@@ -278,9 +293,9 @@ internal fun HomeScreensaver(
                     // - one line, capped at the wordmark's own width so a long
                     // line ellipsizes instead of running past the art it
                     // labels.
-                    genreOf(slide)?.let { genre ->
+                    genre?.let { line ->
                         Text(
-                            text = genre.uppercase(),
+                            text = line.uppercase(),
                             color = KBTextLo,
                             style = MaterialTheme.typography.bodySmall,
                             letterSpacing = ScreensaverGenreTracking,

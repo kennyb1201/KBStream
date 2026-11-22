@@ -38,7 +38,8 @@ internal class ScreensaverController(
 
 /**
  * The TV screensaver's arm/dismiss state machine, shared by every screen that
- * owns one (Home's rails, the TV Detail page).
+ * owns one (Home's rails, the TV Detail page, and the TV Settings page since
+ * spec 2026-11-21).
  *
  * This is Home's machinery moved out verbatim rather than copied: the idle
  * clock, the resumed gate, the menu gate, the trailer hold and its restarting

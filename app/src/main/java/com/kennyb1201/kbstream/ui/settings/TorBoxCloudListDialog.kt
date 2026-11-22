@@ -140,6 +140,7 @@ fun TorBoxCloudListDialog(
     }
 
     Dialog(onDismissRequest = onDismiss) {
+        SettingsModalHold()
         if (FormFactor.isTv) {
             TvKBDialogPanel(
                 title = "TorBox cloud",

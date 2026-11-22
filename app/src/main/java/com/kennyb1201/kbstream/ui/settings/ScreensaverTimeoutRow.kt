@@ -15,7 +15,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 
 /**
- * How long TV Home sits idle before the screensaver takes the screen over.
+ * How long a TV screen sits idle before the screensaver takes it over.
  *
  * The wait is a preference rather than a constant for the same reason the hero
  * trailer's dwell is: "idle" is the viewer's own idea of it, and someone who
@@ -60,8 +60,8 @@ internal fun ScreensaverTimeoutRow(
         }
     }
     Text(
-        text = "How long Home or a title's page must sit untouched before the " +
-            "screensaver takes the screen. Any press on the remote brings the screen " +
+        text = "How long Home, a title's page or Settings must sit untouched before " +
+            "the screensaver takes the screen. Any press on the remote brings the screen " +
             "straight back, exactly where it was. Trailers stop while it is up, and a " +
             "title without both a backdrop and a logo is skipped rather than shown as " +
             "a poster.",

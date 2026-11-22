@@ -61,6 +61,7 @@ internal fun AnimeUsernameDialog(
     }
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        SettingsModalHold()
         KBDialogPanel(title = "$service username") {
             Text(
                 text = "KBStream reads this profile's PUBLIC anime list. Nothing is " +

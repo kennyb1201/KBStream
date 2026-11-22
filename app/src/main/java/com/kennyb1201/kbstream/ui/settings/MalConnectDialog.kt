@@ -64,6 +64,7 @@ internal fun MalConnectDialog(
     var browserUnavailable by remember { mutableStateOf(false) }
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        SettingsModalHold()
         AnimeDialogPanel(phone = phone, title = "MyAnimeList") {
             Text(
                 text = malDialogCopy(state, viewerName),

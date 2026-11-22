@@ -8463,6 +8463,10 @@ fun HomeScreen(
                 // happened for this title, never from a new fetch: a slide the
                 // focus never reached shows its logo alone.
                 genreOf = { meta -> viewModel.resolvedHeroGenre(meta.id, meta.type) },
+                // A slide the warm pass did not reach asks for its genre as it
+                // is drawn, so a label can appear mid-slide rather than at its
+                // next cycle.
+                onMissingGenre = { meta -> viewModel.requestScreensaverGenre(meta) },
                 onExit = { screensaver.dismiss() }
             )
         }

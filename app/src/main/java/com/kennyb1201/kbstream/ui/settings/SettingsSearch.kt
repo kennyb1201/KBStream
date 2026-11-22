@@ -609,7 +609,7 @@ internal object SettingsSearchIndex {
             SettingsPane.INTERFACE,
             "TV Screensaver",
             "screensaver screensaver ambient idle daydream burn in slideshow backdrop " +
-                "logo timeout home detail title tv"
+                "logo timeout home detail title settings tv"
         ),
         SettingSearchEntry(
             "interface.24h-clock",
