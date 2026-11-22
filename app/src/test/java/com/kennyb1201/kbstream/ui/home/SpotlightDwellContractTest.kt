@@ -160,6 +160,22 @@ class SpotlightDwellContractTest {
         )
     }
 
+    @Test
+    fun `the billboard resolves the first pages eagerly and spreads the tail`() {
+        val model = source(VIEW_MODEL)
+        assertTrue(
+            "the page under the viewer and its next two keep the fast cadence",
+            model.contains("BILLBOARD_RESOLVE_EAGER_PAGES = 3") &&
+                model.contains("BILLBOARD_RESOLVE_STAGGER_MS = 120L")
+        )
+        assertTrue(
+            "the rest resolve at a browsing pace rather than in Home's first paint burst",
+            model.contains("BILLBOARD_RESOLVE_TAIL_MS = 500L") &&
+                model.contains("index < BILLBOARD_RESOLVE_EAGER_PAGES") &&
+                model.contains("(index - BILLBOARD_RESOLVE_EAGER_PAGES) *")
+        )
+    }
+
     // ── F2/F3 (2026-11-13): the details are the panel's content ───────────
 
     @Test
@@ -175,9 +191,10 @@ class SpotlightDwellContractTest {
         )
         val model = source(VIEW_MODEL)
         assertTrue(
-            "and every rail item is prefetched, so the card the dwell is about to open " +
-                "is a cache hit (F2 is a verification, not a change)",
-            model.contains("prefetchHeroArt(\n                    finalRails.flatMap { it.items }\n                )")
+            "the first screenful is prefetched, so the card the dwell is about to " +
+                "open is a cache hit without starting every rail's chains at once",
+            model.contains("finalRails\n                        .take(HERO_ART_PREFETCH_RAILS)\n") &&
+                model.contains("HERO_ART_PREFETCH_RAILS = 3")
         )
         assertTrue(
             "bounded, as before: two permits, sixty cards",

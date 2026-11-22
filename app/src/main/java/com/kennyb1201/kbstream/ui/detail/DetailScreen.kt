@@ -546,12 +546,17 @@ private suspend fun LazyListState.revealRail(rowKey: String, hintIndex: Int): Bo
  *    measuring it mid-flight would land the poster row where the row was, not
  *    where it ended up, and the two animations would fight over the viewport;
  *  - passes are collapsed, so a D-pad walk across one row's cards (every card a
- *    fresh arrival) is one reveal, not one per card.
+ *    fresh arrival) is one reveal, not one per card;
+ *  - the last settled zero is remembered with the list position it was measured
+ *    at, so a further chip in the SAME row does not re-run a reveal that has
+ *    nothing to fix. A page that has settled stays settled under the hand.
  *
  * It only ever scrolls the OUTER list. The rows themselves are untouched, the
- * focused row is untouched - its rect is one of the two the delta keeps whole -
- * and a neighbour whose poster row is nowhere on screen asks for nothing, since
- * that row is not in the measurables and nothing is being cut.
+ * focused row is untouched - its rect is one of the two the delta keeps whole,
+ * which is the conservative form of "keep the focused chip composed": a row
+ * that stays composed cannot dispose the focus inside it - and a neighbour
+ * whose poster row is nowhere on screen asks for nothing, since that row is not
+ * in the measurables and nothing is being cut.
  */
 private class SeasonRowReveal(
     private val listState: LazyListState,
@@ -570,10 +575,27 @@ private class SeasonRowReveal(
      */
     private var requestedKey: String? = null
 
+    /**
+     * The last neighbour whose reveal settled at zero, plus the list position
+     * that made that zero true.
+     *
+     * A chip-to-chip walk inside one row lands on a new focus target every
+     * press, and every gain used to re-ask this reveal. With the list still at
+     * the position the zero was measured at there is nothing to fix, so the
+     * ask is dropped until the list actually moves (or the hand enters another
+     * neighbour). This is the damping half of round four's F2: a settled poster
+     * row must stay put while the hand walks its chips, not be scrolled afresh
+     * per chip.
+     */
+    private var settledKey: String? = null
+    private var settledFirstIndex: Int = -1
+    private var settledFirstOffset: Int = -1
+
     /** [neighbourKey] is the list item key of the row that just took the focus. */
     fun ask(neighbourKey: String) {
         requestedKey = neighbourKey
         if (job?.isActive == true) return
+        if (isSettledAtCurrentPosition(neighbourKey)) return
         job =
             scope.launch {
                 repeat(SEASON_ROW_REVEAL_PASSES) { pass ->
@@ -630,6 +652,7 @@ private class SeasonRowReveal(
                             branch = branch,
                             delta = 0
                         )
+                        rememberSettled(key)
                         return@launch
                     }
 
@@ -654,6 +677,17 @@ private class SeasonRowReveal(
      */
     fun release(neighbourKey: String) {
         if (requestedKey == neighbourKey) requestedKey = null
+    }
+
+    private fun isSettledAtCurrentPosition(neighbourKey: String): Boolean =
+        settledKey == neighbourKey &&
+            settledFirstIndex == listState.firstVisibleItemIndex &&
+            settledFirstOffset == listState.firstVisibleItemScrollOffset
+
+    private fun rememberSettled(neighbourKey: String) {
+        settledKey = neighbourKey
+        settledFirstIndex = listState.firstVisibleItemIndex
+        settledFirstOffset = listState.firstVisibleItemScrollOffset
     }
 
     /** Null when either row is not laid out - see the unmeasured branch above. */
@@ -1034,6 +1068,11 @@ fun DetailScreen(
     var pendingFocusReclaim by remember { mutableStateOf<DetailFocusReclaim?>(null) }
     var focusReclaimSerial by remember { mutableIntStateOf(0) }
     var reclaimBlockedFor by remember { mutableStateOf<DetailRow?>(null) }
+    // The screensaver is the one overlay whose return is not a chain ask: it
+    // covers the page but does not remove its controls, so a dismiss can leave
+    // focus where the overlay put it (or nowhere). Remember that it was up so
+    // the hide can hand the page's own last row back through the reclaim path.
+    var screensaverWasVisible by remember { mutableStateOf(false) }
     // The effect is keyed on the serial, never on the request it consumes:
     // clearing the request inside the effect must not cancel the reclaim.
 
@@ -1986,7 +2025,10 @@ fun DetailScreen(
     // The trailer the button offers IS the trailer the button plays: one pick,
     // one rule. Movies almost always carry a video typed exactly "Trailer", so
     // this matters for series, which TMDB frequently files as a "Teaser".
-    val trailerVideo = remember(tmdbDetail) {
+    // Keyed on the videos, not the whole payload: an appended recommendations
+    // page copies [TmdbDetail] (perf audit, detail #1), and keying these
+    // derivations on the parent made every page allocation rebuild all of them.
+    val trailerVideo = remember(tmdbDetail?.videos?.results) {
         TrailerPick.best(tmdbDetail?.videos?.results)
     }
     // The title's IMDb id, for the IMDb trailer leg of every resolve on this
@@ -2137,7 +2179,7 @@ fun DetailScreen(
 
     val hasStreamAddons by viewModel.hasStreamAddons.collectAsStateWithLifecycle()
 
-    val seasons = remember(tmdbDetail) {
+    val seasons = remember(tmdbDetail?.seasons) {
         tmdbDetail?.seasons.orEmpty()
             .map { it.seasonNumber }
             .distinct()
@@ -2170,7 +2212,8 @@ fun DetailScreen(
     // (see AirDateCorrection); its answer wins only when TMDB still claims a
     // date that has already passed.
     val today = remember { LocalDate.now() }
-    val seasonPremiereDates = remember(tmdbDetail, airDateCorrections) {
+    val seasonPremiereDates =
+        remember(tmdbDetail?.seasons, tmdbDetail?.nextEpisodeToAir, airDateCorrections) {
         val bySeason = LinkedHashMap<Int, LocalDate>()
 
         fun offer(seasonNumber: Int, raw: String?) {
@@ -2205,7 +2248,8 @@ fun DetailScreen(
     // i.e. the season rows are the stale source. Per-episode dates for those
     // seasons cannot be trusted either, so an episode card keeps its date but
     // drops the UNAVAILABLE verdict (see [EpisodeCard]).
-    val seasonsWithStaleDates = remember(tmdbDetail) {
+    val seasonsWithStaleDates =
+        remember(tmdbDetail?.seasons, tmdbDetail?.nextEpisodeToAir) {
         val pointer = tmdbDetail?.nextEpisodeToAir
         val seasonNumber = pointer?.seasonNumber
         val rowDate = tmdbDetail?.seasons.orEmpty()
@@ -2231,9 +2275,9 @@ fun DetailScreen(
     // de-duplicated and capped. Memoized because the detail list builder below
     // runs on EVERY recomposition of a screen that recomposes constantly
     // (position ticks, badge updates, focus moves), while this list depends
-    // only on tmdbDetail - so building it inline re-deduplicated and
+    // only on the credits - so building it inline re-deduplicated and
     // re-allocated the whole rail for a value that had not changed.
-    val peopleItems = remember(tmdbDetail) {
+    val peopleItems = remember(tmdbDetail?.credits) {
         val tmdbCast = tmdbDetail?.credits?.cast.orEmpty()
         val tmdbDirector = tmdbDetail?.credits?.director()
         val mainWriter = tmdbDetail?.credits?.writers().orEmpty().distinctBy { it.id }.firstOrNull()
@@ -2326,7 +2370,8 @@ fun DetailScreen(
      * that is all about the title you just hid is the first place it comes
      * back.
      */
-    val recommendations = remember(tmdbDetail, hiddenTitleKeys, normalizedType) {
+    val recommendations =
+        remember(tmdbDetail?.recommendations, hiddenTitleKeys, normalizedType) {
         tmdbDetail?.recommendations
             ?.results
             .orEmpty()
@@ -2357,7 +2402,7 @@ fun DetailScreen(
      * entry of the second, and this is the first surface to show the rest of
      * them.
      */
-    val mediaVideos = remember(tmdbDetail) {
+    val mediaVideos = remember(tmdbDetail?.videos?.results) {
         tmdbDetail?.videos?.results.orEmpty()
     }
     // fanart.tv's own art for this title (spec 2026-11-15, fanart in the Media
@@ -2403,13 +2448,13 @@ fun DetailScreen(
     // The tab strip counts THESE, so a title with no TMDB backdrops but fanart
     // backgrounds now offers the page, and a page with nothing from either
     // source still is not offered.
-    val mediaBackdrops = remember(tmdbDetail, fanartMediaArt) {
+    val mediaBackdrops = remember(tmdbDetail?.images, fanartMediaArt) {
         DetailMediaArt.backdrops(
             tmdb = tmdbDetail?.images?.backdrops.orEmpty(),
             fanart = fanartMediaArt
         )
     }
-    val mediaPosters = remember(tmdbDetail, fanartMediaArt) {
+    val mediaPosters = remember(tmdbDetail?.images, fanartMediaArt) {
         DetailMediaArt.posters(
             tmdb = tmdbDetail?.images?.posters.orEmpty(),
             fanart = fanartMediaArt
@@ -2427,7 +2472,7 @@ fun DetailScreen(
      */
     // The themes page draws the title's own backdrop - AnimeThemes serves no
     // still for a theme - at the same size the Backdrops page draws its cards.
-    val mediaThemeArt = remember(tmdbDetail, initialBackdrop) {
+    val mediaThemeArt = remember(tmdbDetail?.backdropPath, initialBackdrop) {
         tmdbDetail?.backdropPath?.takeIf { it.isNotBlank() }
             ?.let { path -> tmdbImage(path, "w780") }
             ?: initialBackdrop
@@ -5081,7 +5126,7 @@ fun DetailScreen(
             // screen is the producer the player's Up Next panel reads its
             // show title from, so an id that got past here used to surface
             // there - and ride every autoplay after it.
-            val displayName = remember(m, tmdbDetail) {
+            val displayName = remember(m, tmdbDetail?.name, tmdbDetail?.title) {
                 detailDisplayName(
                     metaName = m.name,
                     tmdbName = tmdbDetail?.name,
@@ -5097,7 +5142,7 @@ fun DetailScreen(
             // clear every chip on it. The names themselves are the leak. The
             // search rail's own keywords are vetted by their titles instead
             // (TmdbRepository.kidsFilterKeywords), where that rule does work.
-            val keywords = remember(tmdbDetail, kidsCeiling) {
+            val keywords = remember(tmdbDetail?.keywords, kidsCeiling) {
                 if (kidsCeiling != null) {
                     emptyList()
                 } else {
@@ -5113,10 +5158,10 @@ fun DetailScreen(
             // each rail's itemsIndexed argument, i.e. on every re-execution of
             // the list content lambda, allocating a new list for a value that
             // only changes when the detail does.
-            val networks = remember(tmdbDetail) {
+            val networks = remember(tmdbDetail?.networks) {
                 tmdbDetail?.networks.orEmpty().distinctBy { it.id }
             }
-            val companies = remember(tmdbDetail) {
+            val companies = remember(tmdbDetail?.productionCompanies) {
                 tmdbDetail?.productionCompanies.orEmpty().distinctBy { it.id }
             }
             // The genre chips live in the fixed header above the list and the
@@ -5125,7 +5170,7 @@ fun DetailScreen(
             // them - so their presence in the chain means "on screen", exactly
             // like every other row's.
             val tmdbGenres = tmdbDetail?.genres.orEmpty()
-            val reviews = remember(allReviews, tmdbDetail) {
+            val reviews = remember(allReviews, tmdbDetail?.reviews) {
                 allReviews
                     .ifEmpty { tmdbDetail?.reviews?.results.orEmpty() }
                     .distinctBy { it.id }
@@ -5202,7 +5247,7 @@ fun DetailScreen(
             // that only need SOMETHING behind the title and have no widescreen
             // art to fall back on: this screen's hero, and the hand-off to the
             // player.
-            val backdropArtUrl = remember(tmdbDetail, m) {
+            val backdropArtUrl = remember(tmdbDetail?.backdropPath, m.background) {
                 tmdbDetail?.backdropPath?.let {
                     TmdbRepository.fullResBackdropUrl(TmdbRepository.BACKDROP_BASE + it)
                 }
@@ -6150,6 +6195,31 @@ fun DetailScreen(
                 }
             }
 
+            // The screensaver return, scoped out of the page's focus machinery.
+            // The root used to carry a focusRestorer for this, which also
+            // answered every chain revocation by restoring its last child
+            // (Play, the header's first control). The overlay is the only case
+            // that needs a restorer, so it is handled here, through the same
+            // verified reclaim path as any other lost row.
+            LaunchedEffect(screensaver.visible) {
+                if (screensaver.visible) {
+                    screensaverWasVisible = true
+                } else if (screensaverWasVisible) {
+                    screensaverWasVisible = false
+                    awaitFrame()
+                    val row = lastOwnedRow
+                    if (
+                        focusedRowNow == null &&
+                        pendingFocusReclaim == null &&
+                        row != null &&
+                        reclaimRowPresent(row)
+                    ) {
+                        pendingFocusReclaim = DetailFocusReclaim(row, null)
+                        focusReclaimSerial++
+                    }
+                }
+            }
+
             /**
              * F1 of the 2026-11-22 revocation spec: the chain reclaims a row the
              * framework's restart-to-Play took, without waiting out a verify
@@ -6210,8 +6280,22 @@ fun DetailScreen(
                     "detail focus reclaim row=${request.row.name} " +
                         "from=${request.observed?.name ?: "none"}"
                 )
-                val landed = reclaimFocusRow(request.row, request.observed)
-                awaitFrame()
+                // One frame used to be the whole patience budget. A revocation
+                // caused by a scroll disposing the focused chip can land while
+                // the replacement item is still recomposing, so a single ask
+                // reads `observed=none` and the reclaim gives up on a page that
+                // is about to be ready. Ask, yield a frame, verify, and retry
+                // inside this one reclaim - the same bounded shape focusTabStrip
+                // uses - before declaring it failed.
+                var landed = false
+                var attempts = 0
+                while (attempts < RETURN_FOCUS_STEPS) {
+                    landed = reclaimFocusRow(request.row, request.observed)
+                    awaitFrame()
+                    if (landed && focusedRowNow == request.row) break
+                    attempts++
+                    if (attempts < RETURN_FOCUS_STEPS) delay(RETURN_FOCUS_DELAY_MS)
+                }
                 if (landed && focusedRowNow == request.row) {
                     reclaimBlockedFor = null
                 } else {
@@ -6236,10 +6320,13 @@ fun DetailScreen(
                         }
                         false
                     }
-                    // The page's controls never leave composition while the
-                    // show is up, so this is what puts focus back on the one
-                    // that held it when the overlay goes.
-                    .focusRestorer()
+                    // NO focusRestorer on the page root: its job is the
+                    // screensaver return (handled above through the verified
+                    // reclaim path), and as a root restorer it also answered
+                    // chain revocations by restoring its last child, which is
+                    // the Play control. That is the `observed=HEADER` reclaim
+                    // failure from the 452 field paste; one owner stays the
+                    // rule here too.
             ) {
                 // Zero-size focus sink for season swaps (see declaration).
                 // A child, not a modifier on this Box: children of a Box

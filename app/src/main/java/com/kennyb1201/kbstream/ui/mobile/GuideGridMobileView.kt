@@ -163,14 +163,55 @@ internal fun GuideGridMobileView(
     // keys this remember, so without the per-channel memo a page landing rebuilt
     // every channel's cells for the whole lineup - the phone's version of the
     // whole-lineup rebuild the TV grid stopped doing (dig four §2b).
+    //
+    // The TV grid's next step is here too: compare a channel's inputs before
+    // asking the memo, and reuse its row pair unchanged. The memo cannot hold a
+    // five-figure lineup, so on a page merge most channels were missing from it
+    // and paid a full rowCells rebuild even though their inputs never moved.
+    val previousRows = remember {
+        mutableMapOf<String, Pair<IptvChannelWithEpg, List<GridCell>>>()
+    }
+    val previousPrograms = remember { mutableMapOf<String, List<GridProgram>>() }
+    val previousWindow = remember { arrayOfNulls<GridWindow>(1) }
     val rows = remember(items, programsByChannel, window) {
-        items.map { item ->
-            item to GuideRowCellMemo.cells(
-                channelKey = item.channel.id,
-                programs = programsByChannel[item.channel.id].orEmpty(),
-                window = window,
-            )
+        val next = ArrayList<Pair<IptvChannelWithEpg, List<GridCell>>>(items.size)
+        items.forEach { item ->
+            val channelKey = item.channel.id
+            val programs = programsByChannel[channelKey].orEmpty()
+            val existing = previousRows[channelKey]
+            val cells = if (
+                existing != null &&
+                existing.first == item &&
+                previousWindow[0] == window &&
+                previousPrograms[channelKey] == programs
+            ) {
+                existing.second
+            } else {
+                GuideRowCellMemo.cells(
+                    channelKey = channelKey,
+                    programs = programs,
+                    window = window,
+                )
+            }
+            next += if (
+                existing != null &&
+                existing.first == item &&
+                existing.second === cells
+            ) {
+                existing
+            } else {
+                item to cells
+            }
         }
+        previousRows.clear()
+        previousPrograms.clear()
+        next.forEach { row ->
+            val channelKey = row.first.channel.id
+            previousRows[channelKey] = row
+            previousPrograms[channelKey] = programsByChannel[channelKey].orEmpty()
+        }
+        previousWindow[0] = window
+        next
     }
 
     // F3d: a window change re-clips every cell, so the strip's copy of the tapped program

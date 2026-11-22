@@ -628,6 +628,47 @@ class DetailAuditContractTest {
         assertNotEquals("a state pair cannot be one file", downOutline, downFilled)
     }
 
+    @Test
+    fun `an appended recommendations page does not rebuild unrelated derivations`() {
+        val src = normalized(tv)
+        // The ViewModel appends each recommendations page by copying the whole
+        // TmdbDetail. A derivation keyed on that parent is invalidated by every
+        // page even though its own inputs did not change (perf audit, detail #1).
+        assertFalse(
+            "no screen derivation may key on the whole payload",
+            src.contains("remember(tmdbDetail) {")
+        )
+        listOf(
+            "remember(tmdbDetail?.videos?.results)",
+            "remember(tmdbDetail?.seasons)",
+            "remember(tmdbDetail?.credits)",
+            "remember(tmdbDetail?.recommendations,",
+            "remember(tmdbDetail?.images,",
+            "remember(tmdbDetail?.backdropPath,"
+        ).forEach { key ->
+            assertTrue("expected the narrowed key $key", src.contains(key))
+        }
+    }
+
+    @Test
+    fun `the phone's appended recommendations do not rebuild its detail derivations`() {
+        val src = normalized(mobile)
+        assertFalse(
+            "a phone derivation keyed on the whole payload is invalidated by every page",
+            src.contains("remember(tmdbDetail) {")
+        )
+        listOf(
+            "remember(tmdbDetail?.videos?.results)",
+            "remember(tmdbDetail?.seasons)",
+            "remember(tmdbDetail?.keywords,",
+            "remember(allReviews, tmdbDetail?.reviews)",
+            "remember(tmdbDetail?.backdropPath,",
+            "remember(tmdbDetail?.nextEpisodeToAir, tmdbDetail?.seasons)"
+        ).forEach { key ->
+            assertTrue("expected the narrowed phone key $key", src.contains(key))
+        }
+    }
+
     /** `src/main` for this module, the root the drawable directory hangs off. */
     private val mainRoot: File get() = sourceRoot.parentFile
 

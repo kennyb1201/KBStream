@@ -116,6 +116,30 @@ class ProbeOrderContractTest {
         assertFunnelProbesPinnedOrder(mpvSource, "private fun probeThenLoad(load: () -> Unit)")
     }
 
+    @Test
+    fun `playback starts on the head before the probe answers`() {
+        val nativeBody = funnel(nativeSource, "private fun probeThenCreatePlayer()")
+        val mpvBody = funnel(mpvSource, "private fun probeThenLoad(load: () -> Unit)")
+        assertTrue(
+            "the native engine must build the head before it launches the probe",
+            nativeBody.contains("createPlayer()\n        val probe = SourcePlaybackProbe")
+        )
+        assertTrue(
+            "the mpv engine must load the head before it launches the probe",
+            mpvBody.contains("load()\n        val probe = SourcePlaybackProbe")
+        )
+        listOf(nativeBody, mpvBody).forEach { body ->
+            assertTrue(
+                "a head that already rendered must not be interrupted by a late probe",
+                body.contains("probe: head already rendered, keeping it")
+            )
+            assertTrue(
+                "only a head without a picture is replaced",
+                body.contains("if (firstFrameRendered) {")
+            )
+        }
+    }
+
     private fun assertFunnelProbesPinnedOrder(source: String, signature: String) {
         val body = funnel(source, signature)
         assertTrue("must build the pinned order", body.contains("val (candidates, addons) = probeOrder()"))

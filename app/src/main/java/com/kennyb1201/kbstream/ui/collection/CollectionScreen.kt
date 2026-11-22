@@ -178,7 +178,7 @@ fun CollectionScreen(
     // Release order, resolved once: the rail paints in this order and the card
     // a return from Detail is coming back for is a position IN this list, so
     // the two have to be the same list (see [BrowseReturnFocus]).
-    val parts = remember(detail) {
+    val parts = remember(detail?.parts) {
         detail?.parts?.sortedBy { it.releaseDate ?: "9999-99-99" }.orEmpty()
     }
 

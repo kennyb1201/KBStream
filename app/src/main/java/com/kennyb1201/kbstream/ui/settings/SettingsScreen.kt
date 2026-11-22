@@ -1112,7 +1112,8 @@ fun SettingsScreen(
             title = selectedPane.label,
             blurb = selectedPane.blurb,
             scrollable = selectedPane != SettingsPane.HIDDEN &&
-                selectedPane != SettingsPane.RATED,
+                selectedPane != SettingsPane.RATED &&
+                selectedPane != SettingsPane.INTEGRATIONS,
             flashing = flashingSetting,
             modifier = Modifier.graphicsLayer {
                 alpha = paneProgress.value
@@ -1141,6 +1142,21 @@ fun SettingsScreen(
                     .activeProfile.collectAsStateWithLifecycle().value
                     ?.kidsMaxAge != null
                 if (selectedPane == SettingsPane.INTEGRATIONS) {
+                    // The Integrations pane is the first Settings pane to be
+                    // sectioned into a lazy list. Its sections were composing
+                    // all of their rows - API keys, trackers, TorBox, the
+                    // remote - before the first one was even visible. Each
+                    // section is now its own item, and the host does not wrap
+                    // us in a verticalScroll (see SettingsContentHost): a lazy
+                    // list measured by one throws.
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        item(key = "integrations-profiles") {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
 
                     // Sign-in moved to the Sync pane (settings reorg §10.1, Q1):
                     // an account belongs beside sync health, not above Profiles.
@@ -1195,6 +1211,10 @@ fun SettingsScreen(
                         )
                     }
 
+                            }
+                        }
+                        item(key = "integrations-trackers") {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     // ── Trackers ──────────────────────────────────────────
                     // The three services that hold this account's viewing
                     // state, plus the resume tie-break they feed. One home for
@@ -1348,6 +1368,10 @@ fun SettingsScreen(
                         )
                     }
 
+                            }
+                        }
+                        item(key = "integrations-public-lists") {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 // ── PUBLIC LISTS ───────────────────────────────────────
                 // One section for the three sources that can browse and save a
                 // community list (spec F1). Before this, "where do I browse
@@ -1438,6 +1462,10 @@ fun SettingsScreen(
                     onClick = { onOpenPublicLists("mal") }
                 )
 
+                            }
+                        }
+                        item(key = "integrations-api-keys") {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 // ── API KEYS ─────────────────────────────────────────────
                 // ONE contiguous block (settings reorg §3.3, M2 + M4): the four
                 // key surfaces used to be split by the MDBList card and by the
@@ -1880,9 +1908,10 @@ fun SettingsScreen(
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
-                }
-
-                if (selectedPane == SettingsPane.INTEGRATIONS) {
+                            }
+                        }
+                        item(key = "integrations-subtitles") {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 // ── OPENSUBTITLES KEY (in-player subtitle search) ─────────
                 val subsFocusRequester = remember { FocusRequester() }
                 KBCard(
@@ -2206,6 +2235,10 @@ fun SettingsScreen(
                     }
                 }
 
+                            }
+                        }
+                        item(key = "integrations-torbox") {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 // ── TORBOX & LIBRARY ──────────────────────────────────
                 // (settings reorg §3.4, M4): this replaces the deleted
                 // "Subtitles & Debrid" header, which named a concern that
@@ -2504,9 +2537,10 @@ fun SettingsScreen(
                     )
                 }
 
-                }
-
-                if (selectedPane == SettingsPane.INTEGRATIONS) {
+                            }
+                        }
+                        item(key = "integrations-remote") {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     // The phone remote's TV half (spec 2026-11-13, F1): the
                     // pairing code and the phones paired with this box. It sits
                     // in Integrations because that is the pane of things
@@ -2515,6 +2549,9 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(12.dp))
                     SettingsSectionHeader("Phone Remote")
                     RemoteSection()
+                            }
+                        }
+                    }
                 }
 
                 if (selectedPane == SettingsPane.COLLECTIONS) {
@@ -7620,7 +7657,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.RatedTitlesSection() 
     var armed by remember { mutableStateOf(false) }
     var clearStatus by remember { mutableStateOf<String?>(null) }
 
-    val shown = ratedList(entries, filter)
+    val shown = remember(entries, filter) { ratedList(entries, filter) }
 
     Text(
         text = "${shown.size} rated " + if (shown.size == 1) "title" else "titles",

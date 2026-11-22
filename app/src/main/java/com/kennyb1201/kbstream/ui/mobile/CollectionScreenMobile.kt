@@ -130,7 +130,7 @@ fun CollectionScreenMobile(
 
     // Release order, resolved once: the grid paints in this order and the card
     // a return is coming back for is a position in THIS list.
-    val parts = remember(collection) {
+    val parts = remember(collection?.parts) {
         collection?.parts?.sortedBy { it.releaseDate ?: "9999-99-99" }.orEmpty()
     }
 

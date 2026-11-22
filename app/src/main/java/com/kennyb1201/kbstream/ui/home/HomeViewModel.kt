@@ -2636,8 +2636,22 @@ Log.d(
         billboardResolveJob = viewModelScope.launch {
             try {
                 coroutineScope {
-                    dealt.forEach { item ->
+                    dealt.forEachIndexed { index, item ->
                         launch {
+                            // The page under the viewer resolves first; the
+                            // next two follow at the fast cadence, and the tail
+                            // spreads out so a cold Home does not put the whole
+                            // 20-page hero pool on the network while the rails
+                            // are still filling (perf audit, home #4). Page
+                            // order and which pages resolve are unchanged.
+                            val stagger = if (index < BILLBOARD_RESOLVE_EAGER_PAGES) {
+                                index * BILLBOARD_RESOLVE_STAGGER_MS
+                            } else {
+                                BILLBOARD_RESOLVE_EAGER_PAGES * BILLBOARD_RESOLVE_STAGGER_MS +
+                                    (index - BILLBOARD_RESOLVE_EAGER_PAGES) *
+                                    BILLBOARD_RESOLVE_TAIL_MS
+                            }
+                            if (stagger > 0) delay(stagger)
                             val key = billboardPageKey(item)
                             val resolved = billboardResolveSemaphore
                                 .withPermit {
@@ -13551,7 +13565,14 @@ private suspend fun calculateEpisodesRemaining(
                 // the hero swaps art in one frame instead of flashing the
                 // raw addon backdrop + plain title for the resolve time.
                 prefetchHeroArt(
-                    finalRails.flatMap { it.items }
+                    // The first screenful, not the first sixty items of the
+                    // whole page. A cold load used to start up to 60 detail +
+                    // artwork chains while the rails were still filling; a card
+                    // below this window still resolves on focus through the
+                    // dwell/lookahead path (perf audit, home #5).
+                    finalRails
+                        .take(HERO_ART_PREFETCH_RAILS)
+                        .flatMap { it.items }
                 )
 
                 // Success: NOW clear any stale error (was previously done at
@@ -15653,6 +15674,28 @@ private suspend fun calculateEpisodesRemaining(
          * The draw site is the source of truth for these two numbers; if that
          * frame ratio changes, this must change with it.
          */
+        /**
+         * Gap between billboard page resolves, so page 1 starts alone and the
+         * remaining pages spread out instead of competing with first paint.
+         */
+        private const val BILLBOARD_RESOLVE_STAGGER_MS = 120L
+
+        /** Pages resolved at the fast cadence: the one on screen plus its next two. */
+        private const val BILLBOARD_RESOLVE_EAGER_PAGES = 3
+
+        /**
+         * Gap between the remaining page resolves.
+         *
+         * The 120 ms cadence is for the pages a viewer can reach in the first
+         * few swipes; the rest are not competing with Home's first paint, so
+         * they can arrive at a browsing pace (the whole 20-page pool still
+         * settles, in order, within a handful of seconds).
+         */
+        private const val BILLBOARD_RESOLVE_TAIL_MS = 500L
+
+        /** Rails whose cards are warmed at publish time; the rest wait for focus. */
+        private const val HERO_ART_PREFETCH_RAILS = 3
+
         private const val BILLBOARD_LOOKAHEAD_BITMAP_WIDTH = 1280
         private const val BILLBOARD_LOOKAHEAD_BITMAP_HEIGHT = 800
 

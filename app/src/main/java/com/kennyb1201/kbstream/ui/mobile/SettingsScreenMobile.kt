@@ -1600,7 +1600,7 @@ private fun RatedTitlesPaneMobile() {
 
     // The same list rule the TV section uses, from the same helper: newest
     // first, then the filter.
-    val shown = ratedList(entries, filter)
+    val shown = remember(entries, filter) { ratedList(entries, filter) }
 
     LazyColumn(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 28.dp),

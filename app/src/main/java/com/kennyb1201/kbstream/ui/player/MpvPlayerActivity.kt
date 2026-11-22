@@ -83,6 +83,7 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -1707,6 +1708,18 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         val probeUrl = currentUrl
         val probeHeaders = streamHeaders
         lifecycleScope.launch {
+            // Let the first picture win the opening buffer (perf audit,
+            // players #3): the probe reads the stream head itself, so running it
+            // at the same time made the start gate pay twice. The cap is the
+            // no-video fallback so the probe still eventually runs.
+            var waitedMs = 0L
+            while (!firstFrameRendered && waitedMs < 3_000L && !isFinishing) {
+                delay(50L)
+                waitedMs += 50L
+            }
+            // A source switch during the wait owns the session now; probing
+            // the old head would label THIS source with the previous one's rate.
+            if (isFinishing || currentUrl != probeUrl) return@launch
             FrameRateProbe.probe(probeUrl, probeHeaders, cacheDir)
                 ?.let { fps ->
                     // Remembered as well as offered: on this engine the probe's
@@ -1793,6 +1806,12 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             load()
             return
         }
+        // START ON THE HEAD NOW (perf audit, players #1). The probe used to gate
+        // the first load, so every multi-source launch waited out the slowest
+        // probe before mpv opened the file. Load the head immediately and let
+        // the probe race it; the switch below only runs when the head is proved
+        // dead before its first picture. A working head is never interrupted.
+        load()
         val probe = SourcePlaybackProbe(sessionDeadAddons, probeHttpClient)
         lifecycleScope.launch {
             val (candidates, addons) = probeOrder()
@@ -1815,11 +1834,17 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             // only fires when that pick itself was dead.
             if (pick != null && !pick.url.isNullOrBlank() && pick.url != currentUrl) {
                 Log.w(TAG, "probe picked a different head source: ${pick.sourceLabel()}")
-                adoptInitialSource(pick)
+                // A live picture beats a probe's opinion; only a head that
+                // never produced one is replaced. The old path replaced before
+                // loading, so every launch paid for the choice.
+                if (firstFrameRendered) {
+                    Log.i(TAG, "probe: head already rendered, keeping it")
+                } else {
+                    switchToSource(pick, isAutoRecovery = true)
+                }
             } else if (pick != null && pick.url == currentUrl) {
                 Log.i(TAG, "probe: initial source live, keeping: ${pick.sourceLabel()}")
             }
-            load()
         }
     }
 

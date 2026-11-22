@@ -7167,6 +7167,21 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     val probeUrl = currentUrl
                     val probeHeaders = streamHeaders
                     lifecycleScope.launch {
+                        // Do not fetch the same head bytes while the player is
+                        // filling its start gate (perf audit, players #3). The
+                        // probe is still non-blocking; it just waits for the
+                        // first picture instead of competing with it. The cap
+                        // keeps an audio-only/file that never reports a frame
+                        // from suppressing the rate for the whole session.
+                        var waitedMs = 0L
+                        while (!firstFrameRendered && waitedMs < 3_000L && !isFinishing) {
+                            delay(50L)
+                            waitedMs += 50L
+                        }
+                        // A source switch during the wait owns the session now;
+                        // probing the old head would label THIS source with the
+                        // previous one's rate.
+                        if (isFinishing || currentUrl != probeUrl) return@launch
                         FrameRateProbe.probe(probeUrl, probeHeaders, cacheDir)
                             ?.let { fps ->
                                 // Remembered as well as offered: this is the one
@@ -17355,6 +17370,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             createPlayer()
             return
         }
+        // START ON THE HEAD NOW (perf audit, players #1). The probe used to
+        // gate player creation, so every multi-source launch paid the slowest
+        // probe - up to the pinned 4s ceiling - before prepare() was even
+        // called. Build the head immediately and let the probe race it; the
+        // switch below only happens when the probe proves the head dead before
+        // its first frame. A working head is never interrupted.
+        createPlayer()
         val probe = SourcePlaybackProbe(sessionDeadAddons, httpClient)
         lifecycleScope.launch {
             val (candidates, addons) = probeOrder()
@@ -17377,11 +17399,18 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // below now only fires when that pick itself was dead.
             if (pick != null && !pick.url.isNullOrBlank() && pick.url != currentUrl) {
                 Log.w(TAG, "probe picked a different head source: ${pick.displayLabel()}")
-                adoptInitialSource(pick)
+                // The optimistic head already rendered: a live picture beats a
+                // probe's opinion, so keep playing it. A dead head cannot have
+                // rendered, and switching then is the one case that pays for a
+                // rebuild - the old path paid for it on every launch.
+                if (firstFrameRendered) {
+                    Log.i(TAG, "probe: head already rendered, keeping it")
+                } else {
+                    switchToSource(pick, isAutoRecovery = true)
+                }
             } else if (pick != null && pick.url == currentUrl) {
                 Log.i(TAG, "probe: initial source live, keeping: ${pick.displayLabel()}")
             }
-            createPlayer()
         }
     }
 

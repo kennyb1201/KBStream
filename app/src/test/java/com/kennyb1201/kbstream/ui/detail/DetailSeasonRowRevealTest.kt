@@ -233,6 +233,29 @@ class DetailSeasonRowRevealTest {
     }
 
     @Test
+    fun `a settled reveal is not re-run while the hand walks the same row`() {
+        val reveal = normalized(stripComments(detailSource()))
+            .substringAfter("private class SeasonRowReveal(")
+            .substringBefore("private enum class EpisodeFocusEdge")
+        assertTrue(
+            "the settle remembers the row and the list position that made it true",
+            reveal.contains("settledKey") &&
+                reveal.contains("settledFirstIndex") &&
+                reveal.contains("settledFirstOffset")
+        )
+        assertTrue(
+            "the ask is dropped only while that exact position is unchanged",
+            reveal.contains("isSettledAtCurrentPosition(neighbourKey)") &&
+                reveal.contains("listState.firstVisibleItemIndex") &&
+                reveal.contains("listState.firstVisibleItemScrollOffset")
+        )
+        assertTrue(
+            "and a measured zero records the settle",
+            reveal.contains("rememberSettled(key)")
+        )
+    }
+
+    @Test
     fun `the reveal files its decision in the diagnostics report`() {
         val reveal = normalized(stripComments(detailSource()))
         assertTrue(

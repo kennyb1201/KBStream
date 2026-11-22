@@ -91,6 +91,12 @@ class DetailSeasonPosterSizeContractTest {
             "the caption is drawn either way",
             art.indexOf("Text(") > art.indexOf("if (posterUrl != null) {")
         )
+        assertTrue(
+            "the caption-only ring reserves 12dp/6dp, so the accent border does " +
+                "not touch the glyphs and the row cannot move on focus",
+            art.contains(".padding(horizontal = 12.dp, vertical = 6.dp)") &&
+                art.contains("if (focused) KBAccent else Color.Transparent")
+        )
     }
 
     @Test

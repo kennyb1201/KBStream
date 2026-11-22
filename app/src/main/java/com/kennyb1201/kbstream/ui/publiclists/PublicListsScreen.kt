@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -639,8 +640,13 @@ private fun LazyListScope.detailBodyItems(
             // the case this exists for: only the rows on screen are composed.
             // No `key`: a provider's list may legitimately name the same title
             // twice, and duplicate keys would fail the list outright.
-            val openable = titles.rows.mapNotNull { row ->
-                row.detailId?.let { detailId -> row to detailId }
+            // A 1,000-title list must not re-run this derivation on every
+            // save-phase change or notice update in the same composition scope.
+            // The rows themselves are the whole input.
+            val openable = remember(titles) {
+                titles.rows.mapNotNull { row ->
+                    row.detailId?.let { detailId -> row to detailId }
+                }
             }
             items(openable.size) { index ->
                 val (row, detailId) = openable[index]

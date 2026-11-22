@@ -39,6 +39,20 @@ class CollectionHeaderBackdropContractTest {
         return raw.substringAfter(anchor).take(length)
     }
 
+    @Test
+    fun `a part list only re-sorts when the parts themselves change`() {
+        assertTrue(
+            "the TV page's release order must not key on the whole collection",
+            normalized("com/kennyb1201/kbstream/ui/collection/CollectionScreen.kt")
+                .contains("val parts = remember(detail?.parts)")
+        )
+        assertTrue(
+            "the phone page's release order must not key on the whole collection",
+            normalized("com/kennyb1201/kbstream/ui/mobile/CollectionScreenMobile.kt")
+                .contains("val parts = remember(collection?.parts)")
+        )
+    }
+
     private fun findMainSourceRoot(): File {
         val prefixes = listOf("", "app/")
         var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile

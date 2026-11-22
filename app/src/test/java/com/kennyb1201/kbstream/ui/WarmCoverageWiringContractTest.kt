@@ -169,6 +169,13 @@ class WarmCoverageWiringContractTest {
                 mobileGuide.contains("GuideRowCellMemo.cells(") &&
                 mobileGuide.contains("channelKey = item.channel.id")
         )
+        assertTrue(
+            "a merge reuses every unchanged channel's row and only asks the memo for the rest",
+            mobileGuide.contains("val previousRows = remember {") &&
+                mobileGuide.contains("existing.first == item") &&
+                mobileGuide.contains("previousPrograms[channelKey] == programs") &&
+                mobileGuide.contains("existing.second === cells")
+        )
         val warm = region(mobileGuide, "WarmRowAhead(", "LazyColumn(")
         assertTrue(
             "the warm is the channel row itself",

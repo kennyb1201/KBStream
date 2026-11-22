@@ -92,6 +92,21 @@ class LibraryMainThreadContractTest {
         )
     }
 
+    @Test
+    fun `S3b - an unchanged personal-lists blob is parsed once, not once per list`() {
+        val read = block(models, "private fun readListsOrNull(")
+        assertTrue(
+            "the same raw-text proof the item reader uses covers the lists blob",
+            read.contains("lastParsedLists[storeKey]") &&
+                read.contains("?.takeIf { (cachedRaw, _) -> cachedRaw == raw }") &&
+                read.contains("?.let { (_, cached) -> return cached.toMutableList() }")
+        )
+        assertTrue(
+            "a fresh parse fills it for the next listItems()/recomputeAll pass",
+            read.contains("lastParsedLists[storeKey] = raw to parsed")
+        )
+    }
+
     // ── F2: only the lists whose rows moved are rebuilt ──────────────────
 
     @Test

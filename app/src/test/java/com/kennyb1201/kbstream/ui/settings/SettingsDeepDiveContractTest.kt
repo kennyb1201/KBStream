@@ -571,6 +571,32 @@ class SettingsDeepDiveContractTest {
     }
 
     @Test
+    fun `Integrations is the first Settings pane sectioned into a lazy list`() {
+        val screen = source(SCREEN)
+
+        assertTrue(
+            "the host must not wrap a lazy pane in verticalScroll: a LazyColumn " +
+                "measured by an unbounded parent throws",
+            screen.contains("selectedPane != SettingsPane.INTEGRATIONS,")
+        )
+        listOf(
+            "integrations-profiles",
+            "integrations-trackers",
+            "integrations-public-lists",
+            "integrations-api-keys",
+            "integrations-subtitles",
+            "integrations-torbox",
+            "integrations-remote"
+        ).forEach { key ->
+            assertTrue(
+                "$key is its own lazy item, so its rows are not composed until " +
+                    "the section is near the viewport",
+                screen.contains("item(key = \"$key\")")
+            )
+        }
+    }
+
+    @Test
     fun `the phone about pane still asks for no focus at all`() {
         assertFalse(
             "the phone scrolls with a finger, so it asks for no focus at all",

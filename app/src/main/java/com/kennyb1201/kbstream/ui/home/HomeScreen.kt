@@ -67,6 +67,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -7779,6 +7780,49 @@ fun HomeScreen(
                                                 val watchedPartially =
                                                     !watched && watchedKey in partialWatchedKeys
 
+                                                // Stable per-card handlers: the
+                                                // card's identity does not change
+                                                // when the rail republishes, so a
+                                                // fresh lambda here made every
+                                                // visible card non-skippable on
+                                                // every publish/focus step. The
+                                                // state setters and ViewModel call
+                                                // inside are stable; only the
+                                                // captured item needs to be the
+                                                // key.
+                                                val currentOnItemClick =
+                                                    rememberUpdatedState(onItemClick)
+                                                val currentRail = rememberUpdatedState(rail)
+                                                val onCardClick =
+                                                    remember(meta) {
+                                                        {
+                                                            selectHero(meta)
+                                                            currentOnItemClick.value(meta)
+                                                        }
+                                                    }
+                                                val onCardLongClick =
+                                                    remember(meta, requester) {
+                                                        {
+                                                            lastPosterFocusRequester = requester
+                                                            posterMenu = PosterMenuTarget(
+                                                                meta,
+                                                                currentRail.value
+                                                            )
+                                                        }
+                                                    }
+                                                val onPosterError =
+                                                    remember(meta) {
+                                                        { throwable: Throwable ->
+                                                            Log.e(
+                                                                "HOME_UI",
+                                                                "Catalog poster load failed, " +
+                                                                    "title=${meta.name}, " +
+                                                                    "poster=${meta.poster}",
+                                                                throwable
+                                                            )
+                                                        }
+                                                    }
+
                                                 // The rail drawn first owns the
                                                 // top-bar hook (see the merged-
                                                 // order note above).
@@ -7954,19 +7998,8 @@ fun HomeScreen(
                                                                 rail.ranked,
                                                                 index
                                                             ),
-                                                            onClick = {
-                                                                selectHero(meta)
-                                                                onItemClick(meta)
-                                                            },
-                                                            onLongClick = {
-                                                                lastPosterFocusRequester =
-                                                                    requester
-                                                                posterMenu =
-                                                                    PosterMenuTarget(
-                                                                        meta,
-                                                                        rail
-                                                                    )
-                                                            },
+                                                            onClick = onCardClick,
+                                                            onLongClick = onCardLongClick,
                                                             modifier = posterModifier
                                                         )
                                                     } else {
@@ -7984,29 +8017,10 @@ fun HomeScreen(
                                                             isWatched = watched,
                                                             airDate = meta.releaseInfo,
                                                             isPartiallyWatched = watchedPartially,
-                                                            onClick = {
-                                                                selectHero(meta)
-                                                                onItemClick(meta)
-                                                            },
-                                                            onLongClick = {
-                                                                lastPosterFocusRequester =
-                                                                    requester
-                                                                posterMenu =
-                                                                    PosterMenuTarget(
-                                                                        meta,
-                                                                        rail
-                                                                    )
-                                                            },
+                                                            onClick = onCardClick,
+                                                            onLongClick = onCardLongClick,
                                                             modifier = posterModifier,
-                                                            onPosterError = { throwable ->
-                                                                Log.e(
-                                                                    "HOME_UI",
-                                                                    "Catalog poster load failed, " +
-                                                                        "title=${meta.name}, " +
-                                                                        "poster=${meta.poster}",
-                                                                    throwable
-                                                                )
-                                                            }
+                                                            onPosterError = onPosterError
                                                         )
                                                     }
                                                 }

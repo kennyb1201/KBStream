@@ -473,6 +473,19 @@ object LocalLibraryStore {
     private val lastParsed =
         java.util.concurrent.ConcurrentHashMap<String, Pair<String, List<LibraryItem>>>()
 
+    /**
+     * The same raw-text cache for the personal-lists blob.
+     *
+     * [listItems] parses the whole blob to extract one list, and `recomputeAll`
+     * calls it once per local list - so a library with N lists paid N full
+     * parses of a blob that grows with every title (Library perf audit #2). The
+     * stored text is the version: a write changes it, so a matching raw string
+     * means the parsed rows are still the answer. Returned lists are copied by
+     * [readListsOrNull], because read-modify-write callers may mutate them.
+     */
+    private val lastParsedLists =
+        java.util.concurrent.ConcurrentHashMap<String, Pair<String, List<StoredList>>>()
+
     private fun cacheKey(context: Context, key: String): String =
         "${ProfileStorage.prefsName(context, BASE_NAME)}::$key"
 
@@ -993,6 +1006,10 @@ object LocalLibraryStore {
 
     private fun readListsOrNull(context: Context): MutableList<StoredList>? {
         val raw = prefs(context).getString(KEY_LISTS, null) ?: return mutableListOf()
+        val storeKey = cacheKey(context, KEY_LISTS)
+        lastParsedLists[storeKey]
+            ?.takeIf { (cachedRaw, _) -> cachedRaw == raw }
+            ?.let { (_, cached) -> return cached.toMutableList() }
         val parsed = runCatching {
             val root = JSONObject(raw)
             val out = mutableListOf<StoredList>()
@@ -1031,7 +1048,8 @@ object LocalLibraryStore {
             )
             return null
         }
-        lastGood[cacheKey(context, KEY_LISTS)] = parsed
+        lastParsedLists[storeKey] = raw to parsed
+        lastGood[storeKey] = parsed
         return parsed.toMutableList()
     }
 

@@ -1659,8 +1659,7 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 // rows a gate dropped, and which tier produced each feed the
                 // card lists. It runs on every card - the miss is what it is
                 // here to explain, and a miss lists nothing.
-                tier1.game(
-                    gameTraceLabel(game),
+                tier1.game(gameTraceLabel(game)) {
                     SportsChannelMatcher.traceTier1(
                         game,
                         programs,
@@ -1669,7 +1668,7 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                         channelIndex,
                         matchedFeeds,
                     )
-                )
+                }
                 matchedFeeds.takeIf { it.isNotEmpty() }
                     ?.let { feeds ->
                         found[game.id] = feeds
@@ -1731,7 +1730,9 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             PerfTrace.recordCount("sports.match.programs", programs.size.toLong())
             // The block COPY DIAGNOSTICS reads (see Diagnostics). Recorded once
             // per pass, after the loop, so it describes a finished pass.
-            SportsTier1Trace.record(tier1.render())
+            // Deferred: a normal pass must not grade every guide row twice for
+            // a block only Copy Diagnostics reads (perf audit, sports).
+            SportsTier1Trace.record { tier1.render() }
             found
         }
         _matches.value = matches

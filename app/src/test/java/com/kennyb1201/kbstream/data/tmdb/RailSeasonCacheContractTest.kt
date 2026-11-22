@@ -32,6 +32,20 @@ class RailSeasonCacheContractTest {
             .substringBefore("val seasonDetail = api.getSeasonDetail")
     }
 
+    @Test
+    fun `concurrent season reads share one load instead of fetching twice`() {
+        assertTrue(
+            "the season path needs its own single-flight gate like detail and rail",
+            repository.contains("private val seasonLoadLocks =") &&
+                repository.contains("seasonLoadLocks.getOrPut(coalesceKey) { Mutex() }")
+        )
+        assertTrue(
+            "the first caller loads and a concurrent caller waits for its answer",
+            repository.contains("return lock.withLock {") &&
+                repository.contains("loadSeasonEpisodes(tvId, season, imdbId)")
+        )
+    }
+
     // F1: the rate
 
     @Test

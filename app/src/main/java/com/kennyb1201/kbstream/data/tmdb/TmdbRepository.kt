@@ -517,6 +517,21 @@ class TmdbRepository private constructor(context: Context) :
 
     private val seasonEpisodesCache =
         ConcurrentHashMap<String, Pair<Long, List<ResolvedEpisode>>>()
+
+    /**
+     * One loading gate per show/season, so concurrent callers share the first
+     * read instead of each firing `getSeasonDetail`.
+     *
+     * The detail and rail paths already coalesce with their own in-flight
+     * maps; the season path did not, and it has the most overlapping callers
+     * (CW walks, Upcoming, Detail and the players all ask while a season is
+     * already loading). A second caller waits here, then reads the cache the
+     * first one filled. Keys are tiny and bounded by the seasons this process
+     * actually touches; they are deliberately not evicted, because removing a
+     * lock while a waiter holds it would let a third caller start a duplicate
+     * load against the same season.
+     */
+    private val seasonLoadLocks = ConcurrentHashMap<String, Mutex>()
     private val seasonEpisodesCacheTtlMs = 12L * 60L * 60L * 1000L
     private val seasonEpisodesDiskTtlMs = 7L * 24L * 60L * 60L * 1000L
 
@@ -2637,6 +2652,18 @@ class TmdbRepository private constructor(context: Context) :
     private val SEASON_POSTER_TTL_MS = 12L * 60L * 60L * 1000L
 
     suspend fun getSeasonEpisodes(
+        tvId: Int,
+        season: Int,
+        imdbId: String
+    ): List<ResolvedEpisode> {
+        val coalesceKey = "$tvId:$season:$imdbId"
+        val lock = seasonLoadLocks.getOrPut(coalesceKey) { Mutex() }
+        return lock.withLock {
+            loadSeasonEpisodes(tvId, season, imdbId)
+        }
+    }
+
+    private suspend fun loadSeasonEpisodes(
         tvId: Int,
         season: Int,
         imdbId: String

@@ -270,6 +270,19 @@ class DetailOneOwnerContractTest {
                 detail.contains("detail focus reclaim failed row=")
         )
         assertTrue(
+            "the reclaim retries inside that one attempt before calling it failed",
+            detail.contains("while (attempts < RETURN_FOCUS_STEPS)") &&
+                detail.contains("landed = reclaimFocusRow(request.row, request.observed)") &&
+                detail.contains("delay(RETURN_FOCUS_DELAY_MS)")
+        )
+        assertTrue(
+            "the page root no longer runs a restorer for every chain loss",
+            !detail.substringAfter("Box( modifier = Modifier .fillMaxSize()")
+                .substringBefore(") {")
+                .contains(".focusRestorer()") &&
+                detail.contains("screensaverWasVisible")
+        )
+        assertTrue(
             "consuming the request cannot cancel the effect that reclaims it",
             detail.contains("LaunchedEffect(") &&
                 detail.contains("focusReclaimSerial,") &&

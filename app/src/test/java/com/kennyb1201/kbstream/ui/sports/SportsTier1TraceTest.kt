@@ -274,6 +274,40 @@ class SportsTier1TraceTest {
     }
 
     @Test
+    fun `a game trace is not read until the block is rendered`() {
+        val ledger = SportsTier1Ledger()
+        var reads = 0
+        ledger.game("Jets @ Lightning") {
+            reads++
+            Tier1GameTrace(
+                strong = 1,
+                weak = 0,
+                near = 0,
+                drops = emptyList(),
+                listed = listOf("TSN3" to "guide-title"),
+            )
+        }
+        assertEquals("matching itself must not pay for diagnostics", 0, reads)
+        assertTrue(ledger.render().contains("game Jets @ Lightning strong=1"))
+        assertEquals("the block reads the trace exactly once", 1, reads)
+    }
+
+    @Test
+    fun `a deferred pass block is built once, on first read`() {
+        SportsTier1Trace.clear()
+        var builds = 0
+        SportsTier1Trace.record {
+            builds++
+            "sports tier1: matchups=0 games=0"
+        }
+        assertEquals("recording a pass must not build diagnostics", 0, builds)
+        assertEquals("sports tier1: matchups=0 games=0", SportsTier1Trace.block())
+        assertEquals("the cached answer is not rebuilt", 1, builds)
+        assertEquals("sports tier1: matchups=0 games=0", SportsTier1Trace.block())
+        assertEquals(1, builds)
+    }
+
+    @Test
     fun `the last pass's block is what diagnostics reads`() {
         SportsTier1Trace.clear()
         assertNull("a process that has not matched yet has no block", SportsTier1Trace.block())
@@ -366,7 +400,8 @@ class SportsTier1TraceTest {
         )
         assertTrue(
             "every game is traced, matched or not - a miss is what the trace is for",
-            viewModel.contains("tier1.game(") && viewModel.contains("SportsChannelMatcher.traceTier1(")
+            viewModel.contains("tier1.game(") && viewModel.contains("SportsChannelMatcher.traceTier1(") &&
+                viewModel.contains("tier1.game(gameTraceLabel(game)) {")
         )
         assertTrue(
             "the guide-index gate names what it dropped instead of returning silently",
@@ -374,7 +409,7 @@ class SportsTier1TraceTest {
         )
         assertTrue(
             "and the finished pass is what the report reads",
-            viewModel.contains("SportsTier1Trace.record(tier1.render())")
+            viewModel.contains("SportsTier1Trace.record { tier1.render() }")
         )
         assertTrue(
             "the per-matchup lookup goes through the two-stage lookup, not the index alone",

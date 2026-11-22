@@ -41,7 +41,7 @@ class SportsHubMinorsContractTest {
     /** The end of that function: where a completed pass files its key. */
     private val matchPassEnd: String by lazy {
         viewModel
-            .substringAfter("SportsTier1Trace.record(tier1.render())")
+            .substringAfter("SportsTier1Trace.record { tier1.render() }")
             .substringBefore("private fun guideIndexSourceKey")
     }
 

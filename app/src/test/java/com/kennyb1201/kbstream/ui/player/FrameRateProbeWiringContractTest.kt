@@ -142,6 +142,22 @@ class FrameRateProbeWiringContractTest {
     }
 
     @Test
+    fun `the probe waits for first frame instead of competing with the start gate`() {
+        listOf("native" to source(NATIVE), "mpv" to source(MPV)).forEach { (engine, src) ->
+            assertTrue(
+                "$engine must not fetch the stream head while the first picture is buffering",
+                src.contains(
+                    "while (!firstFrameRendered && waitedMs < 3_000L && !isFinishing) {"
+                )
+            )
+            assertTrue(
+                "$engine must not label a switched source with the old head's rate",
+                src.contains("isFinishing || currentUrl != probeUrl")
+            )
+        }
+    }
+
+    @Test
     fun `the native player probes alongside player prep and marks the source`() {
         val native = source(NATIVE)
         assertTrue(

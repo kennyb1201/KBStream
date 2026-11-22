@@ -29,7 +29,11 @@ import android.util.Log
 internal class SportsTier1Ledger {
 
     private val matchups = ArrayList<Tier1Matchup>(MAX_LINES * 2)
-    private val games = ArrayList<Tier1Game>(MAX_LINES * 2)
+    // A provider, not the finished entry: traceTier1 walks every guide row for
+    // one game, and the hub used to run it for every card on every pass just to
+    // build a diagnostics block most passes never read. The lambda runs once,
+    // only when render() is asked for the block.
+    private val games = ArrayList<() -> Tier1Game>(MAX_LINES * 2)
 
     /** One matchup was asked. [rows] is what the search answered, [kept] what survived the guide gate. */
     fun matchup(
@@ -46,19 +50,26 @@ internal class SportsTier1Ledger {
     }
 
     /** One card was matched. [trace] is the matcher's own read - see [SportsChannelMatcher.traceTier1]. */
-    fun game(label: String, trace: Tier1GameTrace) {
-        val entry = Tier1Game(
-            label = label,
-            strong = trace.strong,
-            weak = trace.weak,
-            near = trace.near,
-            listed = trace.listed,
-            drops = trace.drops,
-            broadcasts = trace.broadcasts,
-            lost = trace.lost,
-        )
-        games += entry
-        trace.drops.forEach(::logDrop)
+    fun game(label: String, trace: Tier1GameTrace) = game(label) { trace }
+
+    /**
+     * One card was matched, read lazily. The hub passes the matcher's trace as
+     * a provider so a normal pass does not pay for diagnostics it will not show.
+     */
+    fun game(label: String, trace: () -> Tier1GameTrace) {
+        games += {
+            val read = trace()
+            Tier1Game(
+                label = label,
+                strong = read.strong,
+                weak = read.weak,
+                near = read.near,
+                listed = read.listed,
+                drops = read.drops,
+                broadcasts = read.broadcasts,
+                lost = read.lost,
+            )
+        }
     }
 
     /**
@@ -68,12 +79,18 @@ internal class SportsTier1Ledger {
      * the LAST [MAX_LINES] entries, newest first, so the tail of a big pass -
      * where the game the viewer reported usually sits - is what survives the cap.
      */
-    fun render(): String = buildString {
+    fun render(): String {
+        // Materialize once: the header totals and the detail tail must read the
+        // same lazy answers, and a provider is allowed to be expensive.
+        val resolvedGames = games.map { it() }
+        return buildString {
         append("sports tier1: matchups=").append(matchups.size)
-        append(" games=").append(games.size)
+        append(" games=").append(resolvedGames.size)
         append(" rows=").append(matchups.sumOf { it.rows })
         append(" kept=").append(matchups.sumOf { it.kept })
-        append(" dropped=").append(matchups.sumOf { it.drops.size } + games.sumOf { it.drops.size })
+        append(" dropped=").append(
+            matchups.sumOf { it.drops.size } + resolvedGames.sumOf { it.drops.size }
+        )
         append(" fallback=").append(matchups.count { it.fallback })
         matchups.takeLast(MAX_LINES).reversed().forEach { matchup ->
             appendLine()
@@ -89,7 +106,7 @@ internal class SportsTier1Ledger {
                 append(" \"").append(drop.title).append("\"")
             }
         }
-        games.takeLast(MAX_LINES).reversed().forEach { game ->
+        resolvedGames.takeLast(MAX_LINES).reversed().forEach { game ->
             appendLine()
             append("  · game ").append(game.label)
             append(" strong=").append(game.strong)
@@ -121,12 +138,13 @@ internal class SportsTier1Ledger {
                 append(" \"").append(drop.title).append("\"")
             }
         }
+        }
     }
 
     /**
      * One logcat line per dropped row, naming the gate. The report above only
-     * carries the capped tail; logcat carries every one, which is what a live
-     * `adb logcat` during a field capture reads.
+     * carries the capped tail; when Copy Diagnostics builds the block, logcat
+     * gets every one, which is what a live `adb logcat` during that capture reads.
      */
     private fun logDrop(drop: Tier1Drop) {
         Log.d(TAG, "sports tier1 ${drop.gate}: channel=${drop.channelId} title=\"${drop.title}\"")
@@ -243,14 +261,36 @@ internal object SportsTier1Trace {
     @Volatile
     private var lastBlock: String? = null
 
+    /** Deferred form of [record]: evaluated by the first [block] read. */
+    @Volatile
+    private var lastProvider: (() -> String)? = null
+
     fun record(block: String) {
+        lastProvider = null
         lastBlock = block
     }
 
-    fun block(): String? = lastBlock
+    /**
+     * Files this pass's block without building it. A pass records every pass,
+     * but the block is diagnostics-only; [block] materializes it on demand.
+     */
+    fun record(provider: () -> String) {
+        lastBlock = null
+        lastProvider = provider
+    }
+
+    fun block(): String? {
+        lastBlock?.let { return it }
+        val provider = lastProvider ?: return null
+        val block = provider()
+        lastBlock = block
+        lastProvider = null
+        return block
+    }
 
     /** Test hook: a fresh process has no block, and a test needs the same. */
     fun clear() {
         lastBlock = null
+        lastProvider = null
     }
 }

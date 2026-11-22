@@ -310,17 +310,23 @@ internal fun SeasonPosterArt(
                 // is not a poster frame and it is not a chip.
                 //
                 // THE SPACE IS RESERVED IN BOTH STATES (spec audit 2026-11-18,
-                // Detail L2). The ring used to arrive with its own 6dp/3dp of
-                // padding, so focusing a poster-less season widened the label and
-                // nudged every poster beside it - a focus cue that moves the row
-                // is a focus cue that reads as a layout glitch. A border draws
-                // inside its bounds, so padding always and colour on focus is the
-                // same cue with a still row (poster items scale via graphicsLayer
-                // and never move anything either).
+                // Detail L2). The ring used to arrive with its own padding, so
+                // focusing a poster-less season widened the label and nudged
+                // every poster beside it - a focus cue that moves the row is a
+                // focus cue that reads as a layout glitch. A border draws inside
+                // its bounds, so padding always and colour on focus is the same
+                // cue with a still row (poster items scale via graphicsLayer and
+                // never move anything either).
+                //
+                // Round four widened the reservation: 6dp/3dp left a 2dp border
+                // sitting ~4dp from the glyphs horizontally and ~1dp vertically,
+                // which the 452 photo read as the ring touching (and nearly
+                // clipping) "SEASON 1". 12dp/6dp keeps the same unconditional
+                // space and leaves a visible gap in both states.
                 .then(
                     if (posterUrl == null) {
                         Modifier
-                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
                             .border(
                                 2.dp,
                                 if (focused) KBAccent else Color.Transparent,

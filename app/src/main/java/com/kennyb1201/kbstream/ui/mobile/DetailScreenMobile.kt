@@ -598,7 +598,7 @@ fun DetailScreenMobile(
         }
         // Widescreen art only: the cover splash fills the frame, so a poster is
         // never handed up as a backdrop.
-        val backdropArtUrl = remember(tmdbDetail, meta, initialBackdrop) {
+        val backdropArtUrl = remember(tmdbDetail?.backdropPath, meta?.background, initialBackdrop) {
             tmdbDetail?.backdropPath?.let {
                 TmdbRepository.fullResBackdropUrl(TmdbRepository.BACKDROP_BASE + it)
             }
@@ -660,12 +660,12 @@ fun DetailScreenMobile(
         // itself be adult, and this title passed the ceiling - so it is one of
         // each of its keywords' titles and vetting would clear them all. Genres
         // stay: that vocabulary is fixed and carries no such names.
-        val keywords = remember(tmdbDetail, kidsCeiling) {
+        val keywords = remember(tmdbDetail?.keywords, kidsCeiling) {
             if (kidsCeiling != null) emptyList() else tmdbDetail?.keywords?.list().orEmpty()
         }
         // The trailer the button OFFERS is the trailer it PLAYS (one pick, one
         // rule - see TrailerPick): a series files its promos as Teaser/Clip.
-        val trailerVideo = remember(tmdbDetail) {
+        val trailerVideo = remember(tmdbDetail?.videos?.results) {
             TrailerPick.best(tmdbDetail?.videos?.results)
         }
 
@@ -686,7 +686,7 @@ fun DetailScreenMobile(
         // Specials (TMDB season 0) sort behind the numbered seasons: the chip
         // row is the show's run, not its promo bucket, and the default season
         // with nothing else to go on is then the first real one.
-        val seasons = remember(tmdbDetail) {
+        val seasons = remember(tmdbDetail?.seasons) {
             MobileDetailRules.seasonsInChipOrder(tmdbDetail?.seasons.orEmpty())
         }
         val currentSeason = season ?: loadedSeason ?: seasons.firstOrNull()?.seasonNumber ?: 1
@@ -706,13 +706,14 @@ fun DetailScreenMobile(
         val episodeOrderBusy by viewModel.episodeOrderBusy.collectAsStateWithLifecycle()
 
         // ---- the watched-state arithmetic the menus share ----
-        val staleSeasons = remember(tmdbDetail) {
+        val staleSeasons = remember(tmdbDetail?.nextEpisodeToAir, tmdbDetail?.seasons) {
             MobileDetailRules.staleSeasonDates(tmdbDetail)
         }
         val seasonNumbersFor = remember(
             episodes,
             loadedSeason,
-            tmdbDetail,
+            tmdbDetail?.seasons,
+            tmdbDetail?.nextEpisodeToAir,
             staleSeasons,
             today
         ) {
@@ -1510,7 +1511,7 @@ fun DetailScreenMobile(
 
         // The TV's page-1 reviews plus every extra page the ViewModel fetched
         // in the background, in the same order.
-        val reviews = remember(allReviews, tmdbDetail) {
+        val reviews = remember(allReviews, tmdbDetail?.reviews) {
             allReviews.ifEmpty { tmdbDetail?.reviews?.results.orEmpty() }
         }
         // The title's other collection entries, minus itself (a part list that
@@ -1524,7 +1525,7 @@ fun DetailScreenMobile(
         val mediaPosters = tmdbDetail?.images?.posters.orEmpty()
         // The theme video has no still of its own, so its card draws the
         // title's backdrop - the same one the hero shows.
-        val mediaThemeArt = remember(tmdbDetail, initialBackdrop) {
+        val mediaThemeArt = remember(tmdbDetail?.backdropPath, initialBackdrop) {
             tmdbDetail?.backdropPath?.takeIf { it.isNotBlank() }
                 ?.let { path -> tmdbImage(path, "w780") }
                 ?: initialBackdrop
