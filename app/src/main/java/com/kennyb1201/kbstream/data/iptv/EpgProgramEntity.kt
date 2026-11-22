@@ -27,7 +27,13 @@ import androidx.room.PrimaryKey
                 "startUtcMillis",
                 "endUtcMillis"
             ]
-        )
+        ),
+        // The diagnostics' newest-program-end read and the "recent" guide read
+        // filter on end time, but the composite above leads with start time and
+        // cannot seek on it. On a 129MB guide, MAX(endUtcMillis) over a source
+        // was a full source scan; this is a covering seek. Added in schema v9
+        // with a real migration, not the destructive fallback.
+        Index(value = ["sourceId", "endUtcMillis"])
     ]
 )
 data class EpgProgramEntity(

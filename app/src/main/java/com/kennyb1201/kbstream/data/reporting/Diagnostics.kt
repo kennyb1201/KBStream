@@ -169,6 +169,10 @@ object Diagnostics {
         // states a "No program data" report could not be told apart from a
         // healthy guide without this line (see IptvRepository.guideStateRows).
         guideLine(app)?.let { report.appendLine(it) }
+        // ...and how the guide's hot reads are planned. The state line says what
+        // is stored; a plan saying SCAN epg_programs says the reads that find it
+        // are paying for a missing index. Plans only - never a row read.
+        guideQueryPlanLine(app)?.let { report.appendLine(it) }
         // ...and WHY the last refresh left it in that state. The guide line
         // above proves the programs are gone; it cannot say whether the
         // background worker is even scheduled (Fire OS, Doze, a cancelled
@@ -1180,6 +1184,9 @@ object Diagnostics {
      * Counts and timestamps only - no URLs (the guide line's per-source rows are
      * already redacted) and never key material.
      */
+    private suspend fun guideQueryPlanLine(context: Context): String? =
+        runCatching { IptvRepository.shared(context).guideQueryPlanLine() }.getOrNull()
+
     private suspend fun guideRefreshLine(context: Context): String? = withContext(Dispatchers.IO) {
         val prefs = runCatching {
             context.getSharedPreferences(

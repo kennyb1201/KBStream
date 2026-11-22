@@ -692,6 +692,18 @@ class IptvRepository(
         .maxOrNull()
 
     /**
+     * The hot guide reads' `EXPLAIN QUERY PLAN`, for diagnostics.
+     *
+     * Null when no source is configured (there is no guide to plan) or the
+     * database cannot be opened: an absent line is a fact, while a fabricated
+     * "indexed" verdict would hide a regression. Only plans - no row reads.
+     */
+    suspend fun guideQueryPlanLine(): String? = withContext(Dispatchers.IO) {
+        if (GuideFiles.guideUrls(appContext).isEmpty()) return@withContext null
+        runCatching { EpgQueryPlans.line(db.openHelper.readableDatabase) }.getOrNull()
+    }
+
+    /**
      * Which guide source resolved each playlist channel, for diagnostics.
      *
      * This profile's playlist channels - primary plus extras, read from the

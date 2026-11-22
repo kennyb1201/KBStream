@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.kennyb1201.kbstream.data.db.RoomBusyTimeout
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
@@ -21,6 +23,13 @@ import java.util.concurrent.atomic.AtomicLong
  *     already drops and recreates it. The one thing the drop must not leave
  *     behind is the full-text index, which lives outside Room's schema —
  *     EpgSearchIndexCallback.onDestructiveMigration removes it.
+ *
+ *  v9 adds `(sourceId, endUtcMillis)` on `epg_programs`: diagnostics' newest
+ *     program end and the recent-programs read filter on the end time, while
+ *     the v8 composite leads with start time. Unlike the v7→v8 change, this is
+ *     an additive index on a 129MB guide users already have, so it ships as a
+ *     real migration and keeps every imported program: rebuilding it costs a
+ *     full provider download and parse, and the index is a few MB.
  */
 @Database(
     entities = [
@@ -30,7 +39,7 @@ import java.util.concurrent.atomic.AtomicLong
         CachedPlaylistChannelEntity::class,
         PlaylistEpgMatchEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class IptvDatabase : RoomDatabase() {
@@ -82,12 +91,24 @@ abstract class IptvDatabase : RoomDatabase() {
          */
         private val pendingClose = HashMap<String, Retirement>()
 
+        /** v8→v9: add the end-time index without dropping the cached guide. */
+        internal val MIGRATION_8_9: Migration = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS " +
+                        "`index_epg_programs_sourceId_endUtcMillis` " +
+                        "ON `epg_programs` (`sourceId`, `endUtcMillis`)"
+                )
+            }
+        }
+
         private fun build(context: Context, dbName: String): IptvDatabase =
             Room.databaseBuilder(
                 context.applicationContext,
                 IptvDatabase::class.java,
                 dbName
-            ).fallbackToDestructiveMigration(dropAllTables = true)
+            ).addMigrations(MIGRATION_8_9)
+                .fallbackToDestructiveMigration(dropAllTables = true)
                 .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
                 .addCallback(RoomBusyTimeout)
                 .addCallback(EpgSearchIndexCallback)

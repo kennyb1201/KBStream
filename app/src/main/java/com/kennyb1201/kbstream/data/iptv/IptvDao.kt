@@ -317,24 +317,17 @@ interface IptvDao {
      * The first [perChannelLimit] programs per channel in the window: the guide's
      * own rows, without the description/category the full read carries.
      *
-     * Written as a correlated count rather than the partitioned row-numbering
-     * window function it used to be, which is the same "first N per channel" but
-     * on machinery every SQLite this app can run has: window functions need
-     * 3.25+, minSdk is 26 (SQLite 3.19), and Fire OS on the Fire Cube ships 3.22 —
-     * where SQLite rejects the window clause outright as a syntax error and
-     * throws on the main thread, so opening the guide force-closed the app
-     * (Sentry often missed it, because the process died before the report
-     * flushed). [GuideWindowQueryCompatibilityTest] pins both the equivalence and
-     * the absence of the old syntax. A row is kept when FEWER than
-     * [perChannelLimit] in-window programs on its channel start before it,
-     * which is exactly the row-number test; equal starts are broken by `rowid`
-     * so the answer is deterministic rather than whatever the scan order was.
-     *
-     * The window predicates are repeated inside the count so it measures the
-     * same set the outer query filters — the subquery is correlated on
-     * (sourceId, channelId), which is the coverage this table already had, and
-     * n is programs-per-channel inside a time window (tens, not thousands), the
-     * same bound the window function worked within.
+     * The SQL returns one ordered index range for the batch; [takePerChannel]
+     * keeps the first N of each channel in Kotlin. This replaced a correlated
+     * `COUNT(*)` per candidate row, which re-scanned the channel's window for
+     * every row it was deciding about. Window functions were never an option:
+     * they need SQLite 3.25+, while minSdk is 26 (SQLite 3.19) and Fire OS on the
+     * Fire Cube ships 3.22, where the clause is a syntax error that used to
+     * force-close the app (Sentry often missed it because the process died
+     * before the report flushed). The full ordered range is still bounded by the
+     * batch size and the guide's own 22-hour window, and the alternative paid
+     * O(programs²) per channel. Equal starts stay in `rowid` order, so the trim
+     * remains deterministic.
      */
     @Query(
         """
@@ -350,40 +343,39 @@ interface IptvDao {
           AND p1.endUtcMillis > :windowStart
           AND p1.startUtcMillis < :windowEnd
           AND p1.channelId IN (:channelIds)
-          AND (
-              SELECT COUNT(*)
-              FROM epg_programs p2
-              WHERE p2.sourceId = p1.sourceId
-                AND p2.channelId = p1.channelId
-                AND p2.endUtcMillis > :windowStart
-                AND p2.startUtcMillis < :windowEnd
-                AND (
-                    p2.startUtcMillis < p1.startUtcMillis
-                    OR (p2.startUtcMillis = p1.startUtcMillis AND p2.rowid < p1.rowid)
-                )
-          ) < :perChannelLimit
-        ORDER BY p1.channelId ASC, p1.startUtcMillis ASC
+        ORDER BY p1.channelId ASC, p1.startUtcMillis ASC, p1.rowid ASC
         """
     )
+    suspend fun getProgramsForChannelsInWindowLiteAll(
+        sourceUrl: String,
+        channelIds: List<String>,
+        windowStart: Long,
+        windowEnd: Long
+    ): List<EpgProgramRow>
+
     suspend fun getProgramsForChannelsInWindowLite(
         sourceUrl: String,
         channelIds: List<String>,
         windowStart: Long,
         windowEnd: Long,
         perChannelLimit: Int
-    ): List<EpgProgramRow>
+    ): List<EpgProgramRow> = getProgramsForChannelsInWindowLiteAll(
+        sourceUrl = sourceUrl,
+        channelIds = channelIds,
+        windowStart = windowStart,
+        windowEnd = windowEnd
+    ).takePerChannel(perChannelLimit)
 
     /**
      * The [perChannelLimit] LATEST programs per channel that have already aired,
      * newest first — the guide's "what just finished" rows.
      *
-     * The DESC twin of [getProgramsForChannelsInWindowLite]'s correlated count
-     * (see there for why window functions are not an option on this app's
-     * devices): the count now measures how many in-window programs start AFTER
-     * this one, so keeping count < [perChannelLimit] keeps the N latest. The
-     * window predicates are the same two the outer query filters on, `:nowMillis`
-     * included, and equal starts stay in `rowid` order — the same tie-break the
-     * ascending twin uses, so neither read depends on scan order.
+     * The DESC twin of [getProgramsForChannelsInWindowLiteAll] and trimmed by
+     * the same [takePerChannel], so "latest N" is the first N of an ordered
+     * index range rather than a correlated count. `:nowMillis` and the window
+     * floor are the query's own predicates, and equal starts stay in `rowid`
+     * order — the same tie-break the ascending read uses, so neither depends on
+     * scan order.
      */
     @Query(
         """
@@ -399,37 +391,36 @@ interface IptvDao {
           AND p1.endUtcMillis <= :nowMillis
           AND p1.endUtcMillis > :windowStart
           AND p1.channelId IN (:channelIds)
-          AND (
-              SELECT COUNT(*)
-              FROM epg_programs p2
-              WHERE p2.sourceId = p1.sourceId
-                AND p2.channelId = p1.channelId
-                AND p2.endUtcMillis <= :nowMillis
-                AND p2.endUtcMillis > :windowStart
-                AND (
-                    p2.startUtcMillis > p1.startUtcMillis
-                    OR (p2.startUtcMillis = p1.startUtcMillis AND p2.rowid < p1.rowid)
-                )
-          ) < :perChannelLimit
-        ORDER BY p1.channelId ASC, p1.startUtcMillis DESC
+        ORDER BY p1.channelId ASC, p1.startUtcMillis DESC, p1.rowid ASC
         """
     )
+    suspend fun getRecentProgramsForChannelsAll(
+        sourceUrl: String,
+        channelIds: List<String>,
+        nowMillis: Long,
+        windowStart: Long
+    ): List<EpgProgramRow>
+
     suspend fun getRecentProgramsForChannels(
         sourceUrl: String,
         channelIds: List<String>,
         nowMillis: Long,
         windowStart: Long,
         perChannelLimit: Int
-    ): List<EpgProgramRow>
+    ): List<EpgProgramRow> = getRecentProgramsForChannelsAll(
+        sourceUrl = sourceUrl,
+        channelIds = channelIds,
+        nowMillis = nowMillis,
+        windowStart = windowStart
+    ).takePerChannel(perChannelLimit)
 
     /**
      * The first [perChannelLimit] programs per channel in the window, with the
      * description and category the in-player guide shows.
      *
-     * The same correlated count as [getProgramsForChannelsInWindowLite], on the
-     * same argument (a window clause is a syntax error on the SQLite Fire OS
-     * ships), with this read's own column list: [perChannelLimit] limits how many
-     * rows a channel contributes, never which columns they carry.
+     * The same ordered batch read and [takePerChannel] trim as the lite query,
+     * with this read's own column list: the limit decides how many rows a channel
+     * contributes, never which columns they carry.
      */
     @Query(
         """
@@ -445,28 +436,28 @@ interface IptvDao {
           AND p1.endUtcMillis > :windowStart
           AND p1.startUtcMillis < :windowEnd
           AND p1.channelId IN (:channelIds)
-          AND (
-              SELECT COUNT(*)
-              FROM epg_programs p2
-              WHERE p2.sourceId = p1.sourceId
-                AND p2.channelId = p1.channelId
-                AND p2.endUtcMillis > :windowStart
-                AND p2.startUtcMillis < :windowEnd
-                AND (
-                    p2.startUtcMillis < p1.startUtcMillis
-                    OR (p2.startUtcMillis = p1.startUtcMillis AND p2.rowid < p1.rowid)
-                )
-          ) < :perChannelLimit
-        ORDER BY p1.channelId ASC, p1.startUtcMillis ASC
+        ORDER BY p1.channelId ASC, p1.startUtcMillis ASC, p1.rowid ASC
         """
     )
+    suspend fun getProgramsForChannelsInWindowAll(
+        sourceUrl: String,
+        channelIds: List<String>,
+        windowStart: Long,
+        windowEnd: Long
+    ): List<EpgProgramRow>
+
     suspend fun getProgramsForChannelsInWindow(
         sourceUrl: String,
         channelIds: List<String>,
         windowStart: Long,
         windowEnd: Long,
         perChannelLimit: Int
-    ): List<EpgProgramRow>
+    ): List<EpgProgramRow> = getProgramsForChannelsInWindowAll(
+        sourceUrl = sourceUrl,
+        channelIds = channelIds,
+        windowStart = windowStart,
+        windowEnd = windowEnd
+    ).takePerChannel(perChannelLimit)
 
     /**
      * Guide-wide program search: title match on every channel, limited to
