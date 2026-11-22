@@ -112,8 +112,16 @@ class RailSeasonCacheContractTest {
         assertTrue(
             "MAX_DETAIL_ENTRIES sizes detail AND rail - a change to it moves both, " +
                 "which is why the decision lives in one spec",
-            repository.contains("evictOldest(detailCache, { it.first }, MAX_DETAIL_ENTRIES)") &&
-                repository.contains("evictOldest(railDetailCache, { it.first }, MAX_DETAIL_ENTRIES)")
+            repository.contains("pruneCache(detailCache, MAX_DETAIL_ENTRIES) { it.first }") &&
+                repository.contains(
+                    "pruneCache(railDetailCache, MAX_DETAIL_ENTRIES) { it.first }"
+                )
+        )
+        assertTrue(
+            "and pruning leaves headroom under the cap, so a full cache does not " +
+                "sort itself on every lookup",
+            repository.contains("if (cache.size <= cap) return 0") &&
+                repository.contains("evictOldest(cache, stamp, cap - cap / 8)")
         )
         assertTrue(
             "and there is still exactly one eviction function, shared",

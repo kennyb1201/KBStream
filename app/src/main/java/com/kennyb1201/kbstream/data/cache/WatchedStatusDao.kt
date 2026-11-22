@@ -40,6 +40,10 @@ interface WatchedStatusDao {
     @Query("SELECT * FROM watched_status_cache")
     suspend fun getAll(): List<WatchedStatusEntity>
 
+    /** For diagnostics counts: the rows are 26k+ and none of them are needed. */
+    @Query("SELECT COUNT(*) FROM watched_status_cache")
+    suspend fun count(): Int
+
     @Query("DELETE FROM watched_status_cache WHERE key = :key")
     suspend fun deleteByKey(key: String)
 

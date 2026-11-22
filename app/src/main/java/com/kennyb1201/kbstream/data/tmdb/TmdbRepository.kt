@@ -30,6 +30,7 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -37,6 +38,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import okhttp3.OkHttpClient
@@ -419,6 +421,17 @@ class TmdbRepository private constructor(context: Context) :
         ConcurrentHashMap<String, CompletableDeferred<TmdbDetailLookup>>()
 
     /**
+     * In-flight season payloads, keyed like [seasonEpisodesCache].
+     *
+     * Continue Watching, Upcoming, Detail and the players routinely ask for
+     * the same (show, season) at once; without this each caller that missed the
+     * cache fired its own `getSeasonDetail`, and the duplicate answers then
+     * raced through the same mapping/cache writes.
+     */
+    private val seasonDetailInFlight =
+        ConcurrentHashMap<String, CompletableDeferred<TmdbSeasonDetail>>()
+
+    /**
      * In-flight ENRICHED fetches, keyed like [detailCache] - the same map as
      * [detailFetchInFlight] one level up.
      *
@@ -463,6 +476,34 @@ class TmdbRepository private constructor(context: Context) :
      * cache through the same cleanup that trims every other stale entry.
      */
     private fun detailDiskKey(key: String): String = "detail_en:$key"
+
+    /**
+     * Parses a cached detail row OFF the caller's thread.
+     *
+     * The rows are the full enriched payload (cast, recommendations, videos):
+     * 65-280 KB each, by the audit. The disk cache is read from ViewModel
+     * coroutines that start on Main, so parsing inline put the JSON walk in the
+     * same frame window as the screen that asked for the title. `Default` is the
+     * CPU-bound dispatcher; the caller still receives the same nullable result.
+     */
+    private suspend fun parseDetailJson(json: String): TmdbDetail? =
+        withContext(Dispatchers.Default) {
+            runCatching { detailJsonAdapter.fromJson(json) }.getOrNull()
+        }
+
+    /**
+     * Serializes a detail row OFF the caller's thread, the write-side twin of
+     * [parseDetailJson]. The payload is the same 65-280 KB, and the write path
+     * is reached from ViewModel coroutines that start on Main.
+     */
+    private suspend fun serializeDetailJson(detail: TmdbDetail): String =
+        serializeOffMain(detailJsonAdapter, detail)
+
+    /** Serializes any cache payload off the caller's thread. */
+    private suspend fun <T> serializeOffMain(adapter: JsonAdapter<T>, value: T): String =
+        withContext(Dispatchers.Default) {
+            adapter.toJson(value)
+        }
 
     /**
      * Disk key for the rail/resume projection of the same response.
@@ -720,6 +761,27 @@ class TmdbRepository private constructor(context: Context) :
 
     private val resolutionMisses = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
+    /**
+     * Records a negative resolution answer and keeps the map bounded.
+     *
+     * The misses were process-lifetime: every title that genuinely has no
+     * mapping left a permanent entry, and the three key families (imdb, tvdb,
+     * tmdb) never swept. Each value is a Long, so this is slow growth rather
+     * than a heap risk, but a long-running box between process deaths touches
+     * every title it has ever shown. Bounded like the other TMDB maps, pruned
+     * only when an insert pushes it over the cap.
+     */
+    private fun recordResolutionMiss(key: String, now: Long) {
+        resolutionMisses[key] = now
+        if (resolutionMisses.size > MAX_RESOLUTION_MISS_ENTRIES) {
+            // Drain to a low-water mark, not to the cap: pruning one entry at
+            // a time re-sorts the whole map on every subsequent insert, which
+            // is the cost this bound is meant to avoid. One sort per quarter
+            // of the map amortizes over hundreds of misses.
+            evictOldest(resolutionMisses, { it }, RESOLUTION_MISS_LOW_WATER)
+        }
+    }
+
     private var movieGenresCache: List<TmdbGenre>? = null
     private var tvGenresCache: List<TmdbGenre>? = null
 
@@ -825,6 +887,16 @@ class TmdbRepository private constructor(context: Context) :
     private val seasonEvictions = java.util.concurrent.atomic.AtomicInteger()
     private val MAX_RESOLUTION_ENTRIES = 500
     private val MAX_REVIEW_ENTRIES = 300
+    private val MAX_PERSON_ENTRIES = 32
+
+    /**
+     * Actor/director payloads, which were the one "detail" fetch with no cache
+     * at all: every actor open and every KB PERSON rail rebuilt the full
+     * combined-credits response. Person data changes on the order of weeks.
+     */
+    private val personCache =
+        ConcurrentHashMap<String, Pair<Long, TmdbPersonDetail>>()
+    private val personCacheTtlMs = 12L * 60L * 60L * 1000L
 
     /**
      * Keeps all four in-memory caches bounded.
@@ -839,13 +911,33 @@ class TmdbRepository private constructor(context: Context) :
         // Every map here keeps its timestamp in Pair.first, which is the stamp
         // evictOldest orders by. The returns are the three in-scope caches'
         // eviction counts, for the diagnostics rate (spec 2026-11-15).
-        evictOldest(detailCache, { it.first }, MAX_DETAIL_ENTRIES)
-        railEvictions.addAndGet(evictOldest(railDetailCache, { it.first }, MAX_DETAIL_ENTRIES))
-        seasonEvictions.addAndGet(evictOldest(seasonEpisodesCache, { it.first }, MAX_SEASON_ENTRIES))
-        evictOldest(imdbResolutionMemoryCache, { it.first }, MAX_RESOLUTION_ENTRIES)
-        evictOldest(tmdbResolutionMemoryCache, { it.first }, MAX_RESOLUTION_ENTRIES)
-        evictOldest(externalIdsMemoryCache, { it.first }, MAX_RESOLUTION_ENTRIES)
-        evictOldest(reviewsCache, { it.first }, MAX_REVIEW_ENTRIES)
+        pruneCache(detailCache, MAX_DETAIL_ENTRIES) { it.first }
+        railEvictions.addAndGet(pruneCache(railDetailCache, MAX_DETAIL_ENTRIES) { it.first })
+        seasonEvictions.addAndGet(pruneCache(seasonEpisodesCache, MAX_SEASON_ENTRIES) { it.first })
+        pruneCache(imdbResolutionMemoryCache, MAX_RESOLUTION_ENTRIES) { it.first }
+        pruneCache(tmdbResolutionMemoryCache, MAX_RESOLUTION_ENTRIES) { it.first }
+        pruneCache(externalIdsMemoryCache, MAX_RESOLUTION_ENTRIES) { it.first }
+        pruneCache(reviewsCache, MAX_REVIEW_ENTRIES) { it.first }
+    }
+
+    /**
+     * Evicts only when a cache is OVER its cap, and then down to a low-water
+     * mark rather than exactly the cap.
+     *
+     * The caches sit at their cap for most of a session (the paste showed
+     * detail=150/150 and rail=150/150), so pruning on every lookup meant sorting
+     * every full map on every lookup just to remove one entry, then sorting it
+     * again on the next insert. Dropping an eighth of the cap in one pass makes
+     * the sort run once per ~19 inserts at the default sizes. Under the cap this
+     * is still one integer comparison.
+     */
+    private fun <V> pruneCache(
+        cache: ConcurrentHashMap<String, V>,
+        cap: Int,
+        stamp: (V) -> Long
+    ): Int {
+        if (cache.size <= cap) return 0
+        return evictOldest(cache, stamp, cap - cap / 8)
     }
 
     /**
@@ -874,6 +966,7 @@ class TmdbRepository private constructor(context: Context) :
         tmdbResolutionMemoryCache.clear()
         externalIdsMemoryCache.clear()
         reviewsCache.clear()
+        personCache.clear()
         // Resolved brand marks are re-readable from the disk rows, so they are
         // part of what a tight heap may take back.
         entityLogoMemory.clear()
@@ -1023,6 +1116,19 @@ class TmdbRepository private constructor(context: Context) :
         rawId: String,
         type: String,
         fallbackName: String? = null
+    ): TmdbDetail? = fetchEnrichedMetaProjection(rawId, type, fallbackName, full = true)
+
+    /**
+     * [full] selects the appended blocks, not the return shape: a slim answer is
+     * the same [TmdbDetail] with the five bulk fields absent. Only
+     * [fetchEnrichedMetaCached] asks for a slim one, and only its rail
+     * projection callers can receive it.
+     */
+    private suspend fun fetchEnrichedMetaProjection(
+        rawId: String,
+        type: String,
+        fallbackName: String?,
+        full: Boolean
     ): TmdbDetail? {
         if (apiKey.isBlank()) return null
 
@@ -1038,7 +1144,7 @@ class TmdbRepository private constructor(context: Context) :
             else -> null
         }
         if (tmdbId != null) {
-            return fetchDetailByTmdbId(tmdbId, normalizedType)
+            return fetchDetailByTmdbId(tmdbId, normalizedType, full)
         }
 
         return if (lower.startsWith("tvdb:")) {
@@ -1046,36 +1152,119 @@ class TmdbRepository private constructor(context: Context) :
             if (tvdbId.isBlank()) {
                 null
             } else {
-                findAndFetch(tvdbId, "tvdb_id", normalizedType, fallbackName)
+                findAndFetch(tvdbId, "tvdb_id", normalizedType, fallbackName, full)
             }
         } else {
             val imdbId = trimmed.substringBefore(':')
             if (imdbId.isBlank()) {
                 null
             } else {
-                findAndFetch(imdbId, "imdb_id", normalizedType, fallbackName)
+                // An IMDb -> TMDB mapping learned earlier (by this path, the
+                // player's history repair, or a previous resolve) means the
+                // `/find` half of this call is already answered. Go straight to
+                // the detail request and only fall back to find when that misses
+                // - a detail-cache miss used to re-pay `/find` on every tt-id
+                // title, which was roughly a third of the session's TMDB calls.
+                val knownTmdbId = cachedTmdbId(imdbId, normalizedType)
+                if (knownTmdbId != null) {
+                    // The TMDB-keyed cache may already hold this title (TMDB
+                    // rails, Detail, CW). Asking through the cached lookup
+                    // reuses that entry instead of fetching the same payload
+                    // under the tt key, and its answer is written under BOTH
+                    // keys so the next caller of either spelling is free.
+                    //
+                    // A slim caller may consume a full cached answer (it is a
+                    // superset), but it must not go through the full-only
+                    // lookup: that would fetch the bulk back and defeat the
+                    // projection.
+                    if (full) {
+                        (lookupDetailByTmdbId(knownTmdbId, normalizedType) as? TmdbDetailLookup.Found)
+                            ?.detail
+                            ?: findAndFetch(
+                                imdbId,
+                                "imdb_id",
+                                normalizedType,
+                                fallbackName,
+                                full = true
+                            )
+                    } else {
+                        cachedDetailByTmdbId(knownTmdbId, normalizedType)
+                            ?: fetchDetailByTmdbId(knownTmdbId, normalizedType, full = false)
+                            ?: findAndFetch(
+                                imdbId,
+                                "imdb_id",
+                                normalizedType,
+                                fallbackName,
+                                full = false
+                            )
+                    }
+                } else {
+                    findAndFetch(imdbId, "imdb_id", normalizedType, fallbackName, full)
+                        ?.also { detail ->
+                            // Leave the same trail resolveTmdbId would, so the
+                            // next open (and the player's id repair) is free.
+                            if (detail.id > 0) {
+                                recordResolution(imdbId, detail.id, normalizedType)
+                            }
+                        }
+                }
             }
         }
+    }
+
+    /**
+     * The IMDb -> TMDB mapping already on disk or in memory, WITHOUT asking
+     * TMDB.
+     *
+     * [resolveTmdbId] is the full resolver: on a miss it performs `/find`. The
+     * enriched-detail path needs the cache half only - a cache miss here has its
+     * own `/find` in [findAndFetch], and calling the full resolver first would
+     * make the miss pay two finds instead of one.
+     */
+    private suspend fun cachedTmdbId(imdbId: String, type: String): Int? {
+        val trimmedId = imdbId.trim()
+        if (!trimmedId.startsWith("tt")) return null
+
+        val normalizedType = normalizeType(type)
+        val now = System.currentTimeMillis()
+        val cacheKey = "$normalizedType::$trimmedId"
+
+        tmdbResolutionMemoryCache[cacheKey]?.let { (cachedAt, tmdbId) ->
+            if (tmdbId != null && now - cachedAt < imdbResolutionTtlMs) return tmdbId
+        }
+        val diskCached = runCatchingCancellable {
+            imdbResolutionDao.getByImdbId(trimmedId, normalizedType)
+        }.getOrNull() ?: return null
+        if (now - diskCached.updatedAt >= imdbResolutionTtlMs) return null
+
+        tmdbResolutionMemoryCache[cacheKey] = diskCached.updatedAt to diskCached.tmdbId
+        imdbResolutionMemoryCache[
+            imdbResolutionKey(diskCached.tmdbId, normalizedType)
+        ] = diskCached.updatedAt to diskCached.imdbId
+        return diskCached.tmdbId
     }
 
     private suspend fun findAndFetch(
         externalId: String,
         externalSource: String,
         normalizedType: String,
-        fallbackName: String? = null
+        fallbackName: String? = null,
+        full: Boolean = true
     ): TmdbDetail? = findAndFetchDetail(
         api = api,
         apiKey = apiKey,
         externalId = externalId,
         externalSource = externalSource,
         normalizedType = normalizedType,
-        fallbackName = fallbackName
+        fallbackName = fallbackName,
+        full = full
     )
 
     private suspend fun fetchDetailByTmdbId(
         tmdbId: Int,
-        normalizedType: String
-    ): TmdbDetail? = fetchTmdbDetail(api, apiKey, tmdbId, normalizedType)
+        normalizedType: String,
+        full: Boolean = true
+    ): TmdbDetail? = fetchTmdbDetail(api, apiKey, tmdbId, normalizedType, full)
 
     /**
      * The enriched TMDB detail for one raw id: in-memory cache, then the disk
@@ -1190,9 +1379,7 @@ class TmdbRepository private constructor(context: Context) :
             }.getOrNull()
         }
         if (diskCached != null && now - diskCached.updatedAt < detailCacheDiskTtlMs) {
-            val parsed = runCatching {
-                detailJsonAdapter.fromJson(diskCached.json)
-            }.getOrNull()
+            val parsed = parseDetailJson(diskCached.json)
             if (parsed != null) {
                 detailCache[key] = now to parsed
                 railDetailCache[key] = now to parsed
@@ -1207,9 +1394,7 @@ class TmdbRepository private constructor(context: Context) :
                 tmdbJsonCacheDao.getByKey(railKey)
             }.getOrNull()
             if (railDiskCached != null && now - railDiskCached.updatedAt < detailCacheDiskTtlMs) {
-                val parsed = runCatching {
-                    detailJsonAdapter.fromJson(railDiskCached.json)
-                }.getOrNull()
+                val parsed = parseDetailJson(railDiskCached.json)
                 if (parsed != null) {
                     // Only the rail map: this object has no cast, trailer or
                     // recommendations, and must never answer a `full` caller.
@@ -1229,11 +1414,15 @@ class TmdbRepository private constructor(context: Context) :
         // fetch).
         // Said before the wait so the caller can report where the answer came
         // from; the `?.let` shape below is the coalescing rule itself.
-        if (enrichedFetchInFlight[key] != null) onSource?.invoke("shared")
-        enrichedFetchInFlight[key]?.let { pending -> return pending.await() }
+        // A slim fetch and a full fetch are different requests, so they get
+        // different in-flight keys: a full caller must never await a projection
+        // that cannot answer it.
+        val fetchKey = if (full) "$key|full" else "$key|slim"
+        if (enrichedFetchInFlight[fetchKey] != null) onSource?.invoke("shared")
+        enrichedFetchInFlight[fetchKey]?.let { pending -> return pending.await() }
 
         val deferred = CompletableDeferred<TmdbDetail?>()
-        enrichedFetchInFlight.putIfAbsent(key, deferred)?.let { pending ->
+        enrichedFetchInFlight.putIfAbsent(fetchKey, deferred)?.let { pending ->
             onSource?.invoke("shared")
             return pending.await()
         }
@@ -1241,10 +1430,10 @@ class TmdbRepository private constructor(context: Context) :
 
         val result = try {
             runCatchingCancellable {
-                fetchEnrichedMeta(imdbId, type, fallbackName)
+                fetchEnrichedMetaProjection(imdbId, type, fallbackName, full)
             }.getOrNull()
         } catch (cancellation: kotlinx.coroutines.CancellationException) {
-            enrichedFetchInFlight.remove(key)
+            enrichedFetchInFlight.remove(fetchKey)
             // Unblock anyone sharing this fetch with a miss rather than a
             // cancellation they did not ask for.
             deferred.complete(null)
@@ -1257,18 +1446,41 @@ class TmdbRepository private constructor(context: Context) :
         // retry. Only a real answer is remembered, in memory and on disk.
         detailFetches.incrementAndGet()
         if (result != null) {
-            detailCache[key] = now to result
+            // Only a FULL response may enter the full map. A slim response is
+            // already the projection; putting it in detailCache would let the
+            // next Detail (or hero) caller reuse it as if it had the bulk.
+            if (full) detailCache[key] = now to result
             // The slim memory entry holds the PROJECTION, not the response:
             // rails never read the bulk, and keeping a full copy in both maps
             // would double this class's retained heap for no gain. (The disk
             // row is already the projection in the slim case.)
             railDetailCache[key] = now to result.railProjection()
+            // A full answer fetched by IMDb id is also filed under its TMDB
+            // key. The two id spaces used to miss each other, so the same title
+            // fetched by an add-on row and then by a TMDB rail paid /find +
+            // detail twice and wrote two disk rows. Only a FULL response may
+            // take the TMDB key: the slim projection cannot answer a full
+            // caller, and lookupDetailByTmdbId reads the rail map as a full
+            // hit. The disk alias is written for the same reason - it survives
+            // the memory entry being evicted.
+            val tmdbAlias = if (full && result.id > 0) {
+                "${normalizeType(type)}:tmdb:${result.id}"
+            } else {
+                null
+            }
+            if (tmdbAlias != null && tmdbAlias != key) {
+                detailCache[tmdbAlias] = now to result
+            }
             if (full) {
-                cacheJson(diskKey, detailJsonAdapter.toJson(result), now)
+                val fullJson = serializeDetailJson(result)
+                cacheJson(diskKey, fullJson, now)
+                if (tmdbAlias != null && tmdbAlias != key) {
+                    cacheJson(detailDiskKey(tmdbAlias), fullJson, now)
+                }
             } else {
                 cacheJson(
                     railDetailKey(key),
-                    detailJsonAdapter.toJson(result.railProjection()),
+                    serializeDetailJson(result.railProjection()),
                     now
                 )
             }
@@ -1276,7 +1488,7 @@ class TmdbRepository private constructor(context: Context) :
         // Complete before dropping the in-flight marker, so a caller that
         // arrives between the two sees the cache and never double-fetches.
         deferred.complete(result)
-        enrichedFetchInFlight.remove(key)
+        enrichedFetchInFlight.remove(fetchKey)
         return result
     }
 
@@ -1314,7 +1526,7 @@ class TmdbRepository private constructor(context: Context) :
 
         if (lookup.isSuccess && imdbId == null) {
             // A real "no mapping", not a failure: remember it briefly.
-            resolutionMisses["i:$key"] = now
+            recordResolutionMiss("i:$key", now)
         }
 
         if (!imdbId.isNullOrBlank()) {
@@ -1410,7 +1622,7 @@ class TmdbRepository private constructor(context: Context) :
         val tvdbId = ext.tvdbId?.takeIf { it > 0 }
 
         if (tvdbId == null) {
-            resolutionMisses["v:$key"] = now
+            recordResolutionMiss("v:$key", now)
         } else {
             resolutionMisses.remove("v:$key")
         }
@@ -1465,7 +1677,7 @@ class TmdbRepository private constructor(context: Context) :
 
     private suspend fun rememberExternalIds(key: String, ids: TmdbExternalIds, now: Long) {
         externalIdsMemoryCache[key] = now to ids
-        writeJsonCacheRow("extids:$key", externalIdsJsonAdapter.toJson(ids), now)
+        writeJsonCacheRow("extids:$key", serializeOffMain(externalIdsJsonAdapter, ids), now)
     }
 
     /**
@@ -1580,7 +1792,7 @@ class TmdbRepository private constructor(context: Context) :
         if (tmdbId == null) {
             // Only a definitive answer is remembered - a failure above must not
             // hide the title for the miss TTL.
-            if (found.isSuccess) resolutionMisses["t:$cacheKey"] = now
+            if (found.isSuccess) recordResolutionMiss("t:$cacheKey", now)
             return null
         }
 
@@ -1643,7 +1855,16 @@ class TmdbRepository private constructor(context: Context) :
 
     suspend fun getPerson(personId: Int): TmdbPersonDetail? {
         if (apiKey.isBlank()) return null
-        val loaded = api.getPerson(personId, apiKey) ?: return null
+        val now = System.currentTimeMillis()
+        val cacheKey = personId.toString()
+        val cached = personCache[cacheKey]
+            ?.takeIf { (cachedAt, _) -> now - cachedAt < personCacheTtlMs }
+            ?.second
+        val loaded = cached ?: api.getPerson(personId, apiKey) ?: return null
+        if (cached == null) {
+            personCache[cacheKey] = now to loaded
+            evictOldest(personCache, { it.first }, MAX_PERSON_ENTRIES)
+        }
         // Kids Mode: trim the combined filmography to the active ceiling at
         // the source. One chokepoint covers every consumer — the actor
         // screen, detail person chips, and KB PERSON/DIRECTOR/WRITER
@@ -2312,7 +2533,7 @@ class TmdbRepository private constructor(context: Context) :
         if (result != null) {
             pruneMemoryCaches()
             reviewsCache[key] = now to result
-            cacheJson(diskKey, reviewsJsonAdapter.toJson(result), now)
+            cacheJson(diskKey, serializeOffMain(reviewsJsonAdapter, result), now)
         }
         return result
     }
@@ -2505,8 +2726,7 @@ class TmdbRepository private constructor(context: Context) :
             }
         }
 
-        seasonFetches.incrementAndGet()
-        val seasonDetail = api.getSeasonDetail(tvId, season, apiKey)
+        val seasonDetail = fetchSeasonDetailOnce(key, tvId, season)
 
         // TMDB files a "- Specials" row numbered 0 inside a regular
         // season from time to time. It is not an episode the season browser
@@ -2544,9 +2764,44 @@ class TmdbRepository private constructor(context: Context) :
         // kept a transient failure on screen for a week.
         if (seasonEpisodesAreAnAnswer(episodes)) {
             seasonEpisodesCache[key] = now to episodes
-            cacheJson(diskKey, seasonEpisodesJsonAdapter.toJson(episodes), now)
+            cacheJson(diskKey, serializeOffMain(seasonEpisodesJsonAdapter, episodes), now)
         }
         return seasonWithOrderNumbers(episodes, season, orderCatalogue)
+    }
+
+    /**
+     * One season payload per cache key, shared by concurrent callers.
+     *
+     * The caller has already missed memory and disk, so this is the only place
+     * a duplicate network request can still be removed. A waiter receives the
+     * same response and runs its own (cheap) mapping/cache write; only the
+     * request is shared.
+     */
+    private suspend fun fetchSeasonDetailOnce(
+        key: String,
+        tvId: Int,
+        season: Int
+    ): TmdbSeasonDetail {
+        seasonDetailInFlight[key]?.let { pending -> return pending.await() }
+
+        val deferred = CompletableDeferred<TmdbSeasonDetail>()
+        seasonDetailInFlight.putIfAbsent(key, deferred)?.let { pending ->
+            return pending.await()
+        }
+        seasonFetches.incrementAndGet()
+        return try {
+            val detail = api.getSeasonDetail(tvId, season, apiKey)
+            deferred.complete(detail)
+            detail
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            deferred.completeExceptionally(cancelled)
+            throw cancelled
+        } catch (failure: Throwable) {
+            deferred.completeExceptionally(failure)
+            throw failure
+        } finally {
+            seasonDetailInFlight.remove(key, deferred)
+        }
     }
 
     /**
@@ -2624,9 +2879,7 @@ class TmdbRepository private constructor(context: Context) :
             }.getOrNull()
         }
         if (diskCached != null && now - diskCached.updatedAt < detailCacheDiskTtlMs) {
-            val parsed = runCatching {
-                detailJsonAdapter.fromJson(diskCached.json)
-            }.getOrNull()
+            val parsed = parseDetailJson(diskCached.json)
             if (parsed != null) {
                 detailCache[key] = now to parsed
                 return TmdbDetailLookup.Found(parsed)
@@ -2681,7 +2934,7 @@ class TmdbRepository private constructor(context: Context) :
         val detail = (result as? TmdbDetailLookup.Found)?.detail
         if (detail != null) {
             detailCache[key] = now to detail
-            cacheJson(diskKey, detailJsonAdapter.toJson(detail), now)
+            cacheJson(diskKey, serializeDetailJson(detail), now)
         }
         // Complete before dropping the in-flight marker, so a caller that
         // arrives between the two sees the cache and never double-fetches.
@@ -2780,9 +3033,7 @@ class TmdbRepository private constructor(context: Context) :
             }.getOrNull()
         }
         if (diskCached != null && now - diskCached.updatedAt < detailCacheDiskTtlMs) {
-            val parsed = runCatching {
-                detailJsonAdapter.fromJson(diskCached.json)
-            }.getOrNull()
+            val parsed = parseDetailJson(diskCached.json)
             if (parsed != null) {
                 detailCache[key] = now to parsed
                 return TmdbDetailLookup.Found(parsed)
@@ -2797,9 +3048,7 @@ class TmdbRepository private constructor(context: Context) :
             }.getOrNull()
         }
         if (railDiskCached != null && now - railDiskCached.updatedAt < detailCacheDiskTtlMs) {
-            val parsed = runCatching {
-                detailJsonAdapter.fromJson(railDiskCached.json)
-            }.getOrNull()
+            val parsed = parseDetailJson(railDiskCached.json)
             if (parsed != null) {
                 detailCache[key] = now to parsed
                 railDetailCache[key] = now to parsed
@@ -2839,7 +3088,7 @@ class TmdbRepository private constructor(context: Context) :
 
         detailCache[key] = now to detail
         railDetailCache[key] = now to detail.railProjection()
-        cacheJson(diskKey, detailJsonAdapter.toJson(detail), now)
+        cacheJson(diskKey, serializeDetailJson(detail), now)
         return TmdbDetailLookup.Found(detail)
     }
 
@@ -2961,9 +3210,7 @@ class TmdbRepository private constructor(context: Context) :
             tmdbJsonCacheDao.getByKey(detailDiskKey(key))
         }.getOrNull()
         if (diskCached != null && now - diskCached.updatedAt < detailCacheDiskTtlMs) {
-            val parsed = runCatching {
-                detailJsonAdapter.fromJson(diskCached.json)
-            }.getOrNull()
+            val parsed = parseDetailJson(diskCached.json)
             if (parsed != null) {
                 detailCache[key] = now to parsed
                 return parsed
@@ -4686,7 +4933,7 @@ class TmdbRepository private constructor(context: Context) :
             runCatchingCancellable {
                 cacheJson(
                     key,
-                    entityLogoJsonAdapter.toJson(resolved),
+                    serializeOffMain(entityLogoJsonAdapter, resolved),
                     fetchedAt
                 )
                 // Artwork that arrived inside the marker's hour must not stay
@@ -5362,16 +5609,28 @@ class TmdbRepository private constructor(context: Context) :
          * host would turn working art into a 404. A blank or absent URL stays
          * null, the same as everywhere else an image URL is absent.
          */
-        fun fullResBackdropUrl(url: String?): String? {
+        fun fullResBackdropUrl(url: String?): String? =
+            backdropAtWidth(url, BACKDROP_BASE_FULL)
+
+        /**
+         * A TMDB backdrop at one of the size rungs, for the request that draws
+         * it rather than for the URL that gets stored or handed on.
+         *
+         * The detail hero decodes at 1280x720, so downloading `original` only
+         * spends bytes on pixels Coil immediately throws away. The hand-off to
+         * the player's loading splash still goes through
+         * [fullResBackdropUrl] - that surface really does fill the frame.
+         */
+        fun backdropAtWidth(url: String?, base: String = BACKDROP_BASE): String? {
             val raw = url?.takeIf { it.isNotBlank() } ?: return null
-            // A bare path: resolve it against the full-size base.
+            // A bare path: resolve it against the requested size.
             if (!raw.startsWith("http://") && !raw.startsWith("https://")) {
-                return BACKDROP_BASE_FULL + if (raw.startsWith("/")) raw else "/$raw"
+                return base + if (raw.startsWith("/")) raw else "/$raw"
             }
             // Already absolute, and ours: swap the size segment. Any other size
             // qualifies, not just w1280 - "original" on a URL that is already
-            // original rewrites to itself.
-            return TMDB_IMAGE_SIZE.replaceFirst(raw, "$BACKDROP_BASE_FULL/")
+            // at the target size rewrites to itself.
+            return TMDB_IMAGE_SIZE.replaceFirst(raw, "$base/")
         }
 
         /**
@@ -5429,6 +5688,8 @@ class TmdbRepository private constructor(context: Context) :
         /** Company pages the brand-name fallback will read before giving up. */
         private const val MAX_BRAND_NAME_CANDIDATES = 5
         private const val MAX_IMDB_DISK_AGE_MS = 90L * 24L * 60L * 60L * 1000L
+        private const val MAX_RESOLUTION_MISS_ENTRIES = 2_000
+        private const val RESOLUTION_MISS_LOW_WATER = MAX_RESOLUTION_MISS_ENTRIES * 3 / 4
 
         /**
          * How many JSON-cache writes go by between budget checks. See
@@ -5473,14 +5734,17 @@ internal suspend fun findAndFetchDetail(
     externalId: String,
     externalSource: String,
     normalizedType: String,
-    fallbackName: String? = null
+    fallbackName: String? = null,
+    full: Boolean = true
 ): TmdbDetail? {
     val found =
         runCatchingCancellable { api.find(externalId, apiKey, externalSource) }.getOrNull()
             ?: return null
     val wanted = if (normalizedType == "series") found.tvResults else found.movieResults
     val other = if (normalizedType == "series") found.movieResults else found.tvResults
-    wanted.firstOrNull()?.id?.let { return fetchTmdbDetail(api, apiKey, it, normalizedType) }
+    wanted.firstOrNull()?.id?.let {
+        return fetchTmdbDetail(api, apiKey, it, normalizedType, full)
+    }
 
     // Wrong-type signal: the id exists on TMDB, but as the OTHER type - the
     // catalog id is wrong, not absent. (PAW Patrol: series request, tt3121722
@@ -5499,7 +5763,7 @@ internal suspend fun findAndFetchDetail(
         normalizeTitle(it.title ?: it.name) == normalizeTitle(name)
     } ?: return null
     Log.i(TAG, "wrong-type catalog id $externalId recovered by name as tmdb:${match.id}")
-    return fetchTmdbDetail(api, apiKey, match.id, normalizedType)
+    return fetchTmdbDetail(api, apiKey, match.id, normalizedType, full)
 }
 
 /**
@@ -5513,24 +5777,33 @@ internal suspend fun fetchTmdbDetail(
     api: TmdbApiService,
     apiKey: String,
     tmdbId: Int,
-    normalizedType: String
+    normalizedType: String,
+    full: Boolean = true
 ): TmdbDetail? {
-    if (normalizedType == "series") {
-        return runCatchingCancellable {
-            api.getTv(tmdbId, apiKey)
+    val tvAppend = if (full) TmdbAppend.TV_FULL else TmdbAppend.TV_SLIM
+    val movieAppend = if (full) TmdbAppend.MOVIE_FULL else TmdbAppend.MOVIE_SLIM
+    val detail = if (normalizedType == "series") {
+        runCatchingCancellable {
+            api.getTv(tmdbId, apiKey, tvAppend)
         }.getOrNull()
+    } else if (normalizedType == "movie") {
+        runCatchingCancellable {
+            api.getMovie(tmdbId, apiKey, movieAppend)
+        }.getOrNull()
+    } else {
+        runCatchingCancellable {
+            api.getTv(tmdbId, apiKey, tvAppend)
+        }.getOrNull()
+            ?: runCatchingCancellable {
+                api.getMovie(tmdbId, apiKey, movieAppend)
+            }.getOrNull()
     }
-    if (normalizedType == "movie") {
-        return runCatchingCancellable {
-            api.getMovie(tmdbId, apiKey)
-        }.getOrNull()
-    }
-    return runCatchingCancellable {
-        api.getTv(tmdbId, apiKey)
-    }.getOrNull()
-        ?: runCatchingCancellable {
-            api.getMovie(tmdbId, apiKey)
-        }.getOrNull()
+    // Detail's `images` append already answers the hero's `/images` question.
+    // Filing it here means a Home hero focused after Detail opens needs no
+    // second request; the hero repository still owns the artwork pick and its
+    // disk cache.
+    detail?.let { TmdbHeroArtworkRepository.seedFromDetail(normalizedType, tmdbId, it.images) }
+    return detail
 }
 
 /**

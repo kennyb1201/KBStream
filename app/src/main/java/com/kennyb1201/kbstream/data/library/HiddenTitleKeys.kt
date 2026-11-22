@@ -94,6 +94,13 @@ internal object HiddenTitleKeys {
             return true
         }
 
+        // Only id keys are stored, so there is no name key this surface could
+        // match. Skipping the normalize here matters: Home re-runs this for
+        // every item of every rail on every republish, and most hide sets are
+        // id-only, so the old path paid two string allocations per item to
+        // answer a question the set had already answered.
+        if (hidden.none { it.startsWith(TITLE_KEY_PREFIX) }) return false
+
         val name = normalizeTitle(title) ?: return false
         val prefix = "$TITLE_KEY_PREFIX${normalizedType(mediaType)}::$name::"
         return when {

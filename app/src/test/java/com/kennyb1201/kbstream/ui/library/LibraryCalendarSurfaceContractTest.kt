@@ -143,7 +143,7 @@ class LibraryCalendarSurfaceContractTest {
             "each resolved show files what it found and paints at once",
             viewModel.contains("private fun noteResolved(") &&
                 viewModel.contains("for ((day, episodes) in calendarEpisodesFor(month, show, LocalDate.now()))") &&
-                viewModel.contains("days = calendarSortedDays(build.days)") &&
+                viewModel.contains("days = build.sortedDaysForPublish()") &&
                 viewModel.contains("loading = false")
         )
         assertTrue(

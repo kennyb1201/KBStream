@@ -8,6 +8,8 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import androidx.core.content.FileProvider
 import com.kennyb1201.kbstream.data.history.YearReview
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
@@ -121,20 +123,26 @@ internal object YearReviewShareCard {
      * ACTION_SEND with a one-shot read grant on that file, so the receiving app
      * gets the card and nothing else from the app's storage.
      */
-    fun share(
+    suspend fun share(
         context: Context,
         review: YearReview,
         hoursLabel: String,
         accentArgb: Int
     ): Boolean {
-        val written = runCatching {
-            val directory = File(context.cacheDir, "share").apply { mkdirs() }
-            val file = File(directory, "year-review-${review.year}.png")
-            FileOutputStream(file).use { out ->
-                bitmap(review, hoursLabel, accentArgb).compress(Bitmap.CompressFormat.PNG, 100, out)
-            }
-            file
-        }.getOrNull() ?: return false
+        // The 1080x1350 draw plus PNG compression is 100-400ms on a TV box;
+        // doing it in the click handler froze the screen for the tap. Only
+        // rendering/writing moves off Main - the chooser still starts there.
+        val written = withContext(Dispatchers.IO) {
+            runCatching {
+                val directory = File(context.cacheDir, "share").apply { mkdirs() }
+                val file = File(directory, "year-review-${review.year}.png")
+                FileOutputStream(file).use { out ->
+                    bitmap(review, hoursLabel, accentArgb)
+                        .compress(Bitmap.CompressFormat.PNG, 100, out)
+                }
+                file
+            }.getOrNull()
+        } ?: return false
 
         val uri = runCatching {
             FileProvider.getUriForFile(
@@ -152,9 +160,11 @@ internal object YearReviewShareCard {
         val chooser = Intent.createChooser(send, "Share your ${review.year} in review").apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        return runCatching {
-            context.startActivity(chooser)
-            true
-        }.getOrDefault(false)
+        return withContext(Dispatchers.Main.immediate) {
+            runCatching {
+                context.startActivity(chooser)
+                true
+            }.getOrDefault(false)
+        }
     }
 }

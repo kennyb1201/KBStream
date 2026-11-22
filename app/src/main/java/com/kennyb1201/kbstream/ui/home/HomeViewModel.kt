@@ -98,6 +98,7 @@ import kotlin.math.round
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -3381,7 +3382,9 @@ Log.d(
                         add(EpisodeRowArt(EPISODE_ROW_UP_NEXT, it))
                     }
                 }
-                upNext.drop(index + 1).take(HERO_LOOKAHEAD_CARDS).forEach { next ->
+                // A sequence: List.drop() copied the whole tail on every focus
+                // step just to read the next few cards.
+                upNext.asSequence().drop(index + 1).take(HERO_LOOKAHEAD_CARDS).forEach { next ->
                     upNextCardArt(next, spoilerFree)?.let {
                         add(EpisodeRowArt(EPISODE_ROW_UP_NEXT, it))
                     }
@@ -3400,7 +3403,7 @@ Log.d(
                         add(EpisodeRowArt(EPISODE_ROW_UPCOMING, it))
                     }
                 }
-                upcoming.drop(index + 1).take(HERO_LOOKAHEAD_CARDS).forEach { next ->
+                upcoming.asSequence().drop(index + 1).take(HERO_LOOKAHEAD_CARDS).forEach { next ->
                     upcomingCardArt(next)?.let {
                         add(EpisodeRowArt(EPISODE_ROW_UPCOMING, it))
                     }
@@ -3736,7 +3739,10 @@ Log.d(
                         .asReversed()
                 )
             }
-            addAll(rail.items.drop(index + 1).take(RAIL_TILE_LOOKAHEAD_FORWARD))
+            rail.items.asSequence()
+                .drop(index + 1)
+                .take(RAIL_TILE_LOOKAHEAD_FORWARD)
+                .forEach { add(it) }
             // The rails above and below: a vertical move's landing card.
             rails.getOrNull(railIndex - 1)?.items
                 ?.take(RAIL_TILE_LOOKAHEAD_RAIL_HEAD)
@@ -15091,7 +15097,12 @@ private suspend fun calculateEpisodesRemaining(
                 // the screens load them (see [setLibraryRailItems]) and this
                 // ViewModel never held them, so a title that existed only on a
                 // pinned Trakt / MDBList list was never preloaded either.
-                val markerMetas =
+                // This pass walks every item on every rail (1,000+ on a full
+                // Home) and used to allocate the deduped list plus the preload
+                // pairs on Main, in the same window as the load frames. The
+                // inputs are already-published state; only the derivation
+                // moves off Main.
+                val markerMetas = withContext(Dispatchers.Default) {
                     watchedMarkerMetas(
                         railItems =
                             rails.flatMap { rail ->
@@ -15116,9 +15127,9 @@ private suspend fun calculateEpisodesRemaining(
                             },
                         libraryItems = _libraryRailItems.value
                     )
+                }
 
-                val preloadItems =
-                    watchedMarkerPreload(markerMetas)
+                val preloadItems = watchedMarkerPreload(markerMetas)
 
                 if (
                     preloadItems.isEmpty()

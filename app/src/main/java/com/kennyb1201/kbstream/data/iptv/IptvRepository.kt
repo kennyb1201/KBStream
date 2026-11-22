@@ -15,6 +15,7 @@ import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -898,13 +899,25 @@ class IptvRepository(
                 cachedMatches.putIfAbsent(channelId, match)
             }
         }
+        // A no-match is cached under its own guide-set key, never under a
+        // source URL: the positive loader must keep treating "no source matched"
+        // as different from "this source matched". Without it every lineup
+        // query re-ran the name/callsign matcher for every unmatched channel.
+        val negativeKey = negativeMatchKey(normalizedGuideUrls)
+        val cachedNegative = loadCachedMatches(
+            playlistUrl = normalizedPlaylistUrl,
+            epgUrl = negativeKey,
+            playlistChannelIds = channelIds.filterNot { it in cachedMatches }
+        )
 
         val resolvedMatches = resolveMatchesMulti(
             playlistUrl = normalizedPlaylistUrl,
             epgUrls = normalizedGuideUrls,
             snapshots = snapshots,
             playlistChannels = playlist.channels,
-            cachedMatches = cachedMatches
+            cachedMatches = cachedMatches,
+            cachedNegative = cachedNegative,
+            negativeKey = negativeKey
         )
 
         // The program rows were stored under the importer's key
@@ -1022,13 +1035,21 @@ class IptvRepository(
             )
             perSource.forEach { (channelId, match) -> cachedMatches.putIfAbsent(channelId, match) }
         }
+        val negativeKey = negativeMatchKey(guideUrls)
+        val cachedNegative = loadCachedMatches(
+            playlistUrl = playlistUrl,
+            epgUrl = negativeKey,
+            playlistChannelIds = channelIds.filterNot { it in cachedMatches }
+        )
 
         val resolvedMatches = resolveMatchesMulti(
             playlistUrl = playlistUrl,
             epgUrls = guideUrls,
             snapshots = snapshots,
             playlistChannels = playlist.channels,
-            cachedMatches = cachedMatches
+            cachedMatches = cachedMatches,
+            cachedNegative = cachedNegative,
+            negativeKey = negativeKey
         )
         if (resolvedMatches.isEmpty()) return@withContext emptyMap()
 
@@ -1145,6 +1166,24 @@ class IptvRepository(
         guideQueryCache.clear()
     }
 
+    /**
+     * The cache key for "none of [guideUrls] matched this channel".
+     *
+     * It contains the guide URLs, their in-process revisions, and a
+     * process-lifetime nonce. The nonce is what makes a negative row written by
+     * the previous process inert: [GuideRevision] resets when the process does,
+     * so without it an old "no match" could be believed against a guide that
+     * was reimported while the app was closed. The rows themselves stay in the
+     * primary-key table until the next resolution pass prunes old guide sets.
+     */
+    private fun negativeMatchKey(guideUrls: List<String>): String =
+        "no-match:$NEGATIVE_MATCH_NONCE:" +
+            guideUrls
+                .map { it.trim().lowercase(Locale.US) }
+                .distinct()
+                .sorted()
+                .joinToString("|") { "$it#${GuideRevision.of(it)}" }
+
     private suspend fun loadCachedMatches(
         playlistUrl: String,
         epgUrl: String,
@@ -1178,7 +1217,9 @@ class IptvRepository(
         epgUrls: List<String>,
         snapshots: List<GuideSnapshot>,
         playlistChannels: List<IptvChannel>,
-        cachedMatches: Map<String, PlaylistEpgMatchEntity>
+        cachedMatches: Map<String, PlaylistEpgMatchEntity>,
+        cachedNegative: Map<String, PlaylistEpgMatchEntity> = emptyMap(),
+        negativeKey: String? = null
     ): Map<String, ResolvedEpgMatch> {
         val resolved = LinkedHashMap<String, ResolvedEpgMatch>(playlistChannels.size)
         val recordsToSave = ArrayList<PlaylistEpgMatchEntity>()
@@ -1197,6 +1238,17 @@ class IptvRepository(
                 ?.let { key -> cachedSnapshot?.guideById?.get(key) }
 
             val match = if (
+                cached == null &&
+                cachedNegative.containsKey(channel.id)
+            ) {
+                // The same guide set already answered "nothing matches this
+                // channel". The positive cache is a separate lookup by source
+                // URL, so a negative can never mask a source that would match.
+                ResolvedEpgMatch(
+                    epgChannel = null,
+                    matchType = EpgMatchType.NO_MATCH
+                )
+            } else if (
                 cached != null &&
                 cachedSnapshot != null &&
                 (cached.epgChannelId == null || cachedGuideChannel != null)
@@ -1211,13 +1263,23 @@ class IptvRepository(
                     epgUrls = epgUrls,
                     snapshots = snapshots
                 ).also { resolvedMatch ->
-                    if (resolvedMatch.epgUrl != null) {
+                    val epgUrl = resolvedMatch.epgUrl
+                    if (epgUrl != null) {
                         recordsToSave += PlaylistEpgMatchEntity(
                             playlistUrl = playlistUrl,
                             playlistChannelId = channel.id,
-                            epgUrl = resolvedMatch.epgUrl,
+                            epgUrl = epgUrl,
                             epgChannelId = resolvedMatch.epgChannel?.id,
                             matchType = resolvedMatch.matchType.name,
+                            updatedAtUtcMillis = updatedAt
+                        )
+                    } else if (negativeKey != null) {
+                        recordsToSave += PlaylistEpgMatchEntity(
+                            playlistUrl = playlistUrl,
+                            playlistChannelId = channel.id,
+                            epgUrl = negativeKey,
+                            epgChannelId = null,
+                            matchType = EpgMatchType.NO_MATCH.name,
                             updatedAtUtcMillis = updatedAt
                         )
                     }
@@ -1235,6 +1297,9 @@ class IptvRepository(
                 // exactly while the decoder is configuring, so let them wait
                 // for playback to end instead.
                 EpgWriteGate.holdWhilePlaying()
+                if (negativeKey != null) {
+                    dao.deleteStalePlaylistEpgNegativeMatches(playlistUrl, negativeKey)
+                }
                 dao.insertPlaylistEpgMatches(recordsToSave)
             }
         }
@@ -1898,6 +1963,9 @@ class IptvRepository(
         private var sharedInstance: IptvRepository? = null
 
         private const val TAG = "IptvRepository"
+
+        /** See [negativeMatchKey]: one per process, never persisted. */
+        private val NEGATIVE_MATCH_NONCE = UUID.randomUUID().toString()
         private const val CACHE_PAGE_SIZE = 500
         private const val CHANNEL_QUERY_BATCH_SIZE = 400
         private const val PROGRAM_QUERY_BATCH_SIZE = 8

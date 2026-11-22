@@ -88,7 +88,8 @@ import androidx.media3.ui.PlayerView
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
 import coil3.compose.AsyncImage
-import com.kennyb1201.kbstream.ui.components.logoRequest
+import coil3.request.ImageRequest
+import com.kennyb1201.kbstream.ui.components.logoArt
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.notifications.ReminderRules
@@ -290,20 +291,37 @@ internal fun GuideGridView(
     // item and cells are unchanged is what makes a merge cost the channels it
     // carried rather than the whole lineup.
     val previousRows = remember { mutableMapOf<String, GridRowModel>() }
+    // The inputs of the previous cells, per channel. Without these, an unchanged
+    // channel still had to go through GuideRowCellMemo on every merge just to be
+    // told its answer was the same - and on a five-figure lineup the memo cannot
+    // hold every channel, so that call was a full rowCells rebuild for most of
+    // them. Comparing the inputs first lets the unchanged rows skip the memo
+    // entirely; a page merge then pays for the channels it carried.
+    val previousPrograms = remember { mutableMapOf<String, List<GridProgram>>() }
+    val previousWindow = remember { arrayOfNulls<GridWindow>(1) }
     val rows = remember(items, programsByChannel, window) {
         val next = ArrayList<GridRowModel>(items.size)
         items.forEach { item ->
             val channelKey = gridChannelKey(item)
-            // Memoised per channel (dig four §2b): a page answer only changes
-            // the channels it carried, so the rest reuse the cell lists they
-            // already have instead of being rebuilt, allocated and re-hashed for
-            // every channel on the lineup.
-            val cells = GuideRowCellMemo.cells(
-                channelKey = channelKey,
-                programs = programsByChannel[item.channel.id].orEmpty(),
-                window = window,
-            )
+            val programs = programsByChannel[item.channel.id].orEmpty()
             val existing = previousRows[channelKey]
+            // Unchanged inputs reuse the exact cell list the row already has.
+            // Only a channel whose programs or window actually moved reaches
+            // the memo (dig four §2b).
+            val cells = if (
+                existing != null &&
+                existing.item == item &&
+                previousWindow[0] == window &&
+                previousPrograms[channelKey] == programs
+            ) {
+                existing.cells
+            } else {
+                GuideRowCellMemo.cells(
+                    channelKey = channelKey,
+                    programs = programs,
+                    window = window,
+                )
+            }
             next += if (
                 existing != null &&
                 existing.item == item &&
@@ -315,7 +333,13 @@ internal fun GuideGridView(
             }
         }
         previousRows.clear()
-        next.forEach { previousRows[it.channelKey] = it }
+        previousPrograms.clear()
+        next.forEach { row ->
+            previousRows[row.channelKey] = row
+            previousPrograms[row.channelKey] =
+                programsByChannel[row.item.channel.id].orEmpty()
+        }
+        previousWindow[0] = window
         next
     }
 
@@ -859,7 +883,10 @@ internal fun GuideGridView(
             }
             Key.DirectionUp, Key.DirectionDown -> {
                 val direction = if (key == Key.DirectionUp) -1 else 1
-                val target = verticalTarget(rows.map { it.cells }, rowIndex, cell, direction)
+                // Only the rows between here and the landing row are read:
+                // the old `rows.map { it.cells }` allocated a list for every
+                // loaded row on every Up/Down press.
+                val target = verticalTargetAt(rows.size, { rows[it].cells }, rowIndex, cell, direction)
                 if (target != null) {
                     handoffFocus(
                         target.rowIndex,
@@ -1385,6 +1412,12 @@ private fun ChannelCell(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             val logoUrl = item.channel.logoUrl ?: item.epgChannel?.iconUrl
+            // One request per logo, sized to the 20dp the mark is drawn at
+            // inside its 28dp plate. Rebuilding it per recomposition re-ran
+            // Coil's request for every visible row on every focus move, and
+            // no size meant a full-size logo decode for a 20dp mark.
+            val logoContext = LocalContext.current
+            val logoSizePx = with(LocalDensity.current) { 20.dp.roundToPx() }
             Box(
                 // F12b: 28dp, not 34 - the logo and the name line have to fit
                 // 44dp of a 48dp row (F4: the group line that used to sit under
@@ -1398,7 +1431,13 @@ private fun ChannelCell(
             ) {
                 if (!logoUrl.isNullOrBlank()) {
                     AsyncImage(
-                        model = logoRequest(LocalContext.current, logoUrl),
+                        model = remember(logoContext, logoUrl, logoSizePx) {
+                            ImageRequest.Builder(logoContext)
+                                .data(logoUrl)
+                                .logoArt()
+                                .size(logoSizePx, logoSizePx)
+                                .build()
+                        },
                         contentDescription = item.channel.displayName,
                         contentScale = ContentScale.Fit,
                         modifier = Modifier.fillMaxSize().padding(4.dp)

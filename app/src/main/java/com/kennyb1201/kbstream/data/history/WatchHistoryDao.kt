@@ -354,6 +354,11 @@ interface WatchHistoryDao {
     )
     suspend fun getAll(): List<WatchHistoryEntity>
 
+    /** For diagnostics counts: materializing every history row just to size it
+     *  allocated thousands of entities per sync flush. */
+    @Query("SELECT COUNT(*) FROM watch_history")
+    suspend fun count(): Int
+
     /**
      * Every stored row, filters and all: what the one-shot root migration has
      * to see.

@@ -663,7 +663,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     _sections.value = updatedSections
 
                     if (page.items.isNotEmpty()) {
-                        resolveAndPreloadWatched(updatedSections)
+                        // Only the page that just arrived needs resolving; every
+                        // earlier page was resolved when it landed.
+                        resolveAndPreloadWatched(updatedSections, onlyItems = page.items)
                     }
                 }
 
@@ -687,12 +689,18 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private suspend fun resolveAndPreloadWatched(sections: List<StudioSection>) {
+    private suspend fun resolveAndPreloadWatched(
+        sections: List<StudioSection>,
+        /** The rows a page just added. Null means the initial whole-list pass. */
+        onlyItems: List<StudioItem>? = null
+    ) {
         try {
             if (sections.isEmpty()) {
                 _resolvedIds.value = emptyMap()
                 return
             }
+
+            val candidateItems = onlyItems ?: sections.flatMap { it.items }
 
             // The badge preload, UNCAPPED and ahead of the resolution below:
             // this is the raw `tmdb:<n>` flavor the watched pipeline already
@@ -703,7 +711,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             // preloads its whole rail list the same way, and for the same
             // reason: the old tt-only view of the pipeline silently dropped
             // every tmdb-keyed item.
-            val tmdbPairs = sections.flatMap { it.items }
+            val tmdbPairs = candidateItems
                 .mapNotNull { studioItem ->
                     val tmdbId = studioItem.item.id
                     val mediaType = normalizeMediaType(studioItem.mediaType) ?: return@mapNotNull null
@@ -712,18 +720,23 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 .distinct()
             watchedStatusRepository.preload(tmdbPairs)
 
-            val uniqueItems = sections
-                .flatMap { it.items }
+            val resolvedNow = _resolvedIds.value
+            val uniqueItems = candidateItems
                 .mapNotNull { studioItem ->
                     val tmdbId = studioItem.item.id
                     val mediaType = normalizeMediaType(studioItem.mediaType) ?: return@mapNotNull null
                     if (tmdbId <= 0) null else tmdbId to mediaType
                 }
                 .distinct()
+                .filter { (tmdbId, mediaType) -> resolvedNow[lookupKey(tmdbId, mediaType)] == null }
                 .take(300)
 
             if (uniqueItems.isEmpty()) {
-                _resolvedIds.value = emptyMap()
+                // A page of already-resolved rows, or a cached page whose
+                // resolutions are still in hand, must not wipe the map.
+                if (onlyItems == null && resolvedNow.isEmpty()) {
+                    _resolvedIds.value = emptyMap()
+                }
                 return
             }
 
@@ -745,7 +758,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             if (resolved.isEmpty()) {
-                _resolvedIds.value = emptyMap()
+                if (onlyItems == null && resolvedNow.isEmpty()) {
+                    _resolvedIds.value = emptyMap()
+                }
                 return
             }
 
@@ -770,7 +785,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             throw e
         } catch (e: Exception) {
             Log.e("STUDIO_WATCHED", "resolveAndPreloadWatched failed: ${e.message}", e)
-            _resolvedIds.value = emptyMap()
+            // Keep whatever resolutions are already in hand; a failed page
+            // must not strip badges from rows that loaded fine.
         }
     }
 

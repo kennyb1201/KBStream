@@ -197,9 +197,11 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
 
     /**
      * Pings every installed add-on's manifest URL and records whether it
-     * responded with a usable Stremio manifest. Runs sequentially with the
-     * same timeouts as a normal manifest fetch, so broken/offline add-ons
-     * show a badge in the list instead of silently returning empty rails.
+     * responded with a usable Stremio manifest. The fetches run in PARALLEL,
+     * like [refreshAllManifests]: this button exists to tell the viewer which
+     * add-on is dead, and waiting on each dead add-on's timeout in turn made a
+     * six-add-on list take a minute to say so. A broken/offline add-on still
+     * shows a badge in the list instead of silently returning empty rails.
      */
     fun checkHealth() {
         if (_checkingHealth.value || _refreshing.value) return
@@ -209,16 +211,23 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             _checkingHealth.value = true
-            val results = mutableMapOf<String, AddonHealth>()
             val now = System.currentTimeMillis()
-
-            addons.forEach { addon ->
-                val healthy = runCatchingCancellable {
-                    val manifest = repository.fetchManifest(addon.manifestUrl)
-                    manifest.resources.isNotEmpty() || manifest.catalogs.isNotEmpty()
-                }.getOrDefault(false)
-                results[addon.id] = AddonHealth(healthy = healthy, checkedAt = now)
-            }
+            // Parallel, so health-check latency is the slowest add-on rather
+            // than the sum of every add-on's timeout. Off the main thread for
+            // the same reason as refreshAllManifests: a slow manifest must not
+            // hold the UI coroutine while the list waits for its badges.
+            val results =
+                coroutineScope {
+                    addons.map { addon ->
+                        async(Dispatchers.IO) {
+                            val healthy = runCatchingCancellable {
+                                val manifest = repository.fetchManifest(addon.manifestUrl)
+                                manifest.resources.isNotEmpty() || manifest.catalogs.isNotEmpty()
+                            }.getOrDefault(false)
+                            addon.id to AddonHealth(healthy = healthy, checkedAt = now)
+                        }
+                    }.awaitAll().toMap()
+                }
 
             _health.value = results
             _checkingHealth.value = false

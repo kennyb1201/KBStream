@@ -131,7 +131,7 @@ class DetailVerticalAuditContractTest {
         assertTrue(
             "the top landing is still the HEADER arm's own fallback, so this fix did " +
                 "not remove the only landing that arm has",
-            detail.contains("DetailRow.HEADER -> focusTopOfPage()")
+            detail.contains("DetailRow.HEADER -> focusTopOfPage(\"chain\")")
         )
     }
 
@@ -202,7 +202,7 @@ class DetailVerticalAuditContractTest {
             detail.contains(
                 "onUp = { startFocusMove(DetailRow.OVERVIEW, DetailFocusDirection.UP, " +
                     "presence)"
-            ) && detail.contains("|| focusTopOfPage()")
+            ) && detail.contains("|| focusTopOfPage(\"toggle-up\")")
         )
         assertEquals(
             "T6: the page's eleven content rows are untouched - the strip is the " +

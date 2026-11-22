@@ -170,10 +170,14 @@ fun KBCard(
         glowArmed = true
     }
 
-    Card(
-        onClick = onClick,
-        shape = CardDefaults.shape(shape = shape),
-        colors = CardDefaults.colors(
+    // These four factories allocate a fresh object per call. KBCard recomposes
+    // on every focus gain/loss and every glow arm, so a D-pad walk rebuilt them
+    // for two cards per step. Remember each against the values it actually
+    // reads - the glow still changes when focus settles, but focus alone no
+    // longer allocates four new parameter objects.
+    val cardShape = remember(shape) { CardDefaults.shape(shape = shape) }
+    val cardColors = remember(KBSurface, KBSurfaceRaised, KBTextHi) {
+        CardDefaults.colors(
             containerColor = KBSurface,
             contentColor = KBTextHi,
             focusedContainerColor = KBSurfaceRaised,
@@ -183,22 +187,28 @@ fun KBCard(
             // left accent-on-accent cards (a chip already tinted accent)
             // unreadable while selected. Content stays bright in both states.
             focusedContentColor = KBTextHi
-        ),
+        )
+    }
+    val cardScale = remember(gliding, focusedScale) {
         // Focus grows the tile and lifts it; press pulls it back toward the
         // plate. Every poster, tile and button that goes through KBCard gets
-        // the same two beats for free — see the KBFocus* scale in the theme.
-        scale = CardDefaults.scale(
+        // the same two beats for free - see the KBFocus* scale in the theme.
+        CardDefaults.scale(
             scale = 1f,
             focusedScale = if (gliding) KBFocusNone else focusedScale,
             pressedScale = KBFocusPressed
-        ),
-        border = CardDefaults.border(
+        )
+    }
+    val cardBorder = remember(shape, KBAccent) {
+        CardDefaults.border(
             focusedBorder = Border(
                 border = BorderStroke(2.dp, KBAccent),
                 shape = shape
             )
-        ),
-        glow = CardDefaults.glow(
+        )
+    }
+    val cardGlow = remember(glowArmed, gliding, KBAccent) {
+        CardDefaults.glow(
             focusedGlow = Glow(
                 elevationColor = KBAccent,
                 // Zero elevation draws no shadow at all, which is the whole
@@ -207,7 +217,16 @@ fun KBCard(
                 // [FOCUS_GLOW_SETTLE_MS]).
                 elevation = if (glowArmed && !gliding) KBFocusGlow else 0.dp
             )
-        ),
+        )
+    }
+
+    Card(
+        onClick = onClick,
+        shape = cardShape,
+        colors = cardColors,
+        scale = cardScale,
+        border = cardBorder,
+        glow = cardGlow,
         // onPreviewKeyEvent runs on the way DOWN the tree, before Card's own
         // internal clickable sees the event, so we get first refusal on it.
         modifier = modifier

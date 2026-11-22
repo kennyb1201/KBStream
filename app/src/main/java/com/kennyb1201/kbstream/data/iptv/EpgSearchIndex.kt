@@ -173,8 +173,20 @@ object EpgSearchIndex {
             "CREATE TRIGGER IF NOT EXISTS ${TABLE}_ad AFTER DELETE ON `$CONTENT_TABLE` " +
                 "BEGIN DELETE FROM `$TABLE` WHERE rowid = old.id; END"
         )
+        // Recreated rather than IF NOT EXISTS: the guard is new, and an
+        // installed trigger from an older build would otherwise keep the
+        // unconditional DELETE+INSERT forever.
+        db.execSQL("DROP TRIGGER IF EXISTS ${TABLE}_au")
+        // The import promotion's heaviest write is a plain `UPDATE ... SET
+        // sourceId` over every staged program (see IptvDao.swapStagedGuideIntoLive).
+        // Title and description do not change there, so re-tokenizing up to 400
+        // characters of description and rewriting the FTS inverted index per
+        // program was pure duplicate work inside the swap transaction. The
+        // trigger now fires only when a column the index actually holds changes.
+        // `IS NOT` (not `!=`) so NULL-to-value and value-to-NULL both index.
         db.execSQL(
-            "CREATE TRIGGER IF NOT EXISTS ${TABLE}_au AFTER UPDATE ON `$CONTENT_TABLE` " +
+            "CREATE TRIGGER ${TABLE}_au AFTER UPDATE ON `$CONTENT_TABLE` " +
+                "WHEN old.title IS NOT new.title OR old.description IS NOT new.description " +
                 "BEGIN DELETE FROM `$TABLE` WHERE rowid = old.id; " +
                 "INSERT INTO `$TABLE`(rowid, title, description) " +
                 "VALUES (new.id, new.title, new.description); END"

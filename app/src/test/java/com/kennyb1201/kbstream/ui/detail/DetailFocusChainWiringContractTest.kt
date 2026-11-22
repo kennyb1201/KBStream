@@ -202,7 +202,7 @@ class DetailFocusChainWiringContractTest {
             "and its answer is kept rather than returned blind: a move that " +
                 "landed nowhere is what the page has to notice (see the fall-through " +
                 "to the default search below)",
-            detail.contains("val landed = if (target == DetailRow.MEDIA") &&
+            detail.contains("val landing = if (target == DetailRow.MEDIA") &&
                 detail.contains("askRow(target, fromColumn, from, direction, settledRows)") &&
                 detail.contains(
                     "askRow(target, fromColumn, from, direction, presence)"
@@ -253,7 +253,9 @@ class DetailFocusChainWiringContractTest {
             detail.contains(
                 "Log.w(TAG, \"focusRow: could not focus \$target or any row beyond it\")"
             ) &&
-                detail.contains("focusRow(nextTarget, fromColumn, target, direction, presence)")
+                detail.contains(
+                    "focusRow(nextTarget, fromColumn, target, direction, presence, path)"
+                )
         )
         assertTrue(
             "but the walk's end is NOT a consumed press any more: the row the " +
@@ -471,8 +473,8 @@ class DetailFocusChainWiringContractTest {
             "which is what lets the caller's fallback to the header actually run: " +
                 "with an always-true left side it never did",
             detail.contains(
-                "DetailRow.EPISODES -> revealAndFocusEpisodes(from) || " +
-                    "focusByGeometry(DetailFocusDirection.DOWN)"
+                "DetailRow.EPISODES -> { if (revealAndFocusEpisodes(from)) { true } " +
+                    "else { val moved = focusByGeometry(DetailFocusDirection.DOWN)"
             )
         )
     }

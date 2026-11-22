@@ -202,14 +202,15 @@ internal object DetailRatingEnrichment {
             }
 
             if (lastPage > 2) {
-                // Hard safety cap (server totalPages minus page 1) so a
-                // pathological response can never spin the loop; 30 pages
-                // = 600 reviews is far beyond any title's real list.
-                val maxPage = minOf(lastPage, 31)
+                // The rail can show 60 reviews (20 per page), so page 3 is the
+                // last one that can ever reach the screen. Fetching pages
+                // 3..31 spent up to 29 extra TMDB requests on a title browsed
+                // for a few seconds, for reviews the `take(60)` discards.
+                val maxPage = minOf(lastPage, REVIEW_RAIL_MAX_PAGE)
                 // Fetched in bounded parallel rather than one page at a time:
                 // the pages are independent reads, and serializing them made a
-                // cold open of a heavily-reviewed title wait on up to 29 round
-                // trips before the row could settle.
+                // cold open of a heavily-reviewed title wait on one round trip
+                // per page before the row could settle.
                 val pages = coroutineScope {
                     (3..maxPage).map { page ->
                         async {
@@ -232,5 +233,10 @@ internal object DetailRatingEnrichment {
             // allows.
             vm.setAllReviews((bundled + extras).distinctBy { it.id })
         }
+    }
+
+    private companion object {
+        /** Page 1 is bundled with the detail; pages 2 and 3 are the 60 the rail draws. */
+        const val REVIEW_RAIL_MAX_PAGE = 3
     }
 }

@@ -246,10 +246,8 @@ class DetailSeasonChangeDownContractTest {
         assertTrue(
             "and that handoff still goes through it",
             detail.contains("if (focusSeasonOrEpisode()) return true") &&
-                detail.contains(
-                    "DetailRow.EPISODES -> revealAndFocusEpisodes(from) || " +
-                        "focusByGeometry(DetailFocusDirection.DOWN)"
-                )
+                detail.contains("DetailRow.EPISODES -> { if (revealAndFocusEpisodes(from))") &&
+                    detail.contains("focusByGeometry(DetailFocusDirection.DOWN)")
         )
         assertTrue(
             "no second entry path was added for it either - the new function is only the " +

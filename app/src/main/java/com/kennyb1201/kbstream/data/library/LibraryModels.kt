@@ -1324,6 +1324,24 @@ object LocalLibraryStore {
     }
 
     /**
+     * Every local list's items, from ONE parse of the personal-lists blob.
+     *
+     * The Library's flat local set used to call [listItems] once per list, so a
+     * profile with ten lists parsed the same blob ten times (and the blob holds
+     * every list). The result is the same rows in the same list order.
+     */
+    fun allListItems(context: Context): List<LibraryItem> =
+        readLists(context).flatMap { list ->
+            list.items.map {
+                it.copy(
+                    source = LibrarySource.LOCAL_LIST,
+                    listId = list.id,
+                    listName = list.name
+                )
+            }
+        }
+
+    /**
      * Adds a whole list's worth of titles in ONE write, and answers how many
      * were new.
      *

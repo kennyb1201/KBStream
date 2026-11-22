@@ -137,6 +137,7 @@ internal class FanartArtRepository private constructor(context: Context) {
             is FanartResult.Found -> {
                 val at = System.currentTimeMillis()
                 memory[key] = at to result.art
+                trimOldest(memory, FANART_MEMORY_MAX_ENTRIES) { it.first }
                 failures.remove(key)
                 misses.remove(key)
                 runCatching {
@@ -156,6 +157,7 @@ internal class FanartArtRepository private constructor(context: Context) {
                 // exists to avoid.
                 val at = System.currentTimeMillis()
                 misses[key] = at
+                trimOldest(misses, FANART_MEMORY_MAX_ENTRIES * 4) { it }
                 runCatching {
                     dao.upsert(
                         TmdbJsonCacheEntity(
@@ -171,6 +173,7 @@ internal class FanartArtRepository private constructor(context: Context) {
                 // Never recorded as an answer - only as a reason not to hammer
                 // the service again for an hour.
                 failures[key] = System.currentTimeMillis()
+                trimOldest(failures, FANART_MEMORY_MAX_ENTRIES * 4) { it }
                 null
             }
         }
@@ -178,6 +181,28 @@ internal class FanartArtRepository private constructor(context: Context) {
         mutex.withLock { inFlight.remove(key) }
         deferred.complete(answer)
         return answer
+    }
+
+    /**
+     * Drops the oldest entries when a cache grows past [max].
+     *
+     * The maps used to be bounded only by how many titles the viewer opened,
+     * which never falls - a browsing session could retain every fanart bundle it
+     * had ever seen. The drain is deliberately chunked (a quarter of the cap at
+     * a time, not one row) so the next check does not run immediately.
+     */
+    private fun <T> trimOldest(
+        map: ConcurrentHashMap<String, T>,
+        max: Int,
+        ageOf: (T) -> Long
+    ) {
+        val size = map.size
+        if (size <= max) return
+        val drop = (size - max).coerceAtLeast(max / 4)
+        map.entries
+            .sortedBy { ageOf(it.value) }
+            .take(drop)
+            .forEach { map.remove(it.key) }
     }
 
     /**

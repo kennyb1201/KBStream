@@ -290,8 +290,26 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
      * and the watched preload iterate this, so the crew rail badges exactly like
      * the cast rails do.
      */
-    private fun drawnCredits(person: TmdbPersonDetail?): List<TmdbPersonCredit> =
-        sortedCredits(person) + sortedCrewCredits(person)
+    /**
+     * The cast+crew rail order, sorted once per person payload.
+     *
+     * Both watched-key combines ask for this list, and each also asks inside
+     * [siblingOwnedMarkerIdsFor] - four full sorts of a prolific actor's
+     * filmography per emission before this memo. The payload is immutable and
+     * replaced whole when it changes, so identity is the right key.
+     */
+    @Synchronized
+    private fun drawnCredits(person: TmdbPersonDetail?): List<TmdbPersonCredit> {
+        if (person == null) return emptyList()
+        if (person === drawnCreditsSource) return drawnCreditsCache
+        return (sortedCredits(person) + sortedCrewCredits(person)).also { credits ->
+            drawnCreditsSource = person
+            drawnCreditsCache = credits
+        }
+    }
+
+    private var drawnCreditsSource: TmdbPersonDetail? = null
+    private var drawnCreditsCache: List<TmdbPersonCredit> = emptyList()
 
     /**
      * The item id a card records in a return target, and the role half of the

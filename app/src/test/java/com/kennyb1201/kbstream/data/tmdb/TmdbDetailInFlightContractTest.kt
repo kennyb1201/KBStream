@@ -46,6 +46,31 @@ class TmdbDetailInFlightContractTest {
             return file.readText()
         }
 
+    @Test
+    fun `a fetched detail seeds the hero with the images it already carries`() {
+        assertTrue(
+            "the hero's /images answer is already in Detail's append",
+            repository.contains(
+                "TmdbHeroArtworkRepository.seedFromDetail(normalizedType, tmdbId, it.images)"
+            )
+        )
+    }
+
+    @Test
+    fun `a full enriched answer is also filed under its TMDB key`() {
+        val src = repository
+        assertTrue(
+            "only a FULL answer may take the TMDB key - a rail projection " +
+                "cannot answer a full caller",
+            src.contains("val tmdbAlias = if (full && result.id > 0) {") &&
+                src.contains("detailCache[tmdbAlias] = now to result")
+        )
+        assertTrue(
+            "and the disk alias survives the memory entry being evicted",
+            src.contains("cacheJson(detailDiskKey(tmdbAlias), fullJson, now)")
+        )
+    }
+
     /** The body of getDetailByTmdbId, up to the next function declaration. */
     private fun detailBody(): String {
         val src = repository
@@ -126,11 +151,11 @@ class TmdbDetailInFlightContractTest {
         val body = enrichedBody()
         assertTrue(
             "the map must be consulted before the network call",
-            body.contains("enrichedFetchInFlight[key]?.let { pending -> return pending.await() }")
+            body.contains("enrichedFetchInFlight[fetchKey]?.let { pending -> return pending.await() }")
         )
         assertTrue(
             "the check-then-register window must be closed with putIfAbsent",
-            body.contains("enrichedFetchInFlight.putIfAbsent(key, deferred)")
+            body.contains("enrichedFetchInFlight.putIfAbsent(fetchKey, deferred)")
         )
         assertTrue(
             "the shared deferred must be completed with the fetch result",
@@ -138,12 +163,32 @@ class TmdbDetailInFlightContractTest {
         )
         assertTrue(
             "the in-flight marker must be dropped once the fetch settles",
-            body.contains("enrichedFetchInFlight.remove(key)")
+            body.contains("enrichedFetchInFlight.remove(fetchKey)")
         )
         assertFalse(
             "the old shape fired an unconditional request - if that call site is " +
                 "back, so is the duplicate fetch",
             body.contains("val result = runCatchingCancellable { fetchEnrichedMeta(")
+        )
+        assertTrue(
+            "a slim fetch and a full fetch must not share one in-flight answer",
+            body.contains("val fetchKey = if (full) \"\$key|full\" else \"\$key|slim\"")
+        )
+    }
+
+    @Test
+    fun `a slim fetch never enters the full-detail cache`() {
+        val body = enrichedBody()
+        assertTrue(
+            "only a full response may answer a later full caller",
+            body.contains("if (full) detailCache[key] = now to result")
+        )
+        assertTrue(
+            "the slimmer append set reaches the wire",
+            repository.contains("api.getTv(tmdbId, apiKey, tvAppend)") &&
+                repository.contains("api.getMovie(tmdbId, apiKey, movieAppend)") &&
+                repository.contains("if (full) TmdbAppend.TV_FULL else TmdbAppend.TV_SLIM") &&
+                repository.contains("if (full) TmdbAppend.MOVIE_FULL else TmdbAppend.MOVIE_SLIM")
         )
     }
 

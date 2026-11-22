@@ -445,6 +445,103 @@ object StreamRanker {
     )
 
     /**
+     * One stream and every rank fact that does NOT depend on which add-on it
+     * came from. [debridByLink] is the URL/text half of the debrid tier; the
+     * add-on half is supplied by [rankPrepared].
+     *
+     * The picker ranks the merged hand and then each add-on's tab. Those tabs
+     * contain the same Stream objects, so preparing once and sorting each tab
+     * from this list removes the second full text pass the old two-call shape
+     * paid for.
+     */
+    internal class Prepared internal constructor(
+        val stream: Stream,
+        val text: String,
+        val debridByLink: Boolean,
+        val episodeRank: Int,
+        val playable: Boolean,
+        val knownBad: Boolean,
+        val instant: Boolean,
+        val score: Int
+    )
+
+    /**
+     * Prepares the per-stream facts once, for one or more [rankPrepared] calls.
+     * Filters exactly as [rank] does; a stream this drops is absent from every
+     * prepared result.
+     */
+    internal fun prepare(
+        streams: List<Stream>,
+        episode: Pair<Int, Int>? = null,
+        dolbyVisionUseful: Boolean = true,
+        runtimeMinutes: Int? = null
+    ): List<Prepared> =
+        streams
+            .filter { stream -> isPlayable(stream) || !stream.infoHash.isNullOrBlank() }
+            .map { stream ->
+                val text = searchableText(stream)
+                Prepared(
+                    stream = stream,
+                    text = text,
+                    debridByLink = isDebridServed(stream, text),
+                    episodeRank = episodeRank(stream, episode),
+                    playable = isPlayable(stream),
+                    knownBad = isKnownBad(text),
+                    instant = INSTANT_HINT.containsMatchIn(text),
+                    score = score(stream, text, dolbyVisionUseful, runtimeMinutes)
+                )
+            }
+
+    /**
+     * Orders an already-[prepared] list best-first. Same comparator as [rank];
+     * only the add-on half of the debrid tier is evaluated here.
+     */
+    internal fun rankPrepared(
+        prepared: List<Prepared>,
+        addonOf: (Stream) -> String? = { null },
+        debridAddons: Set<String> = emptySet()
+    ): List<Stream> =
+        prepared
+            .map { item ->
+                Candidate(
+                    stream = item.stream,
+                    text = item.text,
+                    debridServed = item.debridByLink ||
+                        isDebridBackedByAddon(addonOf(item.stream), debridAddons),
+                    episodeRank = item.episodeRank,
+                    playable = item.playable,
+                    knownBad = item.knownBad,
+                    instant = item.instant,
+                    score = item.score
+                )
+            }
+            .sortedWith(rankOrder)
+            .map { it.stream }
+
+    private val rankOrder = compareByDescending<Candidate> { if (it.playable) 1 else 0 }
+        // Known-bad copies sink as a class, above every question of
+        // quality or availability - the only way a cached CAM stays
+        // under an honest 480p, which no score bonus can promise.
+        .thenBy { if (it.knownBad) 1 else 0 }
+        // The episode the request is for, then a source that says
+        // nothing about the episode, then one that names another.
+        // Where the known-bad tier keeps a bad copy of the right
+        // thing out of the head, this keeps the wrong thing out of
+        // it - content before labels, the same argument.
+        .thenBy { it.episodeRank }
+        // Served by the debrid service the viewer pays for. Its own
+        // tier, and above availability, because it is a fact about
+        // the link rather than a claim in a title: a scraper addon
+        // can call a hoster link instant, but it cannot put someone
+        // else's domain in the URL it hands over (see
+        // [isDebridServed]).
+        .thenByDescending { if (it.debridServed) 1 else 0 }
+        // Availability, because it is what the sorted addons sort on
+        // first and what the viewer's configuration asked for.
+        .thenByDescending { if (it.instant) 1 else 0 }
+        .thenByDescending { it.score }
+
+    /**
      * Orders a fetched list best-first, for the picker and for auto-play.
      *
      * [episode] is the (season, episode) the request was for, when it names
@@ -472,58 +569,11 @@ object StreamRanker {
         // every entry is judged on its URL and text alone, exactly as before.
         debridAddons: Set<String> = emptySet()
     ): List<Stream> =
-        streams
-            .filter { stream -> isPlayable(stream) || !stream.infoHash.isNullOrBlank() }
-            // The text every rule reads, whether the debrid service the viewer
-            // pays for is serving the link (by URL, by tag, or by the addon it
-            // came from), and what the source itself says about the episode, all
-            // worked out once per stream.
-            .map { stream ->
-                val text = searchableText(stream)
-                Candidate(
-                    stream = stream,
-                    text = text,
-                    debridServed = isDebridServed(stream, text) ||
-                        isDebridBackedByAddon(addonOf(stream), debridAddons),
-                    episodeRank = episodeRank(stream, episode),
-                    playable = isPlayable(stream),
-                    knownBad = isKnownBad(text),
-                    instant = INSTANT_HINT.containsMatchIn(text),
-                    score = score(stream, text, dolbyVisionUseful, runtimeMinutes)
-                )
-            }
-            // Playability is its own tier, not a score bonus: no combination of
-            // quality labels may lift an entry this app cannot open over one it
-            // can. Kotlin's sort is stable, so within a tier the addon's own
-            // order is kept for equal scores - and that is the whole contract
-            // for an addon that already sorted and filtered its own results
-            // (AIOStreams with a regex + SEL config): the ranker only speaks
-            // where it has something to say.
-            .sortedWith(
-                compareByDescending<Candidate> { if (it.playable) 1 else 0 }
-                    // Known-bad copies sink as a class, above every question of
-                    // quality or availability - the only way a cached CAM stays
-                    // under an honest 480p, which no score bonus can promise.
-                    .thenBy { if (it.knownBad) 1 else 0 }
-                    // The episode the request is for, then a source that says
-                    // nothing about the episode, then one that names another.
-                    // Where the known-bad tier keeps a bad copy of the right
-                    // thing out of the head, this keeps the wrong thing out of
-                    // it - content before labels, the same argument.
-                    .thenBy { it.episodeRank }
-                    // Served by the debrid service the viewer pays for. Its own
-                    // tier, and above availability, because it is a fact about
-                    // the link rather than a claim in a title: a scraper addon
-                    // can call a hoster link instant, but it cannot put someone
-                    // else's domain in the URL it hands over (see
-                    // [isDebridServed]).
-                    .thenByDescending { if (it.debridServed) 1 else 0 }
-                    // Availability, because it is what the sorted addons sort on
-                    // first and what the viewer's configuration asked for.
-                    .thenByDescending { if (it.instant) 1 else 0 }
-                    .thenByDescending { it.score }
-            )
-            .map { it.stream }
+        rankPrepared(
+            prepared = prepare(streams, episode, dolbyVisionUseful, runtimeMinutes),
+            addonOf = addonOf,
+            debridAddons = debridAddons
+        )
 
     /**
      * One line saying why [rank] placed a stream where it did: the tiers it

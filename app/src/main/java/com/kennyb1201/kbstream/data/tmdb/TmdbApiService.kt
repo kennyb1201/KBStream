@@ -4,6 +4,24 @@ import retrofit2.http.GET
 import retrofit2.http.Path
 import retrofit2.http.Query
 
+/**
+ * The two detail projections' appended blocks.
+ *
+ * [FULL] is the Detail screen's payload. [SLIM] is what a rail card, badge,
+ * next-episode walk or playback target actually reads: no credits, videos,
+ * recommendations, reviews or keywords. `images`, `release_dates` and
+ * `content_ratings` still have to be there - the card art helpers and the Kids
+ * Mode ceiling read them through helpers rather than fields.
+ */
+internal object TmdbAppend {
+    const val MOVIE_FULL =
+        "release_dates,credits,videos,recommendations,reviews,keywords,images,awards"
+    const val MOVIE_SLIM = "release_dates,images"
+    const val TV_FULL =
+        "content_ratings,credits,videos,recommendations,reviews,keywords,images,awards"
+    const val TV_SLIM = "content_ratings,images"
+}
+
 interface TmdbApiService {
     @GET("find/{externalId}")
     suspend fun find(
@@ -35,7 +53,7 @@ interface TmdbApiService {
     suspend fun getMovie(
         @Path("id") id: Int,
         @Query("api_key") apiKey: String,
-        @Query("append_to_response") append: String = "release_dates,credits,videos,recommendations,reviews,keywords,images,awards",
+        @Query("append_to_response") append: String = TmdbAppend.MOVIE_FULL,
         @Query("include_image_language") imageLanguage: String = "en,null"
     ): TmdbDetail
 
@@ -44,7 +62,7 @@ interface TmdbApiService {
     suspend fun getTv(
         @Path("id") id: Int,
         @Query("api_key") apiKey: String,
-        @Query("append_to_response") append: String = "content_ratings,credits,videos,recommendations,reviews,keywords,images,awards",
+        @Query("append_to_response") append: String = TmdbAppend.TV_FULL,
         @Query("include_image_language") imageLanguage: String = "en,null"
     ): TmdbDetail
 

@@ -134,7 +134,7 @@ class DetailTabsWiringContractTest {
             "and the strip itself is a chain row the focus can land on - from a " +
                 "rail's UP and from the genre chips' DOWN",
             screen.contains("suspend fun focusTabStrip") &&
-                screen.contains("DetailRow.TABS -> focusTabStrip()")
+                screen.contains("DetailRow.TABS -> { if (focusTabStrip())")
         )
     }
 

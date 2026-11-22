@@ -465,7 +465,7 @@ fun HomeScreenMobile(
         val cwFilterLines = remember(cwFilterPass) {
             cwFilterPass.map { (_, decision) -> decision.line }
         }
-        SideEffect { CwFilterTrace.recordAll(cwFilterLines) }
+        LaunchedEffect(cwFilterLines) { CwFilterTrace.recordAll(cwFilterLines) }
         val upcomingRaw by viewModel.upcomingSchedule.collectAsStateWithLifecycle()
         // The Upcoming rail's schedule is its own flow - the filter on upNext
         // does not reach it - so a hidden show's next episode used to surface

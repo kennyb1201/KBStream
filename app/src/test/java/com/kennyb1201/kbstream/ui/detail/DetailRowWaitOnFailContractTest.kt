@@ -102,10 +102,12 @@ class DetailRowWaitOnFailContractTest {
             wait.count("askRow(") == 1 && wait.count("askMediaStrip(") == 1
         )
         assertTrue(
-            "a retry that lands ends the move with that landing",
-            wait.contains("if (retried) {") &&
-                wait.contains("tracedVia = \"chain\"") &&
-                wait.contains("tracedLanded = true") &&
+            "a retry that lands ends the move with that landing, and its own " +
+                "observed/via result",
+            wait.contains("if (retried.landed) return true") &&
+                wait.contains("tracedVia = retried.via.name.lowercase()") &&
+                wait.contains("tracedLanded = retried.landed") &&
+                wait.contains("tracedVerified = retried.verified") &&
                 wait.contains("return true")
         )
     }
@@ -117,7 +119,7 @@ class DetailRowWaitOnFailContractTest {
         assertTrue("the wait exists", waitAt > 0)
         assertTrue(
             "F1: it runs after the landing it rescues",
-            move.indexOf("focusRow(target, fromColumn, from, direction, presence)") < waitAt
+            move.indexOf("askRow(target, fromColumn, from, direction, presence)") < waitAt
         )
         assertTrue(
             "and before the fall-through that used to be the end of a loading press",
@@ -151,8 +153,8 @@ class DetailRowWaitOnFailContractTest {
 
     @Test
     fun `the retry uses the same landing shape as the first ask`() {
-        val firstAsk = move.substringAfter("val landed =")
-            .substringBefore("tracedVia = \"chain\"")
+        val firstAsk = move.substringAfter("val landing =")
+            .substringBefore("tracedVia = landing.via.name.lowercase()")
         val wait = move.slice(
             "if (rowsStillArriving() || DetailFocusChain.exists(target, settledRows)) {",
             "val secondAsk ="
@@ -185,11 +187,13 @@ class DetailRowWaitOnFailContractTest {
                 move.contains("tracedWaited = waited > 0")
         )
         assertTrue(
-            "the line appends both, leaving every existing field where the paste " +
-                "expects it",
+            "the line appends both, and names the row that was actually observed",
             move.contains(
                 "\"landed=\$tracedLanded verified=\$tracedVerified via=\$tracedVia \""
             ) &&
+                move.contains(
+                    "\"observed=\${tracedObserved?.name ?: \"none\"} \""
+                ) &&
                 move.contains("\"loading=\$tracedLoading waited=\$tracedWaited\"") &&
                 move.contains("\"detail move \$from \$direction -> ")
         )

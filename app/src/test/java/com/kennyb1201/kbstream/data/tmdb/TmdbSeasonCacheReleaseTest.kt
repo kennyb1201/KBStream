@@ -78,7 +78,7 @@ class TmdbSeasonCacheReleaseTest {
             "the entry cap is what keeps a surviving cache from growing past " +
                 "what browsing already allowed it",
             repository.contains(
-                "evictOldest(seasonEpisodesCache, { it.first }, MAX_SEASON_ENTRIES)"
+                "pruneCache(seasonEpisodesCache, MAX_SEASON_ENTRIES) { it.first }"
             )
         )
     }

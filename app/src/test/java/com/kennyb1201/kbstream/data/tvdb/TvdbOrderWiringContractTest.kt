@@ -102,6 +102,24 @@ class TvdbOrderWiringContractTest {
         )
     }
 
+    @Test
+    fun `the TVDB id is resolved once per detail instance`() {
+        assertEquals(
+            "setup and a later pick must share one positive answer",
+            2,
+            detailVm.split("val tvdbId = resolveTvdbIdOnce(tmdbId)").size - 1
+        )
+        assertTrue(
+            "only a positive id is kept, so an outage is retried",
+            detailVm.contains("private var resolvedTvdbId: Int? = null") &&
+                detailVm.contains("if (id != null) resolvedTvdbId = id")
+        )
+        assertTrue(
+            "concurrent callers wait on the same lookup",
+            detailVm.contains("tvdbIdMutex.withLock")
+        )
+    }
+
     // ── Laziness / fail-soft ─────────────────────────────────────────────
 
     @Test

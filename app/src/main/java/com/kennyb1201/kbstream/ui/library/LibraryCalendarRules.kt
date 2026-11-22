@@ -668,11 +668,19 @@ internal fun calendarEpisodesFor(
 internal fun calendarSortedDays(
     days: Map<LocalDate, Collection<CalendarEpisode>>
 ): Map<LocalDate, List<CalendarEpisode>> =
-    days.mapValues { (_, episodes) ->
-        episodes
-            .distinctBy { calendarWatchedKey(it.showId, it.season, it.episode) }
-            .sortedWith(calendarEpisodeOrder)
-    }
+    days.mapValues { (_, episodes) -> calendarSortedDay(episodes) }
+
+/**
+ * One day's rows, de-duplicated and ordered. Split out so an incremental
+ * publish can re-sort only the days a landed show touched instead of walking
+ * every day accumulated so far.
+ */
+internal fun calendarSortedDay(
+    episodes: Collection<CalendarEpisode>
+): List<CalendarEpisode> =
+    episodes
+        .distinctBy { calendarWatchedKey(it.showId, it.season, it.episode) }
+        .sortedWith(calendarEpisodeOrder)
 
 /**
  * Every episode of [shows] that lands in [month], indexed by day.

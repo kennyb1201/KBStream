@@ -632,17 +632,69 @@ fun GuideScreen(
     }
 }
     val hiddenChannelIds by viewModel.hiddenChannelIds.collectAsStateWithLifecycle()
-    val groups = remember(unhiddenChannels, favorites, recentChannelKeys, groupOrder) {
+
+    // The membership of every group, built in ONE pass over the lineup. The
+    // sidebar used to filter all 15,490 channels once per group just to count
+    // them, and groupChannels() did the same for the selected group and for
+    // every group the zap lineup publishes. A channel belongs to one playlist
+    // group, so the map holds roughly two references per channel (All + its
+    // group), not groups x channels.
+    val channelsByGroup = remember(unhiddenChannels, favorites, recentChannelKeys) {
+        val favoritesList = ArrayList<IptvChannelWithEpg>()
+        val byKey = HashMap<String, IptvChannelWithEpg>(unhiddenChannels.size * 2)
+        val byPlaylistGroup = LinkedHashMap<String, MutableList<IptvChannelWithEpg>>()
+        // The favorite flag is copied in ONCE here, when the lineup or the
+        // favorites change - not per row on every recomposition. The list row
+        // used to call item.copy() for every visible channel each time the
+        // screen recomposed, which defeats Compose's row skipping outright.
+        val all = ArrayList<IptvChannelWithEpg>(unhiddenChannels.size)
+        unhiddenChannels.forEach { item ->
+            val favorite = favoriteKey(item) in favorites
+            val shown = if (item.isFavorite == favorite) item else item.copy(isFavorite = favorite)
+            all.add(shown)
+            byKey[channelKey(shown)] = shown
+            if (favorite) favoritesList.add(shown)
+            val label = shown.channel.groupTitle?.trim().orEmpty()
+            if (label.isNotEmpty()) {
+                byPlaylistGroup.getOrPut(label) { ArrayList() }.add(shown)
+            }
+        }
+        val grouped = HashMap<String, List<IptvChannelWithEpg>>(
+            byPlaylistGroup.size + 3
+        )
+        grouped[GRID_GROUP_ALL] = all
+        grouped[GRID_GROUP_FAVORITES] = favoritesList
+        // Newest-first over the persisted play order; keys that no longer
+        // resolve (channel removed/hidden) drop out.
+        grouped[GRID_GROUP_RECENT] = recentChannelKeys.mapNotNull(byKey::get)
+        // A playlist group named "All"/"Recent"/"Favorites" is shadowed by
+        // the pinned group, exactly as groupChannels() treated it before.
+        byPlaylistGroup.forEach { (label, items) ->
+            if (label !in GRID_PINNED_GROUPS) grouped[label] = items
+        }
+        grouped
+    }
+
+    /** The visible channels of one group, exactly as the list below renders them. */
+    fun groupChannels(label: String): List<IptvChannelWithEpg> =
+        channelsByGroup[label].orEmpty()
+
+    val groupCounts = remember(channelsByGroup) {
+        channelsByGroup.mapValues { it.value.size }
+    }
+
+    // The group order is built from the membership map, not by scanning the
+    // whole lineup a second time after building it (the scan used to normalize
+    // every group title again just to collect the labels).
+    val groups = remember(channelsByGroup, recentChannelKeys, groupOrder) {
         applyGroupOrder(
             buildList {
-                add("All")
-                if (recentChannelKeys.isNotEmpty()) add("Recent")
-                if (unhiddenChannels.any { favoriteKey(it) in favorites }) add("Favorites")
-                val seenGroups = LinkedHashSet<String>()
-                unhiddenChannels.forEach { item ->
-                    item.channel.groupTitle?.trim()?.takeIf { it.isNotBlank() }?.let(seenGroups::add)
+                add(GRID_GROUP_ALL)
+                if (recentChannelKeys.isNotEmpty()) add(GRID_GROUP_RECENT)
+                if ((groupCounts[GRID_GROUP_FAVORITES] ?: 0) > 0) {
+                    add(GRID_GROUP_FAVORITES)
                 }
-                addAll(seenGroups)
+                addAll(channelsByGroup.keys.filterNot { it in GRID_PINNED_GROUPS })
             },
             groupOrder
         )
@@ -671,21 +723,8 @@ fun GuideScreen(
         if (index < 0) return
         saveGroupOrder(moveGroupOrder(ordered, index, direction))
     }
-    var selectedGroup by remember(activeProfileId) { mutableStateOf(savedGroup?.takeIf { it.isNotBlank() } ?: "All") }
 
-    /** The visible channels of one group, exactly as the list below renders them. */
-    fun groupChannels(label: String): List<IptvChannelWithEpg> =
-        when (label) {
-            "All" -> unhiddenChannels
-            "Favorites" -> unhiddenChannels.filter { favoriteKey(it) in favorites }
-            "Recent" -> {
-                // Newest-first over the persisted play order; keys that no
-                // longer resolve (channel removed/hidden) drop out.
-                val byKey = unhiddenChannels.associateBy(::channelKey)
-                recentChannelKeys.mapNotNull(byKey::get)
-            }
-            else -> unhiddenChannels.filter { it.channel.groupTitle?.trim() == label }
-        }
+    var selectedGroup by remember(activeProfileId) { mutableStateOf(savedGroup?.takeIf { it.isNotBlank() } ?: "All") }
 
     val groupedChannels = remember(unhiddenChannels, selectedGroup, favorites, recentChannelKeys) {
         groupChannels(selectedGroup)
@@ -1727,7 +1766,7 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                             programsByChannel = gridPrograms,
                             resolvedGuideIds = resolvedGuideIds,
                             groups = groups,
-                            groupCount = { label -> groupChannels(label).size },
+                            groupCount = { label -> groupCounts[label] ?: 0 },
                             selectedGroup = selectedGroup,
                             onSelectGroup = { selectedGroup = it },
                             reminderKeys = reminderKeys,
@@ -1901,7 +1940,7 @@ Spacer(modifier = Modifier.height(14.dp))
     items = groupedChannels,
     key = { _, item -> channelKey(item) }
 ) { index, rawItem ->
-                                        val item = withFavoriteFlag(rawItem)
+                                        val item = rawItem
                                         val rowFocusRequester =
                                             remember(item.channel.id) {
                                                 FocusRequester().also {

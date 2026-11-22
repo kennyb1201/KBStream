@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,6 +53,7 @@ import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import kotlinx.coroutines.launch
 import java.time.format.DateTimeFormatter
 
 /**
@@ -108,6 +110,7 @@ private fun YearReviewContent(
     val activeProfileId = ProfileManager.activeProfile
         .collectAsStateWithLifecycle().value?.id
     val context = LocalContext.current
+    val shareScope = rememberCoroutineScope()
 
     // A fresh read on entry, on a new year and whenever the active profile
     // changes: a kids profile must never inherit the previous profile's year.
@@ -205,12 +208,14 @@ private fun YearReviewContent(
                 ReviewBody(
                     review = review,
                     onShare = {
-                        YearReviewShareCard.share(
-                            context = context,
-                            review = review,
-                            hoursLabel = hoursLabel(review.approxRuntimeMs),
-                            accentArgb = KBAccent.toArgb()
-                        )
+                        shareScope.launch {
+                            YearReviewShareCard.share(
+                                context = context,
+                                review = review,
+                                hoursLabel = hoursLabel(review.approxRuntimeMs),
+                                accentArgb = KBAccent.toArgb()
+                            )
+                        }
                     },
                     modifier = Modifier.weight(1f)
                 )

@@ -151,17 +151,30 @@ fun SearchScreen(
             imdb
         )
     }
+    // With nothing hidden the answer is the input list itself. Resolution
+    // batches land constantly while a search streams in, and each one re-runs
+    // these remembers; returning the SAME list lets every rail below skip
+    // instead of taking a fresh filtered copy on every batch. (filterNot always
+    // allocates, even over an empty hidden set.)
     val results = remember(resultsRaw, resolvedIds, hiddenTitleKeys) {
-        resultsRaw.filterNot(::resultIsHidden)
+        if (hiddenTitleKeys.isEmpty()) {
+            resultsRaw
+        } else {
+            resultsRaw.filterNot(::resultIsHidden)
+        }
     }
     val addonResultGroups = remember(
         addonResultGroupsRaw,
         resolvedIds,
         hiddenTitleKeys
     ) {
-        addonResultGroupsRaw.mapNotNull { group ->
-            val visible = group.results.filterNot(::resultIsHidden)
-            group.takeIf { visible.isNotEmpty() }?.copy(results = visible)
+        if (hiddenTitleKeys.isEmpty()) {
+            addonResultGroupsRaw
+        } else {
+            addonResultGroupsRaw.mapNotNull { group ->
+                val visible = group.results.filterNot(::resultIsHidden)
+                group.takeIf { visible.isNotEmpty() }?.copy(results = visible)
+            }
         }
     }
     val suggestions by viewModel.suggestions.collectAsStateWithLifecycle()

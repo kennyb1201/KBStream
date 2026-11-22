@@ -39,7 +39,11 @@ class LibraryMainThreadContractTest {
             block.contains("withContext(Dispatchers.IO) {") &&
                 block.contains("LocalLibraryStore.userLists(appContext)") &&
                 block.contains("LocalLibraryStore.myList(appContext)") &&
-                block.contains("LocalLibraryStore.listItems(appContext, it.id)")
+                block.contains("LocalLibraryStore.allListItems(appContext)")
+        )
+        assertFalse(
+            "one parse serves every local list, not one parse per list",
+            block.contains("flatMap { LocalLibraryStore.listItems(")
         )
         assertFalse(
             "and none of the three reads leaked back out onto the main dispatcher",
@@ -54,10 +58,14 @@ class LibraryMainThreadContractTest {
         val io = body.indexOf("withContext(Dispatchers.IO) {")
         assertTrue("there is one launch", launch >= 0)
         assertTrue(
-            "the per-list parse is INSIDE it: it used to run on main in front of " +
+            "the blob parse is INSIDE it: it used to run on main in front of " +
                 "the press that triggered it",
             io > launch &&
-                body.substring(io).contains("LocalLibraryStore.listItems(appContext, it.id)")
+                body.substring(io).contains("LocalLibraryStore.allListItems(appContext)")
+        )
+        assertFalse(
+            "and one read serves every local list",
+            body.substring(io).contains("flatMap { LocalLibraryStore.listItems(")
         )
         assertFalse(
             "with nothing parsed before the launch",

@@ -112,7 +112,7 @@ class CwHiddenFilterContractTest {
         )
         assertTrue(
             "and the phone's pass is what a phone capture needs to see",
-            block.contains("SideEffect { CwFilterTrace.recordAll(cwFilterLines) }")
+            block.contains("LaunchedEffect(cwFilterLines) { CwFilterTrace.recordAll(cwFilterLines) }")
         )
     }
 
@@ -194,7 +194,7 @@ class CwHiddenFilterContractTest {
     fun `the decision reaches COPY DIAGNOSTICS`() {
         assertTrue(
             "the pass is recorded after composition, not during it",
-            squash(home).contains("SideEffect { CwFilterTrace.recordAll(cwFilterLines) }")
+            squash(home).contains("LaunchedEffect(cwFilterLines) { CwFilterTrace.recordAll(cwFilterLines) }")
         )
         assertTrue(
             "the report prints the block",

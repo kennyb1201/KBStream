@@ -15,8 +15,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -112,61 +113,70 @@ fun BingeCatPublicListsScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 28.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Column(
+            LazyColumn(
                 modifier = Modifier
-                    .fillMaxWidth()
                     .widthIn(max = 1080.dp)
+                    .fillMaxSize()
                     .focusGroup()
                     .background(KBSurface, KBShapePanel)
                     .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    KBPageTitle(
-                        text = "BINGECAT PUBLIC LISTS",
-                        color = KBAccent,
-                        modifier = Modifier.weight(1f)
-                    )
-                    KBButton(label = "BACK") {
-                        if (uiState.canGoBack) vm.back() else onBack()
+                item(key = "header") {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        KBPageTitle(
+                            text = "BINGECAT PUBLIC LISTS",
+                            color = KBAccent,
+                            modifier = Modifier.weight(1f)
+                        )
+                        KBButton(label = "BACK") {
+                            if (uiState.canGoBack) vm.back() else onBack()
+                        }
                     }
                 }
 
                 // Attribution is the surface's standing sentence: these are
                 // community lists, not KBStream's picks, on every level.
-                Text(
-                    text = "Community lists on BingeCat. Importing one copies it into your " +
-                        "BingeCat profile's lists, where it shows up in Library like any list " +
-                        "you made yourself - KBStream does not pick these titles.",
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.bodySmall
-                )
+                item(key = "attribution") {
+                    Text(
+                        text = "Community lists on BingeCat. Importing one copies it into your " +
+                            "BingeCat profile's lists, where it shows up in Library like any list " +
+                            "you made yourself - KBStream does not pick these titles.",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
 
-                uiState.gate?.let { gate -> GatePanel(gate) }
+                uiState.gate?.let { gate ->
+                    item(key = "gate") { GatePanel(gate) }
+                }
 
                 when (val level = uiState.level) {
-                    BingeCatPublicLevel.Categories -> CategoriesBody(
-                        categories = uiState.categories,
-                        isLoading = uiState.isLoadingCategories,
-                        error = uiState.categoriesError,
-                        onOpenCategory = vm::openCategory,
-                        onOpenSearch = vm::openSearch,
-                        onRetry = vm::loadCategories
-                    )
+                    BingeCatPublicLevel.Categories -> item(key = "categories") {
+                        CategoriesBody(
+                            categories = uiState.categories,
+                            isLoading = uiState.isLoadingCategories,
+                            error = uiState.categoriesError,
+                            onOpenCategory = vm::openCategory,
+                            onOpenSearch = vm::openSearch,
+                            onRetry = vm::loadCategories
+                        )
+                    }
 
-                    is BingeCatPublicLevel.Subcategories -> SubcategoriesBody(
-                        level = level,
-                        onOpenChild = { child -> vm.openSubcategory(level, child) }
-                    )
+                    is BingeCatPublicLevel.Subcategories -> item(key = "subcategories") {
+                        SubcategoriesBody(
+                            level = level,
+                            onOpenChild = { child -> vm.openSubcategory(level, child) }
+                        )
+                    }
 
-                    is BingeCatPublicLevel.Lists -> ListsBody(
+                    is BingeCatPublicLevel.Lists -> listsBody(
                         title = level.title,
                         cards = uiState.cards,
                         isLoading = uiState.isLoadingCards,
@@ -176,7 +186,7 @@ fun BingeCatPublicListsScreen(
                         onImport = vm::startImport
                     )
 
-                    BingeCatPublicLevel.Search -> SearchBody(
+                    BingeCatPublicLevel.Search -> searchBody(
                         query = uiState.searchQuery,
                         type = uiState.searchType,
                         results = uiState.searchResults,
@@ -190,7 +200,7 @@ fun BingeCatPublicListsScreen(
                         onImport = vm::startImport
                     )
 
-                    is BingeCatPublicLevel.Detail -> DetailBody(
+                    is BingeCatPublicLevel.Detail -> detailBody(
                         card = level.card,
                         titles = uiState.titles,
                         phase = uiState.importPhases[level.card.importId],
@@ -203,14 +213,16 @@ fun BingeCatPublicListsScreen(
                 // surface is one focus group, and a remote can reach the modes
                 // without a focus trap to escape from.
                 uiState.importTarget?.let { target ->
-                    ImportConfirmPanel(
-                        card = target,
-                        modes = uiState.importModes,
-                        selected = uiState.importMode,
-                        onSelect = vm::chooseImportMode,
-                        onConfirm = vm::confirmImport,
-                        onCancel = vm::cancelImport
-                    )
+                    item(key = "import-confirm") {
+                        ImportConfirmPanel(
+                            card = target,
+                            modes = uiState.importModes,
+                            selected = uiState.importMode,
+                            onSelect = vm::chooseImportMode,
+                            onConfirm = vm::confirmImport,
+                            onCancel = vm::cancelImport
+                        )
+                    }
                 }
             }
         }
@@ -345,8 +357,7 @@ private fun SubcategoriesBody(
 }
 
 /** One category's list cards, drawn the same way search results are. */
-@Composable
-private fun ListsBody(
+private fun LazyListScope.listsBody(
     title: String,
     cards: List<BingeCatPublicListCard>,
     isLoading: Boolean,
@@ -355,41 +366,45 @@ private fun ListsBody(
     onOpenCard: (BingeCatPublicListCard) -> Unit,
     onImport: (BingeCatPublicListCard) -> Unit
 ) {
-    KBSectionHeader(title = title)
-    if (isLoading) {
-        Text(
-            text = "Reading this category's lists…",
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodySmall
-        )
-        return
-    }
-    error?.let { ReasonLine(it) }
-    if (cards.isEmpty()) {
-        Text(
-            text = if (error != null) {
-                "Nothing to show from the last read."
+    item(key = "lists-header") {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            KBSectionHeader(title = title)
+            if (isLoading) {
+                Text(
+                    text = "Reading this category's lists…",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall
+                )
             } else {
-                "This category holds no lists yet."
-            },
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodySmall
-        )
-        return
+                error?.let { ReasonLine(it) }
+                if (cards.isEmpty()) {
+                    Text(
+                        text = if (error != null) {
+                            "Nothing to show from the last read."
+                        } else {
+                            "This category holds no lists yet."
+                        },
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
     }
-    cards.forEach { card ->
-        PublicListCardView(
-            card = card,
-            phase = phases[card.importId],
-            onOpen = { onOpenCard(card) },
-            onImport = { onImport(card) }
-        )
+    if (!isLoading) {
+        items(cards, key = { "card-${it.importId}" }) { card ->
+            PublicListCardView(
+                card = card,
+                phase = phases[card.importId],
+                onOpen = { onOpenCard(card) },
+                onImport = { onImport(card) }
+            )
+        }
     }
 }
 
 /** The search row, its type filter, and the cards a query returned. */
-@Composable
-private fun SearchBody(
+private fun LazyListScope.searchBody(
     query: String,
     type: BingeCatSearchType,
     results: List<BingeCatPublicListCard>,
@@ -402,48 +417,52 @@ private fun SearchBody(
     onOpenCard: (BingeCatPublicListCard) -> Unit,
     onImport: (BingeCatPublicListCard) -> Unit
 ) {
-    KBSectionHeader(title = "Search public lists")
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        KBTextField(
-            value = query,
-            onValueChange = onQueryChange,
-            placeholder = "List name, theme, owner…",
-            modifier = Modifier.weight(1f),
-            onDone = onSearch
-        )
-        Spacer(modifier = Modifier.width(10.dp))
-        KBButton(
-            label = if (isSearching) "SEARCHING…" else "SEARCH",
-            enabled = !isSearching && BingeCatPublicListRules.searchEnabled(query)
-        ) { onSearch() }
-    }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        BingeCatSearchType.values().forEach { option ->
-            KBButton(
-                label = option.label,
-                labelColor = if (option == type) KBAccent else null
-            ) { onTypeChange(option) }
+    item(key = "search-controls") {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            KBSectionHeader(title = "Search public lists")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                KBTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    placeholder = "List name, theme, owner…",
+                    modifier = Modifier.weight(1f),
+                    onDone = onSearch
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                KBButton(
+                    label = if (isSearching) "SEARCHING…" else "SEARCH",
+                    enabled = !isSearching && BingeCatPublicListRules.searchEnabled(query)
+                ) { onSearch() }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BingeCatSearchType.values().forEach { option ->
+                    KBButton(
+                        label = option.label,
+                        labelColor = if (option == type) KBAccent else null
+                    ) { onTypeChange(option) }
+                }
+            }
+            if (!BingeCatPublicListRules.searchEnabled(query) && !isSearching) {
+                Text(
+                    text = "Type at least two characters. Search finds BingeCat LISTS, never " +
+                        "individual titles.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            error?.let { ReasonLine(it) }
+            if (!isSearching && error == null && results.isEmpty() &&
+                BingeCatPublicListRules.searchEnabled(query)
+            ) {
+                Text(
+                    text = "No public lists match that search.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
     }
-    if (!BingeCatPublicListRules.searchEnabled(query) && !isSearching) {
-        Text(
-            text = "Type at least two characters. Search finds BingeCat LISTS, never " +
-                "individual titles.",
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodySmall
-        )
-    }
-    error?.let { ReasonLine(it) }
-    if (!isSearching && error == null && results.isEmpty() &&
-        BingeCatPublicListRules.searchEnabled(query)
-    ) {
-        Text(
-            text = "No public lists match that search.",
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodySmall
-        )
-    }
-    results.forEach { card ->
+    items(results, key = { "card-${it.importId}" }) { card ->
         PublicListCardView(
             card = card,
             phase = phases[card.importId],
@@ -531,95 +550,114 @@ private fun PublicListCardView(
 }
 
 /** The detail level: metadata, attribution, the import action, and titles if any. */
-@Composable
-private fun DetailBody(
+private fun LazyListScope.detailBody(
     card: BingeCatPublicListCard,
     titles: BingeCatTitlesState,
     phase: BingeCatImportPhase?,
     onOpenTitle: (mediaType: String, id: String) -> Unit,
     onImport: () -> Unit
 ) {
-    Text(
-        text = card.name,
-        color = KBTextHi,
-        style = MaterialTheme.typography.headlineSmall,
-        fontWeight = FontWeight.SemiBold
-    )
-    Text(
-        text = BingeCatPublicListRules.attribution(
-            owner = card.owner,
-            isOfficial = card.isOfficial,
-            provider = card.provider
-        ),
-        color = KBTextLo,
-        style = MaterialTheme.typography.bodySmall
-    )
-    Text(
-        text = listOfNotNull(
-            BingeCatPublicListRules.countsLabel(card.movieCount, card.seriesCount, card.itemCount),
-            BingeCatPublicListRules.likesLabel(card.likes),
-            BingeCatPublicListRules.addedByLabel(card.addedCount)
-        ).joinToString(" · "),
-        color = KBAccent,
-        style = MaterialTheme.typography.labelSmall
-    )
-    card.description?.let { description ->
-        Text(
-            text = description,
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodyMedium
-        )
+    item(key = "detail-header") {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text(
+                text = card.name,
+                color = KBTextHi,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = BingeCatPublicListRules.attribution(
+                    owner = card.owner,
+                    isOfficial = card.isOfficial,
+                    provider = card.provider
+                ),
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                text = listOfNotNull(
+                    BingeCatPublicListRules.countsLabel(
+                        card.movieCount,
+                        card.seriesCount,
+                        card.itemCount
+                    ),
+                    BingeCatPublicListRules.likesLabel(card.likes),
+                    BingeCatPublicListRules.addedByLabel(card.addedCount)
+                ).joinToString(" · "),
+                color = KBAccent,
+                style = MaterialTheme.typography.labelSmall
+            )
+            card.description?.let { description ->
+                Text(
+                    text = description,
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+            PosterStrip(card.coverPosters)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                KBButton(
+                    label = "SAVE TO MY BINGECAT",
+                    enabled = phase !is BingeCatImportPhase.Importing
+                ) { onImport() }
+                Spacer(modifier = Modifier.width(12.dp))
+                PhaseLine(phase)
+            }
+            KBSectionHeader(title = "Titles")
+        }
     }
-    PosterStrip(card.coverPosters)
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        KBButton(
-            label = "SAVE TO MY BINGECAT",
-            enabled = phase !is BingeCatImportPhase.Importing
-        ) { onImport() }
-        Spacer(modifier = Modifier.width(12.dp))
-        PhaseLine(phase)
-    }
-    KBSectionHeader(title = "Titles")
 
     when (titles) {
-        BingeCatTitlesState.Loading -> Text(
-            text = "Reading this list's titles…",
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodySmall
-        )
+        BingeCatTitlesState.Loading -> item(key = "titles-loading") {
+            Text(
+                text = "Reading this list's titles…",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
 
         // Q4b: the key is not a list ref. The screen says what is true - the
         // titles are behind the import - instead of dressing covers as a grid.
-        BingeCatTitlesState.AfterImport -> Text(
-            text = "This list's titles are readable after you import it, through the " +
-                "imported list in your Library. BingeCat has no public title read for it.",
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodySmall
-        )
+        BingeCatTitlesState.AfterImport -> item(key = "titles-after-import") {
+            Text(
+                text = "This list's titles are readable after you import it, through the " +
+                    "imported list in your Library. BingeCat has no public title read for it.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
 
-        is BingeCatTitlesState.Failed -> ReasonLine(titles.message)
+        is BingeCatTitlesState.Failed -> item(key = "titles-failed") {
+            ReasonLine(titles.message)
+        }
 
         is BingeCatTitlesState.Titles -> {
             // Says the ceiling rule plainly: the lists are BingeCat's, and
             // KBStream (not BingeCat) is what keeps a title off a strict profile.
-            Text(
-                text = "This profile's rating ceiling applies to these titles; " +
-                    "BingeCat does not age-screen its public lists.",
-                color = KBTextLo,
-                style = MaterialTheme.typography.labelSmall
-            )
-            if (titles.rows.isEmpty()) {
+            item(key = "titles-note") {
                 Text(
-                    text = "This list has no titles BingeCat can show.",
+                    text = "This profile's rating ceiling applies to these titles; " +
+                        "BingeCat does not age-screen its public lists.",
                     color = KBTextLo,
-                    style = MaterialTheme.typography.bodySmall
+                    style = MaterialTheme.typography.labelSmall
                 )
             }
-            titles.rows.forEach { row ->
-                val detailId = row.detailId()
-                if (detailId != null) {
-                    TitleRow(row) { onOpenTitle(row.mediaType, detailId) }
+            if (titles.rows.isEmpty()) {
+                item(key = "titles-empty") {
+                    Text(
+                        text = "This list has no titles BingeCat can show.",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
+            }
+            val rows = titles.rows.mapNotNull { row ->
+                row.detailId()?.let { detailId ->
+                    Triple(row, detailId, "title-${row.mediaType}:$detailId")
+                }
+            }.distinctBy { it.third }
+            items(rows, key = { it.third }) { (row, detailId, _) ->
+                TitleRow(row) { onOpenTitle(row.mediaType, detailId) }
             }
         }
     }

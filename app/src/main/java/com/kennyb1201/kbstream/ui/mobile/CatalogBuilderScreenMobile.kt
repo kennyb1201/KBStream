@@ -38,7 +38,6 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
-import com.kennyb1201.kbstream.data.catalogs.CATALOG_MEDIA_MOVIE
 import com.kennyb1201.kbstream.data.catalogs.CATALOG_MEDIA_TV
 import com.kennyb1201.kbstream.data.catalogs.CustomCatalog
 import com.kennyb1201.kbstream.data.catalogs.MAX_CUSTOM_CATALOGS
@@ -49,7 +48,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbSearchKeywordResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.ui.addons.CATALOG_CERTIFICATION_COUNTRY_OPTIONS
 import com.kennyb1201.kbstream.ui.addons.CATALOG_COUNTRY_OPTIONS
-import com.kennyb1201.kbstream.ui.addons.CATALOG_DECADE_OPTIONS
+import com.kennyb1201.kbstream.ui.addons.CATALOG_DECADE_CHOICES
 import com.kennyb1201.kbstream.ui.addons.CATALOG_DEFAULT_CERTIFICATION_COUNTRY
 import com.kennyb1201.kbstream.ui.addons.CATALOG_LANGUAGE_OPTIONS
 import com.kennyb1201.kbstream.ui.addons.CATALOG_MAX_RATING_OPTIONS
@@ -61,7 +60,9 @@ import com.kennyb1201.kbstream.ui.addons.CATALOG_RELEASE_TYPE_OPTIONS
 import com.kennyb1201.kbstream.ui.addons.CATALOG_RUNTIME_MAX_OPTIONS
 import com.kennyb1201.kbstream.ui.addons.CATALOG_RUNTIME_MIN_OPTIONS
 import com.kennyb1201.kbstream.ui.addons.CATALOG_SERVICE_OPTIONS
-import com.kennyb1201.kbstream.ui.addons.CATALOG_SORT_OPTIONS
+import com.kennyb1201.kbstream.ui.addons.CATALOG_MATCH_CHOICES
+import com.kennyb1201.kbstream.ui.addons.CATALOG_MEDIA_TYPE_CHOICES
+import com.kennyb1201.kbstream.ui.addons.CATALOG_SORT_CHOICES
 import com.kennyb1201.kbstream.ui.addons.CATALOG_STUDIO_OPTIONS
 import com.kennyb1201.kbstream.ui.addons.CATALOG_TV_STATUS_OPTIONS
 import com.kennyb1201.kbstream.ui.addons.CATALOG_TV_TYPE_OPTIONS
@@ -558,10 +559,7 @@ private fun CatalogEditorMobile(
 
         BuilderSectionMobile("Type") {
             BuilderChoicesMobile(
-                options = listOf(
-                    CATALOG_MEDIA_MOVIE to "Movies",
-                    CATALOG_MEDIA_TV to "Series"
-                ),
+                options = CATALOG_MEDIA_TYPE_CHOICES,
                 selected = catalog.mediaType,
                 onSelect = viewModel::setMediaType
             )
@@ -569,7 +567,7 @@ private fun CatalogEditorMobile(
 
         BuilderSectionMobile("Sort by") {
             BuilderChoicesMobile(
-                options = CATALOG_SORT_OPTIONS.map { it.id to it.label },
+                options = CATALOG_SORT_CHOICES,
                 selected = catalog.sort,
                 onSelect = viewModel::setSort
             )
@@ -714,7 +712,7 @@ private fun CatalogEditorMobile(
 
         BuilderSectionMobile("Keywords") {
             BuilderChoicesMobile(
-                options = listOf("include" to "MATCH", "exclude" to "EXCLUDE"),
+                options = CATALOG_MATCH_CHOICES,
                 selected = if (keywordsInclude) "include" else "exclude",
                 onSelect = { viewModel.setKeywordsInclude(it == "include") }
             )
@@ -802,7 +800,7 @@ private fun CatalogEditorMobile(
                 ?.trim()
                 ?.toIntOrNull()
             BuilderFilterChipsMobile(
-                options = listOf(CatalogFilterOption(0, "Any")) + CATALOG_DECADE_OPTIONS,
+                options = CATALOG_DECADE_CHOICES,
                 picked = listOf(decadeStart ?: 0),
                 onToggle = { id ->
                     viewModel.setDecade(if (id == 0) null else id)

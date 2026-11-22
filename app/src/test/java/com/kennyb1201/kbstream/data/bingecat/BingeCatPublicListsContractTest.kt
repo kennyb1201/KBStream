@@ -234,6 +234,30 @@ class BingeCatPublicListsContractTest {
     }
 
     @Test
+    fun `the cards and detail titles compose lazily`() {
+        assertTrue(
+            "the browser is one LazyColumn, not a scrolling Column over every card",
+            screen.contains("LazyColumn(")
+        )
+        assertFalse(
+            "a LazyColumn nested in a verticalScroll is an infinite-height crash",
+            screen.contains("verticalScroll(")
+        )
+        assertTrue(
+            "category lists emit their cards as lazy items",
+            screen.contains("items(cards") && !screen.contains("cards.forEach {")
+        )
+        assertTrue(
+            "search results are lazy items too",
+            screen.contains("items(results")
+        )
+        assertTrue(
+            "the detail's uncapped title read is lazy and keyed",
+            screen.contains("items(rows") && !screen.contains("titles.rows.forEach {")
+        )
+    }
+
+    @Test
     fun `nothing in this step re-syncs a payload or touches the imports of other data`() {
         val payload = source("${pkg}data/sync/SyncPrefsPayload.kt")
         assertFalse(

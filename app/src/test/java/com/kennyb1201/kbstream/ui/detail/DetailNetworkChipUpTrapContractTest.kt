@@ -42,7 +42,7 @@ class DetailNetworkChipUpTrapContractTest {
     /** The page's last-resort arm. */
     private val topOfPage: String by lazy {
         source
-            .substringAfter("suspend fun focusTopOfPage(): Boolean {")
+            .substringAfter("suspend fun focusTopOfPage(caller: String = \"unspecified\"): Boolean {")
             .substringBefore("val effectiveSeason")
     }
 

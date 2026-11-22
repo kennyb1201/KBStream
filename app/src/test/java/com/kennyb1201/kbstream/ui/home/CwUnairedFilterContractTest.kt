@@ -166,8 +166,8 @@ class CwUnairedFilterContractTest {
         )
         assertTrue(
             "and the same trace sink the hidden pass already writes",
-            home.contains("SideEffect { CwFilterTrace.recordAll(cwFilterLines) }") &&
-                phone.contains("SideEffect { CwFilterTrace.recordAll(cwFilterLines) }")
+            home.contains("LaunchedEffect(cwFilterLines) { CwFilterTrace.recordAll(cwFilterLines) }") &&
+                phone.contains("LaunchedEffect(cwFilterLines) { CwFilterTrace.recordAll(cwFilterLines) }")
         )
     }
 

@@ -132,7 +132,21 @@ class GuideGridWiringTest {
         assertTrue(
             "one group list is handed to the sidebar",
             screen.contains("groups = groups") &&
-                screen.contains("groupCount = { label -> groupChannels(label).size }")
+                screen.contains("groupCount = { label -> groupCounts[label] ?: 0 }")
+        )
+        assertTrue(
+            "group membership is folded in one remembered pass, not by filtering " +
+                "the whole lineup per sidebar row",
+            screen.contains(
+                "val channelsByGroup = remember(unhiddenChannels, favorites, recentChannelKeys)"
+            ) && screen.contains("val groupCounts = remember(channelsByGroup)")
+        )
+        assertTrue(
+            "the group labels are taken from that same map, not from a second " +
+                "walk over every channel",
+            screen.contains(
+                "addAll(channelsByGroup.keys.filterNot { it in GRID_PINNED_GROUPS })"
+            )
         )
         assertTrue(
             "selecting a row re-filters through the same state the list uses",
@@ -184,7 +198,9 @@ class GuideGridWiringTest {
         )
         assertTrue(
             "vertical movement is computed from the loaded lists, not geometry",
-            grid.contains("verticalTarget(rows.map { it.cells }, rowIndex, cell, direction)")
+            grid.contains(
+                "verticalTargetAt(rows.size, { rows[it].cells }, rowIndex, cell, direction)"
+            )
         )
         // F3e: requesters are pruned, never accumulated.
         assertTrue(

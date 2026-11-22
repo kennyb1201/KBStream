@@ -11,6 +11,7 @@ import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import com.kennyb1201.kbstream.data.BackgroundWork
+import com.kennyb1201.kbstream.data.memory.evictOldest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -18,6 +19,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
 import okhttp3.Request
 
 /**
@@ -131,10 +133,7 @@ class TmdbHeroArtworkRepository(
         // Read BEFORE the id: a resolve that bails out on a missing id still has
         // a media type, and the diagnostics line for it is the one that says the
         // request never happened (see HeroArtTrace).
-        val mediaType = when (type.lowercase()) {
-            "series", "show", "tv" -> "tv"
-            else -> "movie"
-        }
+        val mediaType = heroMediaType(type)
 
         val resolvedTmdbId = tmdbId ?: when {
             id.startsWith("tmdb:", ignoreCase = true) ->
@@ -177,6 +176,24 @@ class TmdbHeroArtworkRepository(
                     return artwork
                 }
                 memoryCache.remove(key)
+            }
+
+            // Artwork Detail already fetched rides ahead of the disk row: it is
+            // newer than a persisted answer, and reading it here is what turns
+            // "open Detail, then focus it" into no `/images` call at all.
+            seededArtwork[key]?.let { (seededAt, artwork) ->
+                if (now - seededAt < MEMORY_CACHE_TTL_MS) {
+                    seededArtwork.remove(key)
+                    memoryCache[key] = now to artwork
+                    HeroArtTrace.record(
+                        tmdbId = resolvedTmdbId,
+                        mediaType = mediaType,
+                        logo = !artwork.logoUrl.isNullOrBlank(),
+                        layer = HeroArtTrace.Layer.MEMORY
+                    )
+                    return artwork
+                }
+                seededArtwork.remove(key)
             }
 
             // Disk cache so resolved artwork survives restarts.
@@ -341,45 +358,7 @@ class TmdbHeroArtworkRepository(
 
                 val json = response.body?.string().orEmpty()
                 val images = imagesAdapter.fromJson(json) ?: return@use null
-
-                // Textless first: a backdrop with words on it is the title's
-                // own locale art, and the hero already draws the clearlogo and
-                // metadata over the image. English is the next preference.
-                val backdrop = images.backdrops
-                    .filter { !it.filePath.isNullOrBlank() }
-                    .sortedWith(
-                        compareByDescending<TmdbImage> { it.iso6391 == null }
-                            .thenByDescending { it.iso6391 == "en" }
-                            .thenByDescending { it.voteAverage ?: 0.0 }
-                            .thenByDescending { it.width ?: 0 }
-                    )
-                    .firstOrNull()
-                    ?.filePath
-                    ?.let { TmdbRepository.BACKDROP_BASE + it }
-
-                // The English wordmark, and NOTHING else: no `null` fallback.
-                // TMDB's `null` means "language not set" (the default value it
-                // assigns on upload), so a `null` logo is an untagged wordmark -
-                // frequently the title's ORIGINAL-language mark. Preferring
-                // English and then falling through to that is what put a foreign
-                // clearlogo in the hero whenever a title had no English mark.
-                // With no English mark the hero shows no logo and falls to its
-                // next rung (the add-on/item logo, then the plain title), which
-                // is correct for an English-only app.
-                val logo = images.logos
-                    .filter { !it.filePath.isNullOrBlank() && it.iso6391 == "en" }
-                    .sortedWith(
-                        compareByDescending<TmdbImage> { it.voteAverage ?: 0.0 }
-                            .thenByDescending { it.width ?: 0 }
-                    )
-                    .firstOrNull()
-                    ?.filePath
-                    ?.let { TmdbRepository.LOGO_BASE + it }
-
-                HeroArtwork(
-                    backdropUrl = backdrop,
-                    logoUrl = logo
-                )
+                heroArtworkFromImages(images)
             }
         }.getOrNull()
     }
@@ -402,9 +381,9 @@ class TmdbHeroArtworkRepository(
         val width: Int? = null
     )
 
-    private companion object {
-        const val MEMORY_CACHE_TTL_MS = 12L * 60L * 60L * 1000L
-        const val DISK_CACHE_TTL_MS = 30L * 24L * 60L * 60L * 1000L
+    companion object {
+        private const val MEMORY_CACHE_TTL_MS = 12L * 60L * 60L * 1000L
+        private const val DISK_CACHE_TTL_MS = 30L * 24L * 60L * 60L * 1000L
 
         /**
          * How long an entry with NO logo may answer for its backdrop only.
@@ -417,7 +396,7 @@ class TmdbHeroArtworkRepository(
          * the logo question is asked again while the viewer still remembers the
          * title.
          */
-        const val LOGO_MISS_TTL_MS = 24L * 60L * 60L * 1000L
+        private const val LOGO_MISS_TTL_MS = 24L * 60L * 60L * 1000L
 
         // Bumped from "hero_artwork:" when the language filter landed, again to
         // "hero_artwork_enlogo:" when the logo pick stopped falling back to
@@ -428,11 +407,100 @@ class TmdbHeroArtworkRepository(
         // This cache stores the RESOLVED URL and is keyed BY prefix, so a bump
         // drops every standing entry at once; the short negative TTL above is
         // what stops the next bad resolve from doing the same thing again.
-        const val DISK_KEY_PREFIX = "hero_artwork_logo2:"
-        const val MEMORY_CACHE_MAX_ENTRIES = 128
+        private const val DISK_KEY_PREFIX = "hero_artwork_logo2:"
+        private const val MEMORY_CACHE_MAX_ENTRIES = 128
 
         /** Concurrent artwork fetches (prefetch + foreground hero together). */
-        const val MAX_CONCURRENT_FETCHES = 6
+        private const val MAX_CONCURRENT_FETCHES = 6
+
+        /**
+         * Artwork a detail response already carried, waiting for a hero resolve.
+         *
+         * Detail's `images` append and the hero's `/images` request ask TMDB the
+         * same question; without this, opening a title and then showing it in
+         * the hero paid for that answer twice. Process-wide because Detail and
+         * the hero own different repository instances. Bounded like the instance
+         * cache; a stale seed is simply dropped and the network path answers.
+         */
+        private val seededArtwork = ConcurrentHashMap<String, Pair<Long, HeroArtwork>>()
+        private const val SEEDED_ARTWORK_MAX_ENTRIES = 128
+
+        /** The hero's media-type spelling, shared by seeded and live resolves. */
+        private fun heroMediaType(type: String): String = when (type.lowercase()) {
+            "series", "show", "tv" -> "tv"
+            else -> "movie"
+        }
+
+        /** Textless backdrop + English wordmark, from either wire model. */
+        private fun heroArtworkFromImages(images: TmdbImagesResponse): HeroArtwork {
+            val backdrop = images.backdrops
+                .filter { !it.filePath.isNullOrBlank() }
+                .sortedWith(
+                    compareByDescending<TmdbImage> { it.iso6391 == null }
+                        .thenByDescending { it.iso6391 == "en" }
+                        .thenByDescending { it.voteAverage ?: 0.0 }
+                        .thenByDescending { it.width ?: 0 }
+                )
+                .firstOrNull()
+                ?.filePath
+                ?.let { TmdbRepository.BACKDROP_BASE + it }
+
+            // The English wordmark, and NOTHING else: no `null` fallback.
+            // TMDB's `null` means "language not set" (the default value it
+            // assigns on upload), so a `null` logo is an untagged wordmark -
+            // frequently the title's ORIGINAL-language mark. Preferring
+            // English and then falling through to that is what put a foreign
+            // clearlogo in the hero whenever a title had no English mark.
+            // With no English mark the hero shows no logo and falls to its
+            // next rung (the add-on/item logo, then the plain title), which
+            // is correct for an English-only app.
+            val logo = images.logos
+                .filter { !it.filePath.isNullOrBlank() && it.iso6391 == "en" }
+                .sortedWith(
+                    compareByDescending<TmdbImage> { it.voteAverage ?: 0.0 }
+                        .thenByDescending { it.width ?: 0 }
+                )
+                .firstOrNull()
+                ?.filePath
+                ?.let { TmdbRepository.LOGO_BASE + it }
+
+            return HeroArtwork(
+                backdropUrl = backdrop,
+                logoUrl = logo
+            )
+        }
+
+        /**
+         * Files a detail response's images where the next hero resolve can see
+         * them. No request, no disk write: the hero cache's normal path still
+         * persists the artwork when it reads the seed.
+         */
+        internal fun seedFromDetail(
+            type: String,
+            tmdbId: Int,
+            images: com.kennyb1201.kbstream.data.tmdb.TmdbImagesResponse?
+        ) {
+            if (tmdbId <= 0 || images == null) return
+            val nested = TmdbImagesResponse(
+                backdrops = images.backdrops.map(::toHeroImage),
+                logos = images.logos.map(::toHeroImage)
+            )
+            val artwork = heroArtworkFromImages(nested)
+            if (artwork.backdropUrl == null && artwork.logoUrl == null) return
+            val key = "${heroMediaType(type)}:$tmdbId"
+            val now = System.currentTimeMillis()
+            seededArtwork[key] = now to artwork
+            evictOldest(seededArtwork, { it.first }, SEEDED_ARTWORK_MAX_ENTRIES)
+        }
+
+        private fun toHeroImage(
+            image: com.kennyb1201.kbstream.data.tmdb.TmdbImageAsset
+        ): TmdbImage = TmdbImage(
+            filePath = image.filePath,
+            iso6391 = image.iso6391,
+            voteAverage = image.voteAverage,
+            width = image.width
+        )
     }
 
     /**

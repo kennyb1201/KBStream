@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.home
 
+import androidx.compose.runtime.Immutable
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.bingecat.BingeCatWatchedSnapshot
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
@@ -92,6 +93,7 @@ internal const val MDBLIST_UP_NEXT_CONCURRENCY =
 internal const val NEW_RELEASE_WINDOW_DAYS =
     7
 
+@Immutable
 data class Rail(
     val addonName: String,
     val catalogName: String,

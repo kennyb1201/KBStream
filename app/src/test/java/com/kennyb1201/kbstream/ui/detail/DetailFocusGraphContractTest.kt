@@ -152,7 +152,7 @@ class DetailFocusGraphContractTest {
                 "failure arm",
             toggleHandler.contains(
                 "DetailFocusChain.nextRow( DetailRow.OVERVIEW, DetailFocusDirection.UP, rows )"
-            ) && toggleHandler.contains("|| focusTopOfPage()")
+            ) && toggleHandler.contains("|| focusTopOfPage(\"toggle-up\")")
         )
         assertTrue(
             "DOWN is the strip painted directly under it, asked with the presence " +

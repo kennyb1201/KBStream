@@ -184,14 +184,21 @@ fun LibraryScreen(
     var calendarTakeFocus by remember { mutableStateOf(false) }
 
     val state = remember(stateRaw, hiddenTitleKeys) {
-        stateRaw.copy(
-            localItems = stateRaw.localItems.filterNot(::hiddenItem),
-            allItems = stateRaw.allItems.filterNot(::hiddenItem),
-            watchlistItems =
-                stateRaw.watchlistItems.filterNot(::hiddenItem),
-            selectedListItems =
-                stateRaw.selectedListItems.filterNot(::hiddenItem)
-        )
+        // Nothing hidden is the common case. Four filterNot passes still copy
+        // every list and produce a new UI state, which invalidated the grid on
+        // every enrichment/poster publish even though nothing was removed.
+        if (hiddenTitleKeys.isEmpty()) {
+            stateRaw
+        } else {
+            stateRaw.copy(
+                localItems = stateRaw.localItems.filterNot(::hiddenItem),
+                allItems = stateRaw.allItems.filterNot(::hiddenItem),
+                watchlistItems =
+                    stateRaw.watchlistItems.filterNot(::hiddenItem),
+                selectedListItems =
+                    stateRaw.selectedListItems.filterNot(::hiddenItem)
+            )
+        }
     }
 
     val topFocusRequester = remember { FocusRequester() }
@@ -1476,6 +1483,14 @@ private fun ItemGrid(
         )
     }
 
+    // The grid's dedupe keys, built once per published list instead of once
+    // per key lambda, once per cell, and once more for each successor lookup.
+    // A visible grid was paying three string builds per card per recomposition
+    // (see [LocalLibraryStore.dedupeKey]) on the screen's busiest scroll path.
+    val itemKeys = remember(items) {
+        items.map { item -> LocalLibraryStore.dedupeKey(item) }
+    }
+
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = tileWidth),
         // The screen's own state, not one re-created here: a Back out of Detail
@@ -1498,10 +1513,10 @@ private fun ItemGrid(
             // The same key [BrowseReturnFocus] records a card under, so a grid
             // that has re-ordered under the viewer comes back on the poster
             // that is still there rather than on whatever took its place.
-            key = { _, item -> LocalLibraryStore.dedupeKey(item) },
+            key = { index, _ -> itemKeys[index] },
             contentType = { _, _ -> "library" }
         ) { index, item ->
-            val cardKey = LocalLibraryStore.dedupeKey(item)
+            val cardKey = itemKeys[index]
             // This cell's own node, published so the screen's menu can ask for
             // it by key - including AFTER this card is the one that left the
             // grid, which is when the neighbour's entry is the one that is
@@ -1509,11 +1524,15 @@ private fun ItemGrid(
             // what a removal lands on).
             val cardRequester = remember(cardKey) { FocusRequester() }
             cardFocusRequesters[cardKey] = cardRequester
+            // Both watched badges ask the same candidate keys; the list is a
+            // pure function of the item, so build it once per item rather than
+            // once per badge on every recomposition.
+            val itemWatchedCandidates = remember(item) { item.watchedKeyCandidates() }
             // The card that replaces this one when it is removed: the next one,
             // or the one before it when this is the last - the same successor
             // rule the browse chips' and the search rail's Hide use.
             val successorKey = successorIndexAfter(items.size, index)
-                ?.let { LocalLibraryStore.dedupeKey(items[it]) }
+                ?.let { itemKeys[it] }
             val isReturnItem =
                 returnTarget != null &&
                     index == returnTarget.position &&
@@ -1521,13 +1540,13 @@ private fun ItemGrid(
             LibraryPosterCard(
                 item = item,
                 sourceLabel = sourceLabel(item),
-                rating = ratings[LocalLibraryStore.dedupeKey(item)],
+                rating = ratings[cardKey],
                 // Both id flavors the enrichment can file a row under: the
                 // IMDB one, then the raw `tmdb:<n>` one a row with no IMDB id
                 // (or no resolution) is watched under (see
                 // [LibraryItem.watchedKeyCandidates]).
-                isWatched = item.watchedKeyCandidates().any { it in watchedKeys },
-                isPartiallyWatched = item.watchedKeyCandidates().any { it in partiallyWatchedKeys },
+                isWatched = itemWatchedCandidates.any { it in watchedKeys },
+                isPartiallyWatched = itemWatchedCandidates.any { it in partiallyWatchedKeys },
                 onClick = {
                     val navigationId = item.navigationId
                     if (navigationId != null) {

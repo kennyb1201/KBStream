@@ -197,6 +197,17 @@ fun LandscapeCard(
         modifier = modifier.then(spotlightModifier).onFocusChanged { focused = it.hasFocus },
         shape = posterEdgeShape()
     ) {
+        // The scrim is a pure function of KBVoid; rebuilding the Brush plus its
+        // colour list per tile recomposition is allocation in the default-card
+        // path.
+        val scrimBrush = remember(KBVoid) {
+            Brush.verticalGradient(
+                colors = listOf(
+                    Color.Transparent,
+                    KBVoid.copy(alpha = 0.85f)
+                )
+            )
+        }
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
@@ -253,14 +264,7 @@ fun LandscapeCard(
                     .align(Alignment.BottomStart)
                     .fillMaxWidth()
                     .height(56.dp)
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                Color.Transparent,
-                                KBVoid.copy(alpha = 0.85f)
-                            )
-                        )
-                    )
+                    .background(scrimBrush)
             )
 
             // The rank, on a row that is a standing ("Top Movies Today").
@@ -284,13 +288,15 @@ fun LandscapeCard(
                     fontFamily = InterFamily,
                     fontWeight = FontWeight.Bold,
                     fontSize = rankSize,
-                    style = TextStyle(
-                        shadow = Shadow(
-                            color = KBVoid,
-                            offset = Offset(2f, 2f),
-                            blurRadius = 12f
+                    style = remember(KBVoid) {
+                        TextStyle(
+                            shadow = Shadow(
+                                color = KBVoid,
+                                offset = Offset(2f, 2f),
+                                blurRadius = 12f
+                            )
                         )
-                    ),
+                    },
                     // Artwork, like the clearlogo beside it, but this one is
                     // information: labeled rather than left as a stray digit.
                     modifier = Modifier

@@ -164,7 +164,9 @@ class DetailChipColumnWiringContractTest {
                 "teleport from the bottom of a long page is a lost place",
             source.contains("else -> {") &&
                 source.contains("val nextTarget = DetailFocusChain.nextRow(target, direction, presence)") &&
-                source.contains("focusRow(nextTarget, fromColumn, target, direction, presence)")
+                source.contains(
+                    "focusRow(nextTarget, fromColumn, target, direction, presence, path)"
+                )
         )
         assertFalse(
             "and the walk's end consumes the key where the viewer is instead " +
@@ -201,7 +203,7 @@ class DetailChipColumnWiringContractTest {
         )
         assertTrue(
             source.contains("suspend fun revealAndFocusChipColumn(") &&
-                source.contains("suspend fun focusTopOfPage(): Boolean")
+                source.contains("suspend fun focusTopOfPage(caller: String = \"unspecified\"): Boolean")
         )
     }
 

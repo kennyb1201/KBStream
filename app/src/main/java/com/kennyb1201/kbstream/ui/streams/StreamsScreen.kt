@@ -206,6 +206,9 @@ fun StreamsScreen(
     // episode while the feature is switched off (spec F4c).
     val cloudOffer by viewModel.cloudOffer.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    // One prefs read for the whole list: this used to be read inside every
+    // row, on every recomposition of the picker.
+    val badgesAbove = remember(context) { AppPreferences.getBadgesAboveFile(context) }
 
     /*
      * A DRM stream cannot play on the MPV engine (NativePlayerActivity's own
@@ -719,16 +722,24 @@ fun StreamsScreen(
             // one the viewer has already navigated (see userPlacedFocus).
             .onFocusChanged { userPlacedFocus = it.hasFocus }
     ) {
-        if (!backdrop.isNullOrBlank()) {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(backdrop)
-                    // Full-screen hero backdrop: the one image on the
-                    // full-bleed backdrop.
+        // Remembered, and sized like the Actor hero: this was rebuilt on every
+        // recomposition and decoded at the full view size (1920x1080), for a
+        // backdrop that sits behind a scrim and a list. 1280x720 is the same
+        // decode ceiling the Actor screen already uses for its full-screen art.
+        val backdropRequest = remember(backdrop, context) {
+            backdrop?.takeIf { it.isNotBlank() }?.let { url ->
+                ImageRequest.Builder(context)
+                    .data(url)
+                    .size(1280, 720)
                     .crossfade(true)
                     // Hero-class: stays 8888 (see newImageLoader).
                     .allowRgb565(false)
-                    .build(),
+                    .build()
+            }
+        }
+        if (backdropRequest != null) {
+            AsyncImage(
+                model = backdropRequest,
                 contentDescription = displayName,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -962,8 +973,10 @@ fun StreamsScreen(
                                 // Chips above the file name by default; the
                                 // "Badges above the file name" setting (and the
                                 // player's source picker) shares this pref.
-                                badgesAbove = AppPreferences.getBadgesAboveFile(context),
-                                declaredLabel = declaredLabelFor(stream, season, episode),
+                                badgesAbove = badgesAbove,
+                                declaredLabel = remember(stream, season, episode) {
+                                    declaredLabelFor(stream, season, episode)
+                                },
                                 onClick = {
                                     // The tab the viewer is looking at goes with
                                     // the press and with nothing else: an

@@ -275,11 +275,14 @@ internal fun HomeScreensaver(
                     // this list from titles whose resolvable artwork landed, so
                     // this is the whole picture and never a poster, and never a
                     // rail's raw promo frame, standing in for it.
+                    val logoContext = LocalContext.current
                     AsyncImage(
                         // A clearlogo on transparency: 8888, never the 565
                         // default (see [logoRequest]). A 565 decode here drew
                         // the wordmark's transparent pixels as a solid block.
-                        model = logoRequest(LocalContext.current, slide.logo),
+                        model = remember(logoContext, slide.logo) {
+                            logoRequest(logoContext, slide.logo)
+                        },
                         contentDescription = slide.name,
                         contentScale = ContentScale.Fit,
                         modifier = Modifier

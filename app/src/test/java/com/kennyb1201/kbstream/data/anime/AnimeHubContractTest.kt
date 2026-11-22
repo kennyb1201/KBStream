@@ -28,8 +28,8 @@ class AnimeHubContractTest {
     fun `the hub answers every id from one cached lookup per title`() {
         assertTrue(
             "one cached answer, including 'nobody knows this title'",
-            hub.contains("identities[normalized]?.let { return it }") &&
-                hub.contains("identities[normalized] = identity")
+            hub.contains("identities[normalized]?.let { (_, cached) -> return cached }") &&
+                hub.contains("identities[normalized] = System.currentTimeMillis() to identity")
         )
         assertTrue(
             "a failure is not remembered - a transient outage is not a verdict",
@@ -37,7 +37,11 @@ class AnimeHubContractTest {
         )
         assertTrue(
             "keyed by the normalized title, so case and spacing cannot split one show",
-            hub.contains("private val identities = ConcurrentHashMap<String, AnimeIdentity>()") &&
+            hub.contains(
+                "private val identities = ConcurrentHashMap<String, Pair<Long, AnimeIdentity>>()"
+            ) &&
+                hub.contains("private const val MAX_IDENTITIES = 2_000") &&
+                hub.contains("evictOldest(identities, { it.first }, MAX_IDENTITIES)") &&
                 hub.contains("val normalized = normalizeAnimeTitle(showTitle)")
         )
         assertTrue(

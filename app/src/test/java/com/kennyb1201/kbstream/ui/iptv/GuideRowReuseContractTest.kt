@@ -40,6 +40,13 @@ class GuideRowReuseContractTest {
             "a new model is built only for the channel that did change",
             build.contains("GridRowModel(item = item, channelKey = channelKey, cells = cells)")
         )
+        assertTrue(
+            "and unchanged inputs skip the memo too: on a five-figure lineup the " +
+                "512-entry LRU cannot hold every channel, so re-entering it per " +
+                "merge rebuilt most rows just to hand the same answer back",
+            build.contains("previousWindow[0] == window") &&
+                build.contains("previousPrograms[channelKey] == programs")
+        )
     }
 
     private fun source(relative: String): String {

@@ -95,9 +95,8 @@ class DetailGenreTrapAndSeeMoreTest {
                 "falls to the geometric search DOWNWARD rather than throwing the " +
                 "viewer to PLAY at the top of the page (the vertical-focus " +
                 "audit's F4)",
-            row.contains(
-                "revealAndFocusEpisodes(from) || focusByGeometry(DetailFocusDirection.DOWN)"
-            )
+            row.contains("revealAndFocusEpisodes(from)") &&
+                row.contains("focusByGeometry(DetailFocusDirection.DOWN)")
         )
 
         val reveal = member("suspend fun revealAndFocusEpisodes(", "suspend fun focusRow(")

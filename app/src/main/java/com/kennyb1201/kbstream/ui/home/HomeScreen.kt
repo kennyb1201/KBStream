@@ -552,10 +552,12 @@ private fun TopProfileItem(
         ) {
             if (customAvatarUrl != null) {
                 AsyncImage(
-                    model = ImageRequest.Builder(itemContext)
-                        .data(customAvatarUrl)
-                        .crossfade(false)
-                        .build(),
+                    model = remember(itemContext, customAvatarUrl) {
+                        ImageRequest.Builder(itemContext)
+                            .data(customAvatarUrl)
+                            .crossfade(false)
+                            .build()
+                    },
                     contentDescription = name,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
@@ -1461,6 +1463,11 @@ internal fun HeroClearLogo(
 ) {
     var logoIsDark by remember(url) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    // One request per URL, not per hero recomposition. The hero recomposes on
+    // every focus step; rebuilding the request re-executed Coil's request and
+    // reset the painter's state each time (a memory hit, but churn on the
+    // surface that also drives the crossfade).
+    val context = LocalContext.current
     // Has the art actually PAINTED? A logo URL that exists is not a logo on
     // screen: the fetch takes a moment, and it is a fetch again whenever Coil's
     // decoded-bitmap cache has been dropped (which is this device's normal
@@ -1491,15 +1498,13 @@ internal fun HeroClearLogo(
         }
 
         AsyncImage(
-            model = ImageRequest.Builder(LocalContext.current)
-                .data(url)
-                // The hero logo lands on the hero backdrop (which fades
-                // too), so it fades in with it rather than popping onto
-                // finished art. This is the hero, not a rail tile.
-                .crossfade(true)
-                // Hero-class: stays 8888 (see newImageLoader).
-                .allowRgb565(false)
-                .build(),
+            model = remember(url, context) {
+                ImageRequest.Builder(context)
+                    .data(url)
+                    .crossfade(true)
+                    .allowRgb565(false)
+                    .build()
+            },
             contentDescription = name,
             contentScale = ContentScale.Fit,
             onSuccess = { state ->
@@ -5443,17 +5448,26 @@ fun HomeScreen(
     // draws nothing, so this LINE says why and where the fix is.
     val bingecatNeedsReconnect = rememberBingeCatReconnectNotice()
     val railsAfterHiddenTitles = remember(railsRawForProfile, hiddenTitleKeys) {
-        railsRawForProfile.mapNotNull { rail ->
-            val visible = rail.items.filterNot { meta ->
-                HiddenTitles.hides(
-                    hiddenTitleKeys,
-                    meta.type,
-                    meta.name,
-                    meta.yearOrNull,
-                    meta.id
-                )
+        // Nothing hidden is the common case, so do not walk every rail just to
+        // prove it: HiddenTitles.hides early-outs per item, but the pass still
+        // allocates a filter result for every rail on every republish. When
+        // something IS hidden, [withoutItems] keeps the rail's identity unless
+        // that rail actually lost an item - a new Rail per untouched rail is
+        // what made a 60-90 republish cold load repaint every visible row.
+        if (hiddenTitleKeys.isEmpty()) {
+            railsRawForProfile
+        } else {
+            railsRawForProfile.mapRailsPreservingIdentity { rail ->
+                rail.withoutItems { meta ->
+                    HiddenTitles.hides(
+                        hiddenTitleKeys,
+                        meta.type,
+                        meta.name,
+                        meta.yearOrNull,
+                        meta.id
+                    )
+                }
             }
-            rail.takeIf { visible.isNotEmpty() }?.copy(items = visible)
         }
     }
     // ...and, when the viewer asked for it, finished titles come off the rails
@@ -5467,11 +5481,10 @@ fun HomeScreen(
         if (!hideWatchedOnRails) {
             railsAfterHiddenTitles
         } else {
-            railsAfterHiddenTitles.mapNotNull { rail ->
-                val visible = rail.items.filterNot { meta ->
+            railsAfterHiddenTitles.mapRailsPreservingIdentity { rail ->
+                rail.withoutItems { meta ->
                     viewModel.watchedKey(meta.id, meta.type) in watchedKeys
                 }
-                rail.takeIf { visible.isNotEmpty() }?.copy(items = visible)
             }
         }
     }
@@ -5523,7 +5536,7 @@ fun HomeScreen(
     val cwFilterLines = remember(cwFilterPass) {
         cwFilterPass.map { (_, decision) -> decision.line }
     }
-    SideEffect { CwFilterTrace.recordAll(cwFilterLines) }
+    LaunchedEffect(cwFilterLines) { CwFilterTrace.recordAll(cwFilterLines) }
     val upcomingScheduleRaw by
         viewModel.upcomingSchedule.collectAsStateWithLifecycle()
     // ...and the Upcoming rail's own schedule is filtered here too. It is a
@@ -7743,21 +7756,28 @@ fun HomeScreen(
                                                     FocusRequester()
                                                 }
 
-                                                val watched =
-                                                    viewModel.watchedKey(
-                                                        meta.id,
-                                                        meta.type
-                                                    ) in watchedKeys
+                                                // Both badges ask the same
+                                                // question of the same card, and
+                                                // the key is a pure function of
+                                                // (id, type). Compute it once and
+                                                // keep it across recompositions
+                                                // instead of building
+                                                // "movie::tt..." twice per card
+                                                // on every republish/step.
+                                                val watchedKey =
+                                                    remember(meta.id, meta.type) {
+                                                        viewModel.watchedKey(
+                                                            meta.id,
+                                                            meta.type
+                                                        )
+                                                    }
+                                                val watched = watchedKey in watchedKeys
 
                                                 // Eye badge: started but not
                                                 // finished. Never shown when the
                                                 // completed checkmark resolves.
                                                 val watchedPartially =
-                                                    !watched &&
-                                                        viewModel.watchedKey(
-                                                            meta.id,
-                                                            meta.type
-                                                        ) in partialWatchedKeys
+                                                    !watched && watchedKey in partialWatchedKeys
 
                                                 // The rail drawn first owns the
                                                 // top-bar hook (see the merged-
@@ -8543,6 +8563,63 @@ private fun SpotlightHeroFocusDriver(
             onResolve(focused)
         }
     }
+}
+
+/**
+ * Map rails while keeping the SAME list instance when no rail changed.
+ *
+ * `mapNotNull` always allocates a new list, and the downstream `remember(rails)`
+ * derivations (merged entries, the rail column) key on that identity - so even
+ * a no-op filter pass invalidated them. Returning `this` when every rail maps
+ * to itself is what lets a republish that changed one rail leave every other
+ * rail's derived work alone.
+ */
+private inline fun List<Rail>.mapRailsPreservingIdentity(
+    transform: (Rail) -> Rail?
+): List<Rail> {
+    var mapped: ArrayList<Rail>? = null
+    forEachIndexed { index, rail ->
+        val next = transform(rail)
+        if (next !== rail) {
+            val out = mapped ?: ArrayList<Rail>(size).also { it.addAll(subList(0, index)) }
+            mapped = out
+            if (next != null) out.add(next)
+        } else {
+            mapped?.add(rail)
+        }
+    }
+    return mapped ?: this
+}
+
+/**
+ * Drop items from a rail without paying for a new [Rail] when nothing is
+ * dropped.
+ *
+ * Home filters its rails twice on every publish (hidden titles, then
+ * hide-watched). `filterNot` + `copy` allocated a new list and a new Rail for
+ * every rail even when the predicate removed nothing, so one rails republish
+ * invalidated every visible row all the way down. This keeps the SAME rail
+ * instance when the pass is a no-op, and only builds a replacement list once a
+ * rail actually loses its first item.
+ *
+ * Returns null when every item is dropped, which is how Home removes a rail the
+ * viewer emptied instead of leaving a gap.
+ */
+private fun Rail.withoutItems(drop: (MetaPreview) -> Boolean): Rail? {
+    var kept: ArrayList<MetaPreview>? = null
+    items.forEachIndexed { index, item ->
+        if (drop(item)) {
+            if (kept == null) {
+                val visible = ArrayList<MetaPreview>(items.size)
+                visible.addAll(items.subList(0, index))
+                kept = visible
+            }
+        } else {
+            kept?.add(item)
+        }
+    }
+    val visible = kept ?: return this
+    return if (visible.isEmpty()) null else copy(items = visible)
 }
 
 /**

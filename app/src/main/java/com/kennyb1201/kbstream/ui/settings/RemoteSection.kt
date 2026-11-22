@@ -59,7 +59,11 @@ internal fun RemoteSection() {
     LaunchedEffect(context) {
         while (true) {
             pin = RemotePairings.livePin() ?: RemotePairings.ensurePin()
-            phones = RemotePairings.phones(context)
+            // phones() builds a fresh list every tick. Assigning it regardless
+            // recomposed the section every 2s even when the pairing set had not
+            // changed; State's structural equality now skips that no-op write.
+            val freshPhones = RemotePairings.phones(context)
+            if (phones != freshPhones) phones = freshPhones
             delay(2_000)
         }
     }

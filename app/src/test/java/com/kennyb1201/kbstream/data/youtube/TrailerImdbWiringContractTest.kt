@@ -338,6 +338,20 @@ class TrailerImdbWiringContractTest {
     }
 
     @Test
+    fun `the TV detail pre-resolve waits for a trailer button`() {
+        assertTrue(
+            "a title with no trailer has nothing for the IMDb pre-resolve to " +
+                "serve - the button is not drawn either",
+            flat(detailTv).contains(
+                "LaunchedEffect(trailerVideo?.key, detailImdbId, tmdbDetail?.id) {" //
+            ) && flat(detailTv).contains(
+                "if (trailerVideo != null && (detailImdbId != null || " +
+                    "tmdbDetail?.id != null) ) {"
+            )
+        )
+    }
+
+    @Test
     fun `the phone detail hero and media rail pass the id`() {
         assertTrue(
             detailPhone.contains(

@@ -203,7 +203,9 @@ class GuideGridFieldFixesContractTest {
         )
         assertTrue(
             "and Down past the last visible row is a computed target, not a dead end",
-            grid.contains("verticalTarget(rows.map { it.cells }, rowIndex, cell, direction)")
+            grid.contains(
+                "verticalTargetAt(rows.size, { rows[it].cells }, rowIndex, cell, direction)"
+            )
         )
         assertTrue(
             "density F4: 4dp under the rows - the strip that wanted 12dp is gone",

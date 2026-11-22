@@ -50,6 +50,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
+import java.util.IdentityHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReferenceArray
 import com.kennyb1201.kbstream.data.runCatchingCancellable
@@ -263,12 +264,23 @@ internal fun searchTastePlacement(
 internal fun searchTitleOrder(
     lowerQuery: String,
     taste: TasteSignals.Snapshot = TasteSignals.Snapshot()
-): Comparator<SearchTitleResult> = compareByDescending<SearchTitleResult> {
-    searchMatchScore(lowerQuery, it.name)
+): Comparator<SearchTitleResult> {
+    // A sort asks the comparator O(n log n) times, but every answer here is a
+    // pure function of the item: the match score, the taste placement and the
+    // lowercased name used to be rebuilt inside every comparison, allocating
+    // strings for the same card dozens of times. Identity-keyed caches keep each
+    // answer to one computation per sort call. Identity, not equals: a data
+    // class hit would hash every field to look itself up.
+    val scores = IdentityHashMap<SearchTitleResult, Int>()
+    val placements = IdentityHashMap<SearchTitleResult, TastePlacement>()
+    val lowerNames = IdentityHashMap<SearchTitleResult, String>()
+    return compareByDescending<SearchTitleResult> {
+        scores.getOrPut(it) { searchMatchScore(lowerQuery, it.name) }
+    }
+        .thenByDescending { it.year ?: 0 }
+        .thenBy { placements.getOrPut(it) { searchTastePlacement(it, taste) } }
+        .thenBy { lowerNames.getOrPut(it) { it.name.lowercase() } }
 }
-    .thenByDescending { it.year ?: 0 }
-    .thenBy { searchTastePlacement(it, taste) }
-    .thenBy { it.name.lowercase() }
 
 class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
@@ -752,7 +764,9 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 uniqueItems.map { (tmdbId, mediaType) ->
                     async {
                         val imdbId = runCatchingCancellable {
-                            tmdbRepository.resolveImdbId(tmdbId, mediaType)
+                            titleResolveSemaphore.withPermit {
+                                tmdbRepository.resolveImdbId(tmdbId, mediaType)
+                            }
                         }.getOrNull()
                         Triple(tmdbId, mediaType, imdbId)
                     }
@@ -1853,7 +1867,11 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 results = tmdbRepository.filterByHomeAvailabilityById(
                     items = group.results,
                     id = { result -> result.meta.id },
-                    type = { result -> result.type }
+                    type = { result -> result.type },
+                    // SearchTitleResult already carries the catalog's year, so
+                    // most movies can be answered by the free "released before
+                    // this year" gate instead of a verdict lookup per item.
+                    releasedYear = { result -> result.year }
                 )
             )
         }
@@ -2853,6 +2871,15 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     // 2026-09 seventh wave) fanned out unbounded and TMDB throttled the
     // burst, silently dropping chips (failed lookups are filtered out).
     private val catalogResolveSemaphore = Semaphore(permits = 8)
+
+    /**
+     * Result-title IMDb resolution, capped like the catalog path and the
+     * grid screens. [MAX_RESOLUTION_BATCH] allows 300 ids, and without a cap
+     * the first search of a session launched all of them at once - a 300-wide
+     * burst of DAO reads and possible `/find` calls while the search waves were
+     * still arriving.
+     */
+    private val titleResolveSemaphore = Semaphore(permits = 8)
 
     /** True when the disk cache was applied AND is younger than the TTL. */
     private var browseCacheFresh = false

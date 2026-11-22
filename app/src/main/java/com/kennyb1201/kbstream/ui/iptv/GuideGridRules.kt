@@ -491,11 +491,27 @@ internal fun verticalTarget(
     fromRow: Int,
     fromCell: GridCell,
     direction: Int,
+): GridFocusTarget? = verticalTargetAt(rows.size, { rows[it] }, fromRow, fromCell, direction)
+
+/**
+ * [verticalTarget] over a lazily addressed row list.
+ *
+ * The grid's Up/Down press used to pass `rows.map { it.cells }`, allocating one
+ * list of all 80 loaded rows merely to read the ONE row it lands on. This walks
+ * only the rows between the origin and the target, and the caller supplies the
+ * cells on demand.
+ */
+internal fun verticalTargetAt(
+    rowCount: Int,
+    cellsAt: (Int) -> List<GridCell>,
+    fromRow: Int,
+    fromCell: GridCell,
+    direction: Int
 ): GridFocusTarget? {
     if (direction == 0) return null
     var row = fromRow + direction
-    while (row in rows.indices) {
-        val cells = rows[row]
+    while (row in 0 until rowCount) {
+        val cells = cellsAt(row)
         // An empty ROW cannot happen (rowCells fills the window with a gap), but
         // a skipped one is honest: there is nothing to land on.
         if (cells.isEmpty()) {

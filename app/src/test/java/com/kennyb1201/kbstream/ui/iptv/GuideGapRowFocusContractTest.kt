@@ -61,7 +61,7 @@ class GuideGapRowFocusContractTest {
         val rules = source(RULES)
         val body = between(
             rules,
-            "internal fun verticalTarget(",
+            "internal fun verticalTargetAt(",
             "private fun verticalPick("
         )
 
@@ -71,7 +71,7 @@ class GuideGapRowFocusContractTest {
         )
         assertTrue(
             "the search takes the row's cells and asks whether ANY exist",
-            body.contains("val cells = rows[row]") && body.contains("cells.isEmpty()")
+            body.contains("val cells = cellsAt(row)") && body.contains("cells.isEmpty()")
         )
         assertTrue(
             "and a gap-only row is picked by the same rule the programs use",
@@ -165,9 +165,14 @@ class GuideGapRowFocusContractTest {
             repository.contains("if (snapshot.guideChannels.isEmpty())")
         )
         assertTrue(
-            "a negative match is NOT persisted, so an unmatched channel is " +
-                "re-matched on the next lineup query rather than stuck empty forever",
-            repository.contains("if (resolvedMatch.epgUrl != null) {")
+            "a negative match is persisted under the guide-set key, so an " +
+                "unmatched channel is not re-matched on every lineup query - and " +
+                "the key changes with a guide import, so it can never be stuck " +
+                "empty forever",
+            repository.contains("val epgUrl = resolvedMatch.epgUrl") &&
+                repository.contains("if (epgUrl != null) {") &&
+                repository.contains("epgUrl = negativeKey") &&
+                repository.contains("NEGATIVE_MATCH_NONCE")
         )
     }
 

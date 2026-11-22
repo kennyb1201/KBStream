@@ -57,7 +57,7 @@ class DetailTopFallThroughContractTest {
 
     /** The last-resort landing every UP above the list goes through. */
     private val topOfPage: String by lazy {
-        detail.substringAfter("suspend fun focusTopOfPage(): Boolean {")
+        detail.substringAfter("suspend fun focusTopOfPage(caller: String = \"unspecified\"): Boolean {")
             .substringBefore("val effectiveSeason")
     }
 
@@ -86,7 +86,7 @@ class DetailTopFallThroughContractTest {
 
     @Test
     fun `an UP that reaches the header and cannot land there falls through`() {
-        val landed = move.indexOf("if (landed) return true")
+        val landed = move.indexOf("if (landing.landed) return true")
         val arm = move.indexOf(
             "if (target == DetailRow.HEADER && direction == DetailFocusDirection.UP) {"
         )
@@ -139,7 +139,7 @@ class DetailTopFallThroughContractTest {
             toggleHandler.contains(
                 "onUp = { startFocusMove(DetailRow.OVERVIEW, DetailFocusDirection.UP, " +
                     "presence)"
-            ) && toggleHandler.contains("|| focusTopOfPage()")
+            ) && toggleHandler.contains("|| focusTopOfPage(\"toggle-up\")")
         )
         assertTrue(
             "F1c: it runs INSIDE the move coroutine - the handler consumed the key, " +
@@ -276,13 +276,14 @@ class DetailTopFallThroughContractTest {
                 "landing - so a failed landing is never a dead press",
             move.contains("focusByGeometry(DetailFocusDirection.UP)") &&
                 toggleHandler.contains("focusRow(target, 0, DetailRow.OVERVIEW, " +
-                    "DetailFocusDirection.UP, rows) || focusTopOfPage()")
+                    "DetailFocusDirection.UP, rows) || focusTopOfPage(\"toggle-up\")")
         )
         assertTrue(
             "and the exhaustion reaches the diagnostics ring as E2, which is the " +
                 "half a TV can actually show",
             topOfPage.contains(
-                "DetailTrace.note(\"detail top landing failed after \$attempts attempts\")"
+                "DetailTrace.note( \"detail top landing failed after \$attempts attempts " +
+                    "caller=\$caller\" )"
             )
         )
     }

@@ -82,15 +82,15 @@ class TmdbWrongTypeWiringContractTest {
         )
         assertTrue(
             "the TVDB branch must forward it too - a wrong-type id can arrive either way",
-            fetch.contains("findAndFetch(tvdbId, \"tvdb_id\", normalizedType, fallbackName)")
+            fetch.contains("findAndFetch(tvdbId, \"tvdb_id\", normalizedType, fallbackName, full)")
         )
         assertTrue(
             "and so must the IMDB branch",
-            fetch.contains("findAndFetch(imdbId, \"imdb_id\", normalizedType, fallbackName)")
+            fetch.contains("findAndFetch(imdbId, \"imdb_id\", normalizedType, fallbackName, full)")
         )
         assertTrue(
             "the cached fetch must hand it on to the plain one",
-            repository.contains("fetchEnrichedMeta(imdbId, type, fallbackName)")
+            repository.contains("fetchEnrichedMetaProjection(imdbId, type, fallbackName, full)")
         )
     }
 

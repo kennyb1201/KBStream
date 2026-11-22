@@ -89,6 +89,23 @@ interface IptvDao {
     @Query("DELETE FROM playlist_epg_matches WHERE epgUrl = :epgUrl")
     suspend fun deletePlaylistEpgMatchesByGuide(epgUrl: String)
 
+    /**
+     * Drops remembered no-match answers for this playlist except the current
+     * guide-set key. A guide import changes the key, so the previous set's rows
+     * are stale; the current set's rows must survive a pass that only resolved
+     * a few new channels.
+     */
+    @Query(
+        "DELETE FROM playlist_epg_matches " +
+            "WHERE playlistUrl = :playlistUrl " +
+            "AND epgUrl LIKE 'no-match:%' " +
+            "AND epgUrl != :keepKey"
+    )
+    suspend fun deleteStalePlaylistEpgNegativeMatches(
+        playlistUrl: String,
+        keepKey: String
+    )
+
     @Query(
         """
         SELECT

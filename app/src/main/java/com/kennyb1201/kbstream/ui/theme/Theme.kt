@@ -5,6 +5,7 @@ import android.os.Build
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.Font
@@ -603,8 +604,12 @@ private val KBStreamTypography = Typography(
 
 @Composable
 fun KBStreamTheme(content: @Composable () -> Unit) {
+    // darkColorScheme() builds a fresh ColorScheme. It is the provider value of
+    // the whole app, so allocating it on every theme recomposition was needless
+    // churn; remember it until one of its inputs actually moves.
+    val colorScheme = remember(KBAccent, KBVoid, KBSurface) { KBStreamColorScheme }
     MaterialTheme(
-        colorScheme = KBStreamColorScheme,
+        colorScheme = colorScheme,
         typography = KBStreamTypography,
         content = content
     )

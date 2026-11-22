@@ -209,7 +209,7 @@ class StreamsDeepDiveContractTest {
         )
         assertTrue(
             "ranked by the same ranker, with this add-on's own identity",
-            groups.contains("StreamRanker.rank(") &&
+            groups.contains("StreamRanker.rankPrepared(") &&
                 groups.contains("addonOf = addonOfGroup")
         )
     }

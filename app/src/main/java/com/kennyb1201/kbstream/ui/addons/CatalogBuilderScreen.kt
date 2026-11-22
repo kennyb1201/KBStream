@@ -59,7 +59,6 @@ import coil3.request.ImageRequest
 import coil3.request.allowRgb565
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.MetaPreview
-import com.kennyb1201.kbstream.data.catalogs.CATALOG_MEDIA_MOVIE
 import com.kennyb1201.kbstream.data.catalogs.CATALOG_MEDIA_TV
 import com.kennyb1201.kbstream.data.catalogs.CustomCatalog
 import com.kennyb1201.kbstream.data.catalogs.MAX_CUSTOM_CATALOGS
@@ -577,10 +576,7 @@ private fun CatalogEditor(
 
         EditorSection(title = "Type") {
             ChoiceRow(
-                options = listOf(
-                    CATALOG_MEDIA_MOVIE to "Movies",
-                    CATALOG_MEDIA_TV to "Series"
-                ),
+                options = CATALOG_MEDIA_TYPE_CHOICES,
                 selectedId = catalog.mediaType,
                 onSelect = onMediaType
             )
@@ -588,7 +584,7 @@ private fun CatalogEditor(
 
         EditorSection(title = "Sort by") {
             ChoiceRow(
-                options = CATALOG_SORT_OPTIONS.map { it.id to it.label },
+                options = CATALOG_SORT_CHOICES,
                 selectedId = catalog.sort,
                 onSelect = onSort
             )
@@ -749,7 +745,7 @@ private fun CatalogEditor(
 
         EditorSection(title = "Keywords") {
             ChoiceRow(
-                options = listOf("include" to "MATCH", "exclude" to "EXCLUDE"),
+                options = CATALOG_MATCH_CHOICES,
                 selectedId = if (keywordsInclude) "include" else "exclude",
                 onSelect = { onKeywordsInclude(it == "include") }
             )
@@ -842,7 +838,7 @@ private fun CatalogEditor(
                 ?.trim()
                 ?.toIntOrNull()
             ChipRow(
-                options = listOf(CatalogFilterOption(0, "Any")) + CATALOG_DECADE_OPTIONS,
+                options = CATALOG_DECADE_CHOICES,
                 isSelected = { if (it == 0) decadeStart == null else it == decadeStart },
                 onToggle = { onDecade(if (it == 0) null else it) }
             )
@@ -878,7 +874,7 @@ private fun CatalogEditor(
         if (!isTv) {
             EditorSection(title = "Release type") {
                 ChoiceRow(
-                    options = CATALOG_RELEASE_TYPE_OPTIONS.map { it.code to it.label },
+                    options = CATALOG_RELEASE_TYPE_CHOICES,
                     selectedId = filters.withReleaseType.orEmpty(),
                     onSelect = onReleaseType
                 )

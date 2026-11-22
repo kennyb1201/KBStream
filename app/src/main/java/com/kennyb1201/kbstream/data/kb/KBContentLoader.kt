@@ -16,6 +16,9 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 
+/** One compile, not one per catalog item (see [MetaPreview.toContentItem]). */
+private val YEAR_REGEX = Regex("\\b(?:19|20)\\d{2}\\b")
+
 /**
  * Loads the content behind KB folder sources and normalizes it to
  * [KBContentItem] rows. The two source providers map to:
@@ -518,8 +521,7 @@ class KBContentLoader(context: android.content.Context) {
             title = name,
             posterUrl = poster,
             backdropUrl = background,
-            year = releaseInfo
-                ?.let { Regex("\\b(?:19|20)\\d{2}\\b").find(it)?.value },
+            year = releaseInfo?.let { YEAR_REGEX.find(it)?.value },
             rating = imdbRating?.toDoubleOrNull(),
             tmdbId = null,
             overview = description

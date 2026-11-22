@@ -79,8 +79,12 @@ internal fun sortTitles(
  * the name is the last tiebreak, which keeps the order stable between
  * recompositions.
  */
-internal fun newestTitleOrder(lowerQuery: String): Comparator<SearchTitleResult> =
-    Comparator { a, b ->
+internal fun newestTitleOrder(lowerQuery: String): Comparator<SearchTitleResult> {
+    // The fallback used to re-read both scores and lowercased names inside every
+    // comparison. Identity-keyed caches make each one a once-per-item answer.
+    val scores = java.util.IdentityHashMap<SearchTitleResult, Int>()
+    val lowerNames = java.util.IdentityHashMap<SearchTitleResult, String>()
+    return Comparator { a, b ->
         val yearA = a.year
         val yearB = b.year
         when {
@@ -88,20 +92,31 @@ internal fun newestTitleOrder(lowerQuery: String): Comparator<SearchTitleResult>
             yearA == null && yearB != null -> 1
             yearA != null && yearB != null && yearA != yearB -> yearB.compareTo(yearA)
             else -> {
-                val score = searchMatchScore(lowerQuery, b.name)
-                    .compareTo(searchMatchScore(lowerQuery, a.name))
-                if (score != 0) score else a.name.lowercase().compareTo(b.name.lowercase())
+                val score = scores.getOrPut(b) { searchMatchScore(lowerQuery, b.name) }
+                    .compareTo(scores.getOrPut(a) { searchMatchScore(lowerQuery, a.name) })
+                if (score != 0) {
+                    score
+                } else {
+                    lowerNames.getOrPut(a) { a.name.lowercase() }
+                        .compareTo(lowerNames.getOrPut(b) { b.name.lowercase() })
+                }
             }
         }
     }
+}
 
 /**
  * A-Z by name, case-insensitively, with match quality as the tiebreak (the
  * spec's "name, then match score").
  */
-internal fun alphabeticalTitleOrder(lowerQuery: String): Comparator<SearchTitleResult> =
-    compareBy<SearchTitleResult> { it.name.trim().lowercase() }
-        .thenByDescending { searchMatchScore(lowerQuery, it.name) }
+internal fun alphabeticalTitleOrder(lowerQuery: String): Comparator<SearchTitleResult> {
+    val trimmedLowerNames = java.util.IdentityHashMap<SearchTitleResult, String>()
+    val scores = java.util.IdentityHashMap<SearchTitleResult, Int>()
+    return compareBy<SearchTitleResult> {
+        trimmedLowerNames.getOrPut(it) { it.name.trim().lowercase() }
+    }
+        .thenByDescending { scores.getOrPut(it) { searchMatchScore(lowerQuery, it.name) } }
+}
 
 /**
  * The Titles chip of the hero's count line, said in the terms of the current

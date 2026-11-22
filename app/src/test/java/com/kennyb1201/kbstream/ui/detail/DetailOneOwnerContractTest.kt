@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.detail
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -141,15 +142,103 @@ class DetailOneOwnerContractTest {
                 detail.contains("detail focus LOST ")
         )
         assertTrue(
-            "a landing is confirmed by observation, with one bounded re-ask",
-            detail.contains("suspend fun verifyFocusMoved(") &&
+            "a landing is confirmed on the TARGET or a declared step-over, with " +
+                "one bounded re-ask",
+            detail.contains("suspend fun verifyFocusLanded(") &&
+                detail.contains("DetailFocusLandingRules.isDeclared(") &&
                 detail.contains("suspend fun askRow(") &&
                 detail.contains("detail focus verify ")
         )
         assertTrue(
-            "and the move line reports whether it was verified",
-            detail.contains("verified=\$tracedVerified")
+            "and the move line reports whether it was verified, and WHERE focus " +
+                "actually is",
+            detail.contains("verified=\$tracedVerified") &&
+                detail.contains("observed=\${tracedObserved?.name ?: \"none\"}") &&
+                detail.contains("tracedVerified = landing.verified") &&
+                detail.contains("tracedVerified = retried.verified") &&
+                detail.contains("tracedVerified = secondAsk.verified") &&
+                !detail.contains("tracedVerified = true")
         )
+        assertTrue(
+            "the pill itself reports its own gains and losses, so a dropped ask " +
+                "cannot hide behind the strip container",
+            detail.contains("detail pill GAIN ") && detail.contains("detail pill LOST ")
+        )
+        assertTrue(
+            "every top-of-page ask names its caller",
+            detail.contains("suspend fun focusTopOfPage(caller: String") &&
+                detail.contains("detail top focus caller=\$caller landed=true")
+        )
+        assertFalse(
+            "the header row no longer restores focus after the chain has placed it",
+            detail.contains(
+                ".focusGroup() .focusRestorer() .then(traceRowFocus(DetailRow.HEADER))"
+            )
+        )
+    }
+
+    @Test
+    fun `an ask that returns true but lands on another row is not verified`() {
+        val landing = DetailFocusLandingRules.outcome(
+            target = DetailRow.TABS,
+            before = DetailRow.GENRE,
+            via = DetailFocusVia.CHAIN,
+            observed = DetailRow.HEADER,
+            attempted = setOf(DetailRow.TABS)
+        )
+
+        assertFalse(
+            "this is the 443 failure: the pill accepted the ask and focus was " +
+                "observed on HEADER, so the move did not land TABS",
+            landing.landed
+        )
+        assertFalse("a wrong row is never verified", landing.verified)
+    }
+
+    @Test
+    fun `a geometric fallback keeps its own via so it cannot launder a pill miss`() {
+        val landing = DetailFocusLandingRules.outcome(
+            target = DetailRow.TABS,
+            before = DetailRow.GENRE,
+            via = DetailFocusVia.GEOMETRY,
+            observed = DetailRow.HEADER,
+            attempted = setOf(DetailRow.TABS)
+        )
+
+        assertTrue("geometry really moved the focus, so it landed", landing.landed)
+        assertFalse("but it did not land TABS", landing.verified)
+        assertEquals(
+            "the trace must say geometry, not chain - that is the laundering",
+            DetailFocusVia.GEOMETRY,
+            landing.via
+        )
+
+        val onTarget = DetailFocusLandingRules.outcome(
+            target = DetailRow.TABS,
+            before = DetailRow.GENRE,
+            via = DetailFocusVia.GEOMETRY,
+            observed = DetailRow.TABS,
+            attempted = setOf(DetailRow.TABS)
+        )
+        assertTrue("geometry can land the target", onTarget.verified)
+        assertEquals(
+            "but the trace still says geometry, so a paste can tell how it got there",
+            DetailFocusVia.GEOMETRY,
+            onTarget.via
+        )
+    }
+
+    @Test
+    fun `a declared step-over is the only other row a landing may be verified on`() {
+        val landing = DetailFocusLandingRules.outcome(
+            target = DetailRow.EPISODES,
+            before = DetailRow.TABS,
+            via = DetailFocusVia.CHAIN,
+            observed = DetailRow.PEOPLE,
+            attempted = setOf(DetailRow.EPISODES, DetailRow.PEOPLE)
+        )
+
+        assertTrue("the walk declared PEOPLE as its step-over", landing.verified)
     }
 
     // ── Rule 6: the header height budget ───────────────────────────────────

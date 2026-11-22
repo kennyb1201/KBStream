@@ -234,7 +234,7 @@ class StaleDetailRefetchTest {
 
         assertTrue(
             "the write-back still happens on the normal path, under the normal key",
-            repo.contains("cacheJson(diskKey, detailJsonAdapter.toJson(detail), now)") &&
+            repo.contains("cacheJson(diskKey, serializeDetailJson(detail), now)") &&
                 repo.contains("cacheJson(\n                    railDetailKey(key),")
         )
 

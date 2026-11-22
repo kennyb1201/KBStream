@@ -116,37 +116,44 @@ class StreamsRankWiringContractTest {
     }
 
     @Test
-    fun `every rank call is given the DV verdict, the runtime and the addon facts`() {
+    fun `the expensive rank facts are prepared once and both sorts get the addon facts`() {
         val fetch = functionBody(viewModel, "private suspend fun fetch(")
-        val calls = Regex("""StreamRanker\.rank\(""").findAll(fetch).toList()
+        val prepares = Regex("""StreamRanker\.prepare\(""").findAll(fetch).toList()
+        val ranks = Regex("""StreamRanker\.rankPrepared\(""").findAll(fetch).toList()
 
-        assertEquals("the merged list and each addon's own tab list", 2, calls.size)
-        calls.forEach { call ->
+        assertEquals("one full text/scoring pass for the merged list and its tabs", 1, prepares.size)
+        val prepareArgs = fetch.substring(
+            prepares.single().range.first,
+            minOf(fetch.length, prepares.single().range.first + 400)
+        )
+        assertTrue(
+            "a prepare that keeps the default DV bonus promotes a copy on this " +
+                "box's own hardware: $prepareArgs",
+            prepareArgs.contains("dolbyVisionUseful")
+        )
+        assertTrue(
+            "and one that keeps the default runtime scores bulk where the " +
+                "request knows the length: $prepareArgs",
+            prepareArgs.contains("runtimeMinutes")
+        )
+
+        assertEquals("the merged list and each addon's own tab list", 2, ranks.size)
+        ranks.forEach { call ->
             val args = fetch.substring(call.range.first, minOf(fetch.length, call.range.first + 400))
-            assertTrue(
-                "a rank call that keeps the default DV bonus promotes a copy on " +
-                    "this box's own hardware: $args",
-                args.contains("dolbyVisionUseful")
-            )
-            assertTrue(
-                "and one that keeps the default runtime scores bulk where the " +
-                    "request knows the length: $args",
-                args.contains("runtimeMinutes")
-            )
-            // Both are needed on BOTH calls: the tab list is a filtered view of
-            // All, and a tab ranked without the addon facts would order a
-            // debrid-backed addon's own sources differently from the merged
-            // list the viewer just looked at.
             assertTrue(
                 "a rank call with no addonOf leaves a debrid-backed addon's " +
                     "entries unrecognized: $args",
-                args.contains("addonOf = addonOf")
+                args.contains("addonOf =")
             )
             assertTrue(
                 "and one with no debridAddons set changes nothing at all: $args",
                 args.contains("debridAddons = debridAddons")
             )
         }
+        assertTrue(
+            "the tabs reuse the prepared stream objects instead of re-reading their text",
+            fetch.contains("preparedByStream[it]") && fetch.contains("preparedByStream[it.stream] = it")
+        )
     }
 
     @Test
@@ -154,7 +161,7 @@ class StreamsRankWiringContractTest {
         val fetch = functionBody(viewModel, "private suspend fun fetch(")
         val lambda = fetch.indexOf("val addonOf: (Stream) -> String? =")
         val debridAddons = fetch.indexOf("val debridAddons = debridBackedAddons()")
-        val rank = fetch.indexOf("StreamRanker.rank(")
+        val rank = fetch.indexOf("StreamRanker.prepare(")
         val reorder = fetch.indexOf("SourceAddonPreference.ordered(")
 
         assertTrue(

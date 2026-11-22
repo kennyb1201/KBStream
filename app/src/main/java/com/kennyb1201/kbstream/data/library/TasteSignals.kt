@@ -198,6 +198,15 @@ object TasteSignals {
      */
     private val lastGood = java.util.concurrent.ConcurrentHashMap<String, List<Entry>>()
 
+    /**
+     * The raw blob [lastGood] was decoded from, per profile store. Snapshot
+     * rebuilding runs on every enrichment publish/sort/filter and used to
+     * re-decode the whole JSON blob each time even when the store had not
+     * changed; comparing the raw string makes the decode zero-cost on repeat
+     * reads and still self-invalidating on any write.
+     */
+    private val lastRaw = java.util.concurrent.ConcurrentHashMap<String, String>()
+
     private val _entries = MutableStateFlow<List<Entry>>(emptyList())
 
     /** Newest first. */
@@ -724,6 +733,7 @@ object TasteSignals {
         if (changed == 0) return 0
         store.edit().putString(KEY_ENTRIES, json.encodeToString(Store.serializer(), Store(merged)))
             .apply()
+        lastRaw.remove(storeName(app, profileId))
         // The flows serve the ACTIVE profile. A merge into a sibling's file is
         // written and left there for that profile's next switch.
         if (storeName(app, profileId) == ProfileStorage.prefsName(app, PREFS_BASE)) {
@@ -879,6 +889,7 @@ object TasteSignals {
     private fun readOrNull(store: android.content.SharedPreferences, key: String): List<Entry>? {
         val raw = store.getString(KEY_ENTRIES, null)
         if (raw != null) {
+            if (raw == lastRaw[key]) lastGood[key]?.let { return it }
             val parsed = runCatching {
                 json.decodeFromString(Store.serializer(), raw).entries
             }.getOrNull()
@@ -891,6 +902,7 @@ object TasteSignals {
                 return null
             }
             lastGood[key] = parsed
+            lastRaw[key] = raw
             return parsed
         }
 
@@ -916,8 +928,12 @@ object TasteSignals {
     }
 
     private fun publish(context: Context, store: Store) {
+        val encoded = json.encodeToString(Store.serializer(), store)
+        val key = cacheKey(context)
+        lastGood[key] = store.entries
+        lastRaw[key] = encoded
         prefs(context).edit()
-            .putString(KEY_ENTRIES, json.encodeToString(Store.serializer(), store))
+            .putString(KEY_ENTRIES, encoded)
             // The migration's second half: the thumbs-only blob goes only after
             // a readable v2 blob is on disk, so no crash between the two can
             // leave the store with neither.

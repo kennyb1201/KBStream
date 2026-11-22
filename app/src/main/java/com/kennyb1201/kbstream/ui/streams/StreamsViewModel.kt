@@ -974,14 +974,26 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // there to be reported as an ANR from inside the ranker (Sentry
         // ANDROID-19), so the pass runs on the default pool and only its answer
         // comes back to the frame.
+        //
+        // Prepare once, sort twice. The tabs below contain the same Stream
+        // objects as this merged hand, and the expensive facts (searchable
+        // text, episode rank, known-bad/instant tests and the score) do not
+        // depend on which add-on served the row. Only the add-on half of the
+        // debrid tier is re-evaluated per tab.
+        val preparedByStream =
+            java.util.IdentityHashMap<Stream, StreamRanker.Prepared>()
         val preppedStreams =
             if (useRanker) {
                 withContext(Dispatchers.Default) {
-                    StreamRanker.rank(
+                    val prepared = StreamRanker.prepare(
                         allStreams,
                         requestedEpisode,
                         dolbyVisionUseful,
-                        runtimeMinutes,
+                        runtimeMinutes
+                    )
+                    prepared.forEach { preparedByStream[it.stream] = it }
+                    StreamRanker.rankPrepared(
+                        prepared,
                         addonOf = addonOf,
                         debridAddons = debridAddons
                     )
@@ -1107,11 +1119,12 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                     val addonOfGroup: (Stream) -> String? = { result.addonName }
                     val prepared =
                         if (useRanker) {
-                            StreamRanker.rank(
-                                result.streams,
-                                requestedEpisode,
-                                dolbyVisionUseful,
-                                runtimeMinutes,
+                            // This add-on's own streams, keeping the add-on's
+                            // order for equal scores; the per-stream facts came
+                            // from the one prepare pass above.
+                            val groupInput = result.streams.mapNotNull { preparedByStream[it] }
+                            StreamRanker.rankPrepared(
+                                groupInput,
                                 addonOf = addonOfGroup,
                                 debridAddons = debridAddons
                             )

@@ -66,6 +66,12 @@ internal data class TitlesPagingState(
     val dedupIds: Set<String> = emptySet(),
     val dedupNameYears: Set<String> = emptySet(),
     /**
+     * The tile keys already on the rail, carried forward so [absorb] does not
+     * rebuild a HashSet from every result on every page. Deep paging is capped
+     * at 500 pages, where rebuilding per page made the append O(n squared).
+     */
+    val seenKeys: Set<String> = emptySet(),
+    /**
      * How many of [total] this rail can never show: hits a page landed that the
      * profile filter dropped, plus repeats skipped by [absorb]'s dedupe.
      *
@@ -110,7 +116,11 @@ internal data class TitlesPagingState(
      * answer until the other wave reports again.
      */
     fun absorb(page: TitlesPage): TitlesPagingState {
-        val seen = results.mapTo(HashSet(results.size)) { titleTileKey(it) }
+        val seen = if (seenKeys.isEmpty()) {
+            results.mapTo(HashSet(results.size)) { titleTileKey(it) }
+        } else {
+            HashSet(seenKeys)
+        }
         val fresh = page.merged.filter { seen.add(titleTileKey(it)) }
         return TitlesPagingState(
             results = results + fresh,
@@ -123,7 +133,8 @@ internal data class TitlesPagingState(
             // the builder, and the repeats this dedupe just skipped.
             hidden = hidden + (page.merged.size - fresh.size) + page.profileDropped,
             dedupIds = dedupIds + page.dedupIds,
-            dedupNameYears = dedupNameYears + page.dedupNameYears
+            dedupNameYears = dedupNameYears + page.dedupNameYears,
+            seenKeys = seen
         )
     }
 

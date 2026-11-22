@@ -4172,8 +4172,8 @@ private fun SyncPaneMobile() {
         localRows = runCatching {
             val db = com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
                 .getInstanceScoped(context)
-            "watched cache ${db.watchedStatusDao().getAll().size} \u00b7 " +
-                "history ${db.watchHistoryDao().getAll().size}"
+            "watched cache ${db.watchedStatusDao().count()} \u00b7 " +
+                "history ${db.watchHistoryDao().count()}"
         }.getOrNull()
     }
 

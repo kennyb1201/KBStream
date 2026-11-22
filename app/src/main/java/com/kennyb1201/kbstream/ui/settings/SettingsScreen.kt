@@ -61,6 +61,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -173,6 +174,7 @@ import com.kennyb1201.kbstream.ui.theme.customAccentHexText
 import com.kennyb1201.kbstream.ui.theme.hsvFromArgb
 import com.kennyb1201.kbstream.ui.theme.kbCustomAccentState
 import com.kennyb1201.kbstream.ui.theme.refreshThemeMirrors
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -708,13 +710,22 @@ fun SettingsScreen(
     }
     // External engine, device-local like the engine itself: which video apps
     // are installed is a property of this box, not of the account.
-    val externalPlayers = remember { ExternalPlayer.installed(context) }
+    //
+    // The probe is 7 queryIntentActivities Binder calls plus label loading, so
+    // resolving it inside first composition froze the Settings entry path even
+    // when the viewer never opened Playback. Scan off-main; the rows appear as
+    // the answer lands.
+    val scannedPlayers by produceState<List<ExternalPlayer.Installed>?>(null) {
+        value = withContext(Dispatchers.IO) { ExternalPlayer.installed(context) }
+    }
+    val externalPlayers = scannedPlayers.orEmpty()
     var externalPackage by remember(profileRowKey) {
-        mutableStateOf(
-            AppPreferences.getExternalPlayerPackage(context)?.takeIf { stored ->
-                externalPlayers.any { it.packageName == stored }
-            }
-        )
+        mutableStateOf(AppPreferences.getExternalPlayerPackage(context))
+    }
+    LaunchedEffect(scannedPlayers) {
+        val loaded = scannedPlayers ?: return@LaunchedEffect
+        val stored = externalPackage ?: return@LaunchedEffect
+        if (loaded.none { it.packageName == stored }) externalPackage = null
     }
     // An app the viewer named by hand, for the boxes where detection cannot find
     // their player at all (a TV build whose manifest declares no video handler).
@@ -5639,8 +5650,8 @@ private fun SyncHealthSection(modifier: Modifier = Modifier) {
         localRows = runCatching {
             val db = com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
                 .getInstanceScoped(context)
-            "watched cache ${db.watchedStatusDao().getAll().size} · " +
-                "history ${db.watchHistoryDao().getAll().size}"
+            "watched cache ${db.watchedStatusDao().count()} · " +
+                "history ${db.watchHistoryDao().count()}"
         }.getOrNull()
     }
 

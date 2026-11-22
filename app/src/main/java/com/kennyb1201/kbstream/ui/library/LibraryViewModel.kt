@@ -1038,9 +1038,9 @@ class LibraryViewModel(
                 Triple(
                     LocalLibraryStore.myList(appContext),
                     lists,
-                    lists
-                        .filter { it.source.isLocalList }
-                        .flatMap { LocalLibraryStore.listItems(appContext, it.id) }
+                    // One parse of the personal-lists blob for every local list's
+                    // items, instead of one parse per list.
+                    LocalLibraryStore.allListItems(appContext)
                 )
             }
             localListFlatCache = localListItems
@@ -2446,7 +2446,6 @@ class LibraryViewModel(
      */
     private fun recomputeAll() {
         val appContext = getApplication<Application>()
-        val localLists = _uiState.value.lists.filter { it.source.isLocalList }
         val local = canonicalLocal
         val watchlist = canonicalWatchlist
         // THE CEILING HOLDS HERE TOO (spec audit 2026-11-18, Library H1): this
@@ -2455,12 +2454,13 @@ class LibraryViewModel(
         // over-ceiling titles until the next full refresh. Off the main thread
         // because the filter reads certifications; the publish follows it.
         //
-        // The per-list PARSE moved into that same hop (spec 2026-11-18, Library
+        // The blob PARSE moved into that same hop (spec 2026-11-18, Library
         // F1): it ran on main before the launch, so every add/remove re-read
-        // every local list in front of the press that made it.
+        // every local list in front of the press that made it. One read now
+        // serves every list, not one read per list.
         viewModelScope.launch {
             val flat = withContext(Dispatchers.IO) {
-                localLists.flatMap { LocalLibraryStore.listItems(appContext, it.id) }
+                LocalLibraryStore.allListItems(appContext)
             }
             localListFlatCache = flat
             canonicalAll = kidsFiltered(mergeAllSources(listOf(local, watchlist, flat)))

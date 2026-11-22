@@ -350,6 +350,16 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
     // the global "Landscape Cards" toggle is on — same model as Home.
     // ------------------------------------------------------------------
     private val landscapeArtSemaphore = Semaphore(permits = 6)
+
+    /**
+     * The IMDb resolution batch, capped like the collection sibling
+     * (`CollectionViewModel`) and the calendar. Opening a folder used to launch
+     * every missing id at once - up to 300 - which on a cold cache is a
+     * 300-wide burst of DAO reads and TMDB calls competing with the paint and
+     * the rail artwork. Eight at a time is the same budget those surfaces
+     * already use.
+     */
+    private val imdbResolveSemaphore = Semaphore(permits = 8)
     private var lastLandscapeWanted: Boolean? = null
 
     private val _landscapeArt = MutableStateFlow<Map<String, HeroArtwork>>(emptyMap())
@@ -869,7 +879,9 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
                         val tmdbId = key.substringAfter("::").toIntOrNull()
                         val imdbId = tmdbId?.let {
                             runCatchingCancellable {
-                                tmdbRepository.resolveImdbId(it, normalizedType)
+                                imdbResolveSemaphore.withPermit {
+                                    tmdbRepository.resolveImdbId(it, normalizedType)
+                                }
                             }.getOrNull()
                         }
                         key to imdbId

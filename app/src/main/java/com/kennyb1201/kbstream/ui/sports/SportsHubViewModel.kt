@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.SystemClock
 import android.util.Log
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.iptv.EpgTermLookup
@@ -73,6 +74,7 @@ import kotlinx.coroutines.withContext
  * separate facts, and the screen says "No games today" or "Couldn't reach
  * ESPN" accordingly.
  */
+@Immutable
 data class LeagueSection(
     val league: SportsLeague,
     val games: List<SportsGame> = emptyList(),
@@ -87,6 +89,7 @@ data class LeagueSection(
  * surface in the hub keeps them apart: an offseason team and an unreadable feed
  * are different answers, and only one of them is worth a retry.
  */
+@Immutable
 data class TeamScheduleState(
     val team: SportsTeam,
     val games: List<SportsGame> = emptyList(),
@@ -1263,13 +1266,18 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         // this way. Only the dispatcher moves: the cadence, the TTLs, the
         // no-republish guard and the merge below are untouched (F3).
         val fresh = withContext(Dispatchers.IO) {
-            val sections = HashMap<String, LeagueSection>()
-            paths.forEach { path ->
-                val league = SportsLeagues.byPath(path) ?: return@forEach
-                val previous = _sections.value.firstOrNull { it.league.path == path }
-                sections[path] = fetchSection(league, previous)
-            }
-            sections
+            // Same shape as [fetchSections]: the live leagues share nothing, so
+            // a tick is bound by its slowest feed rather than by the sum of
+            // every league. The repository still answers repeats from its
+            // per-league cache, and the day/cadence rules are untouched.
+            paths.mapNotNull { path ->
+                SportsLeagues.byPath(path)?.let { league ->
+                    async {
+                        val previous = _sections.value.firstOrNull { it.league.path == path }
+                        path to fetchSection(league, previous)
+                    }
+                }
+            }.awaitAll().toMap()
         }
         if (fresh.isEmpty()) return false
         val updated = _sections.value.map { fresh[it.league.path] ?: it }
@@ -1280,11 +1288,22 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         // untouched leagues, so this compares structurally: a republish now
         // means a real change, which is also what makes the recomposition
         // honest when one does happen.
+        val sectionsChanged = updated != _sections.value
         if (updated != _sections.value) {
             _sections.value = updated
         }
-        resolveMatches(updated)
-        refreshDetailSummary()
+        // A repository cache hit usually lands here with byte-identical
+        // sections. Re-running the match pass then still paid the full-slate
+        // flatMap + id-key build before its own skip could fire, and relaunched
+        // the selected-game summary. Only a real change (or a lineup/guide
+        // change that invalidates the previous pass) needs either.
+        if (sectionsChanged ||
+            lastMatchLineupGeneration != lineupGeneration ||
+            lastMatchGuideGeneration != guideGeneration
+        ) {
+            resolveMatches(updated)
+            refreshDetailSummary()
+        }
         // "Still worth polling" is live OR about to be: stopping on hasLive
         // alone would end the tick the moment a poll landed the last beat
         // before kickoff, which is the case the arm exists for.
@@ -1621,6 +1640,13 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             val found = HashMap<String, List<IptvChannel>>()
+            // Progressive publishes are cadenced, not per card. A full slate can
+            // match dozens of games; each publish is a new map and, with the
+            // cards' own unstable inputs, a whole-visible-slate recomposition.
+            // The final `_matches.value = matches` below is still the exact
+            // reconcile, so a card that landed inside the cadence window shows
+            // its channel when the pass ends rather than blinking through it.
+            var lastProgressPublishMs = 0L
             games.forEach { game ->
                 ensureActive()
                 // A superseded pass - the live tick or a profile switch cancelled
@@ -1661,7 +1687,11 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                         // card back to "Finding channel…". The publish below is
                         // what reconciles the map exactly, including dropping a
                         // game whose match is gone.
-                        _matches.update { it + (game.id to feeds) }
+                        val nowMs = SystemClock.elapsedRealtime()
+                        if (nowMs - lastProgressPublishMs >= MATCH_PROGRESS_PUBLISH_MS) {
+                            lastProgressPublishMs = nowMs
+                            _matches.update { it + (game.id to feeds) }
+                        }
                     }
             }
             events.forEach { event ->
@@ -1674,7 +1704,11 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 matchedFeeds.takeIf { it.isNotEmpty() }
                     ?.let { feeds ->
                         found[event.id] = feeds
-                        _matches.update { it + (event.id to feeds) }
+                        val nowMs = SystemClock.elapsedRealtime()
+                        if (nowMs - lastProgressPublishMs >= MATCH_PROGRESS_PUBLISH_MS) {
+                            lastProgressPublishMs = nowMs
+                            _matches.update { it + (event.id to feeds) }
+                        }
                     }
             }
             // Per-stage timing, in the order the stages run: which of the four
@@ -2222,6 +2256,13 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
          * tournaments do not draw from the games' counter (see [EpgLookups]).
          */
         const val MAX_EPG_LOOKUPS = 200
+
+        /**
+         * Minimum gap between progressive match publishes inside one pass.
+         * 120 ms keeps the card flip visibly immediate while turning a 40-60 s
+         * slate from dozens of root recompositions into a handful per second.
+         */
+        const val MATCH_PROGRESS_PUBLISH_MS = 120L
 
         /** A term shorter than this matches too much of the guide to be useful. */
         const val MIN_SEARCH_TERM_LENGTH = 3

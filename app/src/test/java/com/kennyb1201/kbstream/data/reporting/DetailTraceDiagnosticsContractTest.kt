@@ -89,12 +89,14 @@ class DetailTraceDiagnosticsContractTest {
     fun `every chain move notes its target, its landing and the path it took`() {
         assertTrue(
             "E1: the move, spelled the way a paste can be read - with the landing " +
-                "VERIFIED separately since the one-owner revamp (spec 2026-11-21, " +
-                "rule 5), so \"landed\" and \"the focus agreed\" cannot be confused",
+                "VERIFIED separately (spec 2026-11-21, rule 5) and the row focus " +
+                "was actually OBSERVED on (2026-11-21 follow-up), so a landed " +
+                "press cannot hide a wrong target",
             detail.contains("\"detail move \$from \$direction -> ") &&
                 detail.contains(
                     "\"landed=\$tracedLanded verified=\$tracedVerified via=\$tracedVia \""
                 ) &&
+                detail.contains("\"observed=\${tracedObserved?.name ?: \"none\"} \"") &&
                 detail.contains("\"loading=\$tracedLoading waited=\$tracedWaited\"")
         )
         assertTrue(
@@ -112,7 +114,6 @@ class DetailTraceDiagnosticsContractTest {
         // `chain` landing like any other row's.
         val vias =
             listOf(
-                "\"chain\"",
                 "\"geometry\"",
                 "\"blocked\"",
                 "\"cancelled\"",
@@ -121,6 +122,13 @@ class DetailTraceDiagnosticsContractTest {
         vias.forEach { via ->
             assertTrue("the via field names $via", detail.contains("tracedVia = $via"))
         }
+        assertTrue(
+            "a chain ask gets its via from the landing result, not from a blind " +
+                "\"chain\" literal - a geometric fallback must read as geometry",
+            detail.contains("tracedVia = landing.via.name.lowercase()") &&
+                detail.contains("tracedVia = retried.via.name.lowercase()") &&
+                detail.contains("tracedVia = secondAsk.via.name.lowercase()")
+        )
         assertTrue(
             "the target is the chain row the press aimed at, and `none` when the " +
                 "chain had no row that way - a dead press is a line, not an absence",

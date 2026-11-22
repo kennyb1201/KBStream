@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.anime
 
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.mal.MalApiClient
+import com.kennyb1201.kbstream.data.memory.evictOldest
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -49,8 +50,14 @@ import org.json.JSONObject
  */
 internal object AnimeIdHub {
 
-    /** How long a title's answer is remembered. The process, in practice. */
-    private val identities = ConcurrentHashMap<String, AnimeIdentity>()
+    /**
+     * A title's answer, stamped only so the bounded map can drop the oldest.
+     * A process-lifetime answer used to leave one entry for every title ever
+     * opened; the cap keeps a long-running TV's heap from accumulating them.
+     */
+    private val identities = ConcurrentHashMap<String, Pair<Long, AnimeIdentity>>()
+
+    private const val MAX_IDENTITIES = 2_000
 
     private const val JIKAN_TIMEOUT_MS = 8_000L
 
@@ -72,7 +79,7 @@ internal object AnimeIdHub {
         val normalized = normalizeAnimeTitle(showTitle)
         if (normalized.isEmpty()) return AnimeIdentity()
 
-        identities[normalized]?.let { return it }
+        identities[normalized]?.let { (_, cached) -> return cached }
 
         val identity = runCatching { resolveFresh(showTitle.orEmpty()) }.getOrElse {
             // A failure is NOT remembered: the next reader may succeed, and a
@@ -80,7 +87,8 @@ internal object AnimeIdHub {
             return AnimeIdentity()
         }
 
-        identities[normalized] = identity
+        identities[normalized] = System.currentTimeMillis() to identity
+        evictOldest(identities, { it.first }, MAX_IDENTITIES)
         return identity
     }
 

@@ -115,6 +115,9 @@ import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import kotlin.math.abs
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.android.awaitFrame
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -1445,12 +1448,23 @@ private fun ActorCreditRail(
     LaunchedEffect(credits, normalizedMediaType) {
         if (credits.isEmpty()) return@LaunchedEffect
         if (!AppPreferences.landscapePostersActive(prewarmContext)) return@LaunchedEffect
-        credits.take(ACTOR_ART_PREWARM_COUNT).forEach { credit ->
-            val type = credit.mediaType ?: return@forEach
-            GlobalLandscapeArtCache.resolve(
-                prewarmContext,
-                LandscapeArtRequest(id = credit.id.toString(), type = type)
-            )
+        // Concurrent, bounded by the cache's own six permits. Sequential awaits
+        // made a first visit pay one round-trip after another for the whole
+        // screenful; the cards behind them were already composing and asking
+        // for the same entries.
+        coroutineScope {
+            credits.take(ACTOR_ART_PREWARM_COUNT)
+                .mapNotNull { credit ->
+                    credit.mediaType?.let { type ->
+                        async {
+                            GlobalLandscapeArtCache.resolve(
+                                prewarmContext,
+                                LandscapeArtRequest(id = credit.id.toString(), type = type)
+                            )
+                        }
+                    }
+                }
+                .awaitAll()
         }
     }
 

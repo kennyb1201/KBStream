@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.addons
 
+import com.kennyb1201.kbstream.data.catalogs.CATALOG_MEDIA_MOVIE
 import com.kennyb1201.kbstream.data.catalogs.CATALOG_MEDIA_TV
 import com.kennyb1201.kbstream.data.catalogs.CatalogSort
 import com.kennyb1201.kbstream.data.catalogs.CustomCatalog
@@ -300,6 +301,32 @@ internal val CATALOG_RELEASE_TYPE_OPTIONS: List<CatalogCodeOption> = listOf(
 
 /** The sort chips, in menu order. */
 internal val CATALOG_SORT_OPTIONS: List<CatalogSort> = CatalogSort.entries.toList()
+
+/**
+ * The chip shapes the editor hands to `ChoiceRow`/`ChipRow`.
+ *
+ * These were built inline inside the editor's composition, so every keystroke
+ * allocated a new list and every unchanged chip row recomposed. A top-level
+ * value is stable for the life of the process, which lets those rows skip.
+ */
+internal val CATALOG_MEDIA_TYPE_CHOICES: List<Pair<String, String>> = listOf(
+    CATALOG_MEDIA_MOVIE to "Movies",
+    CATALOG_MEDIA_TV to "Series"
+)
+
+internal val CATALOG_SORT_CHOICES: List<Pair<String, String>> =
+    CATALOG_SORT_OPTIONS.map { it.id to it.label }
+
+internal val CATALOG_MATCH_CHOICES: List<Pair<String, String>> = listOf(
+    "include" to "MATCH",
+    "exclude" to "EXCLUDE"
+)
+
+internal val CATALOG_DECADE_CHOICES: List<CatalogFilterOption> =
+    listOf(CatalogFilterOption(0, "Any")) + CATALOG_DECADE_OPTIONS
+
+internal val CATALOG_RELEASE_TYPE_CHOICES: List<Pair<String, String>> =
+    CATALOG_RELEASE_TYPE_OPTIONS.map { it.code to it.label }
 
 /**
  * Applies a media-type switch to a catalog, PRUNING the genres that are not

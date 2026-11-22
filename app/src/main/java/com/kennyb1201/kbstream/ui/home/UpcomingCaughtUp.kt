@@ -491,3 +491,33 @@ internal fun mdbListEpisodePairs(
         }
         .toSet()
 }
+
+/**
+ * The same pairs as [mdbListEpisodePairs], for every show at once.
+ *
+ * The calendar asks about ~100 shows per month and passes each one's id
+ * spellings, and the old per-show call scanned the whole account-wide key set
+ * for every spelling. One pass over the keys here builds the by-show index
+ * those lookups then answer from in O(1). Keys are `"<showId>:<season>:<episode>"`
+ * with the id itself free to contain `:`, so the split is anchored at the LAST
+ * two separators, which is the same suffix the prefix match selected.
+ */
+internal fun mdbListEpisodePairsByShow(
+    episodeKeys: Set<String>
+): Map<String, Set<Pair<Int, Int>>> {
+    if (episodeKeys.isEmpty()) return emptyMap()
+    val out = HashMap<String, MutableSet<Pair<Int, Int>>>()
+    for (raw in episodeKeys) {
+        val episodeAt = raw.lastIndexOf(':')
+        if (episodeAt <= 0) continue
+        val seasonAt = raw.lastIndexOf(':', episodeAt - 1)
+        if (seasonAt <= 0 || seasonAt >= episodeAt - 1) continue
+        val episode = raw.substring(episodeAt + 1).toIntOrNull() ?: continue
+        val season = raw.substring(seasonAt + 1, episodeAt).toIntOrNull() ?: continue
+        if (season <= 0 || episode <= 0) continue
+        val showKey = raw.substring(0, seasonAt)
+        if (showKey.isEmpty()) continue
+        out.getOrPut(showKey) { LinkedHashSet() }.add(season to episode)
+    }
+    return out
+}

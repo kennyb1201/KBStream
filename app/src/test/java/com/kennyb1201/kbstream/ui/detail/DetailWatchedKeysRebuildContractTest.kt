@@ -86,19 +86,20 @@ class DetailWatchedKeysRebuildContractTest {
             code.contains("getOrDefault(emptySet())") ||
                 code.contains("getOrElse { traktWatchedEpisodes }")
         )
+        // Indentation moved when the four legs were launched together; the
+        // rule being pinned is which callback the assignments live in.
+        val flat = viewModel.replace(Regex("\\s+"), " ")
         assertTrue(
             "it assigns and marks the leg read only when the read succeeded",
-            viewModel.contains(
-                "}.onSuccess { episodes ->\n" +
-                    "                        _simklWatchedEpisodes.value = episodes\n" +
-                    "                        _simklSeriesWatched.value = episodes.isNotEmpty()\n" +
-                    "                        simklKeysReadFor = id"
+            flat.contains(
+                "onSuccess { episodes -> _simklWatchedEpisodes.value = episodes " +
+                    "_simklSeriesWatched.value = episodes.isNotEmpty() simklKeysReadFor = id"
             )
         )
         assertTrue(
             "and the two field-backed legs are only replaced on success",
-            viewModel.contains("mdbListWatchedEpisodes = episodes\n                        mdbListKeysReadFor = id") &&
-                viewModel.contains("traktWatchedEpisodes = episodes\n                        traktKeysReadFor = id")
+            flat.contains("mdbListWatchedEpisodes = episodes mdbListKeysReadFor = id") &&
+                flat.contains("traktWatchedEpisodes = episodes traktKeysReadFor = id")
         )
     }
 

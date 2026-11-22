@@ -62,6 +62,17 @@ internal fun TvTopBarOverlay(
     onSwitchProfile: () -> Unit
 ) {
     val motionMs = rememberMotionMs(KB_SCREEN_TRANSITION_MS)
+    // The bar recomposes while it slides; the scrim is a pure function of
+    // KBVoid, so rebuild the Brush once, not per frame.
+    val topScrim = remember(KBVoid) {
+        Brush.verticalGradient(
+            colors = listOf(
+                KBVoid.copy(alpha = .96f),
+                KBVoid.copy(alpha = .72f),
+                Color.Transparent
+            )
+        )
+    }
     val firstChip = remember { FocusRequester() }
     var barHasFocus by remember { mutableStateOf(false) }
     // The window is new, so the reveal has to be animated explicitly: visible=true
@@ -105,15 +116,7 @@ internal fun TvTopBarOverlay(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(
-                                    KBVoid.copy(alpha = .96f),
-                                    KBVoid.copy(alpha = .72f),
-                                    Color.Transparent
-                                )
-                            )
-                        )
+                        .background(topScrim)
                 ) {
                     TopActionBar(
                         onSearch = onSearch,

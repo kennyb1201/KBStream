@@ -431,15 +431,18 @@ private const val RETURN_FOCUS_STEPS = 15
 private const val RETURN_FOCUS_DELAY_MS = 40L
 
 /**
- * Frames a landing is given to prove itself before the press is re-asked
- * (spec 2026-11-21, rule 5).
+ * Steps a landing is given to prove itself before the press is re-asked
+ * (spec 2026-11-21 follow-up).
  *
- * A `requestFocus()` that returns true can be undone by the composition that
- * asked it - that is the exact defect this budget exists to catch - so the
- * landing is observed for a few frames, and only a landing that has left the
- * origin counts.
+ * `FOCUS_VERIFY_FRAMES = 3` was shorter than the ask's own patience: a pill
+ * request can return true and be undone by the focus pass a few frames later,
+ * which is exactly what the 443 paste shows (`GENRE DOWN -> TABS landed=true`
+ * with the GAIN on HEADER). The window is now the same 15 x 40ms scale as the
+ * ask budget, so a landing that legitimately takes most of the ask's time is
+ * observed rather than declared a miss. The rule remains: only the target, or
+ * a row the walk declared it stepped to, verifies.
  */
-private const val FOCUS_VERIFY_FRAMES = 3
+private const val FOCUS_VERIFY_STEPS = RETURN_FOCUS_STEPS
 
 /**
  * How many times a neighbour's arrival asks the poster row to be revealed.
@@ -1604,16 +1607,12 @@ fun DetailScreen(
         }
 
         val slots = chipColumnRequesters.getOrPut(rowKey) { mutableListOf() }
-        // The rail's own item count, when it has been laid out: a trailing slot
-        // past it was filed by the title this composition used to show. Best
-        // effort only - a rail that has not measured yet answers 0 and nothing
-        // is trimmed.
-        val railCount = railStateFor(rowKey)?.layoutInfo?.totalItemsCount ?: 0
-        if (railCount > 0) {
-            while (slots.size > railCount) {
-                slots.removeAt(slots.lastIndex)
-            }
-        }
+        // No layoutInfo read here. Reading it during item composition made every
+        // chip subscribe to its rail's layout, so a scroll or a layout pass
+        // invalidated item compositions that would otherwise skip. The stale
+        // trailing slots this used to trim are already clamped at ask time by
+        // [focusChipColumn], which reads the rail's true count on the press -
+        // not in composition - and the title-change effect clears the map.
         while (slots.size <= column) {
             slots.add(null)
         }
@@ -1902,8 +1901,15 @@ fun DetailScreen(
     // The IMDb pre-resolve, on the same rule: the title has a trailer button, so
     // the press is seconds to minutes away and the lookup (plus its title-page
     // fallback, ~8 s) belongs here rather than in front of a black screen.
-    LaunchedEffect(detailImdbId, tmdbDetail?.id) {
-        if (detailImdbId != null || tmdbDetail?.id != null) {
+    LaunchedEffect(trailerVideo?.key, detailImdbId, tmdbDetail?.id) {
+        // The button is drawn only when [trailerVideo] exists (see the hero
+        // actions), so a title with no trailer has nothing to pre-resolve. This
+        // used to run for every opened title that had an IMDb or TMDB id, which
+        // is effectively every title - paying the lookup (and its ~8 s title
+        // page fallback) for a button that was never going to appear.
+        if (trailerVideo != null &&
+            (detailImdbId != null || tmdbDetail?.id != null)
+        ) {
             runCatchingCancellable {
                 TrailerPlayerLauncher.prefetchImdbTrailer(
                     imdbId = detailImdbId,
@@ -2202,6 +2208,7 @@ fun DetailScreen(
         collection?.parts
             .orEmpty()
             .filter { it.id != tmdbDetail?.id }
+            .distinctBy { it.id }
     }
 
     /**
@@ -2230,6 +2237,7 @@ fun DetailScreen(
                     "tmdb:${rec.id}"
                 )
             }
+            .distinctBy { it.id }
     }
 
     // ── The Media row: one row, three pages (see DetailMediaRow) ────────
@@ -2472,7 +2480,7 @@ fun DetailScreen(
      * for. The return value is what makes the retry real, and what keeps a
      * request that took nothing from being counted as the landing.
      */
-    suspend fun focusTopOfPage(): Boolean {
+    suspend fun focusTopOfPage(caller: String = "unspecified"): Boolean {
         runCatching { detailListState.scrollToItem(0) }
         var attempts = 0
         while (attempts < RETURN_FOCUS_STEPS) {
@@ -2483,7 +2491,10 @@ fun DetailScreen(
             val landed =
                 runCatching { playButtonFocusRequester.requestFocus() }.getOrDefault(false) ||
                     runCatching { movieDetailsFocusRequester.requestFocus() }.getOrDefault(false)
-            if (landed) return true
+            if (landed) {
+                DetailTrace.note("detail top focus caller=$caller landed=true")
+                return true
+            }
             delay(RETURN_FOCUS_DELAY_MS)
             attempts += 1
         }
@@ -2500,7 +2511,9 @@ fun DetailScreen(
         // E2: the same exhaustion in the ring, because the log is exactly what a
         // TV cannot show. This is the line the next field paste needs: it names
         // the failed landing the move line then reports as via=geometry.
-        DetailTrace.note("detail top landing failed after $attempts attempts")
+        DetailTrace.note(
+            "detail top landing failed after $attempts attempts caller=$caller"
+        )
         return false
     }
 
@@ -2549,7 +2562,7 @@ fun DetailScreen(
     LaunchedEffect(handFocusBack.abandoned) {
         val label = handFocusBack.abandoned ?: return@LaunchedEffect
         Log.w(TAG, "hand-back abandoned ($label): landing on the page's controls")
-        focusTopOfPage()
+        focusTopOfPage("hand-back")
         handFocusBack.clearedAbandoned()
     }
 
@@ -3571,21 +3584,48 @@ fun DetailScreen(
         fromColumn: Int,
         from: DetailRow,
         direction: DetailFocusDirection,
-        presence: DetailRowPresence
+        presence: DetailRowPresence,
+        // The rows this walk asked for, and whether it had to place the focus
+        // geometrically. [askRow] owns the path so a landing can be verified
+        // against the target AND the rows the walk declared it stepped to.
+        path: DetailFocusAskPath = DetailFocusAskPath()
     ): Boolean = when (target) {
-        DetailRow.HEADER -> focusTopOfPage()
+        DetailRow.HEADER -> focusTopOfPage("chain")
         // The strip is a fixed row, not a list item: no reveal, no column.
-        DetailRow.TABS -> focusTabStrip() || focusByGeometry(direction)
+        DetailRow.TABS -> {
+            if (focusTabStrip()) {
+                true
+            } else {
+                val moved = focusByGeometry(direction)
+                if (moved) path.via = DetailFocusVia.GEOMETRY
+                moved
+            }
+        }
         // And so is the overview's toggle, one row above it (2026-11-21).
-        DetailRow.OVERVIEW -> focusOverviewToggle() || focusByGeometry(direction)
+        DetailRow.OVERVIEW -> {
+            if (focusOverviewToggle()) {
+                true
+            } else {
+                val moved = focusByGeometry(direction)
+                if (moved) path.via = DetailFocusVia.GEOMETRY
+                moved
+            }
+        }
         // F4: a section that will not take the focus is a miss, not a reason to
         // throw the viewer to the top of the page. The walk arm below already
         // states that rule - "a rail that will not take the focus must not
         // teleport the viewer to the top" - and this arm did not obey it: DOWN
         // from deep in the page ended on PLAY. Geometric DOWN lands on the
         // nearest row below, which is what the press meant.
-        DetailRow.EPISODES ->
-            revealAndFocusEpisodes(from) || focusByGeometry(DetailFocusDirection.DOWN)
+        DetailRow.EPISODES -> {
+            if (revealAndFocusEpisodes(from)) {
+                true
+            } else {
+                val moved = focusByGeometry(DetailFocusDirection.DOWN)
+                if (moved) path.via = DetailFocusVia.GEOMETRY
+                moved
+            }
+        }
         DetailRow.GENRE,
         DetailRow.KEYWORDS,
         DetailRow.PEOPLE,
@@ -3603,7 +3643,7 @@ fun DetailScreen(
             // retry or a row that simply is not on this page.
             val present = DetailFocusChain.exists(target, presence)
             when {
-                targetKey == null -> focusTopOfPage()
+                targetKey == null -> focusTopOfPage("chain")
                 focusChipColumn(targetKey, fromColumn) -> true
                 // Present but not ready: the rail is on screen but its chips
                 // have not finished registering, so the first ask failed. One
@@ -3660,12 +3700,12 @@ fun DetailScreen(
                         // (see [DetailFocusChain.isPageEdge]).
                         false
                     } else {
-                        focusRow(nextTarget, fromColumn, target, direction, presence)
+                        focusRow(nextTarget, fromColumn, target, direction, presence, path)
                     }
                 }
             }
         }
-    }
+    }.also { path.attempted += target }
 
     /**
      * UP out of a Media card: back to the row's tab strip, and the landing
@@ -3729,29 +3769,48 @@ fun DetailScreen(
      * answer (spec 2026-11-21, rule 5).
      *
      * [before] is the row that held the focus when the ask was made. A landing
-     * counts when the focus is now on a row and it is not the one it came from;
-     * which row it is may differ from the chain's target when the walk stepped
-     * over a row that would not take it, and that is still a real landing.
+     * is confirmed only on [target] or on a row [attempted] declares the walk
+     * stepped to; any other row is a miss, and the caller re-asks once before
+     * reporting it. The old verifier accepted ANY row other than [before],
+     * which is how build 443 certified a GENRE -> TABS press that had landed on
+     * HEADER.
+     *
+     * The window matches the ask's own patience ([FOCUS_VERIFY_STEPS] is
+     * [RETURN_FOCUS_STEPS] 40ms polls), so a landing that takes the full ask
+     * budget is still observed before the verdict.
      */
-    suspend fun verifyFocusMoved(before: DetailRow?): Boolean {
-        repeat(FOCUS_VERIFY_FRAMES) {
+    suspend fun verifyFocusLanded(
+        before: DetailRow?,
+        target: DetailRow,
+        attempted: Set<DetailRow>
+    ): DetailRow? {
+        var lastObserved: DetailRow? = focusedRowNow
+        repeat(FOCUS_VERIFY_STEPS) {
             awaitFrame()
             val now = focusedRowNow
-            if (now != null && now != before) return true
+            if (now != null) {
+                lastObserved = now
+                // The first frame that shows the DECLARED row is the landing.
+                // A wrong row is not returned early: the thief might still
+                // put the target there, and the old verifier's mistake was
+                // accepting any different row on the first frame it saw.
+                if (DetailFocusLandingRules.isDeclared(target, attempted, now)) return now
+            }
             delay(RETURN_FOCUS_DELAY_MS)
         }
-        return false
+        return lastObserved
     }
 
     /**
      * The chain's landing ask with rule 5's verification and ONE bounded
-     * re-ask when the observed focus did not move.
+     * re-ask when the observed focus is not the target or a row the walk
+     * declared it stepped to.
      *
      * Every chain destination in [moveFocusVertical], [enterTabContent] and the
-     * content sink goes through this, so "landed" in the trace means the focus
-     * was observed on a row and the move is reported as `verified=`; [focusRow]
-     * itself stays the raw ask, because it is also called recursively while
-     * walking rows.
+     * content sink goes through this, so `verified=` means the focus was
+     * OBSERVED on a row the press aimed at, and `observed=` names the row it
+     * actually found. [focusRow] itself stays the raw ask, because it is also
+     * called recursively while walking rows.
      */
     suspend fun askRow(
         target: DetailRow,
@@ -3759,15 +3818,46 @@ fun DetailScreen(
         from: DetailRow,
         direction: DetailFocusDirection,
         presence: DetailRowPresence
-    ): Boolean {
+    ): DetailFocusLanding {
         val before = focusedRowNow
-        if (!focusRow(target, fromColumn, from, direction, presence)) return false
-        if (verifyFocusMoved(before)) return true
-        DetailTrace.note(
-            "detail focus verify ${target.name} lost after landing; re-asking"
+        val firstPath = DetailFocusAskPath()
+        if (!focusRow(target, fromColumn, from, direction, presence, firstPath)) {
+            return DetailFocusLandingRules.outcome(
+                target = target,
+                before = before,
+                via = firstPath.via,
+                observed = focusedRowNow,
+                attempted = firstPath.attempted
+            )
+        }
+        val firstObserved = verifyFocusLanded(before, target, firstPath.attempted)
+        val first = DetailFocusLandingRules.outcome(
+            target = target,
+            before = before,
+            via = firstPath.via,
+            observed = firstObserved,
+            attempted = firstPath.attempted
         )
-        if (!focusRow(target, fromColumn, from, direction, presence)) return false
-        return verifyFocusMoved(before)
+        if (first.verified) return first
+        // A geometric fallback that moved focus is a real move, honestly
+        // labelled; it must not be re-asked as if the chain had landed.
+        if (first.landed && first.via == DetailFocusVia.GEOMETRY) return first
+        DetailTrace.note(
+            "detail focus verify ${target.name} observed=${first.observed?.name ?: "none"} " +
+                "lost after landing; re-asking"
+        )
+        val retryPath = DetailFocusAskPath()
+        if (!focusRow(target, fromColumn, from, direction, presence, retryPath)) {
+            return first
+        }
+        val retryObserved = verifyFocusLanded(before, target, retryPath.attempted)
+        return DetailFocusLandingRules.outcome(
+            target = target,
+            before = before,
+            via = retryPath.via,
+            observed = retryObserved,
+            attempted = retryPath.attempted
+        )
     }
 
     /**
@@ -3775,13 +3865,40 @@ fun DetailScreen(
      * focusable but not a LazyRow chip, so it is asked through
      * [focusMediaStrip] and then observed exactly as [askRow] observes a rail.
      */
-    suspend fun askMediaStrip(from: DetailRow): Boolean {
+    suspend fun askMediaStrip(from: DetailRow): DetailFocusLanding {
         val before = focusedRowNow
-        if (!focusMediaStrip(from)) return false
-        if (verifyFocusMoved(before)) return true
-        DetailTrace.note("detail focus verify MEDIA lost after landing; re-asking")
-        if (!focusMediaStrip(from)) return false
-        return verifyFocusMoved(before)
+        val attempted = setOf(DetailRow.MEDIA)
+        if (!focusMediaStrip(from)) {
+            return DetailFocusLandingRules.outcome(
+                target = DetailRow.MEDIA,
+                before = before,
+                via = DetailFocusVia.CHAIN,
+                observed = focusedRowNow,
+                attempted = attempted
+            )
+        }
+        val firstObserved = verifyFocusLanded(before, DetailRow.MEDIA, attempted)
+        val first = DetailFocusLandingRules.outcome(
+            target = DetailRow.MEDIA,
+            before = before,
+            via = DetailFocusVia.CHAIN,
+            observed = firstObserved,
+            attempted = attempted
+        )
+        if (first.verified) return first
+        DetailTrace.note(
+            "detail focus verify MEDIA observed=${first.observed?.name ?: "none"} " +
+                "lost after landing; re-asking"
+        )
+        if (!focusMediaStrip(from)) return first
+        val retryObserved = verifyFocusLanded(before, DetailRow.MEDIA, attempted)
+        return DetailFocusLandingRules.outcome(
+            target = DetailRow.MEDIA,
+            before = before,
+            via = DetailFocusVia.CHAIN,
+            observed = retryObserved,
+            attempted = attempted
+        )
     }
 
     /**
@@ -3814,9 +3931,16 @@ fun DetailScreen(
         // it without saying where it went, which made "the landing failed" and
         // "nothing was ever asked" the same reading. It now says the target and
         // which arm placed it.
-        fun trace(target: String, landed: Boolean, via: String) {
+        fun trace(
+            target: String,
+            landed: Boolean,
+            via: String,
+            observed: DetailRow? = null,
+            verified: Boolean = false
+        ) {
             DetailTrace.note(
-                "detail move TABS DOWN -> $target landed=$landed via=$via"
+                "detail move TABS DOWN -> $target landed=$landed verified=$verified " +
+                    "via=$via observed=${observed?.name ?: "none"}"
             )
         }
 
@@ -3845,10 +3969,11 @@ fun DetailScreen(
         val page = latestPageRowPresence.value ?: latestRowPresence.value
         if (page == null) {
             val landed = focusByGeometry(DetailFocusDirection.DOWN)
-            trace("geometry", landed, "geometry")
+            if (landed) awaitFrame()
+            trace("geometry", landed, "geometry", observed = focusedRowNow)
             if (landed) return true
             val container = landOnContainer()
-            trace("container", container, "container")
+            trace("container", container, "container", observed = focusedRowNow)
             return container
         }
         val rows = DetailTabChain.rowPresence(activeTab, page)
@@ -3867,19 +3992,31 @@ fun DetailScreen(
         if (target != null) {
             // The Media row is entered at its own inner strip, never at a
             // card: the strip is the row's selector (see focusMediaStrip).
-            val landed = if (target == DetailRow.MEDIA) {
+            val landing = if (target == DetailRow.MEDIA) {
                 askMediaStrip(DetailRow.TABS)
             } else {
-                // Rule 5: verified, with one bounded re-ask, so "landed" in
-                // the TABS DOWN line is an observed state and not a request's
-                // own answer.
+                // Rule 5: verified on the target (or a declared step-over),
+                // with one bounded re-ask, so `landed` in the TABS DOWN line
+                // is an observed state and not a request's own answer.
                 askRow(target, 0, DetailRow.TABS, DetailFocusDirection.DOWN, rows)
             }
-            if (landed) {
-                trace(target.name, true, "chain")
+            if (landing.landed) {
+                trace(
+                    target.name,
+                    true,
+                    landing.via.name.lowercase(),
+                    landing.observed,
+                    landing.verified
+                )
                 return true
             }
-            trace(target.name, false, "chain")
+            trace(
+                target.name,
+                false,
+                landing.via.name.lowercase(),
+                landing.observed,
+                false
+            )
         } else {
             trace("none", false, "chain")
         }
@@ -3887,13 +4024,13 @@ fun DetailScreen(
         // Mid-page, so this press is never the page's key to swallow: the
         // platform's own search is what any non-chain surface would have got.
         if (focusByGeometry(DetailFocusDirection.DOWN)) {
-            trace("geometry", true, "geometry")
+            trace("geometry", true, "geometry", observed = focusedRowNow)
             return true
         }
 
         // And the last arm, the one that makes this press impossible to swallow.
         val container = landOnContainer()
-        trace("container", container, "container")
+        trace("container", container, "container", observed = focusedRowNow)
         return container
     }
 
@@ -3965,6 +4102,10 @@ fun DetailScreen(
         // Rule 5: whether the focus was OBSERVED on a row after the landing,
         // not merely whether the request said it landed.
         var tracedVerified = false
+        // The row actually observed after the last ask, named in the trace even
+        // when it is the wrong one (spec 2026-11-21 follow-up). A paste must
+        // show where focus IS after every press, not only where it was asked.
+        var tracedObserved: DetailRow? = null
         // NOT "edge". This default is what build 322's paste printed for a DOWN
         // the chain had named a row for - see the cancel arm below - and an
         // "edge" label on a move that never reached a verdict sent the first
@@ -4021,17 +4162,18 @@ fun DetailScreen(
             // the reported "I land on the first trailer and have to press UP to
             // reach the tabs". The column the press arrived with is recorded
             // either way, so the strip can hand it back on the way up.
-            val landed =
+            val landing =
                 if (target == DetailRow.MEDIA && direction == DetailFocusDirection.DOWN) {
                     lastMediaCardColumn = fromColumn
                     askMediaStrip(from)
                 } else {
                     askRow(target, fromColumn, from, direction, presence)
                 }
-            tracedVia = "chain"
-            tracedLanded = landed
-            tracedVerified = landed
-            if (landed) return true
+            tracedVia = landing.via.name.lowercase()
+            tracedLanded = landing.landed
+            tracedVerified = landing.verified
+            tracedObserved = landing.observed
+            if (landing.landed) return true
 
             // F1a: an UP that walked to the header and could not LAND on it is a
             // miss, not an edge, and a miss must move. The edge rule below still
@@ -4044,8 +4186,11 @@ fun DetailScreen(
             // directly above the chips in the fixed header, so UP finds it.
             if (target == DetailRow.HEADER && direction == DetailFocusDirection.UP) {
                 val moved = focusByGeometry(DetailFocusDirection.UP)
+                if (moved) awaitFrame()
                 tracedVia = "geometry"
                 tracedLanded = moved
+                tracedVerified = false
+                tracedObserved = focusedRowNow
                 return moved
             }
 
@@ -4101,12 +4246,11 @@ fun DetailScreen(
                     } else {
                         askRow(target, fromColumn, from, direction, settled)
                     }
-                if (retried) {
-                    tracedVia = "chain"
-                    tracedLanded = true
-                    tracedVerified = true
-                    return true
-                }
+                tracedVia = retried.via.name.lowercase()
+                tracedLanded = retried.landed
+                tracedVerified = retried.verified
+                tracedObserved = retried.observed
+                if (retried.landed) return true
             }
 
             // F2 (2026-11-14): the row the press aimed at gets one more honest
@@ -4134,12 +4278,11 @@ fun DetailScreen(
                 } else {
                     askRow(target, fromColumn, from, direction, settledRows)
                 }
-            if (secondAsk) {
-                tracedVia = "chain"
-                tracedLanded = true
-                tracedVerified = true
-                return true
-            }
+            tracedVia = secondAsk.via.name.lowercase()
+            tracedLanded = secondAsk.landed
+            tracedVerified = secondAsk.verified
+            tracedObserved = secondAsk.observed
+            if (secondAsk.landed) return true
 
             // Nothing landed - not the row the press aimed at, not any row beyond
             // it - and this is where the press used to be swallowed with the
@@ -4149,8 +4292,11 @@ fun DetailScreen(
             // key the page took and did nothing with (see
             // [fallThroughIfMidPage]).
             val fellThrough = fallThroughIfMidPage(from, direction, settledRows)
+            if (fellThrough) awaitFrame()
             tracedVia = "geometry"
             tracedLanded = fellThrough
+            tracedVerified = false
+            tracedObserved = focusedRowNow ?: tracedObserved
             if (fellThrough) return true
 
             // F2 (2026-11-14): the fall-through NO LONGER ends on the overview's
@@ -4183,6 +4329,7 @@ fun DetailScreen(
             DetailTrace.note(
                 "detail move $from $direction -> ${tracedTarget ?: "none"} " +
                     "landed=$tracedLanded verified=$tracedVerified via=$tracedVia " +
+                    "observed=${tracedObserved?.name ?: "none"} " +
                     "loading=$tracedLoading waited=$tracedWaited"
             )
         }
@@ -4552,7 +4699,7 @@ fun DetailScreen(
                         ) ?: DetailRow.HEADER
                     val landed =
                         focusRow(target, 0, DetailRow.OVERVIEW, DetailFocusDirection.UP, rows) ||
-                            focusTopOfPage()
+                            focusTopOfPage("toggle-up")
                     // E3: the toggle's own outcome, readable without the move
                     // line.
                     DetailTrace.note("detail toggle UP -> $target landed=$landed")
@@ -4867,22 +5014,39 @@ fun DetailScreen(
             // search rail's own keywords are vetted by their titles instead
             // (TmdbRepository.kidsFilterKeywords), where that rule does work.
             val keywords = remember(tmdbDetail, kidsCeiling) {
-                if (kidsCeiling != null) emptyList() else tmdbDetail?.keywords?.list().orEmpty()
+                if (kidsCeiling != null) {
+                    emptyList()
+                } else {
+                    tmdbDetail?.keywords?.list().orEmpty().distinctBy { it.id }
+                }
             }
 
             // The rows this page actually paints, in one place: the chain
             // ([DetailFocusChain]) reads these and nothing else, and every field
             // is the same expression that renders its row below - so "the row
             // exists" and "the row is on screen" cannot drift apart.
-            val networks = tmdbDetail?.networks.orEmpty()
-            val companies = tmdbDetail?.productionCompanies.orEmpty()
+            // Remembered above the rails: these used to be de-duplicated inside
+            // each rail's itemsIndexed argument, i.e. on every re-execution of
+            // the list content lambda, allocating a new list for a value that
+            // only changes when the detail does.
+            val networks = remember(tmdbDetail) {
+                tmdbDetail?.networks.orEmpty().distinctBy { it.id }
+            }
+            val companies = remember(tmdbDetail) {
+                tmdbDetail?.productionCompanies.orEmpty().distinctBy { it.id }
+            }
             // The genre chips live in the fixed header above the list and the
             // review rail is the section between More Like This and the Media
             // row; both are read here - with the same expression that renders
             // them - so their presence in the chain means "on screen", exactly
             // like every other row's.
             val tmdbGenres = tmdbDetail?.genres.orEmpty()
-            val reviews = allReviews.ifEmpty { tmdbDetail?.reviews?.results.orEmpty() }
+            val reviews = remember(allReviews, tmdbDetail) {
+                allReviews
+                    .ifEmpty { tmdbDetail?.reviews?.results.orEmpty() }
+                    .distinctBy { it.id }
+                    .take(60)
+            }
             val hasProductionRow = companies.isNotEmpty()
             val hasNetworkRow = normalizedType == "series" && networks.isNotEmpty()
             val hasCollectionRow = collectionParts.isNotEmpty()
@@ -5029,6 +5193,15 @@ fun DetailScreen(
                     screen = ImageOverrides.SCREEN_DETAIL,
                     fallbackUrl = backdropUrl
                 )
+            }
+
+            // The hero decodes at 1280x720. Its source URL is still the
+            // full-resolution one (the same value is handed to the player's
+            // splash, which really does fill the frame), so swap only the size
+            // segment on the way into Coil - the bytes the hero throws away
+            // after decoding are the ones this removes.
+            val heroDrawBackdropUrl = remember(heroBackdropUrl) {
+                TmdbRepository.backdropAtWidth(heroBackdropUrl)
             }
 
             val context = LocalContext.current
@@ -5877,9 +6050,9 @@ fun DetailScreen(
                         .focusable()
                 )
                 AsyncImage(
-            model = remember(heroBackdropUrl) {
+            model = remember(heroDrawBackdropUrl) {
                 ImageRequest.Builder(context)
-                    .data(heroBackdropUrl)
+                    .data(heroDrawBackdropUrl)
                     .size(Size(1280, 720))
                     // The detail hero is one of the two surfaces that may use
                     // hardware bitmaps, and it follows the setting rather than
@@ -5991,7 +6164,16 @@ fun DetailScreen(
                                 bottom = 6.dp
                             )
                             .focusGroup()
-                            .focusRestorer()
+                            // NO focusRestorer on the header (spec 2026-11-21
+                            // follow-up, Defect 2). It remembered PLAY as the
+                            // last focused child - exactly the row the 443
+                            // paste lands on after a successful pill ask - and
+                            // it is the only surface that can restore focus
+                            // THERE, after the chain has already placed it
+                            // lower. The chain owns vertical placement on this
+                            // row; PLAY and the actions still form one focus
+                            // group for sideways traversal, and UP from the
+                            // genres asks for PLAY explicitly.
                             // Rule 5: this row's focus gains and losses are
                             // observed, so a move into the header can be
                             // verified.
@@ -6797,7 +6979,7 @@ fun DetailScreen(
                                 // reach whichever one is in the viewer's
                                 // column, and PLAY above them is its fallback.
                                 if (!focusByGeometry(DetailFocusDirection.UP)) {
-                                    focusTopOfPage()
+                                    focusTopOfPage("strip-up")
                                 }
                             }
                         },
@@ -6851,19 +7033,24 @@ fun DetailScreen(
                                                     activeTab,
                                                     rows
                                                 )
-                                                val landed = target != null &&
+                                                val landing = target?.let { asked ->
                                                     askRow(
-                                                        target,
+                                                        asked,
                                                         0,
                                                         DetailRow.TABS,
                                                         DetailFocusDirection.DOWN,
                                                         rows
                                                     )
+                                                }
                                                 val name = target?.name ?: "none"
                                                 DetailTrace.note(
-                                                    "detail sink DOWN -> $name landed=$landed"
+                                                    "detail sink DOWN -> $name " +
+                                                        "landed=${landing?.landed == true} " +
+                                                        "verified=${landing?.verified == true} " +
+                                                        "via=${landing?.via?.name?.lowercase() ?: "none"} " +
+                                                        "observed=${landing?.observed?.name ?: "none"}"
                                                 )
-                                                if (!landed) {
+                                                if (landing?.landed != true) {
                                                     fallThroughIfMidPage(
                                                         DetailRow.TABS,
                                                         DetailFocusDirection.DOWN,
@@ -6898,7 +7085,7 @@ fun DetailScreen(
                         )
                         val target = DetailTabChain.firstRow(activeTab, rows)
                             ?: return@LaunchedEffect
-                        val landed =
+                        val landing =
                             if (target == DetailRow.MEDIA) {
                                 askMediaStrip(DetailRow.TABS)
                             } else {
@@ -6911,7 +7098,10 @@ fun DetailScreen(
                                 )
                             }
                         DetailTrace.note(
-                            "detail sink handoff -> ${target.name} landed=$landed"
+                            "detail sink handoff -> ${target.name} " +
+                                "landed=${landing.landed} verified=${landing.verified} " +
+                                "via=${landing.via.name.lowercase()} " +
+                                "observed=${landing.observed?.name ?: "none"}"
                         )
                     }
 
@@ -6938,7 +7128,8 @@ fun DetailScreen(
                             top = 6.dp
                         )
                     ) {
-                        val detailFacts = buildList {
+                        val detailFacts = remember(tmdbDetail, type, awards, m.country) {
+                            buildList {
                             tmdbDetail?.bestReleaseDate()
                                 ?.let {
                                     formatDisplayDate(it)
@@ -7004,6 +7195,7 @@ fun DetailScreen(
                                         )
                                     )
                                 }
+                            }
                         }
 
                         // Critic/audience ratings, right under the overview.
@@ -7109,7 +7301,7 @@ fun DetailScreen(
                                         // the class the Actor rail hit as
                                         // ANDROID-1D. Distinct at the build, like
                                         // the cast rail above.
-                                        keywords.distinctBy { it.id },
+                                        keywords,
                                         key = { _, kw -> "keyword:${kw.id}" }
                                     ) { keywordIndex, kw ->
                                         val chipKey = "keyword:${kw.id}"
@@ -7549,6 +7741,8 @@ fun DetailScreen(
                                                             isEpisodeWatched,
                                                         airDatesTrusted =
                                                             effectiveSeason !in seasonsWithStaleDates,
+                                                        spoilerFree =
+                                                            spoilerFreeEnabled,
                                                         progressFraction = run {
                                                             // A watched episode never shows a progress
                                                             // bar. The tick and a partial bar are two
@@ -8115,7 +8309,7 @@ fun DetailScreen(
                                         // that column; a chip can.
                                 ) {
                                     itemsIndexed(
-                                        networks.distinctBy { it.id },
+                                        networks,
                                         key = { _, n -> "network:${n.id}" }
                                     ) { networkIndex, n ->
                                         val chipKey = "network:${n.id}"
@@ -8224,7 +8418,7 @@ fun DetailScreen(
                                         .then(traceRowFocus(DetailRow.PRODUCTION))
                                 ) {
                                     itemsIndexed(
-                                        companies.distinctBy { it.id },
+                                        companies,
                                         key = { _, c -> "company:${c.id}" }
                                     ) { companyIndex, c ->
                                         val chipKey = "company:${c.id}"
@@ -8332,7 +8526,7 @@ fun DetailScreen(
                                         .then(traceRowFocus(DetailRow.COLLECTION))
                                 ) {
                                     itemsIndexed(
-                                        collectionParts.distinctBy { it.id },
+                                        collectionParts,
                                         key = { _, part -> "collection:${part.id}" }
                                     ) { partIndex, part ->
                                         // Focus requester for restoring focus
@@ -8516,7 +8710,7 @@ fun DetailScreen(
                                         .then(traceRowFocus(DetailRow.MORE_LIKE_THIS))
                                 ) {
                                     itemsIndexed(
-                                        recommendations.distinctBy { it.id }.take(30),
+                                        recommendations.take(30),
                                         key = { _, rec -> "rec:${rec.id}" }
                                     ) { recIndex, rec ->
                                         // Focus requester for restoring focus
@@ -8726,7 +8920,7 @@ fun DetailScreen(
                                         .then(traceRowFocus(DetailRow.REVIEWS))
                                 ) {
                                     itemsIndexed(
-                                        reviews.distinctBy { it.id }.take(60),
+                                        reviews,
                                         key = { _, review -> "review:${review.id}" }
                                     ) { reviewIndex, review ->
                                         val reviewFocusRequester =
@@ -10326,7 +10520,13 @@ private fun EpisodeCard(
      * marks the card UNAVAILABLE, because the row is stale rather than the
      * episode unaired.
      */
-    airDatesTrusted: Boolean = true
+    airDatesTrusted: Boolean = true,
+    /**
+     * The screen's already-collected mode. One collector for the whole page
+     * instead of one per episode card (a 24-episode season used to run 24
+     * collectors on the same flow and re-read the pref in each).
+     */
+    spoilerFree: Boolean
 ) {
     val posterUrl = remember(ep.thumbnail, fallbackImageUrl) {
         ep.thumbnail?.takeIf {
@@ -10344,15 +10544,9 @@ private fun EpisodeCard(
     // without its own identity - no name, no synopsis, no frame from it - so
     // browsing a season cannot hand them a plot they have not reached. Watched
     // episodes and the one they are part-way through keep everything: the
-    // first is behind them, the second is where they left off. Read through the
-    // synced revision, so a mode switched on another device un-hides (or hides)
-    // the cards already on screen rather than at the next screen entry.
-    val spoilerFreeContext = LocalContext.current
-    val spoilerFreeRevision by com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
-        .revision.collectAsStateWithLifecycle()
-    val spoilerFree = remember(spoilerFreeContext, spoilerFreeRevision) {
-        AppPreferences.getSpoilerFree(spoilerFreeContext)
-    }
+    // first is behind them, the second is where they left off. [spoilerFree] is
+    // collected once by the screen through the synced revision, so a mode
+    // switched on another device still repaints the cards already on screen.
     val hidesSpoiler = SpoilerFree.hidesIdentity(
         enabled = spoilerFree,
         watched = isWatched,
@@ -10660,11 +10854,11 @@ private fun EpisodeCard(
                     ep.airDate
                         ?.takeIf { it.isNotBlank() }
                         ?.let { airDate ->
+                            val airDateLabel = remember(airDate) {
+                                formatEpisodeAirDate(airDate)
+                            }
                             Text(
-                                text =
-                                    formatEpisodeAirDate(
-                                        airDate
-                                    ),
+                                text = airDateLabel,
                                 color = KBTextLo,
                                 style =
                                     MaterialTheme.typography.bodySmall,
@@ -11380,12 +11574,20 @@ internal fun airedEpisodeCount(
  * `$12,000,000` - the TV meta line's money format, shared with the phone's
  * facts block so the two pages cannot word a budget two ways.
  */
+/**
+ * One currency formatter per thread.
+ *
+ * `formatUsd` sits in the facts block, so a Detail recomposition called it
+ * twice and each call constructed a fresh `NumberFormat`. The formatter is
+ * mutable and not thread-safe, hence the thread-local rather than a shared
+ * top-level value.
+ */
+private val UsdFormat: ThreadLocal<NumberFormat> =
+    ThreadLocal.withInitial { NumberFormat.getCurrencyInstance(Locale.US) }
+
 internal fun formatUsd(
     amount: Long
-): String =
-    NumberFormat
-        .getCurrencyInstance(Locale.US)
-        .format(amount)
+): String = UsdFormat.get().format(amount)
 
 private fun extractYear(
     value: String?
@@ -11798,6 +12000,12 @@ private fun DetailTabPill(
     onUp: () -> Unit,
     onDown: () -> Unit
 ) {
+    // The pill's OWN focus, traced apart from the strip container (spec
+    // 2026-11-21 follow-up, Defect 2). The 443 paste has no `GAIN TABS` at all
+    // while `focusTabStrip()` reported success, so the next paste has to say
+    // whether the pill EVER held the focus or whether the request itself was
+    // dropped. Kept per pill, so a focus move between pills is a LOST/GAIN pair.
+    var pillHadFocus by remember(tab) { mutableStateOf(false) }
     Surface(
         onClick = { onSelect(tab) },
         shape = ClickableSurfaceDefaults.shape(shape = KBShapeChip),
@@ -11835,6 +12043,14 @@ private fun DetailTabPill(
         ),
         modifier = Modifier
             .focusRequester(requester)
+            .onFocusChanged { state ->
+                if (state.isFocused && !pillHadFocus) {
+                    DetailTrace.note("detail pill GAIN ${tab.name}")
+                } else if (!state.isFocused && pillHadFocus) {
+                    DetailTrace.note("detail pill LOST ${tab.name}")
+                }
+                pillHadFocus = state.isFocused
+            }
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) {
                     return@onPreviewKeyEvent false

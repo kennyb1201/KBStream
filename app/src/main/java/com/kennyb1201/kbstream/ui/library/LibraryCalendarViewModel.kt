@@ -36,7 +36,7 @@ import com.kennyb1201.kbstream.ui.home.MAX_TRAKT_CAUGHT_UP_UPCOMING_ITEMS
 import com.kennyb1201.kbstream.ui.home.bingeCatCaughtUpCandidates
 import com.kennyb1201.kbstream.ui.home.localCaughtUpCandidates
 import com.kennyb1201.kbstream.ui.home.mdbListCaughtUpCandidates
-import com.kennyb1201.kbstream.ui.home.mdbListEpisodePairs
+import com.kennyb1201.kbstream.ui.home.mdbListEpisodePairsByShow
 import com.kennyb1201.kbstream.ui.home.traktCaughtUpCandidates
 import java.time.LocalDate
 import java.time.YearMonth
@@ -238,6 +238,15 @@ class LibraryCalendarViewModel(
         val days = HashMap<LocalDate, MutableList<CalendarEpisode>>()
         val resolved = HashSet<String>()
 
+        /** Days whose mutable episode list changed since [sortedDays] was built. */
+        val dirtyDays = HashSet<LocalDate>()
+
+        /** The sorted view handed to the UI; untouched days keep their list. */
+        val sortedDays = HashMap<LocalDate, List<CalendarEpisode>>()
+
+        /** This attempt's one read of the profile's completed rows, for Pass A. */
+        var localWatched: Map<String, Set<Pair<Int, Int>>>? = null
+
         /**
          * The shows already folded into [days], by their resolved TMDB id.
          *
@@ -264,6 +273,22 @@ class LibraryCalendarViewModel(
          * shows from every month until a profile switch or force-stop.
          */
         var failed = 0
+
+        /**
+         * Re-sorts only the days a landed show touched, then hands back the
+         * accumulated sorted view. A cold month used to redo every day on every
+         * 180 ms publish; the touched set is usually one day, not the month.
+         */
+        fun sortedDaysForPublish(): Map<LocalDate, List<CalendarEpisode>> {
+            for (day in dirtyDays) {
+                sortedDays[day] = calendarSortedDay(days[day].orEmpty())
+            }
+            dirtyDays.clear()
+            // A snapshot, not the live map: the next publish mutates this one,
+            // and a UI state that kept the same map instance would not see the
+            // changed day list.
+            return HashMap(sortedDays)
+        }
     }
 
     private val progress = LinkedHashMap<YearMonth, MonthProgress>()
@@ -411,7 +436,7 @@ class LibraryCalendarViewModel(
      * removed by a local pass, and this pass removes nothing at all. Un-marking
      * is the terminal pass's job (see [publishWatched]).
      */
-    private suspend fun refreshWatchedLocal(month: YearMonth) {
+    private suspend fun refreshWatchedLocal(month: YearMonth, build: MonthProgress) {
         val state = _uiState.value
         if (state.month != month) return
         val showIds = state.days.values
@@ -420,7 +445,11 @@ class LibraryCalendarViewModel(
             .toSet()
         if (showIds.isEmpty()) return
 
-        val local = localWatchedRows()
+        // One Room read per build attempt, not one per publish tick. The rows
+        // cannot change while this month is filling, and a cold 300-show month
+        // used to re-read them after every 180ms publish.
+        val local = build.localWatched
+            ?: localWatchedRows().also { build.localWatched = it }
         // The viewer may have paged away during the read; a pass for a month
         // that is no longer on screen must not tint the one that is.
         if (_uiState.value.month != month) return
@@ -466,9 +495,9 @@ class LibraryCalendarViewModel(
      * function runs under the month build's per-show semaphore permit, and a
      * Room read must not hold one.
      */
-    private fun launchLocalWatched(month: YearMonth) {
+    private fun launchLocalWatched(month: YearMonth, build: MonthProgress) {
         watchedJob?.cancel()
-        watchedJob = viewModelScope.launch { refreshWatchedLocal(month) }
+        watchedJob = viewModelScope.launch { refreshWatchedLocal(month, build) }
     }
 
     /**
@@ -776,9 +805,13 @@ class LibraryCalendarViewModel(
         trimProgress(keep = month)
         val selectedWhenStarted = _uiState.value.selected
 
+        // A resumed build already has days from the interrupted attempt. Seed
+        // the incremental sorted view with all of them, or the final publish
+        // would hand back only the days this attempt touched.
+        build.dirtyDays.addAll(build.days.keys)
         _uiState.value = _uiState.value.copy(
             month = month,
-            days = calendarSortedDays(build.days),
+            days = build.sortedDaysForPublish(),
             selected = landingDayFor(month, landingDay, build.days),
             loading = build.days.isEmpty(),
             hasShows = showIds.isNotEmpty()
@@ -806,7 +839,14 @@ class LibraryCalendarViewModel(
         // a previous attempt's count is spent (its candidates are in
         // [remaining] above and are tried again here).
         build.failed = 0
+        // A resumed attempt gets a fresh snapshot: history may have changed
+        // between visits, and this cache lives only for the attempt below.
+        build.localWatched = null
         val semaphore = Semaphore(CALENDAR_CONCURRENCY)
+        // The hidden set cannot change during one month build, and rebuilding
+        // it inside calendarShowFor meant normalizing every hidden entry once
+        // per candidate (up to 300 times). Read it once and pass it in.
+        val hiddenKeys = HiddenTitles.keys(appContext)
 
         coroutineScope {
             remaining.map { id ->
@@ -816,7 +856,7 @@ class LibraryCalendarViewModel(
                         // lookup: this candidate has no answer yet, so it must
                         // not count as resolved (see noteResolved).
                         val show = runCatchingCancellable {
-                            calendarShowFor(id, month)
+                            calendarShowFor(id, month, hiddenKeys)
                         }.fold(onSuccess = { it }, onFailure = { Result.failure(it) })
                         noteResolved(month, build, id, show)
                     }
@@ -826,7 +866,7 @@ class LibraryCalendarViewModel(
 
         val built = CalendarMonth(
             month = month,
-            days = calendarSortedDays(build.days)
+            days = build.sortedDaysForPublish()
         )
         // Cache a month only if every candidate answered. A build that lost
         // shows to a failed read is PUBLISHED (the rows that did land are on
@@ -877,29 +917,34 @@ class LibraryCalendarViewModel(
 
         build.resolved += candidateId
         val show = result.getOrNull()
-        var gained = false
         // One show, folded once - however many candidate ids named it (see
         // MonthProgress.shows). A repeat is still marked resolved so it is not
         // asked about again.
         if (show != null && build.shows.add(show.showId)) {
             for ((day, episodes) in calendarEpisodesFor(month, show, LocalDate.now())) {
                 build.days.getOrPut(day) { ArrayList() } += episodes
-                gained = true
+                build.dirtyDays += day
             }
         }
         if (_uiState.value.month != month) return
 
         val now = System.currentTimeMillis()
-        if (!gained && now - build.lastPublishedAt < PARTIAL_PUBLISH_MS) return
+        // Every landed show used to publish immediately, which meant a cold
+        // month re-sorted every day, copied the whole UI state and restarted
+        // the local-watched Room read once per show (up to 300 times). The
+        // 180ms gate is the same one the no-show misses already used: the grid
+        // still fills while the month builds, at a bounded cadence, instead of
+        // once per answer.
+        if (now - build.lastPublishedAt < PARTIAL_PUBLISH_MS) return
         build.lastPublishedAt = now
         _uiState.value = _uiState.value.copy(
-            days = calendarSortedDays(build.days),
+            days = build.sortedDaysForPublish(),
             loading = false,
             hasShows = showIds.isNotEmpty()
         )
         // Ride the publish gate: the rows that just landed get their local
         // badges now, instead of waiting for the last show of the month.
-        launchLocalWatched(month)
+        launchLocalWatched(month, build)
     }
 
     /** Puts a built month on screen, with the day the viewer should be on. */
@@ -945,7 +990,8 @@ class LibraryCalendarViewModel(
      */
     private suspend fun calendarShowFor(
         candidateId: String,
-        month: YearMonth
+        month: YearMonth,
+        hiddenKeys: Set<String>
     ): Result<CalendarShow?> {
         // A failed detail is a failure, not "this show has nothing": it has to
         // reach [noteResolved] as one so the month is retried (see [detailFor]).
@@ -978,7 +1024,7 @@ class LibraryCalendarViewModel(
         // first and the name/year pair as the cross-namespace fallback.
         if (
             HiddenTitles.hides(
-                HiddenTitles.keys(appContext),
+                hiddenKeys,
                 "series",
                 title,
                 detail.firstAirDate?.take(4)?.toIntOrNull(),
@@ -1172,6 +1218,9 @@ class LibraryCalendarViewModel(
         }
 
         val simklReady = simklRepository.isConfigured() && simklRepository.hasToken()
+        // One pass over the account-wide keys, then a lookup per id spelling.
+        // Scanning the set per show per spelling was O(shows × keys).
+        val mdbListByShow = mdbListEpisodePairsByShow(mdbList.episodeKeys)
         val out = HashMap<String, Set<Pair<Int, Int>>>()
 
         // The id resolution for every on-screen show, concurrently and bounded -
@@ -1192,9 +1241,7 @@ class LibraryCalendarViewModel(
 
             keys.forEach { key ->
                 local[key]?.let(pairs::addAll)
-                mdbList.episodeKeys
-                    .takeIf { it.isNotEmpty() }
-                    ?.let { pairs += mdbListEpisodePairs(key, it) }
+                mdbListByShow[key]?.let(pairs::addAll)
             }
 
             if (trakt.shows.isNotEmpty()) {

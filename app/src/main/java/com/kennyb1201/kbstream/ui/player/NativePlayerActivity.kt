@@ -15371,11 +15371,20 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 // non-blocking - it does nothing until both numbers exist.
                 maybeDetectScheme()
 
-                // Update play/pause button
-                btnPlayPause.setImageResource(
-                    if (player.isPlaying) R.drawable.ic_player_pause else R.drawable.ic_player_play
-                )
-                tintPlayPauseIcon(btnPlayPause, this@NativePlayerActivity)
+                // Update play/pause button. Nothing is looking at it while the
+                // chrome is down and playback is paused, so skip the resource
+                // decode/tint on those ticks; showing the chrome refreshes it
+                // through updateControlsInfo().
+                if (player.isPlaying || controlsVisible) {
+                    btnPlayPause.setImageResource(
+                        if (player.isPlaying) {
+                            R.drawable.ic_player_pause
+                        } else {
+                            R.drawable.ic_player_play
+                        }
+                    )
+                    tintPlayPauseIcon(btnPlayPause, this@NativePlayerActivity)
+                }
 
                 // Some sources (broken HLS tails, streams with wrong or unset
                 // durations) never emit STATE_ENDED: the picture goes black but

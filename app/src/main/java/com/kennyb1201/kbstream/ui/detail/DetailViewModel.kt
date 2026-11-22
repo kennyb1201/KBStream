@@ -65,6 +65,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import com.kennyb1201.kbstream.data.tmdb.keepRecommendedGenre
 import com.kennyb1201.kbstream.data.tmdb.list
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -76,7 +77,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -590,6 +593,15 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     /** True while a pick is being fetched and joined. */
     private val _episodeOrderBusy = MutableStateFlow(false)
     internal val episodeOrderBusy: StateFlow<Boolean> = _episodeOrderBusy.asStateFlow()
+
+    // The alternate-order setup and a later pick both need this show's TVDB id.
+    // The repository cache makes the second lookup cheap, but it is still a
+    // disk/memory read on a path a viewer can trigger while the first is in
+    // flight; one positive answer for this Detail instance is enough. Only a
+    // positive result is kept, so an outage at setup is retried rather than
+    // becoming this show's permanent verdict.
+    private val tvdbIdMutex = Mutex()
+    private var resolvedTvdbId: Int? = null
 
     private val _playButtonText = MutableStateFlow("Play")
     val playButtonText: StateFlow<String> = _playButtonText.asStateFlow()
@@ -2015,102 +2027,140 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 // the report, down to the self-correction. adoptTrackerSetsFor
                 // above is what makes the held set safe to keep: it belongs to
                 // this show.
-                if (
-                    normalizedType == "series" &&
-                    simklRepository.isConfigured() &&
-                    simklRepository.hasToken()
-                ) {
-                    val tmdbShowId = tmdbDetailResult.getOrNull()?.id
-                    val simklStartedAt = SystemClock.elapsedRealtime()
-                    runCatchingCancellable {
-                        simklRepository.getWatchedEpisodesForShowByImdb(imdbId = id, tmdbId = tmdbShowId)
-                    }.onSuccess { episodes ->
-                        _simklWatchedEpisodes.value = episodes
-                        _simklSeriesWatched.value = episodes.isNotEmpty()
-                        simklKeysReadFor = id
-                        // After the publish, so the state's own contract (the
-                        // three lines above, assignment only on success) keeps
-                        // its shape and the timer stays out of it.
-                        PerfTrace.record(
-                            "detail.simkl",
-                            SystemClock.elapsedRealtime() - simklStartedAt,
-                            ok = true
-                        )
+                // All four tracker reads are independent: Simkl's watched
+                // episodes, Simkl's attribution ids, MDBList and Trakt. They
+                // used to be awaited one after another, so a page's badges and
+                // episode start waited for the SUM of four network round trips.
+                // Launch them together and only then apply the results in the
+                // original order - the assignments stay on this coroutine, so
+                // the "a failure keeps the held set" rule is unchanged.
+                coroutineScope {
+                    val simklWatched = if (
+                        normalizedType == "series" &&
+                        simklRepository.isConfigured() &&
+                        simklRepository.hasToken()
+                    ) {
+                        val tmdbShowId = tmdbDetailResult.getOrNull()?.id
+                        async {
+                            val started = SystemClock.elapsedRealtime()
+                            val result = runCatchingCancellable {
+                                simklRepository.getWatchedEpisodesForShowByImdb(
+                                    imdbId = id,
+                                    tmdbId = tmdbShowId
+                                )
+                            }
+                            result to (SystemClock.elapsedRealtime() - started)
+                        }
+                    } else {
+                        null
                     }
-                } else {
-                    _simklWatchedEpisodes.value = emptySet()
-                    _simklSeriesWatched.value = false
-                }
 
-                // The attribution link for this screen, from the same cached
-                // body: Simkl's rules want the Simkl page for the exact title
-                // their data is showing on, and a series this account has no
-                // Simkl record for has nothing to point at.
-                val simklIds = if (
-                    normalizedType == "series" &&
-                    simklRepository.isConfigured() &&
-                    simklRepository.hasToken()
-                ) {
-                    val tmdbShowId = tmdbDetailResult.getOrNull()?.id
-                    runCatchingCancellable {
-                        simklRepository.getShowIdsByImdb(imdbId = id, tmdbId = tmdbShowId)
-                    }.getOrNull()
-                } else {
-                    null
-                }
-                _simklPageUrl.value = simklItemUrl(
-                    mediaType = "series",
-                    simklId = simklIds?.simkl,
-                    slug = simklIds?.slug
-                )
-
-                // MDBList watched episodes for this show, merged alongside
-                // the Simkl set so episode badges reflect both trackers. The
-                // lookup goes through the shared snapshot index rather than
-                // re-parsing the keys here: a show can be filed under either
-                // id form (and, when the device only ever pushed one, under
-                // both at once), so the index is asked for every flavor this
-                // title answers to and unions them.
-                if (
-                    normalizedType == "series" &&
-                    MdbListClient.isConfigured(getApplication())
-                ) {
-                    runCatchingCancellable {
-                        MdbListClient.watchedEpisodesForShow(
-                            context = getApplication(),
-                            showKeys = localHistoryParentIds(id)
-                        )
-                    }.onSuccess { episodes ->
-                        // Kept so the freshness gate's local-only refresh can
-                        // rebuild the merged keys without re-reading the cloud
-                        // snapshot - and kept on FAILURE too (F1): a read that
-                        // did not answer must not empty ticks that were right.
-                        mdbListWatchedEpisodes = episodes
-                        mdbListKeysReadFor = id
+                    val simklIds = if (
+                        normalizedType == "series" &&
+                        simklRepository.isConfigured() &&
+                        simklRepository.hasToken()
+                    ) {
+                        val tmdbShowId = tmdbDetailResult.getOrNull()?.id
+                        async {
+                            runCatchingCancellable {
+                                simklRepository.getShowIdsByImdb(imdbId = id, tmdbId = tmdbShowId)
+                            }.getOrNull()
+                        }
+                    } else {
+                        null
                     }
-                } else {
-                    mdbListWatchedEpisodes = emptySet()
-                }
 
-                // Trakt's watched episodes, unioned into the same keys. Guarded
-                // on its own client id and token; a failed read leaves the
-                // previous set rather than clearing ticks that were already
-                // right (same posture as MDBList above).
-                if (
-                    normalizedType == "series" &&
-                    traktRepository.isConfigured() &&
-                    traktRepository.hasToken()
-                ) {
-                    runCatchingCancellable {
-                        traktRepository.watchedEpisodesForShow(
-                            showKeys = localHistoryParentIds(id)
-                        )
-                    }.onSuccess { episodes ->
-                        traktWatchedEpisodes = episodes
-                        traktKeysReadFor = id
+                    val mdbListWatched = if (
+                        normalizedType == "series" &&
+                        MdbListClient.isConfigured(getApplication())
+                    ) {
+                        val showKeys = localHistoryParentIds(id)
+                        async {
+                            runCatchingCancellable {
+                                MdbListClient.watchedEpisodesForShow(
+                                    context = getApplication(),
+                                    showKeys = showKeys
+                                )
+                            }
+                        }
+                    } else {
+                        null
                     }
-                } else {
-                    traktWatchedEpisodes = emptySet()
+
+                    val traktWatched = if (
+                        normalizedType == "series" &&
+                        traktRepository.isConfigured() &&
+                        traktRepository.hasToken()
+                    ) {
+                        val showKeys = localHistoryParentIds(id)
+                        async {
+                            runCatchingCancellable {
+                                traktRepository.watchedEpisodesForShow(showKeys = showKeys)
+                            }
+                        }
+                    } else {
+                        null
+                    }
+
+                    if (simklWatched != null) {
+                        val (read, elapsedMs) = simklWatched.await()
+                        read.onSuccess { episodes ->
+                            _simklWatchedEpisodes.value = episodes
+                            _simklSeriesWatched.value = episodes.isNotEmpty()
+                            simklKeysReadFor = id
+                            // After the publish, so the state's own contract (the
+                            // three lines above, assignment only on success) keeps
+                            // its shape and the timer stays out of it.
+                            PerfTrace.record("detail.simkl", elapsedMs, ok = true)
+                        }
+                    } else {
+                        _simklWatchedEpisodes.value = emptySet()
+                        _simklSeriesWatched.value = false
+                    }
+
+                    // The attribution link for this screen, from the same cached
+                    // body: Simkl's rules want the Simkl page for the exact title
+                    // their data is showing on, and a series this account has no
+                    // Simkl record for has nothing to point at.
+                    val attributedIds = simklIds?.await()
+                    _simklPageUrl.value = simklItemUrl(
+                        mediaType = "series",
+                        simklId = attributedIds?.simkl,
+                        slug = attributedIds?.slug
+                    )
+
+                    // MDBList watched episodes for this show, merged alongside
+                    // the Simkl set so episode badges reflect both trackers. The
+                    // lookup goes through the shared snapshot index rather than
+                    // re-parsing the keys here: a show can be filed under either
+                    // id form (and, when the device only ever pushed one, under
+                    // both at once), so the index is asked for every flavor this
+                    // title answers to and unions them.
+                    if (mdbListWatched != null) {
+                        mdbListWatched.await().onSuccess { episodes ->
+                            // Kept so the freshness gate's local-only refresh can
+                            // rebuild the merged keys without re-reading the cloud
+                            // snapshot - and kept on FAILURE too (F1): a read that
+                            // did not answer must not empty ticks that were right.
+                            mdbListWatchedEpisodes = episodes
+                            mdbListKeysReadFor = id
+                        }
+                    } else {
+                        mdbListWatchedEpisodes = emptySet()
+                    }
+
+                    // Trakt's watched episodes, unioned into the same keys. Guarded
+                    // on its own client id and token; a failed read leaves the
+                    // previous set rather than clearing ticks that were already
+                    // right (same posture as MDBList above).
+                    if (traktWatched != null) {
+                        traktWatched.await().onSuccess { episodes ->
+                            traktWatchedEpisodes = episodes
+                            traktKeysReadFor = id
+                        }
+                    } else {
+                        traktWatchedEpisodes = emptySet()
+                    }
                 }
 
                 // 3. Build merged keys *before* evaluating target episodes or seasons
@@ -2162,23 +2212,36 @@ var lastMetaError: Throwable? = null
 
 // Every candidate is probed CONCURRENTLY and the results are then considered
 // in preference order, so the winner is still the best-ranked add-on that
-// answered - but the wait is the slowest single probe instead of the sum of
-// every probe (one add-on that never answers no longer delays everything
-// behind it). Each call keeps its own timeout, and withTimeoutOrNull sits
-// INSIDE runCatching so a timeout's own cancellation turns into a null
-// response here instead of escaping this scope as a cancellation of the whole
-// load.
-val probeResults = metaAddons.map { metaAddon ->
-    async {
-        val baseUrl = metaAddon.manifestUrl.substringBeforeLast("/manifest.json")
-        val result = runCatchingCancellable {
-            withTimeoutOrNull(META_PROBE_CALL_TIMEOUT_MS) {
-                repository.getMeta(baseUrl, normalizedType, id)
+// answered. The wait used to be `awaitAll()` - the slowest single probe - even
+// after a higher-ranked add-on had already answered, so every lower-ranked
+// probe (or its full timeout) still held the load tail. Now the loop stops at
+// the first answer and cancels the probes below it. Each call keeps its own
+// timeout, and withTimeoutOrNull sits INSIDE runCatching so a timeout's own
+// cancellation turns into a null response here instead of escaping this scope
+// as a cancellation of the whole load.
+val probeResults = coroutineScope {
+    val probes = metaAddons.map { metaAddon ->
+        metaAddon to async {
+            val baseUrl = metaAddon.manifestUrl.substringBeforeLast("/manifest.json")
+            val result = runCatchingCancellable {
+                withTimeoutOrNull(META_PROBE_CALL_TIMEOUT_MS) {
+                    repository.getMeta(baseUrl, normalizedType, id)
+                }
             }
+            Triple(metaAddon, result.getOrNull(), result.exceptionOrNull())
         }
-        Triple(metaAddon, result.getOrNull(), result.exceptionOrNull())
     }
-}.awaitAll()
+    val considered = mutableListOf<
+        Triple<com.kennyb1201.kbstream.data.addon.InstalledAddon, Meta?, Throwable?>
+        >()
+    for ((_, probe) in probes) {
+        val outcome = probe.await()
+        considered += outcome
+        if (outcome.second != null) break
+    }
+    probes.forEach { (_, probe) -> probe.cancel() }
+    considered
+}
 
 for ((metaAddon, response, error) in probeResults) {
     if (response != null) {
@@ -2766,9 +2829,7 @@ for ((metaAddon, response, error) in probeResults) {
 
             _episodeOrder.value = TvdbOrderRepository.chosen(getApplication(), stable)
 
-            val tvdbId = runCatching {
-                tmdbRepository.resolveTvdbId(tmdbId, "series")
-            }.getOrNull()?.takeIf { it > 0 } ?: return@launch
+            val tvdbId = resolveTvdbIdOnce(tmdbId) ?: return@launch
 
             _episodeOrders.value = TvdbOrderRepository.options(getApplication(), stable, tvdbId)
 
@@ -2785,6 +2846,16 @@ for ((metaAddon, response, error) in probeResults) {
                 _loadedSeason.value?.let { season -> loadEpisodesForSeason(season) }
             }
         }
+    }
+
+    /** One positive TVDB id for this Detail instance; an outage is not remembered. */
+    private suspend fun resolveTvdbIdOnce(tmdbId: Int): Int? = tvdbIdMutex.withLock {
+        resolvedTvdbId?.let { return@withLock it }
+        val id = runCatching {
+            tmdbRepository.resolveTvdbId(tmdbId, "series")
+        }.getOrNull()?.takeIf { it > 0 }
+        if (id != null) resolvedTvdbId = id
+        id
     }
 
     /**
@@ -2810,9 +2881,7 @@ for ((metaAddon, response, error) in probeResults) {
                     .ifBlank { imdbId }
                 val stable = EpisodeSchemeStore.stableShowId(rootId, tmdbId) ?: return@launch
 
-                val tvdbId = runCatching {
-                    tmdbRepository.resolveTvdbId(tmdbId, "series")
-                }.getOrNull()?.takeIf { it > 0 }
+                val tvdbId = resolveTvdbIdOnce(tmdbId)
 
                 val ok = TvdbOrderRepository.select(
                     context = getApplication(),

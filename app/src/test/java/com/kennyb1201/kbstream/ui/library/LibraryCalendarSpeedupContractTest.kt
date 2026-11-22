@@ -21,13 +21,14 @@ class LibraryCalendarSpeedupContractTest {
     fun `the local-first pass is local and unions, and never waits on an id resolution`() {
         val pass = section(
             source(VIEW_MODEL),
-            "private suspend fun refreshWatchedLocal(month: YearMonth) {",
+            "private suspend fun refreshWatchedLocal(month: YearMonth, build: MonthProgress) {",
             "/**\n     * Publishes a watched set"
         )
 
         assertTrue(
-            "the pass reads the profile's completed rows once",
-            pass.contains("val local = localWatchedRows()")
+            "the pass reads the profile's completed rows once per build attempt",
+            pass.contains("build.localWatched") &&
+                pass.contains("?: localWatchedRows().also { build.localWatched = it }")
         )
         assertFalse(
             "no id resolution may run here - that is the network step this pass " +
@@ -59,11 +60,11 @@ class LibraryCalendarSpeedupContractTest {
         )
         assertTrue(
             "it launches after the publish the gate already allowed",
-            note.contains("launchLocalWatched(month)")
+            note.contains("launchLocalWatched(month, build)")
         )
         assertTrue(
             "launched after the publish the gate allowed, so it rides the same cadence",
-            note.indexOf("launchLocalWatched(month)") >
+            note.indexOf("launchLocalWatched(month, build)") >
                 note.indexOf("build.lastPublishedAt = now")
         )
         assertTrue(

@@ -1,5 +1,7 @@
 package com.kennyb1201.kbstream.data.sports
 
+import androidx.compose.runtime.Immutable
+
 /**
  * The sports hub's data model: one shape for a head-to-head game, one for a
  * tournament event.
@@ -12,6 +14,7 @@ package com.kennyb1201.kbstream.data.sports
  */
 
 /** One side of a head-to-head game. */
+@Immutable
 data class SportsTeam(
     /**
      * ESPN's own team (or athlete) id. It is what a favourite is stored under,
@@ -122,6 +125,7 @@ fun SportsGame.involvesFavorite(favoriteKeys: Set<String>): Boolean =
 enum class GameState { LIVE, UPCOMING, FINAL }
 
 /** One head-to-head fixture. */
+@Immutable
 data class SportsGame(
     /**
      * What identifies this fixture inside its league.
@@ -237,6 +241,7 @@ data class EspnGameSummary(
 )
 
 /** One row of a tournament leaderboard. */
+@Immutable
 data class Leader(
     val name: String,
     /** Golf: "-8" relative to par. Racing: "P3" or the gap. */
@@ -250,6 +255,7 @@ data class Leader(
 )
 
 /** One tournament event: a golf round or a Grand Prix. */
+@Immutable
 data class TournamentEvent(
     val id: String,
     val league: String,
@@ -284,6 +290,7 @@ data class TournamentEvent(
 }
 
 /** One top performer in a game, as ESPN carries them on the competition. */
+@Immutable
 data class GameLeader(
     val name: String,
     /** The side they play for, so the sheet can put each line under its team. */
@@ -403,6 +410,7 @@ enum class SportsKind { HEAD_TO_HEAD, TOURNAMENT }
  * TheSportsDB league, whose path is `tsdb:<their league id>` because ESPN has no
  * segment for it (see [isTheSportsDb]).
  */
+@Immutable
 data class SportsLeague(
     val path: String,
     val label: String,
