@@ -206,7 +206,7 @@ class LibraryP2ContractTest {
             "the grid must hand the eye flag to the shared poster card, under either id " +
                 "flavor the enrichment can file the row under",
             screen.contains(
-                "isPartiallyWatched = item.watchedKeyCandidates().any { it in partiallyWatchedKeys }"
+                "isPartiallyWatched = itemWatchedCandidates.any { it in partiallyWatchedKeys }"
             )
         )
         assertTrue(

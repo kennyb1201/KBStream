@@ -100,7 +100,8 @@ class ImageOverrideSurfacesContractTest {
         )
         assertTrue(
             "and the screen draws that image, not the route's own",
-            streams.contains("if (!backdrop.isNullOrBlank())")
+            streams.contains("if (backdropRequest != null)") &&
+                streams.contains("model = backdropRequest")
         )
     }
 

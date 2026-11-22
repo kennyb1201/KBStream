@@ -134,7 +134,7 @@ class IntroDbSourcesContractTest {
 
         assertTrue(
             "a remembered answer - including 'no service knows this' - is reused",
-            hub.contains("identities[normalized]?.let { return it }")
+            hub.contains("identities[normalized]?.let { (_, cached) -> return cached }")
         )
         assertTrue(
             "a failure returns without storing anything, so the next reader retries",
@@ -143,7 +143,9 @@ class IntroDbSourcesContractTest {
         )
         assertTrue(
             "keyed by the normalized title, so case and spacing cannot split it",
-            hub.contains("private val identities = ConcurrentHashMap<String, AnimeIdentity>()") &&
+            hub.contains(
+                "private val identities = ConcurrentHashMap<String, Pair<Long, AnimeIdentity>>()"
+            ) &&
                 hub.contains("normalizeAnimeTitle(showTitle)")
         )
         assertTrue(

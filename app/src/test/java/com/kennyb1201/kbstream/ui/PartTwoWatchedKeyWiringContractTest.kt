@@ -154,7 +154,7 @@ class PartTwoWatchedKeyWiringContractTest {
         )
         assertTrue(
             "the screen hands the card the same rule",
-            code(LIBRARY_SCREEN).contains("item.watchedKeyCandidates().any { it in watchedKeys }")
+            code(LIBRARY_SCREEN).contains("itemWatchedCandidates.any { it in watchedKeys }")
         )
     }
 

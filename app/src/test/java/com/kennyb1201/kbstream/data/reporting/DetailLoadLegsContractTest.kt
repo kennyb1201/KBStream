@@ -86,7 +86,8 @@ class DetailLoadLegsContractTest {
         assertTrue(
             "and the Simkl round-trip, which the load awaits after the paint",
             viewModel.contains("\"detail.simkl\",") &&
-                viewModel.contains("val simklStartedAt = SystemClock.elapsedRealtime()")
+                viewModel.contains("val started = SystemClock.elapsedRealtime()") &&
+                viewModel.contains("result to (SystemClock.elapsedRealtime() - started)")
         )
         val earlyPaint =
             viewModel.indexOf("_isLoading.value = false\n                        markFirstPaint()")

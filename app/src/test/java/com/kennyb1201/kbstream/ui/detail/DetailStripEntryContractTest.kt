@@ -42,20 +42,27 @@ class DetailStripEntryContractTest {
             "one line, the same shape as every other move (row, direction, " +
                 "target, landed, via) - the trace that was missing from the paste",
             entry.contains(
-                "detail move TABS DOWN -> \$target landed=\$landed via=\$via"
-            )
+                "detail move TABS DOWN -> \$target landed=\$landed verified=\$verified"
+            ) &&
+                entry.contains("via=\$via observed=")
         )
         assertTrue(
             "and each arm names itself, so the next paste says WHICH landing " +
                 "failed rather than only that the press went nowhere",
-            entry.contains("trace(target.name, true, \"chain\")") &&
-                entry.contains("trace(\"geometry\", true, \"geometry\")") &&
-                entry.contains("trace(\"container\", container, \"container\")")
+            entry.contains(
+                "trace( target.name, true, landing.via.name.lowercase(), " +
+                    "landing.observed, landing.verified )"
+            ) &&
+                entry.contains("trace(\"geometry\", true, \"geometry\",") &&
+                entry.contains("trace(\"container\", container, \"container\",")
         )
         assertTrue(
             "a chain target that would not land is reported as such, not " +
                 "swallowed",
-            entry.contains("trace(target.name, false, \"chain\")")
+            entry.contains(
+                "trace( target.name, false, landing.via.name.lowercase(), " +
+                    "landing.observed, false )"
+            )
         )
     }
 
@@ -147,7 +154,8 @@ class DetailStripEntryContractTest {
         assertTrue(
             "and it is reached through the same focusRow the chain uses for every " +
                 "other row",
-            detail.contains("DetailRow.OVERVIEW -> focusOverviewToggle()")
+            detail.contains("DetailRow.OVERVIEW -> {") &&
+                detail.contains("if (focusOverviewToggle()) {")
         )
         assertTrue(
             "a remembered landing above the strip is not a landing INSIDE the tab, " +

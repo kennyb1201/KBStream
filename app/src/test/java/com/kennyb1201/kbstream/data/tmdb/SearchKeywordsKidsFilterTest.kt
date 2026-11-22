@@ -211,7 +211,11 @@ class SearchKeywordsKidsFilterTest {
                 "cannot disagree",
             screen.contains(
                 "val keywords = remember(tmdbDetail, kidsCeiling) {\n" +
-                    "                if (kidsCeiling != null) emptyList() else tmdbDetail?.keywords?.list().orEmpty()\n" +
+                    "                if (kidsCeiling != null) {\n" +
+                    "                    emptyList()\n" +
+                    "                } else {\n" +
+                    "                    tmdbDetail?.keywords?.list().orEmpty().distinctBy { it.id }\n" +
+                    "                }\n" +
                     "            }"
             )
         )

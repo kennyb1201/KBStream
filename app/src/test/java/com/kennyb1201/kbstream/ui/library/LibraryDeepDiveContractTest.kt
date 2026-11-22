@@ -195,7 +195,7 @@ class LibraryDeepDiveContractTest {
         assertTrue(
             "the calendar's show builder asks the app's hidden-title rule",
             showFor.contains("HiddenTitles.hides(") &&
-                showFor.contains("HiddenTitles.keys(appContext)")
+                showFor.contains("hiddenKeys")
         )
         assertTrue(
             "with every spelling the sources use plus the name/year fallback",

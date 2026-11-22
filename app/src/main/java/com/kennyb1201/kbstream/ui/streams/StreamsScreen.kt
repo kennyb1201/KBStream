@@ -100,6 +100,7 @@ import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
@@ -206,9 +207,14 @@ fun StreamsScreen(
     // episode while the feature is switched off (spec F4c).
     val cloudOffer by viewModel.cloudOffer.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    // A synced preference: re-seed it when a payload pulled from another box
+    // lands, not only when this screen first composes.
+    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
     // One prefs read for the whole list: this used to be read inside every
     // row, on every recomposition of the picker.
-    val badgesAbove = remember(context) { AppPreferences.getBadgesAboveFile(context) }
+    val badgesAbove = remember(context, syncedRevision) {
+        AppPreferences.getBadgesAboveFile(context)
+    }
 
     /*
      * A DRM stream cannot play on the MPV engine (NativePlayerActivity's own

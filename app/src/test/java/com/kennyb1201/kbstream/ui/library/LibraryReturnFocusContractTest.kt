@@ -137,8 +137,8 @@ class LibraryReturnFocusContractTest {
         assertTrue(
             "the grid is keyed by the same key the record names the card with, " +
                 "so a re-ordered grid returns on the poster still there",
-            source.contains("key = { _, item -> LocalLibraryStore.dedupeKey(item) }") &&
-                source.contains("val cardKey = LocalLibraryStore.dedupeKey(item)")
+            source.contains("key = { index, _ -> itemKeys[index] }") &&
+                source.contains("val cardKey = itemKeys[index]")
         )
     }
 
