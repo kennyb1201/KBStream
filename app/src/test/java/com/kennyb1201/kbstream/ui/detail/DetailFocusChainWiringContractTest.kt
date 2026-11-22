@@ -317,8 +317,8 @@ class DetailFocusChainWiringContractTest {
         // arm above - the one that puts the rail back - could never run.
         assertTrue(
             detail.contains(
-                "return runCatching { requester.requestFocus() }.getOrDefault(false)"
-            )
+                "val landed = runCatching { requester.requestFocus() }.getOrDefault(false)"
+            ) && detail.contains("return landed")
         )
         assertTrue(
             detail.contains(

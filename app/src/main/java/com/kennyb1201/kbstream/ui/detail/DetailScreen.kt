@@ -431,20 +431,6 @@ private const val RETURN_FOCUS_STEPS = 15
 private const val RETURN_FOCUS_DELAY_MS = 40L
 
 /**
- * Steps a landing is given to prove itself before the press is re-asked
- * (spec 2026-11-21 follow-up).
- *
- * `FOCUS_VERIFY_FRAMES = 3` was shorter than the ask's own patience: a pill
- * request can return true and be undone by the focus pass a few frames later,
- * which is exactly what the 443 paste shows (`GENRE DOWN -> TABS landed=true`
- * with the GAIN on HEADER). The window is now the same 15 x 40ms scale as the
- * ask budget, so a landing that legitimately takes most of the ask's time is
- * observed rather than declared a miss. The rule remains: only the target, or
- * a row the walk declared it stepped to, verifies.
- */
-private const val FOCUS_VERIFY_STEPS = RETURN_FOCUS_STEPS
-
-/**
  * How many times a neighbour's arrival asks the poster row to be revealed.
  *
  * Two, because the focus landing is a scroll of its own and the framework's
@@ -508,6 +494,13 @@ private suspend fun LazyListState.revealRail(rowKey: String, hintIndex: Int): Bo
         delay(RETURN_FOCUS_DELAY_MS)
         waited++
     }
+
+    // The row is already composed: there is nothing to reveal, and a
+    // scrollToItem here would move the viewport past a row the press may be
+    // standing on. This is the reveal that disposed the focused episode chip
+    // and fed the 449 revocations - the landing ask only needs the row present,
+    // not the hint honored.
+    if (layoutInfo.visibleItemsInfo.any { it.key == rowKey }) return true
 
     val hint = hintIndex.coerceAtLeast(0)
     val candidates =
@@ -653,6 +646,16 @@ private class SeasonRowReveal(
             }
     }
 
+    /**
+     * The focus left this neighbour before its reveal ran. Dropping the key
+     * makes the running job re-read an empty request instead of scrolling for a
+     * row the hand has already left - the scroll that used to dispose the next
+     * focused item during the 449 episode flap.
+     */
+    fun release(neighbourKey: String) {
+        if (requestedKey == neighbourKey) requestedKey = null
+    }
+
     /** Null when either row is not laid out - see the unmeasured branch above. */
     private fun measure(neighbourKey: String): SeasonRowRevealDecision? {
         val info = listState.layoutInfo
@@ -683,13 +686,23 @@ private fun Modifier.revealSeasonRowOnFocus(
     reveal: SeasonRowReveal,
     neighbourKey: String
 ): Modifier = onFocusChanged { state ->
-    if (state.hasFocus) reveal.ask(neighbourKey)
+    if (state.hasFocus) reveal.ask(neighbourKey) else reveal.release(neighbourKey)
 }
 
 private enum class EpisodeFocusEdge { START, END }
 
 private data class EpisodeTransitionState(
     val edge: EpisodeFocusEdge? = null
+)
+
+/**
+ * A focus loss the chain did not ask for: the row that owned the focus, and
+ * the row it was observed on when the revocation became visible (HEADER for
+ * the framework's restart-to-Play), or null when focus was simply dropped.
+ */
+private data class DetailFocusReclaim(
+    val row: DetailRow,
+    val observed: DetailRow?
 )
 
 private data class PosterMenuTarget(
@@ -1003,6 +1016,34 @@ fun DetailScreen(
     var focusMoveInFlight by remember { mutableStateOf<Job?>(null) }
     var focusMoveDirection by remember { mutableStateOf<DetailFocusDirection?>(null) }
     var focusMoveGeneration by remember { mutableStateOf(0) }
+    // Snapshot-visible, unlike the Job above: the reclaim watcher keys on it, so
+    // a revocation caused by a chain move (the old row being disposed as the
+    // new one lands) is never treated as theft.
+    var chainMoveActive by remember { mutableStateOf(false) }
+
+    // The logical row the chain last owned, and the column it placed within
+    // that row. `focusedRowNow` goes null on a revocation, which is why the
+    // reclaim needs a separate memory of where the focus belonged.
+    var lastOwnedRow by remember { mutableStateOf<DetailRow?>(null) }
+    var lastOwnedColumn by remember { mutableIntStateOf(0) }
+
+    // A focus loss the chain did not ask for, and the one row a failed reclaim
+    // has already tried for. The latter stops a reclaim loop: if the reclaim is
+    // itself revoked, the trace says `reclaim failed` and the watcher waits for
+    // the next real press before trying again.
+    var pendingFocusReclaim by remember { mutableStateOf<DetailFocusReclaim?>(null) }
+    var focusReclaimSerial by remember { mutableIntStateOf(0) }
+    var reclaimBlockedFor by remember { mutableStateOf<DetailRow?>(null) }
+    // The effect is keyed on the serial, never on the request it consumes:
+    // clearing the request inside the effect must not cancel the reclaim.
+
+    // EPISODES is two list items (the season chips and the episode cards), so
+    // moving between them is one logical row staying focused, not a LOST/GAIN
+    // pair. A loss is held for one frame and dropped only if the same row gained
+    // again (the handoff); the serial makes that check independent of which
+    // container reports first.
+    var focusGainSerial by remember { mutableIntStateOf(0) }
+    var lastGainRow by remember { mutableStateOf<DetailRow?>(null) }
 
     /**
      * The overview's "View more" toggle: the page's UP-only stop, and the
@@ -1061,14 +1102,71 @@ fun DetailScreen(
      */
     fun traceRowFocus(row: DetailRow): Modifier = Modifier.onFocusChanged { state ->
         if (state.hasFocus) {
+            focusGainSerial++
+            lastGainRow = row
             if (focusedRowNow != row) {
+                // A gain the chain did not place is how the framework's restart
+                // to Play becomes visible: remember where focus belonged and
+                // let the watcher reclaim it after this composition applies.
+                val owned = lastOwnedRow
+                // The framework's restart lands on the header (Play). A gain on
+                // any other row while no move is in flight is a hand-back, a
+                // drill-down return or another legitimate surface taking focus,
+                // so it becomes the owned row instead of a reclaim candidate.
+                if (
+                    row == DetailRow.HEADER &&
+                    owned != null &&
+                    owned != row &&
+                    !chainMoveActive
+                ) {
+                    pendingFocusReclaim = DetailFocusReclaim(owned, row)
+                    focusReclaimSerial++
+                } else {
+                    lastOwnedRow = row
+                    reclaimBlockedFor = null
+                    pendingFocusReclaim = null
+                }
                 focusedRowNow = row
                 DetailTrace.note("detail focus GAIN ${row.name}")
             }
         } else if (focusedRowNow == row) {
-            focusedRowNow = null
-            DetailTrace.note("detail focus LOST ${row.name}")
+            // A loss is only real when the same logical row does not take over.
+            // EPISODES is two containers, and the focus dispatcher may report
+            // the old one before the new one, so the verdict waits one frame;
+            // a row that is genuinely gone (or stolen) is still reported on
+            // that next frame.
+            val serialAtLoss = focusGainSerial
+            scope.launch {
+                awaitFrame()
+                if (lastGainRow == row && focusGainSerial != serialAtLoss) {
+                    return@launch
+                }
+                val stillFocused = focusedRowNow == row
+                if (stillFocused) focusedRowNow = null
+                // The row did lose the focus even when another row already
+                // gained it; keep the LOST line honest.
+                DetailTrace.note("detail focus LOST ${row.name}")
+                if (stillFocused && lastOwnedRow == row && !chainMoveActive) {
+                                                pendingFocusReclaim = DetailFocusReclaim(row, null)
+                            focusReclaimSerial++
+
+                }
+            }
         }
+    }
+
+    // A drill-down can reuse this composition for another title. Its focus
+    // ownership belongs to that title, not the one the viewer just left.
+    LaunchedEffect(type, id) {
+        focusGainSerial++
+        lastGainRow = null
+        focusedRowNow = null
+        lastOwnedRow = null
+        lastOwnedColumn = 0
+        pendingFocusReclaim = null
+        focusReclaimSerial++
+        reclaimBlockedFor = null
+        chainMoveActive = false
     }
 
     /**
@@ -1150,6 +1248,9 @@ fun DetailScreen(
             DetailFocusMoveRules.Decision.CANCEL_AND_LAUNCH -> {
                 inFlight?.cancel()
                 val generation = ++focusMoveGeneration
+                chainMoveActive = true
+                reclaimBlockedFor = null
+                pendingFocusReclaim = null
                 val job = scope.launch {
                     try {
                         move()
@@ -1159,6 +1260,7 @@ fun DetailScreen(
                         if (focusMoveGeneration == generation) {
                             focusMoveInFlight = null
                             focusMoveDirection = null
+                            chainMoveActive = false
                         }
                     }
                 }
@@ -1662,7 +1764,9 @@ fun DetailScreen(
         val count = if (railCount > 0) railCount else slots.size
         val column = DetailChipColumns.columnFor(fromColumn, count) ?: return false
         val requester = slots.getOrNull(column) ?: return false
-        return runCatching { requester.requestFocus() }.getOrDefault(false)
+        val landed = runCatching { requester.requestFocus() }.getOrDefault(false)
+        if (landed) lastOwnedColumn = column
+        return landed
     }
 
     /**
@@ -3764,41 +3868,21 @@ fun DetailScreen(
     }
 
     /**
-     * Confirms that a landing is still the focus a few frames later, by
-     * OBSERVING the rows' own focus state rather than trusting the request's
-     * answer (spec 2026-11-21, rule 5).
+     * Confirms the landing on the NEXT frame, by OBSERVING the rows' own focus
+     * state rather than trusting the request's answer (spec 2026-11-21, rule 5;
+     * tightened for the 449 revocation round).
      *
-     * [before] is the row that held the focus when the ask was made. A landing
-     * is confirmed only on [target] or on a row [attempted] declares the walk
-     * stepped to; any other row is a miss, and the caller re-asks once before
-     * reporting it. The old verifier accepted ANY row other than [before],
-     * which is how build 443 certified a GENRE -> TABS press that had landed on
-     * HEADER.
+     * A landing is confirmed only on the target or on a row the walk declares
+     * it stepped to; any other row is a miss. The caller re-asks immediately -
+     * the old verifier spent up to 15 x 40ms watching the wrong row, which is
+     * exactly the window in which the Play highlight painted.
      *
-     * The window matches the ask's own patience ([FOCUS_VERIFY_STEPS] is
-     * [RETURN_FOCUS_STEPS] 40ms polls), so a landing that takes the full ask
-     * budget is still observed before the verdict.
+     * The returned row is what was actually observed, including a wrong row or
+     * null, so the move line can keep reporting `observed=` honestly.
      */
-    suspend fun verifyFocusLanded(
-        before: DetailRow?,
-        target: DetailRow,
-        attempted: Set<DetailRow>
-    ): DetailRow? {
-        var lastObserved: DetailRow? = focusedRowNow
-        repeat(FOCUS_VERIFY_STEPS) {
-            awaitFrame()
-            val now = focusedRowNow
-            if (now != null) {
-                lastObserved = now
-                // The first frame that shows the DECLARED row is the landing.
-                // A wrong row is not returned early: the thief might still
-                // put the target there, and the old verifier's mistake was
-                // accepting any different row on the first frame it saw.
-                if (DetailFocusLandingRules.isDeclared(target, attempted, now)) return now
-            }
-            delay(RETURN_FOCUS_DELAY_MS)
-        }
-        return lastObserved
+    suspend fun verifyFocusLanded(): DetailRow? {
+        awaitFrame()
+        return focusedRowNow
     }
 
     /**
@@ -3830,7 +3914,7 @@ fun DetailScreen(
                 attempted = firstPath.attempted
             )
         }
-        val firstObserved = verifyFocusLanded(before, target, firstPath.attempted)
+        val firstObserved = verifyFocusLanded()
         val first = DetailFocusLandingRules.outcome(
             target = target,
             before = before,
@@ -3850,7 +3934,7 @@ fun DetailScreen(
         if (!focusRow(target, fromColumn, from, direction, presence, retryPath)) {
             return first
         }
-        val retryObserved = verifyFocusLanded(before, target, retryPath.attempted)
+        val retryObserved = verifyFocusLanded()
         return DetailFocusLandingRules.outcome(
             target = target,
             before = before,
@@ -3877,7 +3961,7 @@ fun DetailScreen(
                 attempted = attempted
             )
         }
-        val firstObserved = verifyFocusLanded(before, DetailRow.MEDIA, attempted)
+        val firstObserved = verifyFocusLanded()
         val first = DetailFocusLandingRules.outcome(
             target = DetailRow.MEDIA,
             before = before,
@@ -3891,7 +3975,7 @@ fun DetailScreen(
                 "lost after landing; re-asking"
         )
         if (!focusMediaStrip(from)) return first
-        val retryObserved = verifyFocusLanded(before, DetailRow.MEDIA, attempted)
+        val retryObserved = verifyFocusLanded()
         return DetailFocusLandingRules.outcome(
             target = DetailRow.MEDIA,
             before = before,
@@ -6019,6 +6103,126 @@ fun DetailScreen(
                 captureFocus = { null },
                 restoreFocus = {}
             )
+
+            /**
+             * Whether the chain can put the focus back on [row] right now.
+             * A row that is no longer in the tab's presence (tab switched, data
+             * changed) is not reclaimed onto; the chain's normal next-row logic
+             * owns that case.
+             */
+            fun reclaimRowPresent(row: DetailRow): Boolean {
+                val page = latestPageRowPresence.value ?: latestRowPresence.value
+                return when (row) {
+                    DetailRow.HEADER,
+                    DetailRow.TABS -> true
+                    DetailRow.OVERVIEW -> overviewToggleAvailable
+                    else -> {
+                        val rows = page?.let { DetailTabChain.rowPresence(activeTab, it) }
+                        rows != null && DetailFocusChain.exists(row, rows)
+                    }
+                }
+            }
+
+            /**
+             * Re-asks for the chain row the framework just revoked.
+             *
+             * Every row goes back through the chain's own landing ask, in the
+             * column the chain last placed. If the scroll disposed a card rail,
+             * its reveal puts it back and the ask follows the scroll, never the
+             * other way round (the 449 rule).
+             */
+            suspend fun reclaimFocusRow(row: DetailRow, from: DetailRow?): Boolean {
+                val page = latestPageRowPresence.value ?: latestRowPresence.value ?: return false
+                val rows = DetailTabChain.rowPresence(activeTab, page)
+                // Reclaim through the same landing ask every press uses, so a
+                // reclaimed row is verified and retried exactly like a move -
+                // and there is no second route onto the fixed rows.
+                return if (row == DetailRow.MEDIA) {
+                    askMediaStrip(from ?: DetailRow.TABS).landed
+                } else {
+                    askRow(
+                        row,
+                        lastOwnedColumn,
+                        from ?: row,
+                        DetailFocusDirection.DOWN,
+                        rows
+                    ).landed
+                }
+            }
+
+            /**
+             * F1 of the 2026-11-22 revocation spec: the chain reclaims a row the
+             * framework's restart-to-Play took, without waiting out a verify
+             * window. Every legitimate owner of a press suppresses this - a move
+             * in flight, a hand-back, the drill-down return, or an open
+             * menu/dialog. One reclaim per revocation: a reclaim that is itself
+             * revoked is traced as failed and blocked until the next real press,
+             * never looped.
+             */
+            LaunchedEffect(
+                focusReclaimSerial,
+                chainMoveActive,
+                handFocusBack.pending,
+                returnTarget,
+                studioChipMenu,
+                posterMenu,
+                seasonMenu,
+                episodeMenu,
+                mediaImageMenu,
+                playButtonMenu,
+                libraryButtonMenu,
+                ratingDialog,
+                screensaver.visible
+            ) {
+                val request = pendingFocusReclaim ?: return@LaunchedEffect
+                val menuOpen = studioChipMenu != null ||
+                    posterMenu != null ||
+                    seasonMenu != null ||
+                    episodeMenu != null ||
+                    mediaImageMenu != null ||
+                    playButtonMenu ||
+                    libraryButtonMenu ||
+                    ratingDialog ||
+                    screensaver.visible
+                if (
+                    chainMoveActive ||
+                    handFocusBack.pending != null ||
+                    returnTarget != null ||
+                    menuOpen
+                ) {
+                    pendingFocusReclaim = null
+                    return@LaunchedEffect
+                }
+                if (reclaimBlockedFor == request.row) {
+                    pendingFocusReclaim = null
+                    return@LaunchedEffect
+                }
+                pendingFocusReclaim = null
+                if (!reclaimRowPresent(request.row)) {
+                    DetailTrace.note(
+                        "detail focus reclaim skipped row=${request.row.name} " +
+                            "from=${request.observed?.name ?: "none"} (row gone)"
+                    )
+                    return@LaunchedEffect
+                }
+
+                DetailTrace.note(
+                    "detail focus reclaim row=${request.row.name} " +
+                        "from=${request.observed?.name ?: "none"}"
+                )
+                val landed = reclaimFocusRow(request.row, request.observed)
+                awaitFrame()
+                if (landed && focusedRowNow == request.row) {
+                    reclaimBlockedFor = null
+                } else {
+                    reclaimBlockedFor = request.row
+                    DetailTrace.note(
+                        "detail focus reclaim failed row=${request.row.name} " +
+                            "from=${request.observed?.name ?: "none"} " +
+                            "observed=${focusedRowNow?.name ?: "none"}"
+                    )
+                }
+            }
 
             Box(
                 modifier = Modifier

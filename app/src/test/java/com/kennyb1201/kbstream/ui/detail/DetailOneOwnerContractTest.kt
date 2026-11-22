@@ -145,7 +145,7 @@ class DetailOneOwnerContractTest {
             "a landing is confirmed on the TARGET or a declared step-over, with " +
                 "one bounded re-ask",
             detail.contains("suspend fun verifyFocusLanded(") &&
-                detail.contains("DetailFocusLandingRules.isDeclared(") &&
+                detail.contains("DetailFocusLandingRules.outcome(") &&
                 detail.contains("suspend fun askRow(") &&
                 detail.contains("detail focus verify ")
         )
@@ -239,6 +239,73 @@ class DetailOneOwnerContractTest {
         )
 
         assertTrue("the walk declared PEOPLE as its step-over", landing.verified)
+    }
+
+    // ── Round 3: landings are not revoked after they stick ────────────────
+
+    @Test
+    fun `a focus revocation is reclaimed once and cannot loop`() {
+        assertTrue(
+            "the page remembers the row the chain last owned, not only the row " +
+                "that is focused right now",
+            detail.contains("var lastOwnedRow by remember") &&
+                detail.contains("DetailFocusReclaim(owned, row)")
+        )
+        assertTrue(
+            "the reclaim names the row and the row it was stolen by",
+            detail.contains("detail focus reclaim row=") &&
+                detail.contains("from=\${request.observed?.name ?: \"none\"}")
+        )
+        assertTrue(
+            "a chain move, a hand-back, a drill-down return and an open menu all " +
+                "suppress it",
+            detail.contains("chainMoveActive ||") &&
+                detail.contains("handFocusBack.pending != null ||") &&
+                detail.contains("returnTarget != null ||") &&
+                detail.contains("menuOpen")
+        )
+        assertTrue(
+            "one reclaim per revocation: a failed reclaim is blocked, not retried",
+            detail.contains("reclaimBlockedFor") &&
+                detail.contains("detail focus reclaim failed row=")
+        )
+        assertTrue(
+            "consuming the request cannot cancel the effect that reclaims it",
+            detail.contains("LaunchedEffect(") &&
+                detail.contains("focusReclaimSerial,") &&
+                detail.contains("focusReclaimSerial++")
+        )
+        assertTrue(
+            "EPISODES is one logical row even though it is two focus containers",
+            detail.contains("focusGainSerial") &&
+                detail.contains("lastGainRow == row && focusGainSerial != serialAtLoss")
+        )
+    }
+
+    @Test
+    fun `reveals do not scroll a composed row and verify on the next frame`() {
+        assertTrue(
+            "a reveal for a row that is already composed does nothing",
+            detail.contains(
+                "if (layoutInfo.visibleItemsInfo.any { it.key == rowKey }) return true"
+            )
+        )
+        assertTrue(
+            "a neighbour that loses focus cancels its pending poster reveal",
+            detail.contains("fun release(neighbourKey: String)") &&
+                detail.contains("reveal.release(neighbourKey)")
+        )
+        val verify = detail.substringAfter("suspend fun verifyFocusLanded(")
+            .substringBefore("suspend fun askRow(")
+        assertTrue(
+            "the landing is observed on the next frame",
+            verify.contains("awaitFrame()")
+        )
+        assertFalse(
+            "not after a 15-step poll window in which Play can paint",
+            verify.contains("repeat(") || verify.contains("RETURN_FOCUS_DELAY_MS")
+        )
+        assertFalse("the old verify window constant is gone", detail.contains("FOCUS_VERIFY_STEPS"))
     }
 
     // ── Rule 6: the header height budget ───────────────────────────────────
