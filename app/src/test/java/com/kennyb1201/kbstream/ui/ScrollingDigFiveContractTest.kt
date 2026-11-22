@@ -239,8 +239,10 @@ class ScrollingDigFiveContractTest {
         )
         val activity = source("com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt")
         assertTrue(
-            "parsed on attach, cleared when the script goes",
-            activity.contains("assEventBoundaries = AssSubtitleSource.eventBoundariesMs(content)") &&
+            "parsed once on attach from the same summary as the event count, " +
+                "and cleared when the script goes",
+            activity.contains("val summary = AssSubtitleSource.eventSummary(content)") &&
+                activity.contains("assEventBoundaries = summary.boundaries") &&
                 activity.contains("assEventBoundaries = null")
         )
         assertTrue(

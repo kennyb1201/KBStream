@@ -201,7 +201,9 @@ internal object AssSubtitleSource {
      * does not need to be: an animating cue makes libass report a change on every
      * render, so the tick never reaches its static branch while one is playing.
      */
-    fun eventBoundariesMs(raw: String): LongArray = eventSummary(raw).boundaries
+    fun eventBoundariesMs(raw: String): LongArray {
+        return eventSummary(raw).boundaries
+    }
 
     /** `0:00:05.00` / `0:00:05,00` to milliseconds, or null when it is not a time. */
     private fun assTimeToMs(text: String): Long? {

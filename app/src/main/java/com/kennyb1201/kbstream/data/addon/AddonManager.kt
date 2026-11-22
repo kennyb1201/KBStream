@@ -415,13 +415,13 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             // No blob at all: the factory list IS this profile's list, so the
             // seed is legitimate and the write guard stays clear.
             saveToPrefs(defaults, profileId)
-            val load = AddonLoad(defaults)
             // The seed just wrote the JSON this profile will read next time;
             // cache the parse for that identical blob.
-            store.getString(KEY, null)?.let { seeded ->
-                parsedLoads[profileId] = ParsedAddonLoad(seeded, load)
+            return AddonLoad(defaults).also { load ->
+                store.getString(KEY, null)?.let { seeded ->
+                    parsedLoads[profileId] = ParsedAddonLoad(seeded, load)
+                }
             }
-            return load
         }
 
         parsedLoads[profileId]?.let { cached ->
@@ -458,9 +458,9 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                 // true for the rest of the session: without it the first
                 // mutation saved these defaults over the blob (see
                 // [unreadableBlobProfileId]).
-                val fallback = AddonLoad(defaultAddons(), unreadableBlob = true)
-                parsedLoads[profileId] = ParsedAddonLoad(json, fallback)
-                return fallback
+                return AddonLoad(defaultAddons(), unreadableBlob = true).also { load ->
+                    parsedLoads[profileId] = ParsedAddonLoad(json, load)
+                }
             }
 
         /*
@@ -497,9 +497,9 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                 }
         }
 
-        val load = AddonLoad(normalized)
-        parsedLoads[profileId] = ParsedAddonLoad(json, load)
-        return load
+        return AddonLoad(normalized).also { load ->
+            parsedLoads[profileId] = ParsedAddonLoad(json, load)
+        }
     }
 
     private fun saveToPrefs(

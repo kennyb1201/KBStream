@@ -831,9 +831,7 @@ fun SportsHubScreen(
                 // game's team variants on every recomposition, which is a
                 // focus move or a clock tick on this screen (perf audit,
                 // sports/iptv follow-up).
-                val searchSections = remember(favoritesTab, sections, favoritesSection) {
-                    if (favoritesTab) listOf(favoritesSection) else sections
-                }
+                val searchSections = if (favoritesTab) listOf(favoritesSection) else sections
                 val searchLeague = if (favoritesTab) {
                     SportsLeagues.FAVORITES
                 } else {
