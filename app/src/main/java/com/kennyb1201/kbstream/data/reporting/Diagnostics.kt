@@ -169,10 +169,6 @@ object Diagnostics {
         // states a "No program data" report could not be told apart from a
         // healthy guide without this line (see IptvRepository.guideStateRows).
         guideLine(app)?.let { report.appendLine(it) }
-        // ...and how the guide's hot reads are planned. The state line says what
-        // is stored; a plan saying SCAN epg_programs says the reads that find it
-        // are paying for a missing index. Plans only - never a row read.
-        guideQueryPlanLine(app)?.let { report.appendLine(it) }
         // ...and WHY the last refresh left it in that state. The guide line
         // above proves the programs are gone; it cannot say whether the
         // background worker is even scheduled (Fire OS, Doze, a cancelled
@@ -190,6 +186,10 @@ object Diagnostics {
         // lineup and the guide snapshots only - a diagnostics capture must
         // never change the state it reports.
         guideMatchLines(app).forEach { report.appendLine(it) }
+        // ...and how the guide's hot reads are planned. The state line says what
+        // is stored; a plan saying SCAN epg_programs says the reads that find it
+        // are paying for a missing index. Plans only - never a row read.
+        guideQueryPlanLine(app)?.let { report.appendLine(it) }
         // ...and what the guide's FOCUS did on the way in: whether the entry grab
         // was armed at all, whether it landed or exhausted, which guard stood it
         // down, and whether a sidebar collapse hid the sidebar with it. The
