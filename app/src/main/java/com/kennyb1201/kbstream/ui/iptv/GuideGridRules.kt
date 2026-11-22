@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.iptv
 
 import com.kennyb1201.kbstream.data.format.DateFormats
+import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import java.time.format.DateTimeFormatter
 import java.util.Calendar
@@ -16,8 +17,8 @@ import java.util.Locale
  * grid multiplies that: focus over two axes across cells whose widths change
  * with every program is the one thing this screen can get badly wrong, and it
  * cannot be pinned at all from inside a composable. Everything here is
- * `internal`, Compose-free, and takes primitives or [GridCell]s, so
- * `GuideGridRulesTest` runs it on the JVM.
+ * `internal`, Compose-free, and takes primitives, [GridCell]s, or the guide's
+ * channel rows, so `GuideGridRulesTest` runs it on the JVM.
  *
  * The geometry constants are the spec's, not tunables invented here: 8dp per
  * minute (a 30-minute program is 240dp), a 56dp floor so a 5-minute short is
@@ -36,6 +37,58 @@ internal const val GRID_GROUP_FAVORITES = "Favorites"
 
 /** The three labels a saved order may never move. */
 internal val GRID_PINNED_GROUPS = setOf(GRID_GROUP_ALL, GRID_GROUP_RECENT, GRID_GROUP_FAVORITES)
+
+/**
+ * The guide's group membership map, built in one pass over the lineup.
+ *
+ * The `LinkedHashMap` is LOAD-BEARING: callers derive the sidebar's base group
+ * order from [Map.keys], and that must be playlist first-encounter order. A
+ * plain `HashMap` silently reorders those keys by hash bucket, which is the
+ * 2026-11-22 regression (`4778b09ac`) that changed viewers' IPTV group order.
+ * Do not "simplify" this back to `HashMap`. The pinned groups are inserted
+ * first (All, Favorites, Recent); playlist groups follow in the order their
+ * first channel appears. `byKey` is lookup-only and stays a `HashMap`.
+ */
+internal fun buildGuideGroupMembership(
+    channels: List<IptvChannelWithEpg>,
+    favorites: Set<String>,
+    recentChannelKeys: List<String>,
+    channelKey: (IptvChannelWithEpg) -> String,
+): LinkedHashMap<String, List<IptvChannelWithEpg>> {
+    val favoritesList = ArrayList<IptvChannelWithEpg>()
+    val byKey = HashMap<String, IptvChannelWithEpg>(channels.size * 2)
+    val byPlaylistGroup = LinkedHashMap<String, MutableList<IptvChannelWithEpg>>()
+    // The favorite flag is copied in ONCE here, when the lineup or the
+    // favorites change - not per row on every recomposition. The list row
+    // used to call item.copy() for every visible channel each time the
+    // screen recomposed, which defeats Compose's row skipping outright.
+    val all = ArrayList<IptvChannelWithEpg>(channels.size)
+    channels.forEach { item ->
+        val favorite = channelKey(item) in favorites
+        val shown = if (item.isFavorite == favorite) item else item.copy(isFavorite = favorite)
+        all.add(shown)
+        byKey[channelKey(shown)] = shown
+        if (favorite) favoritesList.add(shown)
+        val label = shown.channel.groupTitle?.trim().orEmpty()
+        if (label.isNotEmpty()) {
+            byPlaylistGroup.getOrPut(label) { ArrayList() }.add(shown)
+        }
+    }
+    val grouped = LinkedHashMap<String, List<IptvChannelWithEpg>>(
+        byPlaylistGroup.size + 3
+    )
+    grouped[GRID_GROUP_ALL] = all
+    grouped[GRID_GROUP_FAVORITES] = favoritesList
+    // Newest-first over the persisted play order; keys that no longer
+    // resolve (channel removed/hidden) drop out.
+    grouped[GRID_GROUP_RECENT] = recentChannelKeys.mapNotNull(byKey::get)
+    // A playlist group named "All"/"Recent"/"Favorites" is shadowed by
+    // the pinned group, exactly as groupChannels() treated it before.
+    byPlaylistGroup.forEach { (label, items) ->
+        if (label !in GRID_PINNED_GROUPS) grouped[label] = items
+    }
+    return grouped
+}
 
 /** `Sat Nov 7` - the time header's day label, where the grid crosses midnight. */
 private val GRID_DAY_LABEL: DateTimeFormatter =

@@ -634,45 +634,15 @@ fun GuideScreen(
     val hiddenChannelIds by viewModel.hiddenChannelIds.collectAsStateWithLifecycle()
 
     // The membership of every group, built in ONE pass over the lineup. The
-    // sidebar used to filter all 15,490 channels once per group just to count
-    // them, and groupChannels() did the same for the selected group and for
-    // every group the zap lineup publishes. A channel belongs to one playlist
-    // group, so the map holds roughly two references per channel (All + its
-    // group), not groups x channels.
+    // helper returns a LinkedHashMap on purpose: the sidebar takes its base
+    // group order from the keys, so hash order would scramble playlist order.
     val channelsByGroup = remember(unhiddenChannels, favorites, recentChannelKeys) {
-        val favoritesList = ArrayList<IptvChannelWithEpg>()
-        val byKey = HashMap<String, IptvChannelWithEpg>(unhiddenChannels.size * 2)
-        val byPlaylistGroup = LinkedHashMap<String, MutableList<IptvChannelWithEpg>>()
-        // The favorite flag is copied in ONCE here, when the lineup or the
-        // favorites change - not per row on every recomposition. The list row
-        // used to call item.copy() for every visible channel each time the
-        // screen recomposed, which defeats Compose's row skipping outright.
-        val all = ArrayList<IptvChannelWithEpg>(unhiddenChannels.size)
-        unhiddenChannels.forEach { item ->
-            val favorite = favoriteKey(item) in favorites
-            val shown = if (item.isFavorite == favorite) item else item.copy(isFavorite = favorite)
-            all.add(shown)
-            byKey[channelKey(shown)] = shown
-            if (favorite) favoritesList.add(shown)
-            val label = shown.channel.groupTitle?.trim().orEmpty()
-            if (label.isNotEmpty()) {
-                byPlaylistGroup.getOrPut(label) { ArrayList() }.add(shown)
-            }
-        }
-        val grouped = HashMap<String, List<IptvChannelWithEpg>>(
-            byPlaylistGroup.size + 3
+        buildGuideGroupMembership(
+            channels = unhiddenChannels,
+            favorites = favorites,
+            recentChannelKeys = recentChannelKeys,
+            channelKey = { channelKey(it) }
         )
-        grouped[GRID_GROUP_ALL] = all
-        grouped[GRID_GROUP_FAVORITES] = favoritesList
-        // Newest-first over the persisted play order; keys that no longer
-        // resolve (channel removed/hidden) drop out.
-        grouped[GRID_GROUP_RECENT] = recentChannelKeys.mapNotNull(byKey::get)
-        // A playlist group named "All"/"Recent"/"Favorites" is shadowed by
-        // the pinned group, exactly as groupChannels() treated it before.
-        byPlaylistGroup.forEach { (label, items) ->
-            if (label !in GRID_PINNED_GROUPS) grouped[label] = items
-        }
-        grouped
     }
 
     /** The visible channels of one group, exactly as the list below renders them. */

@@ -1,5 +1,7 @@
 package com.kennyb1201.kbstream.ui.iptv
 
+import com.kennyb1201.kbstream.data.iptv.IptvChannel
+import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -442,6 +444,31 @@ class GuideGridRulesTest {
     }
 
     @Test
+    fun `the base group order is playlist first encounter, not hash order`() {
+        // Regression pin for 4778b09ac: a plain HashMap reordered these keys by
+        // bucket (Zebra, Alpha, Movies, Kids), changing the sidebar's base order.
+        // The lineup's first-encounter order is deliberately non-alphabetical.
+        val lineup = listOf(
+            channel(id = "z1", group = "Zebra"),
+            channel(id = "m1", group = "Movies"),
+            channel(id = "z2", group = "Zebra"),
+            channel(id = "a1", group = "Alpha"),
+            channel(id = "k1", group = "Kids"),
+        )
+
+        val grouped = buildGuideGroupMembership(
+            channels = lineup,
+            favorites = emptySet(),
+            recentChannelKeys = emptyList(),
+            channelKey = { it.channel.id },
+        )
+
+        val playlistGroups = grouped.keys.filterNot { it in GRID_PINNED_GROUPS }
+        assertEquals(listOf("Zebra", "Movies", "Alpha", "Kids"), playlistGroups)
+        assertEquals(listOf("z1", "z2"), grouped.getValue("Zebra").map { it.channel.id })
+    }
+
+    @Test
     fun `moving a group up and down leaves the ends alone`() {
         val labels = listOf("A", "B", "C")
 
@@ -588,4 +615,25 @@ class GuideGridRulesTest {
         )
         assertEquals("Sky · On now · 20 min left", gridDetailMeta("Sky", cell, now))
     }
+
+    private fun channel(id: String, group: String?): IptvChannelWithEpg = IptvChannelWithEpg(
+        channel = IptvChannel(
+            id = id,
+            name = id,
+            displayName = id,
+            streamUrl = "https://example.test/$id",
+            groupTitle = group,
+            logoUrl = null,
+            tvgId = null,
+            tvgName = null,
+            tvgChno = null,
+            catchup = null,
+            catchupDays = null,
+            catchupSource = null,
+            providerChannelId = null,
+        ),
+        epgChannel = null,
+        now = null,
+        next = null,
+    )
 }
