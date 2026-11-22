@@ -12,6 +12,7 @@ import coil3.SingletonImageLoader
 import coil3.decode.DataSource
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
+import coil3.request.allowRgb565
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.reporting.ImageLoadTrace
 import java.util.concurrent.ConcurrentHashMap
