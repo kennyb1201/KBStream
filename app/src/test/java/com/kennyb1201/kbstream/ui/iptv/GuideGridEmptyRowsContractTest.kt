@@ -137,7 +137,7 @@ class GuideGridEmptyRowsContractTest {
         assertTrue(
             "a guide import still drops the entries with the reads they stand for",
             viewModel.contains("private fun clearGuideGrid() {") &&
-                viewModel.contains("_gridPrograms.value = emptyMap()")
+                viewModel.contains("publishGridPrograms(emptyMap())")
         )
     }
 
