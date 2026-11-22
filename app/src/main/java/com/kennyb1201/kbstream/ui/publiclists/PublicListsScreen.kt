@@ -35,7 +35,6 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.publiclists.PublicListCard
 import com.kennyb1201.kbstream.data.publiclists.PublicListTitle
 import com.kennyb1201.kbstream.data.publiclists.PublicListRules
-import com.kennyb1201.kbstream.data.publiclists.PublicListTitle
 import com.kennyb1201.kbstream.data.publiclists.PublicListVendor
 import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBCard
