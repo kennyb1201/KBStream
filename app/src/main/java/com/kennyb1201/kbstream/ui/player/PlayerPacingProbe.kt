@@ -201,6 +201,11 @@ internal class PlayerPacingProbe(context: Context) {
             .onFailure { Log.w(TAG, "could not observe frame release times", it) }
         runCatching { displayManager?.registerDisplayListener(displayListener, handler) }
         beginVsyncBurst()
+        // Frame callbacks and a frame-metadata listener are not free on a
+        // Fire Stick; this diagnostic only needs the load's first window to
+        // decide whether the panel followed the mode (perf audit, players #9).
+        handler.removeCallbacks(stopAfterWindow)
+        handler.postDelayed(stopAfterWindow, MEASURE_WINDOW_MS)
         Log.i(
             TAG,
             "pacing probe started: mode=$modeId at ${ms(refreshRateHz)} Hz"
@@ -214,6 +219,7 @@ internal class PlayerPacingProbe(context: Context) {
         runCatching { player?.clearVideoFrameMetadataListener(frameListener) }
         runCatching { displayManager?.unregisterDisplayListener(displayListener) }
         handler.removeCallbacks(burstStarter)
+        handler.removeCallbacks(stopAfterWindow)
         choreographer?.let { c -> runCatching { c.removeFrameCallback(vsyncCallback) } }
         player = null
         val line = summary()
@@ -388,6 +394,9 @@ internal class PlayerPacingProbe(context: Context) {
 
     private val burstStarter = Runnable { beginVsyncBurst() }
 
+    /** Ends the diagnostic after its one useful window instead of for the session. */
+    private val stopAfterWindow = Runnable { stop() }
+
     /**
      * Samples a short run of CONSECUTIVE frames and keeps their median spacing.
      *
@@ -427,6 +436,9 @@ internal class PlayerPacingProbe(context: Context) {
 
         /** How long a sampled vsync is trusted before it is sampled again. */
         const val VSYNC_BURST_PERIOD_MS = 1000L
+
+        /** The load window a pacing verdict is taken from, then the probe stops. */
+        const val MEASURE_WINDOW_MS = 30_000L
 
         /** Above this, a spacing is a pause or a stall rather than a cadence. */
         const val GAP_NS = 250_000_000L

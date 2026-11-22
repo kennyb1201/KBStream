@@ -294,8 +294,9 @@ class LibraryMinorsContractTest {
         assertTrue("F6: the note is drawn when anything was dropped", note >= 0)
         assertTrue(
             "F6: and the rows are still composed lazily, not in one pass",
-            body.contains("val openable = titles.rows.mapNotNull") &&
-                body.contains("titles.rows.mapNotNull") &&
+            publicScreen.contains("val openableDetailTitles = remember(uiState.titles)") &&
+                body.contains("items(openable.size)") &&
+                !body.contains("titles.rows.mapNotNull") &&
                 !body.contains("titles.rows.forEach")
         )
         assertTrue(

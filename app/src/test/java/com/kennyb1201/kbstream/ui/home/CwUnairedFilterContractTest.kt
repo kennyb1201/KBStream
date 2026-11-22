@@ -129,7 +129,8 @@ class CwUnairedFilterContractTest {
         listOf("TV" to home, "phone" to phone).forEach { (name, src) ->
             assertTrue(
                 "$name: the date is part of the pass's identity",
-                src.contains("val cwFilterDate = LocalDate.now(ZoneId.systemDefault())") &&
+                src.contains("var cwFilterDate by remember {") &&
+                    src.contains("mutableStateOf(LocalDate.now(ZoneId.systemDefault()))") &&
                     src.contains(
                         "remember(upNextRaw, hiddenTitleKeys, cwShowNames, cwFilterDate)"
                     )

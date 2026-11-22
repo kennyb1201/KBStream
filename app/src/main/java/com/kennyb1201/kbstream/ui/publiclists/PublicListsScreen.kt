@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -32,6 +33,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.publiclists.PublicListCard
+import com.kennyb1201.kbstream.data.publiclists.PublicListTitle
 import com.kennyb1201.kbstream.data.publiclists.PublicListRules
 import com.kennyb1201.kbstream.data.publiclists.PublicListTitle
 import com.kennyb1201.kbstream.data.publiclists.PublicListVendor
@@ -111,6 +113,16 @@ fun PublicListsScreen(
     }
 
     val listState = rememberLazyListState()
+
+    // The detail rows that can open, derived once per titles state rather than
+    // inside the LazyColumn body on every save-phase/notice change. A 1,000+
+    // title list made that a full list + Pair rebuild per recomposition (perf
+    // audit, library #9).
+    val openableDetailTitles = remember(uiState.titles) {
+        (uiState.titles as? PublicListTitlesState.Titles)?.rows.orEmpty().mapNotNull { row ->
+            row.detailId?.let { detailId -> row to detailId }
+        }
+    }
 
     // A new level starts at the top. Going Directory → Detail → back used to
     // leave the reader wherever the composition happened to sit; with one list
@@ -238,6 +250,7 @@ fun PublicListsScreen(
                         is PublicListLevel.Detail -> detailBodyItems(
                             card = level.card,
                             titles = uiState.titles,
+                            openable = openableDetailTitles,
                             phase = uiState.savePhases[level.card.key],
                             onOpenTitle = onOpenTitle,
                             onSave = { vm.save(level.card) }
@@ -536,6 +549,7 @@ private fun PublicListCardView(
 private fun LazyListScope.detailBodyItems(
     card: PublicListCard,
     titles: PublicListTitlesState,
+    openable: List<Pair<PublicListTitle, String>>,
     phase: PublicListSavePhase?,
     onOpenTitle: (mediaType: String, id: String) -> Unit,
     onSave: () -> Unit
@@ -639,12 +653,8 @@ private fun LazyListScope.detailBodyItems(
             // the case this exists for: only the rows on screen are composed.
             // No `key`: a provider's list may legitimately name the same title
             // twice, and duplicate keys would fail the list outright.
-            // Derived here, in the list body rather than a @Composable scope:
-            // this helper is a LazyListScope extension and cannot call
-            // remember. The rows themselves are still the only input.
-            val openable = titles.rows.mapNotNull { row ->
-                row.detailId?.let { detailId -> row to detailId }
-            }
+            // [openable] is remembered by the caller; this list body does no
+            // derivation of its own.
             items(openable.size) { index ->
                 val (row, detailId) = openable[index]
                 TitleRow(row) {

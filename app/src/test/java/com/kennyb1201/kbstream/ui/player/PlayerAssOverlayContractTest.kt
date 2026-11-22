@@ -51,8 +51,9 @@ class PlayerAssOverlayContractTest {
         val body = from("private fun attachAssSubtitle(", "private fun startAssSubtitle(")
 
         assertTrue(
-            "the script's events must be counted before it is attached",
-            body.contains("AssSubtitleSource.dialogueEventCount(content)")
+            "the script's events and boundaries must come from one parse before it is attached",
+            body.contains("AssSubtitleSource.eventSummary(content)") &&
+                body.contains("summary.boundaries")
         )
         val guard = body.indexOf("if (events == 0) {")
         assertTrue("the zero-event guard is missing", guard >= 0)

@@ -147,15 +147,40 @@ internal object AssSubtitleSource {
      * the pipeline already renders. `Comment:` lines are not events: libass does
      * not draw them either.
      */
-    fun dialogueEventCount(raw: String): Int {
-        if (raw.isBlank()) return 0
+    fun dialogueEventCount(raw: String): Int = eventSummary(raw).count
+
+    /**
+     * Both facts the attach path needs, from ONE normalisation and one walk.
+     *
+     * [dialogueEventCount] and [eventBoundariesMs] are still separate for the
+     * callers and tests that want one, but attaching used to call both and parse
+     * the whole script twice on the main thread (perf audit, players #5).
+     */
+    data class EventSummary(val count: Int, val boundaries: LongArray)
+
+    fun eventSummary(raw: String): EventSummary {
+        if (raw.isBlank()) return EventSummary(0, LongArray(0))
+        var count = 0
+        val times = ArrayList<Long>()
         // Counted wherever they appear, not inside `[Events]`: a stripped file
         // can carry its Dialogue lines with the section header missing, and the
         // repair only adds an empty one. Nothing else in a script starts with
         // the keyword once the line is trimmed - a commented-out event starts
         // with `;`.
-        return normalize(raw).lineSequence()
-            .count { it.trim().startsWith(DIALOGUE_PREFIX, ignoreCase = true) }
+        normalize(raw).lineSequence().forEach { line ->
+            val trimmed = line.trim()
+            if (!trimmed.startsWith(DIALOGUE_PREFIX, ignoreCase = true)) return@forEach
+            count++
+            // Start and End are the first two timestamps a `Dialogue:` line
+            // carries. Read by shape rather than by splitting on commas: SSA
+            // permits a decimal comma in a time, which a split would tear in
+            // half (and the Text field may carry a time of its own, which is why
+            // only the first two are taken).
+            ASS_TIME.findAll(trimmed).take(2).forEach { match ->
+                assTimeToMs(match.value)?.let(times::add)
+            }
+        }
+        return EventSummary(count, times.toLongArray().apply { sort() })
     }
 
     /**
@@ -176,23 +201,7 @@ internal object AssSubtitleSource {
      * does not need to be: an animating cue makes libass report a change on every
      * render, so the tick never reaches its static branch while one is playing.
      */
-    fun eventBoundariesMs(raw: String): LongArray {
-        if (raw.isBlank()) return LongArray(0)
-        val times = ArrayList<Long>()
-        normalize(raw).lineSequence().forEach { line ->
-            val trimmed = line.trim()
-            if (!trimmed.startsWith(DIALOGUE_PREFIX, ignoreCase = true)) return@forEach
-            // Start and End are the first two timestamps a `Dialogue:` line
-            // carries. Read by shape rather than by splitting on commas: SSA
-            // permits a decimal comma in a time, which a split would tear in
-            // half (and the Text field may carry a time of its own, which is why
-            // only the first two are taken).
-            ASS_TIME.findAll(trimmed).take(2).forEach { match ->
-                assTimeToMs(match.value)?.let(times::add)
-            }
-        }
-        return times.toLongArray().apply { sort() }
-    }
+    fun eventBoundariesMs(raw: String): LongArray = eventSummary(raw).boundaries
 
     /** `0:00:05.00` / `0:00:05,00` to milliseconds, or null when it is not a time. */
     private fun assTimeToMs(text: String): Long? {

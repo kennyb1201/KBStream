@@ -396,6 +396,17 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                     )
                 }
             }
+            // Open the stream disk cache once here, off the first playback's
+            // path. SimpleCache construction reads its SQLite metadata; doing it
+            // from createPlayer() put that on the first play's TTFF frame (perf
+            // audit, players #10). The cache stays process-wide after this, so
+            // playback only takes the existing singleton.
+            startupScope.launch {
+                runCatchingCancellable {
+                    com.kennyb1201.kbstream.data.player.StreamDiskCache
+                        .get(this@MainApplication)
+                }
+            }
             // Home rails pinned to a Library list: check that the list still
             // exists at the service that holds it. A list deleted on a website
             // has no event behind it - the absence from a read is the only

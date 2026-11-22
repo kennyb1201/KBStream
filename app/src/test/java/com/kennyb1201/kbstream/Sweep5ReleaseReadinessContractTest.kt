@@ -148,7 +148,8 @@ class Sweep5ReleaseReadinessContractTest {
         assertTrue(
             "a plain PAUSE must not toggle either",
             source.contains("KeyEvent.KEYCODE_MEDIA_PAUSE -> {") &&
-                source.contains("if (!sessionHasPlayed() || spuriousPauseGuardActive()) return true")
+                source.contains("if (!sessionHasPlayed() || spuriousPauseGuardActive()) {") &&
+                source.contains("noteSpuriousPauseSwallowed(\"media-pause-key\")")
         )
         assertTrue(
             "an external transport pause must not park the session before frame 1, nor " +

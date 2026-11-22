@@ -37,6 +37,17 @@ class FrameRatePacingProbeContractTest {
     private val probe = squash(source(PROBE))
 
     @Test
+    fun `the probe stops itself after its one load window`() {
+        assertTrue(
+            "a frame-metadata listener and Choreographer callbacks must not run for the " +
+                "rest of the episode (perf audit, players #9)",
+            probe.contains("private val stopAfterWindow = Runnable { stop() }") &&
+                probe.contains("postDelayed(stopAfterWindow, MEASURE_WINDOW_MS)") &&
+                probe.contains("removeCallbacks(stopAfterWindow)")
+        )
+    }
+
+    @Test
     fun `the engagement is reported when the panel is confirmed, not when it is asked for`() {
         val confirm = window(match, "private fun confirm(", "private fun settleMode(")
 

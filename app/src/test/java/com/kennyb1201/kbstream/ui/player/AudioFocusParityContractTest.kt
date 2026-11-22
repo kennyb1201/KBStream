@@ -68,8 +68,12 @@ class AudioFocusParityContractTest {
     fun `a permanent loss is remembered and a gain resumes exactly that pause`() {
         val focus = slice(native, "private fun requestAudioFocus()", "private fun togglePlayPause()")
         assertTrue(
-            "a loss that stops a PLAYING session is remembered",
-            focus.contains("if (player.playWhenReady) { pausedByFocusLoss = true player.pause() }")
+            "a loss that stops a PLAYING session is remembered, once the load guard " +
+                "has closed",
+            focus.contains("if (player.playWhenReady) {") &&
+                focus.contains("if (!hasPlayedOnce || spuriousPauseGuardActive()) {") &&
+                focus.contains("} else { pausedByFocusLoss = true") &&
+                focus.contains("player.pause()")
         )
         assertTrue(
             "and the gain resumes it - the branch Exo did not have",

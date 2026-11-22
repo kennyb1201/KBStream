@@ -97,7 +97,8 @@ class SpuriousPauseAndFocusResumeContractTest {
         val surfaceArm = native.slice("KeyEvent.KEYCODE_MEDIA_PAUSE -> {", "KeyEvent.KEYCODE_MEDIA_PLAY -> {")
         assertTrue(
             "the surface listener swallows before the first play AND inside the window",
-            surfaceArm.contains("if (!hasPlayedOnce || spuriousPauseGuardActive()) true else {")
+            surfaceArm.contains("if (!hasPlayedOnce || spuriousPauseGuardActive()) {") &&
+                surfaceArm.contains("noteSpuriousPauseSwallowed(\"media-pause-key\")")
         )
         assertTrue(
             "and pauses normally once the window has closed",
@@ -159,7 +160,8 @@ class SpuriousPauseAndFocusResumeContractTest {
         val keyArm = mpv.slice("KeyEvent.KEYCODE_MEDIA_PAUSE -> {", "KeyEvent.KEYCODE_MEDIA_NEXT -> {")
         assertTrue(
             "the media key swallows before the playhead moves and inside the window",
-            keyArm.contains("if (!sessionHasPlayed() || spuriousPauseGuardActive()) return true")
+            keyArm.contains("if (!sessionHasPlayed() || spuriousPauseGuardActive()) {") &&
+                keyArm.contains("noteSpuriousPauseSwallowed(\"media-pause-key\")")
         )
         val sessionPause = mpv.slice("onPause = {", "onSkipNext =")
         assertTrue(
@@ -240,12 +242,18 @@ class SpuriousPauseAndFocusResumeContractTest {
         val wrapper = native.substringAfter("sessionPlayer = object : ForwardingPlayer(base)")
             .substringBefore("mediaSession =")
         assertTrue(
-            "a session pause is swallowed inside the window",
-            wrapper.contains("override fun pause() {\n                    if (spuriousPauseGuardActive()) return")
+            "a session pause is swallowed before the first frame and inside the window",
+            wrapper.contains(
+                "override fun pause() {\n" +
+                    "                    if (!fromActorReturn && (!hasPlayedOnce || spuriousPauseGuardActive())) {"
+            ) && wrapper.contains("noteSpuriousPauseSwallowed(\"session\")")
         )
         assertTrue(
             "and so is a session setPlayWhenReady(false) - media3 reaches either",
-            wrapper.contains("if (!playWhenReady && spuriousPauseGuardActive()) return")
+            wrapper.contains(
+                "if (!playWhenReady && !fromActorReturn &&\n" +
+                    "                        (!hasPlayedOnce || spuriousPauseGuardActive())"
+            ) && wrapper.contains("noteSpuriousPauseSwallowed(\"session-set-play-when-ready\")")
         )
     }
 
@@ -300,9 +308,71 @@ class SpuriousPauseAndFocusResumeContractTest {
             "the session's own listener is the one policy - see AudioFocusParityContractTest",
             native.contains("setOnAudioFocusChangeListener")
         )
-        assertFalse(
-            "and F1/F2 are untouched by it: the guard is still the key/session path's",
-            block(native, "private fun requestAudioFocus()").contains("spuriousPauseGuard")
+        assertTrue(
+            "and F1/F2 now cover it: a loss during the load guard is swallowed, not " +
+                "allowed to park the session",
+            block(native, "private fun requestAudioFocus()").contains("spuriousPauseGuardActive()") &&
+                block(native, "private fun requestAudioFocus()")
+                    .contains("noteSpuriousPauseSwallowed(\"focus-loss\")")
+        )
+    }
+
+    // ── F2 / F3: focus loss and the combined key join the load guard ──────
+
+    @Test
+    fun `both engines swallow focus loss and toggle-to-pause during the load`() {
+        val nativeFocus = block(native, "private fun requestAudioFocus() {")
+        assertTrue(
+            "Exo's focus loss consults the same pre-frame + window guard",
+            nativeFocus.contains("if (!hasPlayedOnce || spuriousPauseGuardActive()) {") &&
+                nativeFocus.contains("noteSpuriousPauseSwallowed(\"focus-loss\")")
+        )
+        val mpvFocus = block(mpv, "private fun requestAudioFocus() {")
+        assertTrue(
+            "and so does MPV's",
+            mpvFocus.contains("if (!sessionHasPlayed() || spuriousPauseGuardActive()) {") &&
+                mpvFocus.contains("noteSpuriousPauseSwallowed(\"focus-loss\")")
+        )
+        assertEquals(
+            "both Exo combined-key arms swallow a toggle-to-pause during the load",
+            2,
+            Regex("noteSpuriousPauseSwallowed\\(\"play-pause-key\"\\)").findAll(native).count()
+        )
+        assertTrue(
+            "MPV's combined key does too",
+            mpv.contains("noteSpuriousPauseSwallowed(\"play-pause-key\")")
+        )
+    }
+
+    @Test
+    fun `actor-return keeps its intentional pre-frame pause`() {
+        assertTrue(
+            "the wrapper must not swallow the pause that opens an actor-return session",
+            native.contains("!fromActorReturn && (!hasPlayedOnce || spuriousPauseGuardActive())") &&
+                native.contains(
+                    "if (!playWhenReady && !fromActorReturn &&\n" +
+                        "                        (!hasPlayedOnce || spuriousPauseGuardActive())"
+                )
+        )
+    }
+
+    @Test
+    fun `landed external pauses are traced on both engines`() {
+        assertTrue(
+            "Exo's session wrapper names both landed forms",
+            native.contains("pause landed: session\"") &&
+                native.contains("pause landed: session-set-play-when-ready")
+        )
+        assertTrue(
+            "both focus listeners name a landed pause",
+            native.contains("pause landed: focus-loss") &&
+                mpv.contains("pause landed: focus-loss")
+        )
+        assertTrue(
+            "MPV's media session and keys name theirs",
+            mpv.contains("pause landed: session") &&
+                mpv.contains("pause landed: media-pause-key") &&
+                mpv.contains("pause landed: play-pause-key")
         )
     }
 

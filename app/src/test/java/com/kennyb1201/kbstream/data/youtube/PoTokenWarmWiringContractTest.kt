@@ -37,8 +37,10 @@ class PoTokenWarmWiringContractTest {
         val phone = read("com/kennyb1201/kbstream/ui/mobile/DetailScreenMobile.kt")
 
         assertTrue(
-            "the TV detail screen must warm the trailer it is offering",
-            tv.contains("LaunchedEffect(trailerVideo?.key)") &&
+            "the TV detail screen warms the trailer it is offering, once its button " +
+                "has focus (perf audit, detail #7)",
+            tv.contains("LaunchedEffect(trailerVideo?.key, trailerWarmDue)") &&
+                tv.contains("if (!trailerWarmDue) return@LaunchedEffect") &&
                 tv.contains("InnerTubeExtractor.prewarmPoTokens(key)")
         )
         assertTrue(

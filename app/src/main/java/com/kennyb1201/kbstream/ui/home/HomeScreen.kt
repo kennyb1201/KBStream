@@ -235,6 +235,8 @@ import java.time.ZoneId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -810,6 +812,16 @@ internal fun shouldRetryHeroTrailerAfterError(
  * Swapping this object IS the consume: a new source arrives with its own start
  * position, or with 0.
  */
+private data class SpotlightRenderSnapshot(
+    val heroVisible: Boolean,
+    val heroIndex: Int?,
+    val heroHeightDp: Int?,
+    val viewportHeightDp: Int,
+    val firstIndex: Int,
+    val firstOffset: Int,
+    val itemCount: Int
+)
+
 internal data class HeroTrailerPlayback(
     val source: PlayableSource,
     val startPositionMs: Long = 0L
@@ -5514,7 +5526,26 @@ fun HomeScreen(
     // TODAY is part of the pass's identity: the verdict is a fact about the
     // current date, so the morning after an episode airs the same card comes
     // back here on its own - no publish, no dismiss to clear.
-    val cwFilterDate = LocalDate.now(ZoneId.systemDefault())
+    // One date per Home composition, not one per recomposition: the filter
+    // below is remembered on it, and a fresh LocalDate each pass would miss the
+    // cache on every frame (perf audit, home #10). The ticker moves it at the
+    // viewer's midnight, so a Home left open overnight still re-evaluates
+    // without waiting for a recomposition to happen to cross the day.
+    var cwFilterDate by remember {
+        mutableStateOf(LocalDate.now(ZoneId.systemDefault()))
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            val zone = ZoneId.systemDefault()
+            val today = LocalDate.now(zone)
+            if (cwFilterDate != today) cwFilterDate = today
+            val nextMidnight = today.plusDays(1)
+                .atStartOfDay(zone)
+                .toInstant()
+                .toEpochMilli()
+            delay((nextMidnight - System.currentTimeMillis()).coerceAtLeast(1_000L))
+        }
+    }
     val cwFilterPass = remember(upNextRaw, hiddenTitleKeys, cwShowNames, cwFilterDate) {
         upNextRaw.map { item ->
             item to upNextContinueWatchingDecision(
@@ -7136,27 +7167,44 @@ fun HomeScreen(
                 // which is the difference between "not in the list" and "scrolled
                 // away" that the paste could not previously tell apart.
                 if (spotlightActive) {
-                    SideEffect {
-                        val info = railListState.layoutInfo
-                        val hero = info.visibleItemsInfo
-                            .firstOrNull { item -> item.key == SPOTLIGHT_HERO_ITEM_KEY }
-                        SpotlightDiagTrace.billboardRenderList(
-                            heroVisible = hero != null,
-                            heroIndex = hero?.index,
-                            // px -> dp by hand: the paste wants the number a
-                            // viewer can check against the screen, not a px
-                            // count that depends on the box's density.
-                            heroHeightDp = hero?.let {
-                                (it.size / density.density).toInt()
-                            },
-                            viewportHeightDp =
-                                (info.viewportSize.height / density.density).toInt(),
-                            // The list's own position lives on the STATE, not on
-                            // the layout info snapshot.
-                            firstIndex = railListState.firstVisibleItemIndex,
-                            firstOffset = railListState.firstVisibleItemScrollOffset,
-                            itemCount = info.totalItemsCount
-                        )
+                    // A LaunchedEffect keyed on the list, not a SideEffect on
+                    // every composition: snapshotFlow emits only when one of
+                    // these layout facts changes, so diagnostic mode costs a
+                    // write per actual scroll/measure change instead of one per
+                    // focus or clock recomposition (perf audit, home #9).
+                    LaunchedEffect(railListState) {
+                        snapshotFlow {
+                            val info = railListState.layoutInfo
+                            val hero = info.visibleItemsInfo
+                                .firstOrNull { item -> item.key == SPOTLIGHT_HERO_ITEM_KEY }
+                            SpotlightRenderSnapshot(
+                                heroVisible = hero != null,
+                                heroIndex = hero?.index,
+                                // px -> dp by hand: the paste wants the number a
+                                // viewer can check against the screen, not a px
+                                // count that depends on the box's density.
+                                heroHeightDp = hero?.let {
+                                    (it.size / density.density).toInt()
+                                },
+                                viewportHeightDp =
+                                    (info.viewportSize.height / density.density).toInt(),
+                                // The list's own position lives on the STATE, not
+                                // on the layout info snapshot.
+                                firstIndex = railListState.firstVisibleItemIndex,
+                                firstOffset = railListState.firstVisibleItemScrollOffset,
+                                itemCount = info.totalItemsCount
+                            )
+                        }.distinctUntilChanged().collect { snapshot ->
+                            SpotlightDiagTrace.billboardRenderList(
+                                heroVisible = snapshot.heroVisible,
+                                heroIndex = snapshot.heroIndex,
+                                heroHeightDp = snapshot.heroHeightDp,
+                                viewportHeightDp = snapshot.viewportHeightDp,
+                                firstIndex = snapshot.firstIndex,
+                                firstOffset = snapshot.firstOffset,
+                                itemCount = snapshot.itemCount
+                            )
+                        }
                     }
                 }
                 // The cards inside the list read the glide flag here (see

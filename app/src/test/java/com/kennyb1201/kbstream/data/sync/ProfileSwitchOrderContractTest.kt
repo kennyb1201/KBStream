@@ -104,6 +104,24 @@ class ProfileSwitchOrderContractTest {
     }
 
     @Test
+    fun `an unchanged addon blob is parsed once per process`() {
+        val load = addons.substringAfter("private fun loadFromPreferencesOrDefaults(")
+            .substringBefore("private fun saveToPrefs(")
+        val cacheHit = load.indexOf("parsedLoads[profileId]?.let")
+        val parse = load.indexOf("adapter.fromJson(json)")
+        assertTrue(
+            "a switch back to a profile must reuse its parsed list while the blob is " +
+                "byte-identical (perf audit, settings #9)",
+            cacheHit >= 0 && parse > cacheHit &&
+                load.substring(cacheHit, parse).contains("cached.json == json")
+        )
+        assertTrue(
+            "and a successful load caches the list under that exact blob",
+            load.contains("parsedLoads[profileId] = ParsedAddonLoad(json, load)")
+        )
+    }
+
+    @Test
     fun `the pull and its database take the same id`() {
         assertTrue(
             "the switch entry point takes the id",

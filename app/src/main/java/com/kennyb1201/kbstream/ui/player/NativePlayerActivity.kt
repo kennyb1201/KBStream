@@ -3022,6 +3022,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         spuriousPauseGuardUntilMs > 0L &&
             SystemClock.elapsedRealtime() < spuriousPauseGuardUntilMs
 
+    /** One line per swallowed external pause, naming the path and its half of the guard. */
+    private fun noteSpuriousPauseSwallowed(path: String) {
+        val state = if (!hasPlayedOnce) "pre-frame" else "load-window"
+        PlaybackSessionTrace.note("spurious pause swallowed: $path $state")
+    }
+
     /**
      * Opens the spurious-pause window for the load that just started playing.
      *
@@ -5721,7 +5727,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     // which is why the guard is a ten-second window from the
                     // load's first play rather than the first-frame latch alone
                     // (see [spuriousPauseGuardActive]).
-                    if (!hasPlayedOnce || spuriousPauseGuardActive()) true else {
+                    if (!hasPlayedOnce || spuriousPauseGuardActive()) {
+                        noteSpuriousPauseSwallowed("media-pause-key")
+                        true
+                    } else {
+                        PlaybackSessionTrace.note("pause landed: media-pause-key")
                         exoPlayer?.pause(); showControls(); true
                     }
                 }
@@ -5733,7 +5743,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     }
                 }
                 KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                    togglePlayPause(); true
+                    if (exoPlayer?.playWhenReady == true &&
+                        (!hasPlayedOnce || spuriousPauseGuardActive())
+                    ) {
+                        noteSpuriousPauseSwallowed("play-pause-key")
+                    } else {
+                        togglePlayPause()
+                    }
+                    true
                 }
                 KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_BUTTON_SELECT -> {
                     if (errorContainer.visibility == View.VISIBLE) {
@@ -5911,11 +5928,23 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 // them for the load's first ten seconds of play, because the
                 // events do not stop at the first frame.
                 if (hasPlayedOnce && !spuriousPauseGuardActive()) {
+                    PlaybackSessionTrace.note("pause landed: media-pause-key")
                     exoPlayer?.pause(); showControls()
+                } else {
+                    noteSpuriousPauseSwallowed("media-pause-key")
                 }
                 return true
             }
-            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { togglePlayPause(); return true }
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                if (exoPlayer?.playWhenReady == true &&
+                    (!hasPlayedOnce || spuriousPauseGuardActive())
+                ) {
+                    noteSpuriousPauseSwallowed("play-pause-key")
+                } else {
+                    togglePlayPause()
+                }
+                return true
+            }
             KeyEvent.KEYCODE_MEDIA_NEXT -> { advanceToNextEpisode(); return true }
             KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
                 val p = exoPlayer ?: return true
@@ -7368,19 +7397,41 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                  * a load on a build carrying the fix. MPV's session `onPause` has
                  * carried the same guard since the fix's first half.
                  *
-                 * Only the window is swallowed; after it a real transport pause
-                 * pauses exactly as before. `pause()` and
-                 * `setPlayWhenReady(false)` are both overridden because media3
-                 * reaches this player through either, depending on the command.
+                 * The invariant is the same as the key arms: no external pause
+                 * lands before the first frame or inside the load's ten-second
+                 * window. `!hasPlayedOnce || spuriousPauseGuardActive()` covers
+                 * both halves - the AFR mode ask can make Fire OS emit the
+                 * spurious event on either side of the first frame. After the
+                 * guard a real transport pause pauses exactly as before.
+                 * `pause()` and `setPlayWhenReady(false)` are both overridden
+                 * because media3 reaches this player through either, depending
+                 * on the command.
+                 *
+                 * Actor-return is exempt: that load is INTENTIONALLY opened
+                 * paused by this same wrapper, before its first frame, so the
+                 * pre-frame half would otherwise swallow the app's own pause
+                 * and autoplay the session the actor handoff asks to hold.
                  */
                 override fun pause() {
-                    if (spuriousPauseGuardActive()) return
+                    if (!fromActorReturn && (!hasPlayedOnce || spuriousPauseGuardActive())) {
+                        noteSpuriousPauseSwallowed("session")
+                        return
+                    }
+                    PlaybackSessionTrace.note("pause landed: session")
                     super.pause()
                 }
 
                 override fun setPlayWhenReady(playWhenReady: Boolean) {
-                    if (!playWhenReady && spuriousPauseGuardActive()) return
+                    if (!playWhenReady && !fromActorReturn &&
+                        (!hasPlayedOnce || spuriousPauseGuardActive())
+                    ) {
+                        noteSpuriousPauseSwallowed("session-set-play-when-ready")
+                        return
+                    }
                     if (playWhenReady && playbackEndedHandled) return
+                    if (!playWhenReady) {
+                        PlaybackSessionTrace.note("pause landed: session-set-play-when-ready")
+                    }
                     super.setPlayWhenReady(playWhenReady)
                 }
             }
@@ -11120,6 +11171,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         private val delayedShow = Runnable { renderText(currentCueText()) }
         private val positionTick = Runnable { updateFromPosition() }
 
+        /** Last text [updateFromPosition] drew, so an unchanged 500 ms tick is free. */
+        private var lastPositionText: String? = null
+
         /**
          * The suppression state last logged, so a flip is one line rather than
          * one per cue. Reset with the handler, which is rebuilt per player.
@@ -11380,6 +11434,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             handler.removeCallbacks(delayedShow)
             if (assOwned()) return
             if (positionDriven) {
+                // The offset may have moved to a different cue, or back into the
+                // same one, so this path must not reuse the tick's last text.
+                lastPositionText = null
                 updateFromPosition()
                 return
             }
@@ -11398,6 +11455,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             }
             if (assOwned()) return
             if (positionDriven) {
+                lastPositionText = null
                 updateFromPosition()
                 return
             }
@@ -11413,16 +11471,58 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
          */
         fun updateFromPosition() {
             handler.removeCallbacks(positionTick)
-            if (assOwned() || !positionDriven) return
+            if (assOwned() || !positionDriven) {
+                lastPositionText = null
+                return
+            }
             val player = exoPlayer ?: return
             val pos = player.currentPosition + subtitleOffsetMs.toLong()
-            val cue = externalSubtitleCues.firstOrNull { pos >= it.startMs && pos < it.endMs }
-            renderText(cue?.text.orEmpty())
-            val nextBoundary = cue?.endMs
-                ?: externalSubtitleCues.firstOrNull { it.startMs > pos }?.startMs
-                ?: (pos + 500L)
+            // Cues are sorted by start (SubtitleFileParser sorts), so a binary
+            // search finds the covering cue and the next boundary without
+            // walking the whole file twice on every 500 ms tick.
+            val cue = cueAt(pos)
+            val text = cue?.text.orEmpty()
+            if (text != lastPositionText ||
+                (text.isNotEmpty() && subtitleText.visibility != View.VISIBLE)
+            ) {
+                lastPositionText = text
+                renderText(text)
+            }
+            val nextBoundary = cue?.endMs ?: nextCueStartAfter(pos) ?: (pos + 500L)
             val delay = (nextBoundary - pos).coerceIn(1L, 500L)
             handler.postDelayed(positionTick, delay)
+        }
+
+        private fun cueAt(pos: Long): SubtitleFileParser.TimedCue? {
+            var low = 0
+            var high = externalSubtitleCues.lastIndex
+            while (low <= high) {
+                val mid = (low + high) ushr 1
+                val cue = externalSubtitleCues[mid]
+                when {
+                    pos < cue.startMs -> high = mid - 1
+                    pos >= cue.endMs -> low = mid + 1
+                    else -> return cue
+                }
+            }
+            return null
+        }
+
+        private fun nextCueStartAfter(pos: Long): Long? {
+            var low = 0
+            var high = externalSubtitleCues.lastIndex
+            var next: Long? = null
+            while (low <= high) {
+                val mid = (low + high) ushr 1
+                val start = externalSubtitleCues[mid].startMs
+                if (start > pos) {
+                    next = start
+                    high = mid - 1
+                } else {
+                    low = mid + 1
+                }
+            }
+            return next
         }
 
         private fun currentCueText(): String =
@@ -11709,7 +11809,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // used to swallow every cue of the real track for a script that could
         // never paint a pixel. Refuse it instead and leave the selection to the
         // flattened cues the pipeline already renders.
-        val events = AssSubtitleSource.dialogueEventCount(content)
+        val summary = AssSubtitleSource.eventSummary(content)
+        val events = summary.count
         if (events == 0) {
             Log.w(
                 TAG_ASS,
@@ -11724,8 +11825,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         assOverlaySource = source
         assOverlayAddonUrl = addonUrl
         // Parsed once, here: the tick's static cadence reads it, and nothing may
-        // reach into the script text per frame.
-        assEventBoundaries = AssSubtitleSource.eventBoundariesMs(content)
+        // reach into the script text per frame. The same walk supplied the
+        // event count above, so attach no longer normalises the script twice.
+        assEventBoundaries = summary.boundaries
         Log.i(
             TAG_ASS,
             "ASS overlay attached: source=$source events=$events" +
@@ -12142,8 +12244,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         // its pause through the interruption.
                         val player = exoPlayer ?: return@setOnAudioFocusChangeListener
                         if (player.playWhenReady) {
-                            pausedByFocusLoss = true
-                            player.pause()
+                            if (!hasPlayedOnce || spuriousPauseGuardActive()) {
+                                noteSpuriousPauseSwallowed("focus-loss")
+                            } else {
+                                pausedByFocusLoss = true
+                                PlaybackSessionTrace.note("pause landed: focus-loss")
+                                player.pause()
+                            }
                         }
                     }
 

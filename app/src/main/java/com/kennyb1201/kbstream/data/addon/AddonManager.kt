@@ -42,6 +42,9 @@ private class AddonLoad(
     val unreadableBlob: Boolean = false
 )
 
+/** A parsed [AddonLoad] keyed by the exact JSON blob it came from. */
+private class ParsedAddonLoad(val json: String, val load: AddonLoad)
+
 class AddonManager(
     private val context: Context
 ) {
@@ -80,6 +83,18 @@ class AddonManager(
 
     /** Depth of an in-progress read-modify-write; 0 at the outermost entry. */
     private var mutationDepth = 0
+
+    /**
+     * Last few parsed blobs, per profile. A profile switch reads the same JSON
+     * it read the last time it was active, so re-parsing it on the switch's
+     * main-thread path (perf audit, settings #9) is avoidable - but only while
+     * the blob is byte-identical. Any save or cloud apply changes the string
+     * and misses this cache, so it can never serve an older list.
+     */
+    private val parsedLoads = object : LinkedHashMap<String?, ParsedAddonLoad>(4, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String?, ParsedAddonLoad>?) =
+            size > 4
+    }
 
     /**
      * The profile whose stored add-on blob this session could NOT understand, or
@@ -400,8 +415,17 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             // No blob at all: the factory list IS this profile's list, so the
             // seed is legitimate and the write guard stays clear.
             saveToPrefs(defaults, profileId)
+            val load = AddonLoad(defaults)
+            // The seed just wrote the JSON this profile will read next time;
+            // cache the parse for that identical blob.
+            store.getString(KEY, null)?.let { seeded ->
+                parsedLoads[profileId] = ParsedAddonLoad(seeded, load)
+            }
+            return load
+        }
 
-            return AddonLoad(defaults)
+        parsedLoads[profileId]?.let { cached ->
+            if (cached.json == json) return cached.load
         }
 
         /*
@@ -434,7 +458,9 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                 // true for the rest of the session: without it the first
                 // mutation saved these defaults over the blob (see
                 // [unreadableBlobProfileId]).
-                return AddonLoad(defaultAddons(), unreadableBlob = true)
+                val fallback = AddonLoad(defaultAddons(), unreadableBlob = true)
+                parsedLoads[profileId] = ParsedAddonLoad(json, fallback)
+                return fallback
             }
 
         /*
@@ -471,7 +497,9 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                 }
         }
 
-        return AddonLoad(normalized)
+        val load = AddonLoad(normalized)
+        parsedLoads[profileId] = ParsedAddonLoad(json, load)
+        return load
     }
 
     private fun saveToPrefs(
@@ -594,6 +622,9 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         store.edit()
             .putString(KEY, json)
             .apply()
+        // The mutation already has the parsed list in hand, so the reload that
+        // follows every save does not need to deserialize its own JSON again.
+        parsedLoads[profileId] = ParsedAddonLoad(json, AddonLoad(normalized))
 
         // Record the user's configuration edit time (not the push time) so a
         // sibling device can tell a real edit from a plain re-publish.

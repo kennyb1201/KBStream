@@ -2047,6 +2047,14 @@ fun DetailScreen(
     val trailerVideo = remember(tmdbDetail?.videos?.results) {
         TrailerPick.best(tmdbDetail?.videos?.results)
     }
+    // TV only warms the trailer pipeline once its button has focus: opening a
+    // Detail page is not a promise the viewer will press Trailer, and the PO
+    // token + IMDb fallback are network work that used to run for every title
+    // with any video attached (perf audit, detail #7). Phones have no focus to
+    // wait for, so they keep the open-time warm.
+    var trailerActionFocused by remember { mutableStateOf(false) }
+    val trailerWarmDue =
+        !com.kennyb1201.kbstream.FormFactor.isTv || trailerActionFocused
     // The title's IMDb id, for the IMDb trailer leg of every resolve on this
     // page: an add-on meta whose id already is one (Cinemeta). A TMDB-id page
     // has none here - that mapping is resolved by the launcher from tmdbDetail.
@@ -2055,7 +2063,8 @@ fun DetailScreen(
     // minutes away, and the cold WebView is what a resolve pays its whole mint
     // budget for (see InnerTubeExtractor.prewarmPoTokens). Off the main thread
     // and never on the screen's path; a pre-warm that fails changes nothing.
-    LaunchedEffect(trailerVideo?.key) {
+    LaunchedEffect(trailerVideo?.key, trailerWarmDue) {
+        if (!trailerWarmDue) return@LaunchedEffect
         trailerVideo?.key?.takeIf { it.isNotBlank() }?.let { key ->
             InnerTubeExtractor.prewarmPoTokens(key)
         }
@@ -2063,7 +2072,8 @@ fun DetailScreen(
     // The IMDb pre-resolve, on the same rule: the title has a trailer button, so
     // the press is seconds to minutes away and the lookup (plus its title-page
     // fallback, ~8 s) belongs here rather than in front of a black screen.
-    LaunchedEffect(trailerVideo?.key, detailImdbId, tmdbDetail?.id) {
+    LaunchedEffect(trailerVideo?.key, detailImdbId, tmdbDetail?.id, trailerWarmDue) {
+        if (!trailerWarmDue) return@LaunchedEffect
         // The button is drawn only when [trailerVideo] exists (see the hero
         // actions), so a title with no trailer has nothing to pre-resolve. This
         // used to run for every opened title that had an IMDb or TMDB id, which
@@ -5298,9 +5308,9 @@ fun DetailScreen(
             // The title's art, in two shapes, because two consumers want
             // different things from it.
             //
-            // [backdropArtUrl] is WIDESCREEN art only: TMDB's still at full
-            // resolution (the hero is the whole screen, so its still is pulled
-            // at full size), else the add-on's own backdrop - fanart etc. from
+            // [backdropArtUrl] is WIDESCREEN art only: TMDB's w1280 still,
+            // the rung that matches this surface's 1280x720 decode, else the
+            // add-on's own backdrop - fanart etc. from
             // the meta provider, and when no add-on answered, the fallback meta
             // was built from TMDB itself, so this still lands on TMDB art. This
             // is the copy handed on to the player's loading splash, and the
@@ -5315,7 +5325,10 @@ fun DetailScreen(
             // player.
             val backdropArtUrl = remember(tmdbDetail?.backdropPath, m.background) {
                 tmdbDetail?.backdropPath?.let {
-                    TmdbRepository.fullResBackdropUrl(TmdbRepository.BACKDROP_BASE + it)
+                    // The hero decodes at 1280x720, so `/original` only bought
+                    // extra download bytes and disk-cache pressure (perf audit,
+                    // detail #4). w1280 is the matching rung.
+                    TmdbRepository.BACKDROP_BASE + it
                 }
                     ?: m.background
             }
@@ -6729,6 +6742,9 @@ fun DetailScreen(
                                 shape = KBShapePill,
                                 focusedScale = KBFocusButton,
                                 modifier = Modifier
+                                    .onFocusChanged {
+                                        trailerActionFocused = it.isFocused || it.hasFocus
+                                    }
                                     .onPreviewKeyEvent(
                                         headerActionVerticalFocus(
                                             trailerColumn,

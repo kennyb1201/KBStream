@@ -428,7 +428,21 @@ fun HomeScreenMobile(
         // yet - see upNextUnairedForCW; TV and phone share the decision, and the
         // date is part of the pass's identity so a card withheld on its release
         // day returns by itself.
-        val cwFilterDate = LocalDate.now(ZoneId.systemDefault())
+        var cwFilterDate by remember {
+            mutableStateOf(LocalDate.now(ZoneId.systemDefault()))
+        }
+        LaunchedEffect(Unit) {
+            while (true) {
+                val zone = ZoneId.systemDefault()
+                val today = LocalDate.now(zone)
+                if (cwFilterDate != today) cwFilterDate = today
+                val nextMidnight = today.plusDays(1)
+                    .atStartOfDay(zone)
+                    .toInstant()
+                    .toEpochMilli()
+                delay((nextMidnight - System.currentTimeMillis()).coerceAtLeast(1_000L))
+            }
+        }
         val cwFilterPass = remember(upNextRaw, hiddenTitleKeys, cwShowNames, cwFilterDate) {
             upNextRaw.map { item ->
                 item to upNextContinueWatchingDecision(

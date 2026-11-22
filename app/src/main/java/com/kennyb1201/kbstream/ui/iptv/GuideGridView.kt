@@ -1176,7 +1176,10 @@ internal fun GuideGridView(
                     sizePx = with(logoDensity) {
                         val side = 20.dp.roundToPx()
                         IntSize(side, side)
-                    }
+                    },
+                    // Match the draw's `logoArt()` config: a warm decoded as
+                    // RGB_565 is a different cache entry the cell never reads.
+                    allowRgb565 = false
                 ) { index ->
                     rows.getOrNull(index)?.let { row ->
                         row.item.channel.logoUrl ?: row.item.epgChannel?.iconUrl

@@ -92,7 +92,11 @@ internal object ArtWarm {
         context: Context,
         urls: List<String>,
         widthPx: Int,
-        heightPx: Int
+        heightPx: Int,
+        // Logo draws force ARGB_8888 (`logoArt()`); a warm that leaves Coil's
+        // RGB_565 default writes a different cache entry and decodes the same
+        // logo again when the cell draws it (perf audit, sports/iptv #8).
+        allowRgb565: Boolean = true
     ) {
         if (urls.isEmpty() || widthPx <= 0 || heightPx <= 0) return
         val epoch = MemoryPressure.imageCacheRevision()
@@ -107,7 +111,9 @@ internal object ArtWarm {
             urls.asSequence()
                 .filter { it.isNotBlank() }
                 .distinct()
-                .map { url -> async { warmOne(app, url, widthPx, heightPx) } }
+                .map { url ->
+                    async { warmOne(app, url, widthPx, heightPx, allowRgb565) }
+                }
                 .toList()
                 .awaitAll()
         }
@@ -117,7 +123,8 @@ internal object ArtWarm {
         context: Context,
         url: String,
         widthPx: Int,
-        heightPx: Int
+        heightPx: Int,
+        allowRgb565: Boolean
     ) {
         val key = "$url|$widthPx|$heightPx"
         if (synchronized(done) { done.containsKey(key) }) return
@@ -128,6 +135,7 @@ internal object ArtWarm {
                     ImageRequest.Builder(context)
                         .data(url)
                         .size(widthPx, heightPx)
+                        .allowRgb565(allowRgb565)
                         .build()
                 )
                 // Counted only when the warm really decoded: a warm that hit the
@@ -348,11 +356,14 @@ internal fun WarmRowAhead(
     // compile. Every caller knows the card's box, so it is always handed in.
     sizePx: IntSize,
     ahead: Int = WARM_AHEAD_CELLS,
+    // Logo draws force ARGB_8888; the default RGB_565 warms a different
+    // cache entry and the cell decodes the logo again.
+    allowRgb565: Boolean = true,
     urlAt: (Int) -> String?
 ) {
     val context = LocalContext.current
     val latestUrlAt = rememberUpdatedState(urlAt)
-    LaunchedEffect(state, count, ahead) {
+    LaunchedEffect(state, count, ahead, allowRgb565) {
         snapshotFlow {
             state.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
         }
@@ -364,7 +375,7 @@ internal fun WarmRowAhead(
                 val to = minOf(count - 1, last + ahead)
                 if (from > to) return@collect
                 val urls = (from..to).mapNotNull { latestUrlAt.value(it) }
-                ArtWarm.warmAll(context, urls, size.width, size.height)
+                ArtWarm.warmAll(context, urls, size.width, size.height, allowRgb565)
             }
     }
 }

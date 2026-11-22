@@ -109,16 +109,21 @@ class FullResBackdropContractTest {
     // ── where it is used ───────────────────────────────────────────────────
 
     @Test
-    fun `the three full-screen surfaces pull their backdrop at full resolution`() {
+    fun `the splash keeps full resolution and the detail hero uses the w1280 rung`() {
         assertTrue(
             "the player's loading splash is the surface the report came from",
             readSource(SPLASH).contains("TmdbRepository.fullResBackdropUrl(backdropUrl)")
         )
+        // The Detail hero decodes at 1280x720, so `/original` only downloaded
+        // bytes the decode threw away (perf audit, detail #4).
+        val detail = readSource(DETAIL)
         assertTrue(
-            "the detail hero fills the screen",
-            readSource(DETAIL).contains(
-                "TmdbRepository.fullResBackdropUrl(TmdbRepository.BACKDROP_BASE + it)"
-            )
+            "the detail hero builds its backdrop at the size it decodes",
+            detail.contains("TmdbRepository.BACKDROP_BASE + it")
+        )
+        assertFalse(
+            "the detail hero must not ask TMDB for an original it downsamples",
+            detail.contains("fullResBackdropUrl")
         )
 
         val home = readSource(HOME_SCREEN)

@@ -343,7 +343,8 @@ class TrailerImdbWiringContractTest {
             "a title with no trailer has nothing for the IMDb pre-resolve to " +
                 "serve - the button is not drawn either",
             flat(detailTv).contains(
-                "LaunchedEffect(trailerVideo?.key, detailImdbId, tmdbDetail?.id) {" //
+                "LaunchedEffect(trailerVideo?.key, detailImdbId, tmdbDetail?.id, trailerWarmDue) { " +
+                    "if (!trailerWarmDue) return@LaunchedEffect"
             ) && flat(detailTv).contains(
                 "if (trailerVideo != null && (detailImdbId != null || " +
                     "tmdbDetail?.id != null) ) {"

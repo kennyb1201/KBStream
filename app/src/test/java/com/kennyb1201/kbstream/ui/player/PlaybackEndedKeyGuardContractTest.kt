@@ -124,9 +124,15 @@ class PlaybackEndedKeyGuardContractTest {
                 "override fun setPlayWhenReady(playWhenReady: Boolean) {\n" +
                     // Spec audit 2026-11-18, Player H1: the same override now
                     // guards a session-routed pause too, hence the first line.
-                    "if (!playWhenReady && spuriousPauseGuardActive()) return\n" +
+                    "if (!playWhenReady && !fromActorReturn &&\n" +
+                    "(!hasPlayedOnce || spuriousPauseGuardActive())\n" +
+                    ") {\n" +
+                    "noteSpuriousPauseSwallowed(\"session-set-play-when-ready\")\n" +
+                    "return\n}\n" +
                     "if (playWhenReady && playbackEndedHandled) return\n" +
-                    "super.setPlayWhenReady(playWhenReady)\n}"
+                    "if (!playWhenReady) {\n" +
+                    "PlaybackSessionTrace.note(\"pause landed: session-set-play-when-ready\")\n}" +
+                    "\nsuper.setPlayWhenReady(playWhenReady)\n}"
             )
         )
         assertTrue(

@@ -951,6 +951,14 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         spuriousPauseGuardUntilMs > 0L &&
             SystemClock.elapsedRealtime() < spuriousPauseGuardUntilMs
 
+    /** One line per swallowed external pause, naming the path and its half of the guard. */
+    private fun noteSpuriousPauseSwallowed(path: String) {
+        val state = if (!sessionHasPlayed()) "pre-frame" else "load-window"
+        com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+            "spurious pause swallowed: $path $state"
+        )
+    }
+
     /**
      * True when THIS listener paused the session on an audio-focus loss, so a
      * gain may undo it (spec 2026-11-17, F2).
@@ -2387,8 +2395,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 // these events keep arriving once the picture is up too.
                 if (sessionHasPlayed() && !spuriousPauseGuardActive()) {
                     pausedByFocusLoss = false
+                    com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                        "pause landed: session"
+                    )
                     surface?.setPaused(true)
                     keepControlsVisible()
+                } else {
+                    noteSpuriousPauseSwallowed("session")
                 }
             },
             onSkipNext = { skipToNextEpisode() },
@@ -8045,7 +8058,17 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                     // must not restart the episode from the top. Replay is an
                     // explicit seek or a fresh session, not a toggle.
                     if (endedHandled) return true
+                    val pauses = surface?.isPaused() == false
+                    if (pauses && (!sessionHasPlayed() || spuriousPauseGuardActive())) {
+                        noteSpuriousPauseSwallowed("play-pause-key")
+                        return true
+                    }
                     pausedByFocusLoss = false
+                    if (pauses) {
+                        com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                            "pause landed: play-pause-key"
+                        )
+                    }
                     surface?.togglePause()
                     showControls()
                     return true
@@ -8074,8 +8097,14 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                     // F1: those events keep coming AFTER the first frame too, so
                     // the guard is the load's own ten-second window (armed in
                     // onFileLoaded), not the playhead alone.
-                    if (!sessionHasPlayed() || spuriousPauseGuardActive()) return true
+                    if (!sessionHasPlayed() || spuriousPauseGuardActive()) {
+                        noteSpuriousPauseSwallowed("media-pause-key")
+                        return true
+                    }
                     pausedByFocusLoss = false
+                    com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                        "pause landed: media-pause-key"
+                    )
                     surface?.setPaused(true)
                     showControls()
                     return true
@@ -8169,8 +8198,15 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                         // undo: a session the viewer had already paused keeps
                         // its pause through the interruption.
                         if (surface?.isPaused() == false) {
-                            pausedByFocusLoss = true
-                            surface?.setPaused(true)
+                            if (!sessionHasPlayed() || spuriousPauseGuardActive()) {
+                                noteSpuriousPauseSwallowed("focus-loss")
+                            } else {
+                                pausedByFocusLoss = true
+                                com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                                    "pause landed: focus-loss"
+                                )
+                                surface?.setPaused(true)
+                            }
                         }
                     }
                     AudioManager.AUDIOFOCUS_GAIN -> {

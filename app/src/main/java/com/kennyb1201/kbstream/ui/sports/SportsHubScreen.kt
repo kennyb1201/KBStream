@@ -826,13 +826,25 @@ fun SportsHubScreen(
             // has not fetched yet cannot match, and is never fetched on the
             // field's account (see [SportsSearchRules]).
             if (SportsSearchRules.isActive(searchQuery)) {
-                val searchSections = if (favoritesTab) listOf(favoritesSection) else sections
+                // Search is a pure function of the loaded sections and the
+                // query. It used to re-tokenize the query and rebuild every
+                // game's team variants on every recomposition, which is a
+                // focus move or a clock tick on this screen (perf audit,
+                // sports/iptv follow-up).
+                val searchSections = remember(favoritesTab, sections, favoritesSection) {
+                    if (favoritesTab) listOf(favoritesSection) else sections
+                }
                 val searchLeague = if (favoritesTab) {
                     SportsLeagues.FAVORITES
                 } else {
                     SportsSearchRules.RESULTS_LEAGUE
                 }
-                val results = SportsSearchRules.results(searchSections, searchQuery, searchLeague)
+                val results = remember(searchSections, searchQuery, searchLeague) {
+                    SportsSearchRules.results(searchSections, searchQuery, searchLeague)
+                }
+                val hitLeagues = remember(searchSections, searchQuery) {
+                    SportsSearchRules.leaguesWithHits(searchSections, searchQuery)
+                }
                 if (results == null) {
                     KBStatusMessage(
                         title = "No games found",
@@ -844,7 +856,7 @@ fun SportsHubScreen(
                     SearchResultsLine(
                         games = results.games.size,
                         events = results.tournaments.size,
-                        leagues = SportsSearchRules.leaguesWithHits(searchSections, searchQuery)
+                        leagues = hitLeagues
                     )
                     Spacer(modifier = Modifier.height(10.dp))
                     LeagueBody(
