@@ -25,6 +25,7 @@ import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
+import com.kennyb1201.kbstream.data.reporting.ReviewsTrace
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.simkl.simklItemUrl
@@ -1696,6 +1697,12 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         _collection.value = null
         _mdbListRatings.value = null
         _awards.value = null
+        // Both review sources belong to the title being left: a new load must
+        // not let the previous title's Trakt comments merge into this one's
+        // first publish (spec 2026-11-22, F1).
+        tmdbReviewsSource = emptyList()
+        traktReviewsSource = emptyList()
+        ReviewsTrace.beginLoad()
         _allReviews.value = emptyList()
         _simklSeriesWatched.value = false
         _simklPageUrl.value = null
@@ -2631,21 +2638,68 @@ for ((metaAddon, response, error) in probeResults) {
         _awards.value = value
     }
 
+    /**
+     * The rail's two sources, kept apart so arrival order cannot decide the
+     * result (spec 2026-11-22, F1).
+     *
+     * They used to publish with different semantics - TMDB REPLACED
+     * `_allReviews`, Trakt appended to it - so a Trakt-first open had its
+     * comments wiped by the TMDB publish that landed after it. Both legs now
+     * record their own list and one publish combines them, TMDB first.
+     *
+     * Plain vars are safe: every write happens on the main dispatcher, from the
+     * legs' own `viewModelScope` launches.
+     */
+    private var tmdbReviewsSource: List<TmdbReview> = emptyList()
+    private var traktReviewsSource: List<TmdbReview> = emptyList()
+
+    /** The TMDB leg published: its pages, or the bundled page when it has none. */
     internal fun setAllReviews(value: List<TmdbReview>) {
-        _allReviews.value = value
+        tmdbReviewsSource = value
+        publishReviews()
+        ReviewsTrace.noteTmdb(value.size)
     }
 
     /**
-     * Appends a second source's reviews (Trakt) to the rail without dropping
-     * the TMDB pages that arrived first. The bundled payload is the fallback
-     * base when the paginated TMDB read has not published yet; de-duping by id
-     * keeps a retry of the same load from doubling the row.
+     * The Trakt leg published its comments.
+     *
+     * Still named for the rail it merges INTO rather than for a write to the
+     * flow: it must never replace the TMDB pages, whichever leg answered
+     * first. It replaces only the PREVIOUS Trakt answer, so a retry of the same
+     * load cannot double the row.
      */
     internal fun addAllReviews(extra: List<TmdbReview>) {
         if (extra.isEmpty()) return
-        val base = _allReviews.value
-            .ifEmpty { _tmdbDetail.value?.reviews?.results.orEmpty() }
-        _allReviews.value = (base + extra).distinctBy { review -> review.id }
+        traktReviewsSource = extra
+        publishReviews()
+        ReviewsTrace.noteTrakt(extra.size)
+    }
+
+    /**
+     * The rail's ONLY writer: TMDB's reviews first, Trakt's comments after,
+     * de-duped by id (see [mergeReviewSources]).
+     *
+     * The bundled page is the TMDB fallback while the paginated read has not
+     * published yet, so a Trakt-first answer never shows the rail as
+     * Trakt-only.
+     */
+    private fun publishReviews() {
+        val bundled = _tmdbDetail.value?.reviews?.results.orEmpty()
+        _allReviews.value = mergeReviewSources(
+            tmdb = tmdbReviewsSource.ifEmpty { bundled },
+            trakt = traktReviewsSource,
+            id = { review -> review.id }
+        )
+    }
+
+    /**
+     * The Trakt leg answered nothing, and why - the other half of F3.
+     *
+     * A silent empty is indistinguishable from a leg that never ran in every
+     * paste taken before this existed. Reasons are short tokens, never text.
+     */
+    internal fun noteTraktReviewsEmpty(reason: String) {
+        ReviewsTrace.noteTraktEmpty(reason)
     }
 
     private fun autoLoadRelevantSeason(

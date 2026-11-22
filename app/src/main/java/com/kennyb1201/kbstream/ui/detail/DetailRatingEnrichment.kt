@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.detail
 import android.util.Log
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
 import com.kennyb1201.kbstream.data.trakt.TraktComment
@@ -144,6 +145,7 @@ internal object DetailRatingEnrichment {
 
         vm.viewModelScope.launch {
             if (!vm.traktRepository.isConfigured() || !vm.traktRepository.hasToken()) {
+                vm.noteTraktReviewsEmpty("no-token")
                 return@launch
             }
             val imdbId = rawId.takeIf { it.startsWith("tt") }
@@ -152,16 +154,36 @@ internal object DetailRatingEnrichment {
                         vm.tmdbRepository.resolveImdbId(id, normalizedType)
                     }.getOrNull()
                 }
-            val comments = runCatchingCancellable {
+            val commentsResult = runCatchingCancellable {
                 vm.traktRepository.commentsFor(
                     tmdbId = tmdbId,
                     imdbId = imdbId,
                     isMovie = isMovie
                 )
-            }.getOrNull().orEmpty()
+            }
+            val comments = commentsResult.getOrNull().orEmpty()
 
-            if (comments.isEmpty()) return@launch
-            if (vm.imdbId != requestParentId) return@launch
+            // Every silent exit says why (spec 2026-11-22, F3): a paste that
+            // shows neither comments nor a reason cannot tell a disconnected
+            // account from a title nobody commented on.
+            // The retarget check comes FIRST: a stale answer's "empty" says
+            // nothing about the title now on screen, so it must not be recorded
+            // as that title's Trakt result.
+            if (vm.imdbId != requestParentId) {
+                vm.noteTraktReviewsEmpty("guard")
+                return@launch
+            }
+            if (comments.isEmpty()) {
+                val reason = commentsResult.exceptionOrNull()?.let { error ->
+                    // Redacted and capped: this line goes into a paste, and an
+                    // error body can carry a URL or a token-shaped string.
+                    "error:" + Redaction.text(error.message)
+                        .ifBlank { error.javaClass.simpleName }
+                        .take(60)
+                } ?: "none"
+                vm.noteTraktReviewsEmpty(reason)
+                return@launch
+            }
             vm.addAllReviews(comments.map { comment -> comment.toTmdbReview() })
         }
     }
@@ -188,6 +210,10 @@ internal object DetailRatingEnrichment {
         val detail = vm.tmdbDetail.value ?: return
         val tmdbId = detail.id.takeIf { it > 0 } ?: return
         val bundled = detail.reviews?.results.orEmpty()
+        // F2 (spec 2026-11-22): the same retarget guard [traktComments] already
+        // carries. Without it a slow page fetch for the title the viewer just
+        // left published its pages under whatever title is on screen now.
+        val requestParentId = vm.imdbId
 
         vm.viewModelScope.launch {
             val extras = mutableListOf<TmdbReview>()
@@ -232,7 +258,8 @@ internal object DetailRatingEnrichment {
             }
 
             // Publish the pages so the row grows as fast as the network
-            // allows.
+            // allows - but only onto the title this read was started for.
+            if (vm.imdbId != requestParentId) return@launch
             vm.setAllReviews((bundled + extras).distinctBy { it.id })
         }
     }

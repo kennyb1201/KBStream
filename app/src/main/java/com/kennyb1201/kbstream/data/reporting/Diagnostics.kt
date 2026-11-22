@@ -304,6 +304,12 @@ object Diagnostics {
         // [DetailTrace]). Absent until something on Detail has been moved on,
         // so the rest of a report is unchanged.
         DetailTrace.lines().forEach { report.appendLine("detail: $it") }
+        // What the review rail's two legs last did, in one line per Detail open
+        // (spec 2026-11-22, F3): the TMDB count and Trakt's count - or why it
+        // answered nothing. A thin rail was a publish race between the two, and
+        // nothing in the paste could tell that from a leg that never fired.
+        // Absent until a Detail page has loaded.
+        ReviewsTrace.summary()?.let { report.appendLine(it) }
         // F1 (spec 2026-11-15): the detail load's legs in ONE line - first paint,
         // the TMDB fetch, the addons list, the Simkl round-trip, and the tail
         // that ran after the page was visible. `detail.load` alone cannot say
