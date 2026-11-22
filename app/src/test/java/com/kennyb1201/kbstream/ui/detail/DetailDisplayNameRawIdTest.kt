@@ -110,7 +110,7 @@ class DetailDisplayNameRawIdTest {
         val detail = source("com/kennyb1201/kbstream/ui/detail/DetailScreen.kt")
         val block = block(
             detail,
-            startMarker = "val displayName = remember(m, tmdbDetail) {",
+            startMarker = "val displayName = remember(m, tmdbDetail?.name, tmdbDetail?.title) {",
             // The keywords line now also remembers the kids ceiling (spec
             // 2026-11-18, F2) - it is still the block's end marker.
             endMarker = "val keywords = remember(tmdbDetail?.keywords, kidsCeiling)"
