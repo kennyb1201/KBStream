@@ -2325,7 +2325,7 @@ fun DetailScreen(
 
     /**
      * Whether this page has a PEOPLE rail at all, which is what renders it (see
-     * the `peopleheader`/`peoplerow` items below) and what the chip handlers
+     * the `peoplerow` item below) and what the chip handlers
      * above and below tell apart from a rail the scroll has disposed. Hoisted
      * out of the list builder so both read the same expression.
      */
@@ -8382,23 +8382,6 @@ fun DetailScreen(
 
 
                         if (activeTab == DetailTab.CAST && hasPeopleRow) {
-                            item(key = "peopleheader", contentType = "section-header") {
-                                // Plain label, NOT focusable: the movie DOWN
-                                // path (keywords row) jumps straight into the
-                                // people rail instead. A focusable label here
-                                // used to be the only focusable node between
-                                // the tag rail and the people cards on movies,
-                                // so D-pad scrolling caught on invisible
-                                // "empty space" above the people row.
-                                KBSectionHeader(
-                                    title = "PEOPLE",
-                                    modifier = Modifier.padding(
-                                        start = KBScreenEdge,
-                                        top = 14.dp
-                                    )
-                                )
-                            }
-
                             item(key = "peoplerow", contentType = "section-row") {
                                 // Round four F5: the cast rail's next portraits,
                                 // decoded before the D-pad walks to them. Sized at
@@ -8431,6 +8414,7 @@ fun DetailScreen(
                                         ),
                                     modifier = Modifier
                                         .padding(
+                                            top = 14.dp,
                                             bottom = 12.dp
                                         )
                                         // Attached BEFORE the group so
@@ -8966,16 +8950,6 @@ fun DetailScreen(
                         }
 
                         if (activeTab == DetailTab.MORE_LIKE_THIS && hasMoreLikeThisRow) {
-                            item(key = "recsheader", contentType = "section-header") {
-                                KBSectionHeader(
-                                    title = "MORE LIKE THIS",
-                                    modifier = Modifier.padding(
-                                        start = KBScreenEdge,
-                                        top = 14.dp
-                                    )
-                                )
-                            }
-
                             item(key = "recsrow", contentType = "section-row") {
                                 LazyRow(
                                     state = recsRowState,
@@ -8992,6 +8966,7 @@ fun DetailScreen(
                                         ),
                                     modifier = Modifier
                                         .padding(
+                                            top = 14.dp,
                                             bottom = 14.dp
                                         )
                                         .focusGroup()
@@ -9175,16 +9150,6 @@ fun DetailScreen(
                         // collection and the recommendations are how they find
                         // the next one (see DetailRow's painted order).
                         if (activeTab == DetailTab.REVIEWS && reviews.isNotEmpty()) {
-                            item(key = "reviewsheader", contentType = "section-header") {
-                                KBSectionHeader(
-                                    title = "REVIEWS",
-                                    modifier = Modifier.padding(
-                                        start = KBScreenEdge,
-                                        top = 14.dp
-                                    )
-                                )
-                            }
-
                             item(key = REVIEWS_ROW_KEY, contentType = "section-row") {
                                 LazyRow(
                                     // The rail's own scroll state, so the
@@ -9202,6 +9167,7 @@ fun DetailScreen(
                                         ),
                                     modifier = Modifier
                                         .padding(
+                                            top = 14.dp,
                                             bottom = 12.dp
                                         )
                                         .focusGroup()
@@ -9274,16 +9240,6 @@ fun DetailScreen(
                         // More Like This and the reviews: one row of the chain,
                         // several rails inside it.
                         if (activeTab == DetailTab.MEDIA && hasMediaRow) {
-                            item(key = "mediaheader", contentType = "section-header") {
-                                KBSectionHeader(
-                                    title = "MEDIA",
-                                    modifier = Modifier.padding(
-                                        start = KBScreenEdge,
-                                        top = 14.dp
-                                    )
-                                )
-                            }
-
                             // The strip, then the cards of the page it is on:
                             // one row of the chain, several rails inside it
                             // (see mediaStripFocus / mediaCardFocus).
@@ -9326,6 +9282,7 @@ fun DetailScreen(
                                     modifier = Modifier
                                         .padding(
                                             start = KBScreenEdge,
+                                            top = 14.dp,
                                             bottom = 10.dp
                                         )
                                         .then(traceRowFocus(DetailRow.MEDIA))

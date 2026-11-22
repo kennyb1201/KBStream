@@ -49,13 +49,39 @@ class DetailMediaRowWiringContractTest {
                 "its cards the bottom of the page: the order the chain walks",
             collection < recs && recs < reviews && reviews < media
         )
-        assertTrue(
-            "and it carries a section header like every other row",
-            screen.contains(
-                "item(key = \"mediaheader\", contentType = \"section-header\") { " +
-                    "KBSectionHeader( title = \"MEDIA\","
-            )
+        assertFalse(
+            "the MEDIA header only repeated the tab that is already showing",
+            screen.contains("item(key = \"mediaheader\"")
         )
+        assertTrue(
+            "and the row keeps the removed header's top gap",
+            screen.substringAfter("item(key = MEDIA_STRIP_KEY")
+                .substringBefore("item(key =")
+                .contains("top = 14.dp")
+        )
+    }
+
+    @Test
+    fun `the tab-duplicate headers are gone and each first row keeps its gap`() {
+        listOf("peopleheader", "recsheader", "reviewsheader", "mediaheader").forEach { key ->
+            assertFalse(
+                "$key repeated a tab name above a row the tab already names",
+                screen.contains("item(key = \"$key\"")
+            )
+        }
+        listOf(
+            "peoplerow" to "item(key = \"peoplerow\"",
+            "recsrow" to "item(key = \"recsrow\"",
+            "review row" to "item(key = REVIEWS_ROW_KEY",
+            "media strip" to "item(key = MEDIA_STRIP_KEY"
+        ).forEach { (name, anchor) ->
+            assertTrue(
+                "$name must still start 14dp below the tab strip",
+                screen.substringAfter(anchor).substringBefore("item(key =").contains(
+                    "top = 14.dp"
+                )
+            )
+        }
     }
 
     @Test
