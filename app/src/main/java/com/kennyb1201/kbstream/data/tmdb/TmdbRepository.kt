@@ -3359,8 +3359,18 @@ class TmdbRepository private constructor(context: Context) :
                     // answer this process has not seen is then read from the
                     // cache instead of re-derived - same question, same day
                     // ([HomeAvailabilityVerdict]).
+                    //
+                    // KEYED BY THE RESOLVED TMDB ID (spec 2026-11-21). The raw
+                    // row id is a property of the surface that asked - a pinned
+                    // add-on row says `tt...`, a catalog row says `tmdb:...` -
+                    // so keying by it made the same movie derive and pay twice
+                    // and share nothing. [canonicalVerdictKey] maps the shapes
+                    // that can be resolved cheaply; anything else still asks
+                    // with its raw id, and the answer is filed under the id the
+                    // payload resolved to below. Raw-id rows written by older
+                    // builds are simply never read again.
                     val verdictKey =
-                        id(item)
+                        canonicalVerdictKey(id(item), "movie") ?: id(item)
 
                     knownHomeAvailabilityVerdict(verdictKey, today)?.let { known ->
                         return@async if (known) item else null
@@ -3406,20 +3416,40 @@ class TmdbRepository private constructor(context: Context) :
 
                     val permits =
                         if (pinnedLeg) pinnedAvailabilitySemaphore else availabilitySemaphore
-                    val verdict = permits.withPermit {
+                    val detail = permits.withPermit {
 
                         runCatchingCancellable {
 
                             fetchEnrichedMetaCached(
                                 imdbId = id(item),
                                 type = "movie"
-                            )?.isAvailableAtHome(today)
+                            )
 
                         }.getOrNull()
                     }
+                    val verdict = detail?.isAvailableAtHome(today)
 
                     if (verdict != null) {
-                        rememberHomeAvailabilityVerdict(verdictKey, verdict)
+                        // File the answer under the id the payload actually
+                        // resolved to, so the next surface that asks with a
+                        // different id flavor reads this row instead of paying
+                        // for the same detail again. The pre-fetch key covers
+                        // the shapes that need no request; this covers every
+                        // other one (a `tvdb:` id, an add-on id, a `tt...` row
+                        // whose resolution table the fetch just filled).
+                        val resolvedKey =
+                            detail?.id
+                                ?.takeIf { tmdbId -> tmdbId > 0 }
+                                ?.let { tmdbId -> "tmdb:$tmdbId" }
+                                ?: verdictKey
+                        if (resolvedKey != verdictKey) {
+                            // The session memo answers the raw id too, so a
+                            // later row for the same title in THIS build does
+                            // not ask again. Deliberately not persisted: only
+                            // the canonical row is shared across launches.
+                            rememberVerdictInMemory(verdictKey, verdict)
+                        }
+                        rememberHomeAvailabilityVerdict(resolvedKey, verdict)
                     }
 
                     when (verdict) {
@@ -3429,6 +3459,37 @@ class TmdbRepository private constructor(context: Context) :
                 }
             }.awaitAll().filterNotNull()
         }
+    }
+
+    /**
+     * The row id a verdict should share across surfaces: the title's TMDB id,
+     * whichever flavor the caller holds.
+     *
+     * `tmdb:<n>` and bare numeric ids already are one. A `tt...` id is mapped
+     * through the resolution table every detail fetch uses ([resolveTmdbId]),
+     * so the mapping is a cache read once any surface has resolved the title -
+     * and a catalog row with `tmdb:<n>` then reads the same row a pinned `tt...`
+     * row wrote. Null when the shape cannot be mapped without guessing; the
+     * caller then asks with its raw id and files the answer under the resolved
+     * id after the fetch.
+     */
+    private suspend fun canonicalVerdictKey(rawId: String, type: String): String? {
+        val id = rawId.trim()
+        if (id.isEmpty()) return null
+        val numeric = if (id.startsWith("tmdb:", ignoreCase = true)) {
+            id.substringAfter(':').trim().toIntOrNull()
+        } else {
+            id.toIntOrNull()
+        }
+        if (numeric != null) {
+            return numeric.takeIf { it > 0 }?.let { "tmdb:$it" }
+        }
+        if (id.startsWith("tt", ignoreCase = true)) {
+            return resolveTmdbId(id, type)
+                ?.takeIf { tmdbId -> tmdbId > 0 }
+                ?.let { tmdbId -> "tmdb:$tmdbId" }
+        }
+        return null
     }
 
     /**

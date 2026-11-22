@@ -70,9 +70,9 @@ internal object HomePinnedSnapshot {
 
     // ── The blob, pure so a JVM test can round-trip it ────────────────────
 
-    fun encode(rails: List<Rail>): String {
+    fun encode(rails: List<Rail>, maxRails: Int = MAX_RAILS): String {
         val out = StringBuilder()
-        rails.take(MAX_RAILS).forEach { rail ->
+        rails.take(maxRails).forEach { rail ->
             out.append(
                 listOf(
                     RAIL,

@@ -15,11 +15,19 @@ package com.kennyb1201.kbstream.data.tmdb
  * So an answer is written as its own tiny row beside the payloads it came from,
  * and the next build reads it instead of the payload.
  *
- * DAY, NOT A TTL. A verdict is a statement about a date - "can this be watched
- * at home TODAY" - so yesterday's "not yet" is not an answer about today: the
- * digital window may have opened overnight. The encoded day makes that explicit
- * and [decode] refuses every other day. The payloads behind it keep their own
- * 30-day TTL; the answers deliberately do not.
+ * TWO CLOCKS, ONE ROW. A verdict is a statement about whether a title is
+ * available at home today.
+ *
+ *  - "not available" is a statement about TODAY: the digital window may have
+ *    opened overnight, so yesterday's "not yet" must never answer for today.
+ *    It is honoured only on the day it was written.
+ *  - "available" is derived from a release date in the past. That date cannot
+ *    move back into the future, so the answer stays true tomorrow - and every
+ *    current-year title that is already out used to be re-derived on the first
+ *    launch of every day for no new information. It is honoured for
+ *    [AVAILABLE_MAX_AGE_DAYS], the payload's own 30-day TTL: a corrected TMDB
+ *    date still re-derives within that window, and the answer can never outlive
+ *    the payload that would correct it.
  *
  * The row is `"<epochDay>:<0|1>"` - a dozen bytes, so a Home screen's worth of
  * them is nothing beside the `detail_en:` payloads they replace, and knowing
@@ -37,6 +45,15 @@ internal object HomeAvailabilityVerdict {
      */
     const val KEY_PREFIX = "homeavail:"
 
+    /**
+     * How long an "available" answer is honoured after the day it was derived.
+     *
+     * The payload behind it keeps a 30-day TTL (TmdbRepository's
+     * detailCacheDiskTtlMs); an answer must not outlive the data that could
+     * correct it. "Not available" never uses this - it is day-scoped.
+     */
+    const val AVAILABLE_MAX_AGE_DAYS = 30L
+
     /** The cache key for one title's verdict. */
     fun key(id: String): String = KEY_PREFIX + id
 
@@ -48,23 +65,28 @@ internal object HomeAvailabilityVerdict {
         "$epochDay:${if (available) 1 else 0}"
 
     /**
-     * The verdict [row] holds, when it was decided on [epochDay].
+     * The verdict [row] holds for [epochDay].
      *
-     * Null for every other case - a row from an earlier day, a malformed row, a
-     * missing one - because `null` is what makes the caller do the thing it
-     * always did: read the payload and decide for itself. There is deliberately
-     * no "stale is close enough" branch: an unreleased title shown in a row is
-     * exactly the thing this filter exists to prevent.
+     * "Not available" answers only for the day they were written: an unreleased
+     * title must never be shown on a stale answer, because the digital window
+     * may have opened overnight. "Available" answers for
+     * [AVAILABLE_MAX_AGE_DAYS], because a release date already in the past
+     * cannot move back into the future.
+     *
+     * Null for every other case - an expired row, a future row, a malformed
+     * row, a missing one - because `null` is what makes the caller do the thing
+     * it always did: read the payload and decide for itself.
      */
     fun decode(row: String?, epochDay: Long): Boolean? {
         val text = row?.trim().orEmpty()
         val separator = text.indexOf(':')
         if (separator <= 0 || separator != text.lastIndexOf(':')) return null
         val day = text.substring(0, separator).toLongOrNull() ?: return null
-        if (day != epochDay) return null
+        if (day > epochDay) return null
+        val ageDays = epochDay - day
         return when (text.substring(separator + 1)) {
-            "1" -> true
-            "0" -> false
+            "1" -> if (ageDays <= AVAILABLE_MAX_AGE_DAYS) true else null
+            "0" -> if (ageDays == 0L) false else null
             else -> null
         }
     }

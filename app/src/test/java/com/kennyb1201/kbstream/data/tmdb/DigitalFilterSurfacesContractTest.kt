@@ -103,7 +103,7 @@ class DigitalFilterSurfacesContractTest {
             "only an ANSWER is remembered: a null is a read that failed, and filing " +
                 "it as unavailable would hide a released title for the whole session",
             pass.contains("if (verdict != null) {") &&
-                pass.contains("rememberHomeAvailabilityVerdict(verdictKey, verdict)")
+                pass.contains("rememberHomeAvailabilityVerdict(resolvedKey, verdict)")
         )
         assertTrue(
             "the memo alone dies with the process, which is why every rebuild re-read " +

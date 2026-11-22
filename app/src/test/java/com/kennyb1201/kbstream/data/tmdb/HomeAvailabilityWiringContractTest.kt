@@ -60,6 +60,22 @@ class HomeAvailabilityWiringContractTest {
     }
 
     @Test
+    fun `a verdict is shared under the resolved TMDB id`() {
+        val repo = source("com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt")
+
+        assertTrue(
+            "the pre-fetch lookup must canonicalise the row's id flavor",
+            repo.contains("canonicalVerdictKey(id(item), \"movie\") ?: id(item)")
+        )
+        assertTrue(
+            "and the answer must be filed under the id the payload resolved to, " +
+                "or a pinned tt... row and a catalog tmdb: row still pay twice",
+            repo.contains("val resolvedKey =") &&
+                repo.contains("?.let { tmdbId -> \"tmdb:\$tmdbId\" }")
+        )
+    }
+
+    @Test
     fun `the pinned leg has its own permits`() {
         val repo = source("com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt")
         assertTrue(

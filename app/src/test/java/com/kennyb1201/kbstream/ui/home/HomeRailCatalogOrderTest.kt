@@ -173,9 +173,17 @@ class HomeRailCatalogOrderTest {
             src.contains("val catalogOrder = catalogOrderByKey(pendingCatalogs)")
         )
         assertTrue(
-            "and the published list must be ordered by it - `pinned + collected` " +
+            "the fresh rails must be ordered by it - `pinned + collected` " +
                 "is fetch-completion order, which is the defect",
-            src.contains("pinned + orderCatalogRails(collected, catalogOrder)")
+            src.contains("val freshCatalogRails = orderCatalogRails(collected, catalogOrder)")
+        )
+        assertTrue(
+            "and the published list must be that order, with the snapshot rows a " +
+                "failed refresh keeps in their own catalog slots",
+            src.contains(
+                "pinned + orderCatalogRails( freshCatalogRails + snapshotOnlyRails, " +
+                    "catalogOrder )"
+            )
         )
         assertFalse(
             "nothing may publish the collected rails raw again",

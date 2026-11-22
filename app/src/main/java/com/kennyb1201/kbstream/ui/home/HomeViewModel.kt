@@ -236,6 +236,15 @@ class HomeViewModel(
     private var railBuildEpoch = 0L
 
     /**
+     * Bumped on every rail build. The catalog snapshot is written behind the
+     * build's verdict passes, so an older build's write must not land after a
+     * newer build's file (same profile, a manual refresh; the profile epoch does
+     * not move for that). Only the newest build may replace the snapshot.
+     */
+    @Volatile
+    private var catalogSnapshotBuild = 0L
+
+    /**
      * The catalog fan-out's permits - the total less the pinned batch's reserve.
      *
      * See [pinnedCatalogSemaphore]: the two add up to the same ceiling as before,
@@ -2955,10 +2964,28 @@ Log.d(
     private val heroArtPrefetchInFlight =
         java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
 
-    // Deliberately low (2): this runs while the user is already interacting
-    // with Home and about to open a Detail page, so the prefetch must never
-    // hold the shared TMDB/OkHttp capacity the foreground needs. Two at a time
-    // still warms a rail's worth of cards well ahead of focus.
+    // The URL-only warm's own in-flight set (spec 2026-11-21 F3). URL resolution
+    // is a cache-first JSON read, not a bitmap, so it is kept apart from the
+    // metadata/disk warm above: one must never make the other skip.
+    private val heroUrlWarmInFlight =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+
+    // URL warms get their own two permits rather than spending the bitmap warm's.
+    // The artwork repository caps its own fetches at six and caches every answer,
+    // so nothing is bypassed - but a walk-ahead decode must never queue behind a
+    // rail's URL backlog. At focus it has a step plus one dwell to be ready.
+    private val heroUrlWarmSemaphore = Semaphore(permits = 2)
+
+    // The immediate-next-card bitmap decode the focus event starts. Kept apart
+    // from the settled dwell warm so a walk arriving on the card cannot read the
+    // other as "warm already in flight" and skip: Coil dedupes the actual decode,
+    // so the second request is a memory hit, not a second decode.
+    private val heroNextBitmapInFlight =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+
+    // The bitmap-decode ceiling: two 1280x720 decodes (~3.5MB each) at a time.
+    // Resolution does not spend these permits (see [heroUrlWarmSemaphore]), so a
+    // slow URL lookup cannot queue the hero's own decode behind it.
     private val heroArtPrefetchSemaphore = Semaphore(permits = 2)
 
     // The rail-tile warm's own in-flight set and permits (F3, round three).
@@ -2989,7 +3016,7 @@ Log.d(
                     toWarm.mapIndexed { index, item ->
                         async {
                             val artwork =
-                                heroArtPrefetchSemaphore.withPermit {
+                                heroUrlWarmSemaphore.withPermit {
                                     try {
                                         val detail = when {
                                             item.id.startsWith("tmdb:", ignoreCase = true) ->
@@ -3290,10 +3317,16 @@ Log.d(
         // F5: one arrival, so the paste's hit rate is read against the walk the
         // viewer actually did rather than against the number of warms.
         ImageLoadTrace.noteHeroFocusArrival()
+        // Resolve the near field's URLs and decode the IMMEDIATE next card
+        // (spec 2026-11-21 F3). The long pole was never the decode - it was
+        // resolving WHICH url to decode (`warmP50=287ms` versus art resolve
+        // 883ms average / 2.4s p95), so the walk reached cards whose URL lookup
+        // had only just started.
+        warmHeroWalkAhead(item)
         // The hero-size half, debounced to the card the walk stops on
         // (0.9.400). Fired HERE, not from the art dwell: the dwell is the frame
         // the hero draws in, and a warm that starts beside a draw cannot be a
-        // hit for it.
+        // hit for it. This stays as the backstop for the settled card.
         warmHeroLookahead(item)
         // Continue Watching and Upcoming are their own lists, not catalog rails,
         // so the tile warm below returns at its first lookup for a card in
@@ -3441,6 +3474,124 @@ Log.d(
     private var heroLookaheadJob: kotlinx.coroutines.Job? = null
 
     /**
+     * Resolves the hero-art URLs of the cards at the head of a freshly PAINTED
+     * rail, without decoding anything (spec 2026-11-21 F3).
+     *
+     * The snapshot paint puts rows on screen before any network, so the viewer can
+     * focus a card seconds before the build's own [prefetchHeroArt] runs. URL
+     * resolution is the slow half (~883ms average, 2.4s p95), so this gets it
+     * started at paint time, cache-first, bounded to the cards a viewer can reach
+     * without stepping into the rail.
+     */
+    private fun warmHeroArtUrls(rails: List<Rail>) {
+        if (rails.isEmpty()) return
+        val toWarm = rails
+            .flatMap { rail -> rail.items.take(HERO_URL_RAIL_WINDOW) }
+            .filter { item -> item.id.isNotBlank() }
+            .distinctBy { item -> "${item.type}:${item.id}" }
+            .take(HERO_URL_WARM_LIMIT)
+            .filter { item -> heroUrlWarmInFlight.add("${item.type}:${item.id}") }
+        if (toWarm.isEmpty()) return
+
+        viewModelScope.launch {
+            try {
+                coroutineScope {
+                    toWarm.map { item ->
+                        async {
+                            try {
+                                heroUrlWarmSemaphore.withPermit {
+                                    resolveHeroArtworkForPrefetch(item)
+                                }
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                // Best-effort: the focus path resolves it properly.
+                            } finally {
+                                heroUrlWarmInFlight.remove("${item.type}:${item.id}")
+                            }
+                        }
+                    }.awaitAll()
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Scope-level failure: nothing to do.
+            }
+        }
+    }
+
+    /**
+     * The focus event's walk-ahead (spec 2026-11-21 F3).
+     *
+     * Resolves the hero-art URLs of the next few cards in the walk direction
+     * (the focused card's own rail, forward) and decodes ONLY the immediate next
+     * card's hero bitmap. The rest of the window is URL resolution - a cache-first
+     * JSON read, no bitmap memory - so a rail-warmed title costs no extra network
+     * and the 48MB cache is not refilled with art the walk never draws (churn
+     * F1).
+     *
+     * The settled card's decode is still [warmHeroLookahead]'s job. This runs at
+     * the focus event so the next card has the whole step plus its own dwell to
+     * resolve and decode before it is drawn.
+     */
+    private fun warmHeroWalkAhead(item: MetaPreview) {
+        if (item.id.isBlank()) return
+        val slot = warmSlotOf(_rails.value, item) ?: return
+        val forward = slot.rail.items
+            .drop(slot.itemIndex + 1)
+            .filter { candidate -> candidate.id.isNotBlank() }
+            .distinctBy { candidate -> "${candidate.type}:${candidate.id}" }
+            .take(HERO_WALK_URL_AHEAD)
+        if (forward.isEmpty()) return
+
+        val next = forward.first()
+        val nextKey = warmKeyOf(next)
+        val decodeNext = heroNextBitmapInFlight.add(nextKey)
+
+        viewModelScope.launch {
+            try {
+                if (decodeNext) {
+                    // Resolve under the URL permits, decode under the bitmap
+                    // permits: a slow lookup must not hold the memory ceiling.
+                    val artwork = heroUrlWarmSemaphore.withPermit {
+                        resolveHeroArtworkForPrefetch(next)
+                    }
+                    if (!artwork?.backdropUrl.isNullOrBlank()) {
+                        heroArtPrefetchSemaphore.withPermit {
+                            // Counted by warmHeroArtBitmap itself; a memory hit
+                            // there is `skippedCached`, not a second warm.
+                            warmHeroArtBitmap(artwork)
+                        }
+                    }
+                }
+                // The rest of the window is URLs only. Parallel, bounded by the
+                // URL semaphore and the shared artwork cache.
+                coroutineScope {
+                    forward.drop(1).map { candidate ->
+                        async {
+                            try {
+                                heroUrlWarmSemaphore.withPermit {
+                                    resolveHeroArtworkForPrefetch(candidate)
+                                }
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                // Best-effort.
+                            }
+                        }
+                    }.awaitAll()
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Best-effort: the focus path resolves it properly.
+            } finally {
+                if (decodeNext) heroNextBitmapInFlight.remove(nextKey)
+            }
+        }
+    }
+
+    /**
      * Warms the HERO bitmap of the card focus settled on, into the memory cache
      * (spec 2026-11-15 F3, re-shaped 0.9.400 by what the walk measured).
      *
@@ -3462,9 +3613,11 @@ Log.d(
      * the next settle asks again, and the cancelled job's own `finally` releases
      * [heroArtPrefetchInFlight] so a card is never left wedged in it.
      *
-     * Still a `viewModelScope` launch of its own, at the hero's own size, through
-     * [heroArtPrefetchSemaphore] and [heroArtPrefetchInFlight]. It touches TMDB
-     * artwork only - never MDBList, never a tracker.
+     * Resolution and decode take separate permits since 2026-11-21 (F3): the URL
+     * lookup is the long pole, so it must never hold the bitmap ceiling. The
+     * decode itself is still behind [heroArtPrefetchSemaphore] and
+     * [heroArtPrefetchInFlight]. It touches TMDB artwork only - never MDBList,
+     * never a tracker.
      */
     private fun warmHeroLookahead(item: MetaPreview) {
         if (item.id.isBlank()) return
@@ -3493,18 +3646,23 @@ Log.d(
                 return@launch
             }
             try {
-                // The permit covers the bitmap decode as well as the resolve:
-                // two hero warms at a time is the memory ceiling.
-                heroArtPrefetchSemaphore.withPermit {
-                    val artwork = resolveHeroArtworkForPrefetch(item)
-                    // A title with no backdrop warms nothing
-                    // ([warmHeroArtBitmap] returns at its first line), and a
-                    // paste that cannot tell that from a cancelled warm has no
-                    // next move: the 0.9.401 walk showed `heroWarms=6` beside
-                    // `heroDraws=17` and both causes read the same.
-                    if (artwork?.backdropUrl.isNullOrBlank()) {
-                        ImageLoadTrace.noteHeroWarmSkippedNoArt()
-                    } else {
+                // Resolution and decode have their own permits (spec 2026-11-21
+                // F3): the URL lookup is the long pole, and holding a bitmap
+                // permit across it queued every decode behind somebody else's
+                // network. The bitmap permit is still the memory ceiling - two
+                // hero decodes at a time.
+                val artwork = heroUrlWarmSemaphore.withPermit {
+                    resolveHeroArtworkForPrefetch(item)
+                }
+                // A title with no backdrop warms nothing
+                // ([warmHeroArtBitmap] returns at its first line), and a
+                // paste that cannot tell that from a cancelled warm has no
+                // next move: the 0.9.401 walk showed `heroWarms=6` beside
+                // `heroDraws=17` and both causes read the same.
+                if (artwork?.backdropUrl.isNullOrBlank()) {
+                    ImageLoadTrace.noteHeroWarmSkippedNoArt()
+                } else {
+                    heroArtPrefetchSemaphore.withPermit {
                         // Timed from here (settle over, permit held) to the
                         // finished bitmap. The dwell gives this ~350 ms before
                         // the hero draws, and the 0.9.431 walk's 45% hit rate
@@ -12679,6 +12837,8 @@ private suspend fun calculateEpisodesRemaining(
 
             railsRefreshMutex.withLock {
 
+                val catalogSnapshotBuildAtStart = ++catalogSnapshotBuild
+
                 // Rebuilding rails invalidates pagination bookkeeping: rail
                 // identities are stable, but their item offsets are not.
                 railInfo.clear()
@@ -12687,11 +12847,14 @@ private suspend fun calculateEpisodesRemaining(
                 railSourceOffset.clear()
                 closeCatalogGrid()
 
-                // Snapshot the artwork of what is on screen before this build
-                // starts replacing it: those rails' art is what their
-                // replacements inherit (see previousLandscapeArt).
+                // What is on screen before this build starts replacing it. Its
+                // artwork is what the replacements inherit (previousLandscapeArt),
+                // and its rows are the best stale answer for a rail whose refresh
+                // fails (see snapshotOnlyRails). Captured before the pinned
+                // snapshot paints, so "was the screen empty" stays meaningful.
+                val railsOnScreenAtStart = _rails.value
                 previousLandscapeArt =
-                    _rails.value.associate { rail -> railKeyOf(rail) to rail.landscapeArt }
+                    railsOnScreenAtStart.associate { rail -> railKeyOf(rail) to rail.landscapeArt }
 
                 // A new build asks TMDB again. The memo exists to stop the
                 // repeats WITHIN one build, not to outlive it: the repository
@@ -12731,11 +12894,27 @@ private suspend fun calculateEpisodesRemaining(
                 // them) and never touch a catalog rail.
                 val cachedPinnedKeys =
                     cachedPinnedRails.map { rail -> railKeyOf(rail) }.toSet()
+
+                // The first rail on screen, whichever publish gets there first
+                // (spec 2026-11-21 F2): the pinned snapshot, the catalog
+                // snapshot, or - with no snapshot at all - the first live catalog
+                // row. One-shot, and atomic because the live fan-out resolves
+                // several rails on different threads.
+                val firstRailRecorded =
+                    java.util.concurrent.atomic.AtomicBoolean(false)
                 if (cachedPinnedRails.isNotEmpty()) {
                     publishPinnedInPlace(
                         pinnedRails = cachedPinnedRails,
                         buildEpochAtStart = buildEpochAtStart
                     )
+                    // The first catalog row cannot arrive before this, so the
+                    // pinned paint is the earliest thing this build can show.
+                    if (firstRailRecorded.compareAndSet(false, true)) {
+                        PerfTrace.record(
+                            "home.firstRail",
+                            android.os.SystemClock.elapsedRealtime() - buildStartedAtMs
+                        )
+                    }
                     // home.pinned is the CACHED publish now - the moment rails
                     // are on screen without the network. home.pinnedRefined (see
                     // pinnedDeferred below) is the deepened batch landing.
@@ -12743,6 +12922,9 @@ private suspend fun calculateEpisodesRemaining(
                         "home.pinned",
                         android.os.SystemClock.elapsedRealtime() - buildStartedAtMs
                     )
+                    // The rows are on screen; make their first cards' hero URLs
+                    // known before the viewer can focus one (F3).
+                    warmHeroArtUrls(cachedPinnedRails)
                 }
 
                 // The pinned "Top ... Today" rails are loaded inside the
@@ -12824,6 +13006,64 @@ private suspend fun calculateEpisodesRemaining(
                 // on Home is switched up after Refresh all" report.
                 val catalogOrder = catalogOrderByKey(pendingCatalogs)
 
+                // PAINT SECOND (spec 2026-11-21 F2): the catalog rails as the
+                // last completed build left them, on screen before the fan-out
+                // below sends a single request. Pinned rows already painted from
+                // their own snapshot; without this the catalog slots stayed
+                // skeletons for `firstRail=1968ms` / `railsReady=4401ms` on the
+                // 0.9.440 paste even though the viewer had seen every one of
+                // these rows on the previous launch.
+                //
+                // Only rails still in the viewer's catalog order are painted: a
+                // catalog they removed since the file was written must not come
+                // back. The snapshot was filtered when it was written (kids
+                // ceiling, upcoming, digital availability), and the scope is the
+                // profile + ceiling - so what paints is already the set the live
+                // rows would have produced. `hideUpcoming` is re-applied because
+                // it can change between sessions.
+                val catalogSnapshotScope =
+                    HomeCatalogSnapshot.scopeOf(
+                        profileId = profileIdAtStart.orEmpty(),
+                        kidsCeiling = tmdbRepository.kidsMaxAge() != null
+                    )
+                val cachedCatalogRails =
+                    HomeCatalogSnapshot.load(
+                        getApplication<Application>(),
+                        catalogSnapshotScope
+                    )
+                        .filter { rail -> catalogOrder.containsKey(railKeyOf(rail)) }
+                        .map { rail ->
+                            if (hideUpcoming) rail.copy(items = filterUpcoming(rail.items)) else rail
+                        }
+                        .filter { rail -> rail.items.isNotEmpty() }
+                if (
+                    cachedCatalogRails.isNotEmpty() &&
+                    // A refresh already has rows on screen; replacing them with
+                    // the file would be a regression for the seconds the fresh
+                    // fan-out takes. The snapshot is for a launch with nothing
+                    // to show.
+                    railsOnScreenAtStart.isEmpty()
+                ) {
+                    publishCatalogSnapshotInPlace(
+                        catalogRails = cachedCatalogRails,
+                        buildEpochAtStart = buildEpochAtStart
+                    )
+                    if (firstRailRecorded.compareAndSet(false, true)) {
+                        PerfTrace.record(
+                            "home.firstRail",
+                            android.os.SystemClock.elapsedRealtime() - buildStartedAtMs
+                        )
+                    }
+                    PerfTrace.record(
+                        "home.catalogPaint",
+                        android.os.SystemClock.elapsedRealtime() - buildStartedAtMs
+                    )
+                    // Same reason as the pinned paint: the snapshot is the screen
+                    // until the fan-out answers, so its near field gets the URL
+                    // warm now (F3).
+                    warmHeroArtUrls(cachedCatalogRails)
+                }
+
                 // Progressive publication: each catalog rail lands in the
                 // UI the moment it resolves, in catalog order — the screen
                 // no longer waits for the slowest addon before painting.
@@ -12832,9 +13072,19 @@ private suspend fun calculateEpisodesRemaining(
                         mutableListOf<Rail>()
                     )
 
-                /** Guards the one-shot home.firstRail sample below. */
-                val firstRailRecorded =
-                    java.util.concurrent.atomic.AtomicBoolean(false)
+                // A rail whose FETCH failed (as opposed to one that answered
+                // empty) means the fresh catalog set is incomplete, so the
+                // snapshot must not be rewritten from it.
+                val catalogFetchFailures =
+                    java.util.concurrent.atomic.AtomicInteger(0)
+
+                // The verdict passes the catalog rails launched behind their
+                // publish. The snapshot is written after these answer, so the
+                // next launch paints the filtered set rather than the raw rows.
+                val catalogVerdictJobs =
+                    java.util.Collections.synchronizedList(
+                        mutableListOf<kotlinx.coroutines.Job>()
+                    )
 
                 coroutineScope {
 
@@ -12952,6 +13202,9 @@ private suspend fun calculateEpisodesRemaining(
                                     buildEpochAtStart = buildEpochAtStart,
                                     replacing = cachedPinnedKeys
                                 )
+                                // The refined rows have replaced the snapshot's
+                                // cards; resolve their head cards' URLs too (F3).
+                                warmHeroArtUrls(rails)
                                 // The next cold start paints from THIS batch, not
                                 // from the one before it - once the rows that are
                                 // still owed their verdicts have answered.
@@ -13025,7 +13278,9 @@ private suspend fun calculateEpisodesRemaining(
                                     pending,
                                     hideUpcoming,
                                     landscapeCards,
-                                    buildEpochAtStart
+                                    buildEpochAtStart,
+                                    onFetchFailure = { catalogFetchFailures.incrementAndGet() },
+                                    verdictJobs = catalogVerdictJobs
                                 )?.let { rail ->
 
                                     // No wait on the pinned batch any more: it
@@ -13117,6 +13372,12 @@ private suspend fun calculateEpisodesRemaining(
                                                 )
                                         }
                                     }
+                                    // The rail just published: get its head cards'
+                                    // hero URLs resolved while the viewer is still
+                                    // on the row above it (F3). Bounded per rail
+                                    // and cache-first, the same repository and
+                                    // semaphore the hero uses.
+                                    warmHeroArtUrls(listOf(rail))
                                 }
                             }
                         }
@@ -13184,13 +13445,37 @@ private suspend fun calculateEpisodesRemaining(
                 // this list is what Home lays the unarranged rails out by
                 // (see KBHomeSlots.buildMergedEntries: the rail list IS the
                 // default order).
+                // A rail whose refresh failed keeps its snapshot row for this
+                // session (stale beats empty - the same rule as the rate-limit
+                // spec). Only keys still in the viewer's catalog order are
+                // eligible, and a fresh rail always wins its slot.
+                val freshCatalogRails = orderCatalogRails(collected, catalogOrder)
+                val freshCatalogKeys =
+                    freshCatalogRails.map { rail -> railKeyOf(rail) }.toSet()
+                // A failed refresh keeps what is on screen; only a launch that
+                // painted the snapshot needs the file's rows instead. On-screen
+                // wins the dedupe, because it can be newer than the file.
+                val staleCatalogRails =
+                    (railsOnScreenAtStart + cachedCatalogRails)
+                        .filter { rail -> catalogOrder.containsKey(railKeyOf(rail)) }
+                        .distinctBy { rail -> railKeyOf(rail) }
+                val snapshotOnlyRails = staleCatalogRails.filter { rail ->
+                    railKeyOf(rail) !in freshCatalogKeys
+                }
+
                 // Re-applied here because this assignment REPLACES the whole
                 // rail list: a verdict pass that landed while the build was still
                 // collecting would otherwise be overwritten by the rail the
                 // build collected before it. A row the pass emptied is dropped,
                 // the same end state the blocking filter produced.
                 val finalRails =
-                    (pinned + orderCatalogRails(collected, catalogOrder))
+                    (
+                        pinned +
+                            orderCatalogRails(
+                                freshCatalogRails + snapshotOnlyRails,
+                                catalogOrder
+                            )
+                        )
                         .mapNotNull { rail ->
                             val items = withCatalogVerdicts(railKeyOf(rail), rail.items)
                             if (items.isEmpty()) null else rail.copy(items = items)
@@ -13212,6 +13497,35 @@ private suspend fun calculateEpisodesRemaining(
 
                 _rails.value =
                     finalRails.distinctBy { railKeyOf(it) }
+
+                // The next cold start's paint-first catalog set, written only
+                // from a COMPLETE fresh set: every catalog answered, none failed
+                // to fetch. A partial file is worse than an old one - it would
+                // paint some rails fresh and forget the rest on the next launch
+                // - and a rail that failed keeps the previous snapshot.
+                //
+                // Behind the screen and behind the verdicts, because the file
+                // exists to be painted BEFORE any verdict exists: saving the raw
+                // rows would put a title that is not out yet back on Home next
+                // launch. `withCatalogVerdicts` applies the pass's recorded hides
+                // after every launched pass has answered; a pass that could not
+                // answer keeps its row, which is the keep-on-failure rule.
+                if (catalogFetchFailures.get() == 0) {
+                    val completedCatalogSet = freshCatalogRails
+                    viewModelScope.launch {
+                        catalogVerdictJobs.toList().forEach { job -> job.join() }
+                        if (buildEpochAtStart != railBuildEpoch) return@launch
+                        if (catalogSnapshotBuildAtStart != catalogSnapshotBuild) return@launch
+                        HomeCatalogSnapshot.save(
+                            getApplication<Application>(),
+                            catalogSnapshotScope,
+                            completedCatalogSet.mapNotNull { rail ->
+                                val items = withCatalogVerdicts(railKeyOf(rail), rail.items)
+                                if (items.isEmpty()) null else rail.copy(items = items)
+                            }
+                        )
+                    }
+                }
 
                 // The rows are on screen; now fill in their landscape art. This
                 // used to happen inside each rail's own load, before the rail
@@ -13396,7 +13710,16 @@ private suspend fun calculateEpisodesRemaining(
         pending: PendingCatalogLoad,
         hideUpcoming: Boolean,
         landscapeCards: Boolean,
-        buildEpoch: Long
+        buildEpoch: Long,
+        /**
+         * Called when the catalog could not be FETCHED (never for an empty
+         * answer, which is a completed rail). The build uses it to decide
+         * whether its fresh set is complete enough to replace the snapshot.
+         */
+        onFetchFailure: (() -> Unit)? = null,
+        /** The verdict pass this row launches behind its publish, collected by
+         *  the build so the snapshot can be written from its answer. */
+        verdictJobs: MutableList<kotlinx.coroutines.Job>? = null
     ): Rail? {
 
         // First page: whatever the addon returns for skip=0 (its own page
@@ -13440,6 +13763,7 @@ private suspend fun calculateEpisodesRemaining(
                 if (pending.addonName.isNotBlank()) {
                     failedAddonsThisBuild.add(pending.addonName)
                 }
+                onFetchFailure?.invoke()
 
                 // A rail that never appears is exactly the case a fetch timer
                 // has to cover, so this path records too - including the time it
@@ -13542,8 +13866,9 @@ private suspend fun calculateEpisodesRemaining(
 
         // The verdicts, off the row's critical path (see the comment above).
         // Launched here because the pass is suspending: the catalog rows never
-        // read its answer, they only want the screen corrected.
-        viewModelScope.launch {
+        // read its answer, they only want the screen corrected - and the
+        // snapshot, which must not remember a title this pass hid.
+        val verdictJob = viewModelScope.launch {
             filterCatalogRowBehind(
                 railKey = railKey,
                 metas = metas,
@@ -13551,6 +13876,7 @@ private suspend fun calculateEpisodesRemaining(
                 buildEpoch = buildEpoch
             )
         }
+        verdictJobs?.add(verdictJob)
 
         return rail
     }
@@ -13778,6 +14104,27 @@ private suspend fun calculateEpisodesRemaining(
                 replacing = replacing,
                 keyOf = { rail -> railKeyOf(rail) }
             )
+        }
+    }
+
+    /**
+     * Publishes the catalog snapshot into its slots (spec 2026-11-21 F2).
+     *
+     * Unlike the pinned refine this does not touch the rails already on screen:
+     * the snapshot is the CATALOG half only, so it appends after the pinned
+     * paint and replaces any same-key row (a previous session's row still held
+     * in memory on a same-process rebuild). The live fan-out then replaces each
+     * slot as its fresh rail resolves, and the final publish orders the lot.
+     */
+    private fun publishCatalogSnapshotInPlace(
+        catalogRails: List<Rail>,
+        buildEpochAtStart: Long
+    ) {
+        if (buildEpochAtStart != railBuildEpoch) return
+        if (catalogRails.isEmpty()) return
+        _rails.update { current ->
+            val incoming = catalogRails.map { rail -> railKeyOf(rail) }.toSet()
+            current.filterNot { rail -> railKeyOf(rail) in incoming } + catalogRails
         }
     }
 
@@ -15192,6 +15539,25 @@ private suspend fun calculateEpisodesRemaining(
          * 3.5MB and thirty-five of these.
          */
         private const val HERO_LOOKAHEAD_CARDS = 3
+
+        /**
+         * Cards after the focused one whose art URL the focus event resolves
+         * ahead (spec 2026-11-21 F3).
+         *
+         * One of them - the immediate next - is also decoded at hero size. The
+         * rest are URL resolution only: cache-first JSON, no bitmap memory, so
+         * the walk arrives on a title whose URL is known without refilling the
+         * 48MB image cache with art it may never draw.
+         */
+        private const val HERO_WALK_URL_AHEAD = 3
+
+        /**
+         * The head of each freshly painted rail whose hero URL is resolved at
+         * paint time (F3). Bounded: the cards a viewer can focus without
+         * stepping deeper into the row, not the whole rail.
+         */
+        private const val HERO_URL_RAIL_WINDOW = 4
+        private const val HERO_URL_WARM_LIMIT = 24
 
         /**
          * How long the hero-size warm waits after a focus step before it decodes

@@ -49,6 +49,8 @@ class HomeColdStartPaintFirstContractTest {
     private companion object {
         const val VIEW_MODEL = "com/kennyb1201/kbstream/ui/home/HomeViewModel.kt"
         const val SNAPSHOT = "com/kennyb1201/kbstream/ui/home/HomePinnedSnapshot.kt"
+        const val CATALOG_SNAPSHOT =
+            "com/kennyb1201/kbstream/ui/home/HomeCatalogSnapshot.kt"
         const val WARM = "com/kennyb1201/kbstream/data/home/HomePinnedWarm.kt"
         const val SPEC = "com/kennyb1201/kbstream/data/home/PinnedRailsSpec.kt"
         const val APPLICATION = "com/kennyb1201/kbstream/MainApplication.kt"
@@ -128,6 +130,61 @@ class HomeColdStartPaintFirstContractTest {
         assertTrue(
             "the build must scope the snapshot by the active profile",
             vm.contains("profileId = profileIdAtStart.orEmpty()")
+        )
+    }
+
+    // ── F2: catalog SWR ────────────────────────────────────────────────
+
+    @Test
+    fun `the catalog snapshot is painted before the first catalog request`() {
+        val vm = source(VIEW_MODEL)
+        val load = vm.indexOf("HomeCatalogSnapshot.load(")
+        val paint = vm.indexOf("publishCatalogSnapshotInPlace(")
+        val fanOut = vm.indexOf("pendingCatalogs\n                        .map { pending ->")
+
+        assertTrue("the build must read the catalog snapshot", load > 0)
+        assertTrue("the snapshot must be published", paint > load)
+        assertTrue("the live fan-out must still exist", fanOut > 0)
+        assertTrue(
+            "the snapshot must paint before a single catalog fetch is launched",
+            fanOut > paint
+        )
+    }
+
+    @Test
+    fun `the catalog snapshot is scoped like the pinned one`() {
+        val vm = source(VIEW_MODEL)
+        assertTrue(
+            "the catalog snapshot must be per profile + ceiling",
+            vm.contains(
+                "HomeCatalogSnapshot.scopeOf(\n                        profileId = profileIdAtStart.orEmpty(),\n                        kidsCeiling = tmdbRepository.kidsMaxAge() != null"
+            )
+        )
+        val snapshot = source(CATALOG_SNAPSHOT)
+        assertTrue(
+            "the scope key must include the kids ceiling",
+            snapshot.contains("kids=\$kidsCeiling")
+        )
+    }
+
+    @Test
+    fun `a failed rail keeps its snapshot row and the snapshot is not rewritten`() {
+        val vm = source(VIEW_MODEL)
+        assertTrue(
+            "a rail whose refresh failed must keep its snapshot version",
+            vm.contains("snapshotOnlyRails")
+        )
+        assertTrue(
+            "a failed fetch makes the fresh set incomplete",
+            vm.contains("catalogFetchFailures.get() == 0")
+        )
+        assertTrue(
+            "the snapshot is only written after its verdicts answer",
+            vm.contains("catalogVerdictJobs.toList().forEach { job -> job.join() }")
+        )
+        assertTrue(
+            "and only from a completed fresh set",
+            vm.indexOf("HomeCatalogSnapshot.save(") > vm.indexOf("catalogVerdictJobs.toList()")
         )
     }
 
