@@ -216,13 +216,17 @@ class DetailGenreTrapAndSeeMoreTest {
         val fallThrough =
             move.indexOf("val fellThrough = fallThroughIfMidPage(from, direction, settledRows)")
         assertTrue(
-            "instead, the row the press aimed at is asked again, with the presence " +
-                "that settled and with no edge verdict in front of it, before the " +
-                "platform's search gets the press",
+            "instead, the row the press aimed at is asked again - through the " +
+                "verified ask since the one-owner revamp (spec 2026-11-21, rule 5) - " +
+                "with the presence that settled and with no edge verdict in front " +
+                "of it, before the platform's search gets the press",
             secondAsk in 0 until fallThrough &&
                 move.substringAfter("val secondAsk =")
                     .substringBefore("val fellThrough")
-                    .contains("focusRow(target, fromColumn, from, direction, settledRows)")
+                    .contains("askRow(target, fromColumn, from, direction, settledRows)") &&
+                move.substringAfter("val secondAsk =")
+                    .substringBefore("val fellThrough")
+                    .contains("askMediaStrip(from)")
         )
         assertTrue(
             "and the edge still ends the move: a press with nowhere to aim is still " +

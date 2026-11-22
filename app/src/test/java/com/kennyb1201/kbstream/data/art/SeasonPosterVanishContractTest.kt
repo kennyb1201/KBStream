@@ -77,8 +77,10 @@ class SeasonPosterVanishContractTest {
             resolve.contains("current = poster,")
         )
         assertTrue(
-            "and a page that cannot resolve a season returns before touching it",
-            resolve.contains("if (!resolver.canResolve) return@LaunchedEffect")
+            "and a page that cannot resolve a season returns before touching it - " +
+                "and so does a run paused behind a loading episode list (spec " +
+                "2026-11-21, rule 7), which keeps whatever poster was already drawn",
+            resolve.contains("if (!resolver.canResolve || paused) return@LaunchedEffect")
         )
         assertTrue(
             "a show without a TMDB id yet is the same case",

@@ -271,8 +271,9 @@ class FanartArtContractTest {
         // fix (spec 2026-11-14, F2). Those three promises moved file, not away.
         val row = source("com/kennyb1201/kbstream/ui/detail/SeasonPosterRow.kt")
         assertTrue(
-            "the poster follows the season selection",
-            row.contains("LaunchedEffect(season, resolver)")
+            "the poster follows the season selection, and re-runs when the " +
+                "episode list stops holding its lookups",
+            row.contains("LaunchedEffect(season, resolver, paused)")
         )
         assertTrue(
             "the new poster is written only when it answers (no flash)",

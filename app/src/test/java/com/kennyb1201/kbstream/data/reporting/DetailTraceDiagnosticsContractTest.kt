@@ -88,10 +88,14 @@ class DetailTraceDiagnosticsContractTest {
     @Test
     fun `every chain move notes its target, its landing and the path it took`() {
         assertTrue(
-            "E1: the move, spelled the way a paste can be read",
+            "E1: the move, spelled the way a paste can be read - with the landing " +
+                "VERIFIED separately since the one-owner revamp (spec 2026-11-21, " +
+                "rule 5), so \"landed\" and \"the focus agreed\" cannot be confused",
             detail.contains("\"detail move \$from \$direction -> ") &&
-                detail.contains("\"landed=\$tracedLanded via=\$tracedVia loading=\$tracedLoading \"") &&
-                detail.contains("\"waited=\$tracedWaited\"")
+                detail.contains(
+                    "\"landed=\$tracedLanded verified=\$tracedVerified via=\$tracedVia \""
+                ) &&
+                detail.contains("\"loading=\$tracedLoading waited=\$tracedWaited\"")
         )
         assertTrue(
             "noted from a finally, so every exit produces a line - including the " +
