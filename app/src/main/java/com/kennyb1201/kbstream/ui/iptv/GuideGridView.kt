@@ -1856,6 +1856,8 @@ private fun GridPreview(channel: IptvChannel, modifier: Modifier = Modifier) {
                 modifier = Modifier.padding(horizontal = 12.dp)
             ) {
                 val logoUrl = channel.logoUrl
+                val logoContext = LocalContext.current
+                val logoSizePx = with(LocalDensity.current) { 64.dp.roundToPx() }
                 Box(
                     modifier = Modifier
                         .size(64.dp)
@@ -1865,7 +1867,13 @@ private fun GridPreview(channel: IptvChannel, modifier: Modifier = Modifier) {
                 ) {
                     if (!logoUrl.isNullOrBlank()) {
                         AsyncImage(
-                            model = logoRequest(LocalContext.current, logoUrl),
+                            model = remember(logoContext, logoUrl, logoSizePx) {
+                                ImageRequest.Builder(logoContext)
+                                    .data(logoUrl)
+                                    .logoArt()
+                                    .size(logoSizePx, logoSizePx)
+                                    .build()
+                            },
                             contentDescription = channel.displayName,
                             contentScale = ContentScale.Fit,
                             modifier = Modifier.fillMaxSize().padding(6.dp)

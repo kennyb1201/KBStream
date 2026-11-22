@@ -23,6 +23,8 @@ import kotlinx.coroutines.sync.withPermit
  * results land and never block the detail UI, and every failure degrades to
  * "no extra data" rather than an error.
  */
+private const val REVIEW_RAIL_MAX_PAGE = 3
+
 internal object DetailRatingEnrichment {
 
     /**
@@ -235,8 +237,4 @@ internal object DetailRatingEnrichment {
         }
     }
 
-    private companion object {
-        /** Page 1 is bundled with the detail; pages 2 and 3 are the 60 the rail draws. */
-        const val REVIEW_RAIL_MAX_PAGE = 3
-    }
 }

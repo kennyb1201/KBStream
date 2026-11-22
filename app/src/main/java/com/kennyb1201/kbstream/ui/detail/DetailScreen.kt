@@ -7128,8 +7128,7 @@ fun DetailScreen(
                             top = 6.dp
                         )
                     ) {
-                        val detailFacts = remember(tmdbDetail, type, awards, m.country) {
-                            buildList {
+                        val detailFacts = buildList {
                             tmdbDetail?.bestReleaseDate()
                                 ?.let {
                                     formatDisplayDate(it)
@@ -7196,7 +7195,6 @@ fun DetailScreen(
                                     )
                                 }
                             }
-                        }
 
                         // Critic/audience ratings, right under the overview.
                         // They used to render at the very BOTTOM of the page
