@@ -7812,7 +7812,7 @@ fun HomeScreen(
                                                     }
                                                 val onPosterError =
                                                     remember(meta) {
-                                                        { throwable: Throwable ->
+                                                        { throwable: Throwable? ->
                                                             Log.e(
                                                                 "HOME_UI",
                                                                 "Catalog poster load failed, " +
@@ -7820,6 +7820,7 @@ fun HomeScreen(
                                                                     "poster=${meta.poster}",
                                                                 throwable
                                                             )
+                                                            Unit
                                                         }
                                                     }
 
