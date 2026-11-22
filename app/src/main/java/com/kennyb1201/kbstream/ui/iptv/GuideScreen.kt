@@ -213,6 +213,9 @@ fun GuideScreen(
     val resolvedGuideIds by viewModel.resolvedGuideChannelIds.collectAsStateWithLifecycle()
     // The timeline grid's own reads: every program of the rows it has loaded.
     val gridPrograms by viewModel.gridPrograms.collectAsStateWithLifecycle()
+    // ...and a stamp for it, so the grid's row models key on an Int rather than
+    // structurally comparing the whole lineup on every merge.
+    val gridProgramsVersion by viewModel.gridProgramsVersion.collectAsStateWithLifecycle()
     // F3: the live/finished games the grid's cells may show a score for, resolved
     // in the ViewModel by the hub's own matcher. The phone grid is handed the
     // same list.
@@ -1734,6 +1737,7 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                         GuideGridView(
                             items = groupedChannels,
                             programsByChannel = gridPrograms,
+                            programsVersion = gridProgramsVersion,
                             resolvedGuideIds = resolvedGuideIds,
                             groups = groups,
                             groupCount = { label -> groupCounts[label] ?: 0 },

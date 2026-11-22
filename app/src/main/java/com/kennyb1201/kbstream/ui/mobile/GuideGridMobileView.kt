@@ -92,6 +92,12 @@ import com.kennyb1201.kbstream.ui.iptv.guideRowSlice
 internal fun GuideGridMobileView(
     items: List<IptvChannelWithEpg>,
     programsByChannel: Map<String, List<GridProgram>>,
+    /**
+     * A stamp for [programsByChannel], from the ViewModel's merge - see the TV
+     * grid's copy of this parameter. Keying the row `remember` on the map made
+     * every merge structurally compare the whole lineup on the main thread.
+     */
+    programsVersion: Int,
     resolvedGuideIds: Set<String>,
     loadingGuideIds: Set<String>,
     reminderKeys: Set<String>,
@@ -173,7 +179,7 @@ internal fun GuideGridMobileView(
     }
     val previousPrograms = remember { mutableMapOf<String, List<GridProgram>>() }
     val previousWindow = remember { arrayOfNulls<GridWindow>(1) }
-    val rows = remember(items, programsByChannel, window) {
+    val rows = remember(items, programsVersion, window) {
         val next = ArrayList<Pair<IptvChannelWithEpg, List<GridCell>>>(items.size)
         items.forEach { item ->
             val channelKey = item.channel.id

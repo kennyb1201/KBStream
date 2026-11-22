@@ -1109,6 +1109,29 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         _gridPrograms.asStateFlow()
 
     /**
+     * How many times [gridPrograms] has been republished.
+     *
+     * The grids derive their row models in a `remember`, and keying that on the
+     * map meant every merge structurally compared a five-figure map (same size,
+     * so every entry) just to decide whether to re-derive - on the main thread,
+     * under composition. A counter answers the same question in one Int compare.
+     * It only moves when a merge actually produced a new map, so an answer that
+     * changed nothing does not re-derive either.
+     */
+    private val _gridProgramsVersion = MutableStateFlow(0)
+    internal val gridProgramsVersion: StateFlow<Int> =
+        _gridProgramsVersion.asStateFlow()
+
+    /** Publishes a merged grid map and stamps it, in that order. */
+    private fun publishGridPrograms(next: Map<String, List<GridProgram>>) {
+        // [mergeWindowAnswer] hands back the same map when it merged nothing;
+        // re-stamping that would re-derive every row for no change.
+        if (next === _gridPrograms.value) return
+        _gridPrograms.value = next
+        _gridProgramsVersion.value = _gridProgramsVersion.value + 1
+    }
+
+    /**
      * Channels whose grid window is being read right now.
      *
      * A row that is in here AND has no programs yet renders as loading; a row
@@ -1252,12 +1275,13 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
                 // Unchanged: a successful read merges over what the rows hold
                 // and never blanks them.
-                _gridPrograms.value =
+                publishGridPrograms(
                     mergeWindowAnswer(
                         existing = _gridPrograms.value,
                         requestedIds = missingIds,
                         loaded = loaded,
                     )
+                )
 
                 Log.d(
                     TAG,
@@ -1287,12 +1311,13 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 // so a failed re-read can never blank a row. The keys stay
                 // UNMARKED, which is the whole fix - the next window request
                 // finds them missing and reads again.
-                _gridPrograms.value =
+                publishGridPrograms(
                     mergeWindowAnswer(
                         existing = _gridPrograms.value,
                         requestedIds = missingIds,
                         loaded = emptyMap(),
                     )
+                )
             }
 
             _gridLoadingChannelIds.value = _gridLoadingChannelIds.value - missingIds
@@ -1447,7 +1472,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
     /** Drops the grid's reads, e.g. after a guide import replaced the programs. */
     private fun clearGuideGrid() {
-        _gridPrograms.value = emptyMap()
+        publishGridPrograms(emptyMap())
         _gridLoadingChannelIds.value = emptySet()
         gridWindowReads.clear()
     }

@@ -12673,6 +12673,55 @@ private suspend fun calculateEpisodesRemaining(
      * that boots with no network stops instead of retrying forever.
      */
     /**
+     * Puts one streamed catalog [rail] into its catalog slot.
+     *
+     * Its slot is the position of the first rail already on screen that belongs
+     * LATER in the catalog order. Appending after the last rail that had
+     * resolved (what this did before) put the rows on screen in resolution
+     * order, and the rows then had to be re-ordered under the viewer when the
+     * build finished.
+     *
+     * A rail the order does not name - a pinned/app-built row from the previous
+     * build, or a row for a catalog that is no longer loaded - never triggers
+     * the insert, so the new rail lands after it. That keeps the app-built rows
+     * at the head of Home, exactly as the final publish draws them.
+     *
+     * Extracted so a batch of rails held back by [RailStreamGate] can be folded
+     * into the list in arrival order (perf spec 2026-11-22, item 3).
+     */
+    private fun insertStreamedRail(
+        current: List<Rail>,
+        rail: Rail,
+        catalogOrder: Map<String, Int>
+    ): List<Rail> {
+        val without =
+            current.filterNot { existing ->
+                railKeyOf(existing) == railKeyOf(rail)
+            }
+        val mine =
+            catalogOrder[railKeyOf(rail)]
+        val insertAt = if (mine == null) {
+            -1
+        } else {
+            without.indexOfFirst { existing ->
+                val theirs =
+                    catalogOrder[railKeyOf(existing)]
+                theirs != null && theirs > mine
+            }
+        }
+        return if (insertAt < 0) {
+            without + rail
+        } else {
+            without.subList(0, insertAt) +
+                listOf(rail) +
+                without.subList(
+                    insertAt,
+                    without.size
+                )
+        }
+    }
+
+    /**
      * Fills in landscape-card artwork for rails that are already on screen.
      *
      * Artwork used to be resolved inside each rail's own load, before that rail
@@ -13106,6 +13155,17 @@ private suspend fun calculateEpisodesRemaining(
                         mutableListOf<kotlinx.coroutines.Job>()
                     )
 
+                // Streaming publishes go through a cadence (perf spec
+                // 2026-11-22, item 3). The first rail still lands at once; the
+                // rest of a cold load's 60-90 rows publish together at most
+                // every [RAIL_STREAM_PUBLISH_MS], instead of each one replacing
+                // the whole list (and re-running the screen's hides and
+                // hide-watched passes) on its own.
+                val streamGate =
+                    RailStreamGate<Rail>(RAIL_STREAM_PUBLISH_MS) {
+                        android.os.SystemClock.elapsedRealtime()
+                    }
+
                 coroutineScope {
 
                     val pinnedDeferred =
@@ -13365,38 +13425,25 @@ private suspend fun calculateEpisodesRemaining(
                                     // That keeps the app-built rows at the head
                                     // of Home, exactly as the final publish
                                     // draws them.
-                                    _rails.update { current ->
-                                        val without =
-                                            current.filterNot { existing ->
-                                                railKeyOf(existing) == railKeyOf(rail)
-                                            }
-                                        val mine =
-                                            catalogOrder[railKeyOf(rail)]
-                                        val insertAt = if (mine == null) {
-                                            -1
-                                        } else {
-                                            without.indexOfFirst { existing ->
-                                                val theirs =
-                                                    catalogOrder[railKeyOf(existing)]
-                                                theirs != null && theirs > mine
-                                            }
-                                        }
-                                        if (insertAt < 0) {
-                                            without + rail
-                                        } else {
-                                            without.subList(0, insertAt) +
-                                                listOf(rail) +
-                                                without.subList(
-                                                    insertAt,
-                                                    without.size
+                                    streamGate.offer(rail) { batch ->
+                                        _rails.update { current ->
+                                            batch.fold(current) { next, streamed ->
+                                                insertStreamedRail(
+                                                    current = next,
+                                                    rail = streamed,
+                                                    catalogOrder = catalogOrder
                                                 )
+                                            }
                                         }
                                     }
-                                    // The rail just published: get its head cards'
+                                    // The rail just resolved: get its head cards'
                                     // hero URLs resolved while the viewer is still
                                     // on the row above it (F3). Bounded per rail
                                     // and cache-first, the same repository and
-                                    // semaphore the hero uses.
+                                    // semaphore the hero uses. Warmed on arrival,
+                                    // not on publish: the cadence is about paint
+                                    // cost, and a warm held back would only land
+                                    // later.
                                     warmHeroArtUrls(listOf(rail))
                                 }
                             }
@@ -15695,6 +15742,20 @@ private suspend fun calculateEpisodesRemaining(
 
         /** Rails whose cards are warmed at publish time; the rest wait for focus. */
         private const val HERO_ART_PREFETCH_RAILS = 3
+
+        /**
+         * How often a cold load's streaming rail publishes may replace the rail
+         * list (perf spec 2026-11-22, item 3).
+         *
+         * A cold load resolves 60-90 catalog rows. Publishing each one replaced
+         * the whole list, and every derivation on the screen re-ran with it
+         * (hidden titles, hide-watched, the remembered rail list): that is the
+         * during-load frame cost, while a steady walk measured p50 16 ms. The
+         * first rail still publishes at once (see [RailStreamGate]); this is the
+         * floor for the rest, short enough that rows still appear to stream and
+         * long enough to turn a per-row repaint into a per-frame one.
+         */
+        private const val RAIL_STREAM_PUBLISH_MS = 90L
 
         private const val BILLBOARD_LOOKAHEAD_BITMAP_WIDTH = 1280
         private const val BILLBOARD_LOOKAHEAD_BITMAP_HEIGHT = 800

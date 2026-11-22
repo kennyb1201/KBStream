@@ -170,9 +170,35 @@ fun KBCard(
         glowArmed = true
     }
 
+    // The Card below recomposes on every focus gain and loss - that is what a
+    // D-pad walk does - and its defaults used to be rebuilt for each one, two
+    // cards per step. The plain builders and the Border objects are remembered
+    // on the values that shape them; only `colors` stays inline because it is a
+    // @Composable defaults call and cannot be remembered. It is built from
+    // constants, so its result compares equal either way.
+    val cardShape = remember(shape) { CardDefaults.shape(shape = shape) }
+    val cardFocusBorder = remember(shape) {
+        Border(border = BorderStroke(2.dp, KBAccent), shape = shape)
+    }
+    val cardScale = remember(gliding, focusedScale) {
+        CardDefaults.scale(
+            scale = 1f,
+            focusedScale = if (gliding) KBFocusNone else focusedScale,
+            pressedScale = KBFocusPressed
+        )
+    }
+    val cardGlow = remember(glowArmed, gliding) {
+        CardDefaults.glow(
+            focusedGlow = Glow(
+                elevationColor = KBAccent,
+                elevation = if (glowArmed && !gliding) KBFocusGlow else 0.dp
+            )
+        )
+    }
+
     Card(
         onClick = onClick,
-        shape = CardDefaults.shape(shape = shape),
+        shape = cardShape,
         colors = CardDefaults.colors(
             containerColor = KBSurface,
             contentColor = KBTextHi,
@@ -187,27 +213,9 @@ fun KBCard(
         // Focus grows the tile and lifts it; press pulls it back toward the
         // plate. Every poster, tile and button that goes through KBCard gets
         // the same two beats for free - see the KBFocus* scale in the theme.
-        scale = CardDefaults.scale(
-            scale = 1f,
-            focusedScale = if (gliding) KBFocusNone else focusedScale,
-            pressedScale = KBFocusPressed
-        ),
-        border = CardDefaults.border(
-            focusedBorder = Border(
-                border = BorderStroke(2.dp, KBAccent),
-                shape = shape
-            )
-        ),
-        glow = CardDefaults.glow(
-            focusedGlow = Glow(
-                elevationColor = KBAccent,
-                // Zero elevation draws no shadow at all, which is the whole
-                // point: the deferred half of the focus treatment costs
-                // nothing until the focus has settled (see
-                // [FOCUS_GLOW_SETTLE_MS]).
-                elevation = if (glowArmed && !gliding) KBFocusGlow else 0.dp
-            )
-        ),
+        scale = cardScale,
+        border = CardDefaults.border(focusedBorder = cardFocusBorder),
+        glow = cardGlow,
         // onPreviewKeyEvent runs on the way DOWN the tree, before Card's own
         // internal clickable sees the event, so we get first refusal on it.
         modifier = modifier

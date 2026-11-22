@@ -198,6 +198,15 @@ private const val ENTRY_FOCUS_ATTEMPTS = 8
 internal fun GuideGridView(
     items: List<IptvChannelWithEpg>,
     programsByChannel: Map<String, List<GridProgram>>,
+    /**
+     * A stamp for [programsByChannel], from the ViewModel's merge.
+     *
+     * The row models are remembered, and the key used to be the map itself:
+     * every merge therefore walked the whole lineup comparing entries before it
+     * could even decide to re-derive. The stamp is one Int compare, and only
+     * moves when a merge produced a new map.
+     */
+    programsVersion: Int,
     resolvedGuideIds: Set<String>,
     groups: List<String>,
     groupCount: (String) -> Int,
@@ -299,7 +308,7 @@ internal fun GuideGridView(
     // entirely; a page merge then pays for the channels it carried.
     val previousPrograms = remember { mutableMapOf<String, List<GridProgram>>() }
     val previousWindow = remember { arrayOfNulls<GridWindow>(1) }
-    val rows = remember(items, programsByChannel, window) {
+    val rows = remember(items, programsVersion, window) {
         val next = ArrayList<GridRowModel>(items.size)
         items.forEach { item ->
             val channelKey = gridChannelKey(item)

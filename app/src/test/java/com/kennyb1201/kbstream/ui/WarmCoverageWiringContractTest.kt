@@ -164,8 +164,8 @@ class WarmCoverageWiringContractTest {
     @Test
     fun `the phone guide memoises its cells and warms the next channels' logos`() {
         assertTrue(
-            "per-channel cells, remembered on exactly the three keys a page landing changes",
-            mobileGuide.contains("remember(items, programsByChannel, window) {") &&
+            "per-channel cells, remembered on the lineup, its stamp and the window",
+            mobileGuide.contains("remember(items, programsVersion, window) {") &&
                 mobileGuide.contains("GuideRowCellMemo.cells(") &&
                 mobileGuide.contains("channelKey = item.channel.id")
         )

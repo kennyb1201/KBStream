@@ -9,7 +9,7 @@ import org.junit.Test
 /**
  * The grid's per-channel cell memo (dig four, 2026-11-16, §2b).
  *
- * The bug it fixes: `rows` is one `remember(items, programsByChannel, window)`
+ * The bug it fixes: `rows` is one `remember(items, programsVersion, window)`
  * that maps EVERY channel through `rowCells`, and `programsByChannel` changes on
  * each page answer - so a page of programs landing rebuilt the cells for the
  * whole lineup. These cases pin the reuse rule that stops it, and the three

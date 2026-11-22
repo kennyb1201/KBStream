@@ -97,6 +97,27 @@ private fun DiscoverFilterChip(
 ) {
     var focused by remember { mutableStateOf(focusedInitial) }
     val shape = KBShapeCard
+    // A chip recomposes on every focus change, and both borders were rebuilt
+    // each time. They are remembered on the one input that shapes them; the
+    // defaults call taking them is @Composable and stays inline.
+    val restingBorder = remember(selected, shape) {
+        Border(
+            border = BorderStroke(
+                1.dp,
+                if (selected) KBAccent else KBTextLo.copy(alpha = 0.35f)
+            ),
+            shape = shape
+        )
+    }
+    val focusedBorder = remember(selected, shape) {
+        Border(
+            border = BorderStroke(
+                2.dp,
+                if (selected) KBAccent else KBTextHi
+            ),
+            shape = shape
+        )
+    }
 
     Surface(
         onClick = onClick,
@@ -151,20 +172,8 @@ private fun DiscoverFilterChip(
         // clip in place is what made this row look like it had no focus
         // animation even once one was asked for.
         border = ClickableSurfaceDefaults.border(
-            border = Border(
-                border = BorderStroke(
-                    1.dp,
-                    if (selected) KBAccent else KBTextLo.copy(alpha = 0.35f)
-                ),
-                shape = shape
-            ),
-            focusedBorder = Border(
-                border = BorderStroke(
-                    2.dp,
-                    if (selected) KBAccent else KBTextHi
-                ),
-                shape = shape
-            )
+            border = restingBorder,
+            focusedBorder = focusedBorder
         ),
         glow = ClickableSurfaceDefaults.glow(
             focusedGlow = Glow(

@@ -289,6 +289,7 @@ fun GuideScreenMobile(
         // The grid's group list is a slide-in drawer on a phone (F2k-e).
         var showGroupDrawer by remember { mutableStateOf(false) }
         val gridPrograms by viewModel.gridPrograms.collectAsStateWithLifecycle()
+        val gridProgramsVersion by viewModel.gridProgramsVersion.collectAsStateWithLifecycle()
         val gridLoadingIds by viewModel.gridLoadingChannelIds.collectAsStateWithLifecycle()
         // F3m: the same resolved games the TV grid is handed. The poll is shared
         // (ref-counted in the feed), so a phone grid and a TV grid never cost two.
@@ -977,6 +978,7 @@ fun GuideScreenMobile(
                         GuideGridMobileView(
                             items = filtered,
                             programsByChannel = gridPrograms,
+                            programsVersion = gridProgramsVersion,
                             resolvedGuideIds = resolvedGuideIds,
                             loadingGuideIds = gridLoadingIds,
                             reminderKeys = reminderKeys,
