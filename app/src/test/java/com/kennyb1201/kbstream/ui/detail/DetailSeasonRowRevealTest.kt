@@ -256,6 +256,65 @@ class DetailSeasonRowRevealTest {
     }
 
     @Test
+    fun `the focused band keeps a guarded edge inside the viewport`() {
+        val decision = seasonRowRevealDecision(
+            seasonStart = 100,
+            seasonEnd = 220,
+            neighbourStart = 200,
+            neighbourEnd = 280,
+            viewportStart = 0,
+            viewportEnd = 240,
+            focusedStart = 200,
+            focusedEnd = 280,
+            focusGuard = 16
+        )
+        assertEquals(
+            "the focused row is not left flush with the edge the ring overdraws",
+            56,
+            decision.delta
+        )
+        assertEquals(SEASON_ROW_REVEAL_FIT, decision.branch)
+        assertEquals("focused row bottom sits 16px inside the viewport", 224, 280 - decision.delta)
+        assertEquals("and the poster row is still whole", 164, 220 - decision.delta)
+    }
+
+    @Test
+    fun `a focused item taller than the guarded band costs no scroll`() {
+        val decision = seasonRowRevealDecision(
+            seasonStart = 100,
+            seasonEnd = 220,
+            neighbourStart = 200,
+            neighbourEnd = 280,
+            viewportStart = 0,
+            viewportEnd = 240,
+            focusedStart = 0,
+            focusedEnd = 300,
+            focusGuard = 16
+        )
+        assertEquals("no scroll can make the focused item fit the band", 0, decision.delta)
+        assertEquals(SEASON_ROW_REVEAL_DONT_FIT_NEIGHBOUR, decision.branch)
+    }
+
+    @Test
+    fun `the reveal measures the focused band as well as the poster row`() {
+        val reveal = normalized(stripComments(detailSource()))
+            .substringAfter("private class SeasonRowReveal(")
+            .substringBefore("private enum class EpisodeFocusEdge")
+        assertTrue(
+            "the measurement passes the focused band and its edge guard into the rule",
+            reveal.contains("focusedStart = focusedStart") &&
+                reveal.contains("focusedEnd = focusedEnd") &&
+                reveal.contains("focusGuard = focusGuardPx")
+        )
+        assertTrue(
+            "and the screen gives that guard a real size in list pixels",
+            normalized(detailSource()).contains(
+                "val seasonRowFocusGuardPx = with(LocalDensity.current) { 12.dp.roundToPx() }"
+            )
+        )
+    }
+
+    @Test
     fun `the reveal files its decision in the diagnostics report`() {
         val reveal = normalized(stripComments(detailSource()))
         assertTrue(

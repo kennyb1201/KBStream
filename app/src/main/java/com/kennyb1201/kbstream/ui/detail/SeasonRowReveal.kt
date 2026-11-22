@@ -69,10 +69,89 @@ internal data class SeasonRowRevealDecision(
  * scroll delta - positive scrolls forward, so items move up - which the caller
  * applies with `animateScrollBy`.
  *
+ * [focusedStart] / [focusedEnd] are the focused item's band. On a horizontal rail
+ * every card shares the neighbour row's vertical band, so the caller passes that
+ * row's rect; the clamp is still expressed over an item rect because a vertical
+ * rail's focused card can be shorter than its row. [focusGuard] keeps the item
+ * away from the viewport edge by that many pixels - the focus ring and scale are
+ * drawn outside the card bounds, and a chip flush with the edge is the one the
+ * framework can dispose under the scroll it just watched. If keeping the poster
+ * row whole and keeping the focused item inside that guarded band conflict, the
+ * focused item wins and the poster takes the cut.
+ *
  * Pure, and here rather than inside the screen, because this is the arithmetic a
  * contract test can assert exactly with no device and no focus tree.
  */
 internal fun seasonRowRevealDecision(
+    seasonStart: Int,
+    seasonEnd: Int,
+    neighbourStart: Int,
+    neighbourEnd: Int,
+    viewportStart: Int,
+    viewportEnd: Int,
+    focusedStart: Int = neighbourStart,
+    focusedEnd: Int = neighbourEnd,
+    focusGuard: Int = 0
+): SeasonRowRevealDecision {
+    // Nothing to clamp against when the page is already measuring the
+    // neighbour itself (the horizontal-rail case) and no edge is being
+    // reserved. Keeping the early exit makes the pre-guard decisions exact.
+    if (focusGuard <= 0 && focusedStart == neighbourStart && focusedEnd == neighbourEnd) {
+        return seasonRowRevealBase(
+            seasonStart = seasonStart,
+            seasonEnd = seasonEnd,
+            neighbourStart = neighbourStart,
+            neighbourEnd = neighbourEnd,
+            viewportStart = viewportStart,
+            viewportEnd = viewportEnd
+        )
+    }
+
+    // A leading content padding makes viewportStart negative. That edge is the
+    // list's own top padding, not a cut: keeping the row flush with it is
+    // correct, and guarding it would scroll a page whose first row is already
+    // whole. The bottom edge is the one the focus landing parks a chip against.
+    val safeStart = if (viewportStart < 0) viewportStart else viewportStart + focusGuard
+    val safeEnd = viewportEnd - focusGuard
+    if (safeStart >= safeEnd) {
+        // A guard wider than the viewport has no safe band at all. Leave the
+        // page alone rather than guessing which cut is preferable.
+        return SeasonRowRevealDecision(
+            delta = 0,
+            branch = SEASON_ROW_REVEAL_DONT_FIT_NEIGHBOUR
+        )
+    }
+
+    // The row-whole arithmetic runs against the GUARDED viewport, so a row
+    // that is whole also keeps the focus cue's overdraw inside the screen. The
+    // item clamp below is the second half: a vertical rail's focused card can
+    // be shorter than its neighbour row, and it must stay in that band too.
+    val base = seasonRowRevealBase(
+        seasonStart = seasonStart,
+        seasonEnd = seasonEnd,
+        neighbourStart = neighbourStart,
+        neighbourEnd = neighbourEnd,
+        viewportStart = safeStart,
+        viewportEnd = safeEnd
+    )
+
+    // After scrolling by d the focused band is [start - d, end - d). It is
+    // inside the guarded viewport exactly when d is in that interval.
+    val lower = focusedEnd - safeEnd
+    val upper = focusedStart - safeStart
+    if (lower > upper) {
+        // The focused item cannot fit the guarded band (it is taller than the
+        // viewport): do not scroll and trade one cut for another.
+        return SeasonRowRevealDecision(
+            delta = 0,
+            branch = SEASON_ROW_REVEAL_DONT_FIT_NEIGHBOUR
+        )
+    }
+
+    return base.copy(delta = base.delta.coerceIn(lower, upper))
+}
+
+private fun seasonRowRevealBase(
     seasonStart: Int,
     seasonEnd: Int,
     neighbourStart: Int,
@@ -123,12 +202,18 @@ internal fun seasonRowRevealScroll(
     neighbourStart: Int,
     neighbourEnd: Int,
     viewportStart: Int,
-    viewportEnd: Int
+    viewportEnd: Int,
+    focusedStart: Int = neighbourStart,
+    focusedEnd: Int = neighbourEnd,
+    focusGuard: Int = 0
 ): Int = seasonRowRevealDecision(
     seasonStart = seasonStart,
     seasonEnd = seasonEnd,
     neighbourStart = neighbourStart,
     neighbourEnd = neighbourEnd,
     viewportStart = viewportStart,
-    viewportEnd = viewportEnd
+    viewportEnd = viewportEnd,
+    focusedStart = focusedStart,
+    focusedEnd = focusedEnd,
+    focusGuard = focusGuard
 ).delta

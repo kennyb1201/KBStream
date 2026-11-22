@@ -561,7 +561,12 @@ private suspend fun LazyListState.revealRail(rowKey: String, hintIndex: Int): Bo
  */
 private class SeasonRowReveal(
     private val listState: LazyListState,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    // The ring and the focus scale are drawn outside a card's bounds. A row
+    // flush with the viewport edge can therefore be the row the framework
+    // decides is no longer composed. The reveal keeps the focused band this
+    // far inside the edge, in the list's own pixels.
+    private val focusGuardPx: Int = 0
 ) {
     private var job: Job? = null
 
@@ -698,13 +703,22 @@ private class SeasonRowReveal(
             info.visibleItemsInfo.firstOrNull { it.key == SEASON_ROW_KEY } ?: return null
         val neighbour =
             info.visibleItemsInfo.firstOrNull { it.key == neighbourKey } ?: return null
+        val focusedStart = neighbour.offset
+        val focusedEnd = neighbour.offset + neighbour.size
         return seasonRowRevealDecision(
             seasonStart = season.offset,
             seasonEnd = season.offset + season.size,
             neighbourStart = neighbour.offset,
             neighbourEnd = neighbour.offset + neighbour.size,
             viewportStart = info.viewportStartOffset,
-            viewportEnd = info.viewportEndOffset
+            viewportEnd = info.viewportEndOffset,
+            // Horizontal rails share the neighbour row's vertical band, which
+            // is the part a vertical reveal can dispose; a vertical rail's
+            // focused card is still inside it. Passing the band here means the
+            // clamp covers every neighbour that asks, not only the episode row.
+            focusedStart = focusedStart,
+            focusedEnd = focusedEnd,
+            focusGuard = focusGuardPx
         )
     }
 }
@@ -1644,9 +1658,10 @@ fun DetailScreen(
     // neighbour, so it can never be seen cut mid-poster at a viewport edge (see
     // [SeasonRowReveal]). Hoisted here because the asking rows are LazyColumn
     // items of their own and the answer is one scroll of this list.
+    val seasonRowFocusGuardPx = with(LocalDensity.current) { 12.dp.roundToPx() }
     val seasonRowReveal =
-        remember(detailListState, scope) {
-            SeasonRowReveal(detailListState, scope)
+        remember(detailListState, scope, seasonRowFocusGuardPx) {
+            SeasonRowReveal(detailListState, scope, seasonRowFocusGuardPx)
         }
     // Every rail a drill-down off this page can be opened from, each with the
     // scroll state and the per-card requesters a return needs: the rail is put
@@ -3759,7 +3774,7 @@ fun DetailScreen(
                 moved
             }
         }
-        // And so is the overview's toggle, one row above it (2026-11-21).
+        // The overview's toggle is the first row below it (2026-11-22).
         DetailRow.OVERVIEW -> {
             if (focusOverviewToggle()) {
                 true
@@ -4126,15 +4141,40 @@ fun DetailScreen(
         val target = if (rememberedPresent) remembered
         else DetailTabChain.firstRow(activeTab, rows)
         if (target != null) {
-            // The Media row is entered at its own inner strip, never at a
-            // card: the strip is the row's selector (see focusMediaStrip).
-            val landing = if (target == DetailRow.MEDIA) {
-                askMediaStrip(DetailRow.TABS)
-            } else {
-                // Rule 5: verified on the target (or a declared step-over),
-                // with one bounded re-ask, so `landed` in the TABS DOWN line
-                // is an observed state and not a request's own answer.
-                askRow(target, 0, DetailRow.TABS, DetailFocusDirection.DOWN, rows)
+            // The rail's first chip is registered a frame or more after the
+            // tab's content composes. One verified ask can therefore land on a
+            // row whose card is not registered yet and report a miss for what
+            // is only composition latency. The tab-entry ask gets the same
+            // bounded patience the reclaim uses, but only while the chain says
+            // this tab HAS the row - a row that is genuinely absent still falls
+            // through without a wait.
+            suspend fun askEntry(): DetailFocusLanding =
+                if (target == DetailRow.MEDIA) {
+                    // The Media row is entered at its own inner strip, never at
+                    // a card: the strip is the row's selector.
+                    askMediaStrip(DetailRow.TABS)
+                } else {
+                    askRow(target, 0, DetailRow.TABS, DetailFocusDirection.DOWN, rows)
+                }
+
+            var landing = askEntry()
+            var entryAttempts = 0
+            while (
+                entryAttempts < RETRY_CHIP_STEPS &&
+                DetailFocusChain.exists(target, rows) &&
+                !landing.verified &&
+                !(landing.landed && landing.via == DetailFocusVia.GEOMETRY)
+            ) {
+                delay(RETRY_CHIP_DELAY_MS)
+                landing = askEntry()
+                entryAttempts++
+            }
+            if (entryAttempts > 0) {
+                DetailTrace.note(
+                    "detail tab entry retry ${target.name} attempts=$entryAttempts " +
+                        "verified=${landing.verified} " +
+                        "observed=${landing.observed?.name ?: "none"}"
+                )
             }
             if (landing.landed) {
                 trace(
@@ -4220,10 +4260,10 @@ fun DetailScreen(
         // UP out of a list row is the strip, always (2026-11-21). This used to
         // carry a special case that jumped a first-list-row UP straight onto the
         // overview's toggle, because the toggle had no chain row of its own. It
-        // has one now ([DetailRow.OVERVIEW], painted between the chips and the
-        // strip), so the chain's answer - strip first, then toggle - IS the
-        // move, and a special case that skipped the strip would send UP past the
-        // row the viewer can see directly above them.
+        // has one now ([DetailRow.OVERVIEW], painted directly below the strip
+        // inside Details), so the chain's answer - strip first, then toggle -
+        // IS the move, and a special case that skipped the strip would send UP
+        // past the row the viewer can see directly above them.
         // F7: the rows the page has NOW, not the ones the pressing rail was
         // composed with - a rail composed before a higher row landed computes
         // the wrong target in that one recomposition window. This is the same

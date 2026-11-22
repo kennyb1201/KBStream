@@ -23,22 +23,24 @@ internal enum class DetailFocusDirection { UP, DOWN }
  *
  * The order is the PAINTED order, which is not the order the rails are listed
  * in the source: under the fixed header's title/PLAY row the genre chips, then
- * the tag rail, then the episode section, the people rail, the network rail,
- * the production companies, the collection rail, More Like This, the review
- * rail and finally the Media row (see the `genrerow`, `keywordsrow`,
+ * the tab strip, then the selected tab's first row (the overview toggle in
+ * Details), then the tag rail, the episode section, the people rail, the
+ * network rail, the production companies, the collection rail, More Like This,
+ * the review rail and finally the Media row (see the `genrerow`, `keywordsrow`,
  * `peoplerow`, `networkrow`, `productionrow`, `collectionrow`, `recsrow`,
  * `reviewsrow` and `mediarow` items). A chain that did not mirror the screen
  * would send UP into a row the viewer can see is below them.
  *
  * Rows that carry no vertical handler of their own are deliberately absent:
- * the overview block, the ratings strip and the fact cards are leaf surfaces
- * reached by the default search, and naming them here would change behaviour
- * the chain is not about. The genre rail, the review rail, the collection rail,
- * More Like This and the Media row ARE named - the genre chips because they
- * live in the fixed header and a press out of the tag rail used to skip them,
- * the review rail because a card reached by touch had no chain entry for where
- * it was, and the last three because a viewer who scrolled into them had no
- * chain entry either - all in the order they are painted.
+ * the ratings strip and the fact cards are leaf surfaces reached by the default
+ * search, and naming them here would change behaviour the chain is not about.
+ * The overview belongs here because its toggle is focusable; its prose does not
+ * take a press. The genre rail, the review rail, the collection rail, More Like
+ * This and the Media row ARE named - the genre chips because they live in the
+ * fixed header and a press out of the tag rail used to skip them, the review
+ * rail because a card reached by touch had no chain entry for where it was, and
+ * the last three because a viewer who scrolled into them had no chain entry
+ * either - all in the order they are painted.
  */
 internal enum class DetailRow {
     /** The fixed title/logo and PLAY row above the list - always composed. */

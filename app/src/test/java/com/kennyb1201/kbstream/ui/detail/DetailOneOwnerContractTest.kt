@@ -350,6 +350,40 @@ class DetailOneOwnerContractTest {
         )
     }
 
+    @Test
+    fun `tab entry keeps asking while the present rail registers its chips`() {
+        val entry = detail.substringAfter("suspend fun enterTabContent()")
+            .substringBefore("Whether this page is still waiting")
+        assertTrue(
+            "the entry ask is retried, not judged on one composition",
+            entry.contains("var landing = askEntry()") &&
+                entry.contains("entryAttempts < RETRY_CHIP_STEPS") &&
+                entry.contains("landing = askEntry()")
+        )
+        assertTrue(
+            "the retry is gated on the chain's presence, so an absent row still falls through",
+            entry.contains("DetailFocusChain.exists(target, rows)")
+        )
+        assertTrue(
+            "and the retry is visible in the paste",
+            entry.contains("detail tab entry retry") &&
+                entry.contains("verified=") && entry.contains("observed=")
+        )
+    }
+
+    @Test
+    fun `the strip's pills are keyed and its input list is title-stable`() {
+        assertTrue(
+            "a series' tab list is read once from the title, not rebuilt with page data",
+            detail.contains("val availableTabs = remember(isSeriesTitle)") &&
+                detail.contains("DetailTabChain.stableTabs(isSeriesTitle)")
+        )
+        assertTrue(
+            "each pill is keyed by tab, so a recomposition around it cannot recreate its node",
+            detail.contains("tabs.forEach { tab -> key(tab) {")
+        )
+    }
+
     // ── helpers ────────────────────────────────────────────────────────────
 
     private fun stripComments(text: String): String =
