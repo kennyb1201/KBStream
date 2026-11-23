@@ -641,6 +641,12 @@ dependencies {
     // never leaves the device, so a rooted box or a pulled prefs file yields
     // ciphertext instead of a live session that can be replayed off-device.
     implementation(libs.androidx.security.crypto)
+    // Where the preference files live now (spec 2026-11-22, DataStore). Nothing
+    // reads DataStore directly: `Prefs.file` returns a SharedPreferences over
+    // one of these files, so the thousand-odd get/put call sites never learn
+    // that the storage under them changed. The one-time adoption of the old
+    // XML stores is `SharedPreferencesMigration` in that shim.
+    implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
