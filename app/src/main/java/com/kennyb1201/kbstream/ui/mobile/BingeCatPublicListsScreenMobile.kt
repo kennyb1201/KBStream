@@ -24,7 +24,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.bingecat.BingeCatImportMode
 import com.kennyb1201.kbstream.data.bingecat.BingeCatPublicCategory
@@ -72,7 +72,7 @@ fun BingeCatPublicListsScreenMobile(
     modifier: Modifier = Modifier,
     onBack: () -> Unit,
     onOpenTitle: (mediaType: String, id: String) -> Unit,
-    vm: BingeCatPublicListsViewModel = viewModel()
+    vm: BingeCatPublicListsViewModel = hiltViewModel()
 ) {
     val uiState by vm.uiState.collectAsStateWithLifecycle()
 

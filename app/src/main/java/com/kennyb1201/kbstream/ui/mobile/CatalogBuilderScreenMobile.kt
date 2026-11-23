@@ -36,7 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.catalogs.CATALOG_MEDIA_TV
 import com.kennyb1201.kbstream.data.catalogs.CustomCatalog
@@ -117,7 +117,7 @@ import com.kennyb1201.kbstream.ui.theme.MobileTheme
 @Composable
 fun CatalogBuilderScreenMobile(
     onBack: () -> Unit,
-    viewModel: CatalogBuilderViewModel = viewModel()
+    viewModel: CatalogBuilderViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val draft by viewModel.draft.collectAsStateWithLifecycle()

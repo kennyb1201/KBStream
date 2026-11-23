@@ -5,7 +5,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.kennyb1201.kbstream.ui.browse.studioBrowseScreenKey
 import com.kennyb1201.kbstream.ui.studio.StudioViewModel
 import com.kennyb1201.kbstream.ui.theme.MobileTheme
@@ -34,7 +34,7 @@ fun StudioScreenMobile(
     originalsCompanyId: Int? = null,
     onBack: () -> Unit,
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
-    viewModel: StudioViewModel = viewModel()
+    viewModel: StudioViewModel = hiltViewModel()
 ) {
     val sections by viewModel.sections.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()

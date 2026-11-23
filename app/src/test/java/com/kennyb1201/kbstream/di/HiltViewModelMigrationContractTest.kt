@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.di
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -50,18 +51,55 @@ class HiltViewModelMigrationContractTest {
     }
 
     /**
+     * The check this migration needed and did not have: a `@HiltViewModel` built
+     * by the DEFAULT factory compiles and then throws when the screen opens,
+     * because the factory looks for a constructor that takes an Application and
+     * nothing else. It is not a screen-level rule - the phone wrappers create
+     * these classes too, and the first pass moved the outer screen while the
+     * `*ScreenMobile` beside it still asked the default factory.
+     *
+     * So the scan is every main source file, and the test fails on a line that
+     * names a migrated class AND calls `viewModel(...)`. `hiltViewModel(...)`
+     * does not match (the bridge's `V` is capital), which is what makes the
+     * check usable as a grep.
+     */
+    @Test
+    fun `no migrated view model is built by the default factory`() {
+        val offenders = mutableListOf<String>()
+        sourceFiles().forEach { file ->
+            file.readLines().forEachIndexed { index, line ->
+                if (!line.contains("viewModel(") && !line.contains("viewModel<")) return@forEachIndexed
+                MIGRATED.forEach { name ->
+                    if (line.contains(name.substringAfterLast('/'))) {
+                        offenders += "${file.name}:${index + 1} -> ${name.substringAfterLast('/')}"
+                    }
+                }
+            }
+        }
+        assertTrue(
+            "these still ask the default factory, which cannot inject: $offenders",
+            offenders.isEmpty()
+        )
+    }
+
+    /**
      * The rule the whole migration turns on: a class that has moved owns no
      * accessor call any more. If one comes back, the class and the graph can
      * each believe they own the singleton, which is the one thing delegating
      * first was supposed to make impossible.
      */
     @Test
-    fun `no migrated class reaches for a legacy accessor`() {
+    fun `no migrated class reaches for a legacy accessor, except where it must`() {
         MIGRATED.forEach { name ->
-            val source = source("$UI/$name.kt")
-            assertTrue(
-                "$name still calls a getInstance accessor",
-                !source.contains("getInstance(")
+            val actual = Regex("\\w+\\.getInstance\\(")
+                .findAll(source("$UI/$name.kt"))
+                .map { it.value }
+                .sorted()
+                .toList()
+            assertEquals(
+                "$name's accessor calls are not the ones this migration left it",
+                KNOWN_ACCESSOR_CALLS[name].orEmpty().sorted(),
+                actual
             )
         }
     }
@@ -91,15 +129,32 @@ class HiltViewModelMigrationContractTest {
     fun `the screen asks the graph instead of the default factory`() {
         SCREENS.forEach { path ->
             val screen = source("$UI/$path")
+            // The call, not its spelling: one screen wraps the default onto the
+            // next line, and Detail keys it (`hiltViewModel(key = ...)`), which is
+            // the same resolution with the key it has always used.
             assertTrue(
                 "$path resolves its view model from the entry point",
-                screen.contains("= hiltViewModel()")
+                screen.contains("hiltViewModel(")
             )
             assertTrue(
                 "$path's default factory would build a second instance beside the injected one",
                 !screen.contains("= viewModel()")
             )
         }
+    }
+
+    /**
+     * Home composes two ViewModels and has moved one of them so far, so it
+     * cannot join [SCREENS] - that list forbids any `= viewModel()` at all,
+     * which is the right rule for a screen that has finished moving.
+     */
+    @Test
+    fun `Home resolves its KB collections from the graph`() {
+        val home = source("$UI/home/HomeScreen.kt")
+        assertTrue(
+            "the KB view model comes from the entry point",
+            home.contains("KBHomeViewModel =\n        hiltViewModel()")
+        )
     }
 
     @Test
@@ -141,6 +196,12 @@ class HiltViewModelMigrationContractTest {
         return file.readText()
     }
 
+    private fun sourceFiles(): List<File> =
+        findSourceRoot()
+            .walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .toList()
+
     private fun findSourceRoot(): File {
         val prefixes = listOf("", "app/")
         var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
@@ -176,6 +237,19 @@ class HiltViewModelMigrationContractTest {
     private companion object {
         const val UI = "com/kennyb1201/kbstream/ui"
 
+        /**
+         * The accessor calls each moved class is still allowed to make, and the
+         * reason it must. Home keeps exactly one: `FanartArtRepository` is
+         * `internal`, so it cannot be a provider's return type and cannot be
+         * injected until its own construction moves (see LegacySingletonsModule).
+         * Everything else on this map is empty - a call coming back is two owners
+         * for one singleton, which is the bug the delegation order exists to
+         * prevent.
+         */
+        val KNOWN_ACCESSOR_CALLS = mapOf(
+            "home/HomeViewModel" to listOf("FanartArtRepository.getInstance(")
+        )
+
         /** The classes that have moved onto the graph, in migration order. */
         val MIGRATED = listOf(
             "settings/YearReviewViewModel",
@@ -193,7 +267,14 @@ class HiltViewModelMigrationContractTest {
             "streams/StreamsViewModel",
             "settings/StatsViewModel",
             "iptv/IptvViewModel",
-            "sports/SportsHubViewModel"
+            "sports/SportsHubViewModel",
+            "search/SearchViewModel",
+            "addons/AddonsViewModel",
+            "library/LibraryCalendarViewModel",
+            "library/LibraryViewModel",
+            "kb/KBHomeViewModel",
+            "kb/KBFolderViewModel",
+            "detail/DetailViewModel"
         )
 
         val SCREENS = listOf(
@@ -212,7 +293,13 @@ class HiltViewModelMigrationContractTest {
             "streams/StreamsScreen.kt",
             "settings/StatsScreen.kt",
             "iptv/GuideScreen.kt",
-            "sports/SportsHubScreen.kt"
+            "sports/SportsHubScreen.kt",
+            "search/SearchScreen.kt",
+            "addons/AddonsScreen.kt",
+            "library/LibraryScreen.kt",
+            "library/LibraryCalendarPane.kt",
+            "kb/KBFolderScreen.kt",
+            "detail/DetailScreen.kt"
         )
     }
 }

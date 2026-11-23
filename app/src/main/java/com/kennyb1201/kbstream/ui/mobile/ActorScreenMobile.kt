@@ -35,7 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.library.HiddenTitles
@@ -105,7 +105,7 @@ fun ActorScreenMobile(
     actorId: Int,
     onBack: () -> Unit,
     onNavigateDetail: (String, String) -> Unit,
-    viewModel: ActorViewModel = viewModel()
+    viewModel: ActorViewModel = hiltViewModel()
 ) {
     val person by viewModel.person.collectAsStateWithLifecycle()
     val resolvedCreditIds by viewModel.resolvedCreditIds.collectAsStateWithLifecycle()

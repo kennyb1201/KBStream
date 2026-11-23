@@ -68,7 +68,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.debrid.CloudMatch
@@ -981,7 +981,7 @@ fun SettingsScreen(
     // view model Home itself uses, so this page never builds a second rail
     // feed. [screensaverPoolForSettings] puts it through the active profile's
     // ceiling, the same rule the billboard pool uses.
-    val screensaverHomeViewModel: HomeViewModel = viewModel()
+    val screensaverHomeViewModel: HomeViewModel = hiltViewModel()
     val screensaverRails by screensaverHomeViewModel.rails.collectAsStateWithLifecycle()
     val screensaverProfileId = com.kennyb1201.kbstream.data.sync.ProfileManager
         .activeProfile.collectAsStateWithLifecycle().value?.id

@@ -30,7 +30,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.kennyb1201.kbstream.data.trakt.TraktWatchedCounts
 import com.kennyb1201.kbstream.ui.components.KBQrCode
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
@@ -64,7 +64,7 @@ import com.kennyb1201.kbstream.ui.trakt.TraktViewModel
 fun TraktConnectScreenMobile(
     modifier: Modifier = Modifier,
     onBack: () -> Unit,
-    vm: TraktViewModel = viewModel()
+    vm: TraktViewModel = hiltViewModel()
 ) {
     // Leaving ends the attempt (spec audit 2026-11-18, Onboarding M1).
     DisposableEffect(Unit) {

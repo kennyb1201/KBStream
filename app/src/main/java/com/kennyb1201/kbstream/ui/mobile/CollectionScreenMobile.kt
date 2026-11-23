@@ -34,7 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.library.HiddenTitles
@@ -95,7 +95,7 @@ fun CollectionScreenMobile(
     collectionName: String,
     onBack: () -> Unit,
     onNavigateDetail: (type: String, id: String) -> Unit,
-    viewModel: CollectionViewModel = viewModel()
+    viewModel: CollectionViewModel = hiltViewModel()
 ) {
     val collectionRaw by viewModel.collection.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()

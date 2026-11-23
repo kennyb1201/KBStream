@@ -275,8 +275,9 @@ class OnboardingAndCatalogGridMobileContractTest {
             text.contains("rememberHomeLandscape()")
         )
 
-        // Same ViewModel and data path as the TV grid.
-        assertTrue(text.contains("viewModel: HomeViewModel = viewModel()"))
+        // Same ViewModel and data path as the TV grid. Built by the graph since
+        // spec 2026-11-22, item 3: the phone grid no longer owns the construction.
+        assertTrue(text.contains("viewModel: HomeViewModel = hiltViewModel()"))
         assertTrue(
             "the grid reopens its rail from the route's whole identity: the name " +
                 "pair alone cannot tell two same-named rails apart (grid S2)",

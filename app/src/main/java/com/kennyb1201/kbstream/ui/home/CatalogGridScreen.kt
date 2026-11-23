@@ -37,7 +37,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.paging.LoadState
 import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.paging.filter
@@ -126,7 +126,7 @@ fun CatalogGridScreen(
     catalogId: String? = null,
     type: String? = null,
     viewModel: HomeViewModel =
-        viewModel(),
+        hiltViewModel(),
     onItemClick: (MetaPreview) -> Unit,
     onBack: () -> Unit
 ) {

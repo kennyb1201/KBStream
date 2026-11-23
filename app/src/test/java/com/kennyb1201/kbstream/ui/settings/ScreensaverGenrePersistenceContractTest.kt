@@ -192,9 +192,11 @@ class ScreensaverGenrePersistenceContractTest {
                 ) &&
                 squash(homeVm).contains("tmdbRepository.kidsFilterMetas(pool)")
         )
+        // Borrowed from the activity's entry point since spec 2026-11-22, item 3:
+        // the same activity-scoped instance, not a second feed.
         assertTrue(
             "the screen borrows the activity-scoped Home view model rather than building a second feed",
-            squash(settings).contains("val screensaverHomeViewModel: HomeViewModel = viewModel()") &&
+            squash(settings).contains("val screensaverHomeViewModel: HomeViewModel = hiltViewModel()") &&
                 squash(settings).contains(
                     "screensaverPool = screensaverHomeViewModel.screensaverPoolForSettings()"
                 )

@@ -67,7 +67,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
@@ -1575,7 +1575,7 @@ fun AppRoot(
             onboardingComplete &&
             screen is Screen.Home
         ) {
-            viewModel<HomeViewModel>()
+            hiltViewModel<HomeViewModel>()
         } else {
             null
         }
@@ -1643,7 +1643,7 @@ fun AppRoot(
     // Moshi on the main thread — for a value nothing in this file ever read.
     // Every consumer calls getInstance itself, and the repository now builds its
     // reflection-heavy half on IO (see TmdbRepository.warmUpReflectionStack).
-    val streamsViewModel: StreamsViewModel = viewModel()
+    val streamsViewModel: StreamsViewModel = hiltViewModel()
     // The picker's state must not survive a profile switch. The ViewModel is
     // activity-scoped and shared by both pickers, so profile 1's target, sources
     // and remembered request were still there for profile 2 - which is how a
@@ -1664,7 +1664,7 @@ fun AppRoot(
 
     // Activity-scoped search state, referenced by the BackHandler so exiting
     // Search commits the query to history and clears the session.
-    val searchViewModel: SearchViewModel = viewModel()
+    val searchViewModel: SearchViewModel = hiltViewModel()
 
     // Hoisted here (not inside SearchScreen) so the scroll position survives
     // Search -> Detail -> Back: the when-branch swap decomposes SearchScreen,
@@ -3280,7 +3280,7 @@ fun AppRoot(
             // two doors"). Same instance the route below resolves: same class,
             // same default key, same owner.
             val bingecatPublicListsVm: com.kennyb1201.kbstream.ui.bingecat.BingeCatPublicListsViewModel =
-                viewModel()
+                hiltViewModel()
             SettingsScreen(
                 onBack = { screen = Screen.Home },
                 onOpenAddons = {
@@ -3638,7 +3638,7 @@ fun AppRoot(
                         returnTo = current
                     )
                 },
-                vm = viewModel()
+                vm = hiltViewModel()
             )
         }
 
@@ -3649,7 +3649,7 @@ fun AppRoot(
             // and coming back returns to the level the viewer left - and so an
             // import already following its job is not restarted by the trip.
             val publicListsVm: com.kennyb1201.kbstream.ui.bingecat.BingeCatPublicListsViewModel =
-                viewModel()
+                hiltViewModel()
             val publicListsState by publicListsVm.uiState.collectAsStateWithLifecycle()
             if (publicListsState.browsing) {
                 com.kennyb1201.kbstream.ui.bingecat.BingeCatPublicListsScreen(
@@ -3716,7 +3716,7 @@ fun AppRoot(
             // from the player — for a screen most sessions never open. The
             // activity-scoped store still hands back the same instance once
             // it exists, so Guide -> Player -> Guide keeps its state.
-            val iptvViewModel: IptvViewModel = viewModel()
+            val iptvViewModel: IptvViewModel = hiltViewModel()
 
             GuideScreen(
                 viewModel = iptvViewModel,
@@ -4103,7 +4103,7 @@ fun AppRoot(
         is Screen.Streams -> {
 
             val streamsViewModel: StreamsViewModel =
-                viewModel()
+                hiltViewModel()
 
             LaunchedEffect(
                 current.target.contentType,

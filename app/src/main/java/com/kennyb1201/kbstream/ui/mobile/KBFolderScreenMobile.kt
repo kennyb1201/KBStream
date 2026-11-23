@@ -37,7 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.ui.components.logoRequest
 import com.kennyb1201.kbstream.data.kb.KBContentItem
@@ -142,7 +142,7 @@ fun KBFolderScreenMobile(
         backdrop: String?,
         title: String?
     ) -> Unit,
-    viewModel: KBFolderViewModel = viewModel()
+    viewModel: KBFolderViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()

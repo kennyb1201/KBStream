@@ -92,7 +92,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import com.kennyb1201.kbstream.data.addon.Meta
@@ -502,7 +502,7 @@ fun HomeScreenMobile(
         // Home, and the rail arrangement that interleaves them with the
         // catalogs - the same slot builder the TV screen uses, so a rail lands
         // where the home manager says on both screens.
-        val kbViewModel: KBHomeViewModel = viewModel()
+        val kbViewModel: KBHomeViewModel = hiltViewModel()
         val kbState by kbViewModel.state.collectAsStateWithLifecycle()
         // The row the screen actually draws - everything below asks this, not
         // the raw schedule. Upcoming is a SCHEDULE, not a discovery rail, so it

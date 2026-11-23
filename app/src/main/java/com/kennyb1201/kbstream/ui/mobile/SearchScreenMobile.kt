@@ -49,7 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.ui.components.logoRequest
 import com.kennyb1201.kbstream.data.addon.MetaPreview
@@ -163,7 +163,7 @@ fun SearchScreenMobile(
     // The same LazyListState the TV column uses - the two are never on screen
     // together, so one scroll record is enough.
     listState: LazyListState = rememberIdleLazyListState(),
-    viewModel: SearchViewModel = viewModel()
+    viewModel: SearchViewModel = hiltViewModel()
 ) {
     MobileTheme {
         val context = LocalContext.current

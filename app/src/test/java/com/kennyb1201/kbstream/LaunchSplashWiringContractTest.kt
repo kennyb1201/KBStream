@@ -219,9 +219,9 @@ class LaunchSplashWiringContractTest {
         val activity = flat(source("com/kennyb1201/kbstream/MainActivity.kt"))
         assertTrue(
             "Home's readiness is read from an activity-scoped HomeViewModel - the " +
-                "same instance HomeScreen's default `viewModel()` resolves",
+                "same instance HomeScreen's default `hiltViewModel()` resolves",
             activity.contains("val splashHomeViewModel =") &&
-                activity.contains("viewModel<HomeViewModel>()")
+                activity.contains("hiltViewModel<HomeViewModel>()")
         )
         assertTrue(
             "both halves of the condition HomeScreen's skeleton uses: still " +

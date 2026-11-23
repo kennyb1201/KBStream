@@ -44,7 +44,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.data.library.LibraryList
@@ -143,7 +143,7 @@ fun LibraryScreenMobile(
     onItemClick: (mediaType: String, id: String) -> Unit,
     /** Opens the year in review: the Library's year-round door beside the shelves. */
     onOpenYearReview: () -> Unit = {},
-    viewModel: LibraryViewModel = viewModel()
+    viewModel: LibraryViewModel = hiltViewModel()
 ) {
     MobileTheme {
         val context = LocalContext.current

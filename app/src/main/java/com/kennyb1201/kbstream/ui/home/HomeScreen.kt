@@ -102,7 +102,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
@@ -5232,7 +5232,7 @@ fun HomeScreen(
      */
     onOpenYearReview: (Int?) -> Unit = {},
     viewModel: HomeViewModel =
-        viewModel()
+        hiltViewModel()
 ) {
     // Re-warm after a pressure event (dig four, 2026-11-16, §3f). Every warm in
     // the ViewModel is driven by a resolve, and a resolve by a focus change - so
@@ -5296,7 +5296,7 @@ fun HomeScreen(
     // KB collections (imported from a profile URL) interleaved with the
     // addon rails below; arrangement (pin/reorder/hide) from the manager.
     val kbViewModel: com.kennyb1201.kbstream.ui.kb.KBHomeViewModel =
-        viewModel()
+        hiltViewModel()
 
     // Keyed on the active profile: these are profile-scoped prefs and
     // remember{} would otherwise keep the previous profile's display

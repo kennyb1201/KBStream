@@ -71,7 +71,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import coil3.compose.AsyncImage
 import coil3.compose.SubcomposeAsyncImage
 import coil3.request.ImageRequest
@@ -154,7 +154,7 @@ private const val SEARCH_FOCUS_ATTEMPTS = 12
 
 @Composable
 fun SportsHubScreenMobile(
-    viewModel: SportsHubViewModel = viewModel(),
+    viewModel: SportsHubViewModel = hiltViewModel(),
     modifier: Modifier = Modifier,
     onBack: () -> Unit,
     onPlayChannels: (gameId: String?, tournamentId: String?, List<IptvChannel>) -> Unit =
@@ -950,7 +950,7 @@ private fun LineupMissingNoticeMobile(
     modifier: Modifier = Modifier
 ) {
     // Created here, and only while this notice is on screen: see the TV twin.
-    val iptvViewModel: IptvViewModel = viewModel()
+    val iptvViewModel: IptvViewModel = hiltViewModel()
     val freeInstalled by iptvViewModel.freeLineupInstalled.collectAsStateWithLifecycle()
     val freeInstalling by iptvViewModel.freeLineupInstalling.collectAsStateWithLifecycle()
     val freeFailed by iptvViewModel.freeLineupFailed.collectAsStateWithLifecycle()

@@ -31,7 +31,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.kennyb1201.kbstream.data.bingecat.BingeCatConfig
 import com.kennyb1201.kbstream.data.bingecat.BingeCatProfile
 import com.kennyb1201.kbstream.data.bingecat.bingecatActivationUrlForQr
@@ -76,7 +76,7 @@ fun BingeCatConnectScreenMobile(
     modifier: Modifier = Modifier,
     onBack: () -> Unit,
     onBrowsePublicLists: () -> Unit = {},
-    vm: BingeCatViewModel = viewModel()
+    vm: BingeCatViewModel = hiltViewModel()
 ) {
     // Leaving ends the attempt (spec audit 2026-11-18, Onboarding M1).
     DisposableEffect(Unit) {

@@ -33,7 +33,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.ui.components.KBQrCode
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
@@ -81,7 +81,7 @@ import com.kennyb1201.kbstream.ui.theme.MobileTheme
 fun SimklConnectScreenMobile(
     modifier: Modifier = Modifier,
     onBack: () -> Unit,
-    vm: SimklViewModel = viewModel()
+    vm: SimklViewModel = hiltViewModel()
 ) {
     // Leaving ends the attempt (spec audit 2026-11-18, Onboarding M1) - see
     // SimklConnectScreen's twin.
