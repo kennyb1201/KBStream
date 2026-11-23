@@ -87,19 +87,34 @@ class DetailWatchedKeysRebuildContractTest {
                 code.contains("getOrElse { traktWatchedEpisodes }")
         )
         // Indentation moved when the four legs were launched together; the
-        // rule being pinned is which callback the assignments live in.
+        // rule being pinned is which callback the assignments live in. Since
+        // spec 2026-11-23 (F1) that rule has ONE home per leg: the apply
+        // helper, which also refuses to move the marker on a null answer.
         val flat = viewModel.replace(Regex("\\s+"), " ")
         assertTrue(
-            "it assigns and marks the leg read only when the read succeeded",
+            "the full load still routes each leg through its apply helper on both outcomes",
+            flat.contains("onSuccess = { episodes -> applySimklLeg(id, episodes) }") &&
+                flat.contains("onFailure = { error -> applySimklLeg(id, null, error) }") &&
+                flat.contains("onSuccess = { episodes -> applyMdbListLeg(id, episodes) }") &&
+                flat.contains("onSuccess = { episodes -> applyTraktLeg(id, episodes) }")
+        )
+        assertTrue(
+            "and the helper assigns and marks the leg read only for an ANSWERED read",
             flat.contains(
-                "onSuccess { episodes -> _simklWatchedEpisodes.value = episodes " +
-                    "_simklSeriesWatched.value = episodes.isNotEmpty() simklKeysReadFor = id"
+                "if (episodes != null) { _simklWatchedEpisodes.value = episodes " +
+                    "_simklSeriesWatched.value = episodes.isNotEmpty() simklKeysReadFor = parentId }"
             )
         )
         assertTrue(
-            "and the two field-backed legs are only replaced on success",
-            flat.contains("mdbListWatchedEpisodes = episodes mdbListKeysReadFor = id") &&
-                flat.contains("traktWatchedEpisodes = episodes traktKeysReadFor = id")
+            "the two field-backed legs are only replaced on an answered read too",
+            flat.contains("mdbListWatchedEpisodes = episodes mdbListKeysReadFor = parentId") &&
+                flat.contains("traktWatchedEpisodes = episodes traktKeysReadFor = parentId")
+        )
+        assertTrue(
+            "and every leg logs its answer or its silence, once, per rebuild (F2)",
+            flat.contains("logWatchedLeg(\"simkl\", parentId, episodes, cause)") &&
+                flat.contains("logWatchedLeg(\"mdblist\", parentId, episodes, cause)") &&
+                flat.contains("logWatchedLeg(\"trakt\", parentId, episodes, cause)")
         )
     }
 

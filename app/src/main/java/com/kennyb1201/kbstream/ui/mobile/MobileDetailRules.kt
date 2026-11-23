@@ -48,7 +48,9 @@ internal object MobileDetailRules {
         airDatesTrusted: Boolean,
         today: LocalDate,
         nextEpisodeToAir: TmdbEpisodeAirInfo? = null,
-        seasonAirDate: String? = null
+        seasonAirDate: String? = null,
+        /** Whether the show is over; a still-airing show proves less (F3). */
+        finished: Boolean = false
     ): List<Int>? =
         DetailSeasonEpisodes.numbers(
             season = season,
@@ -58,6 +60,7 @@ internal object MobileDetailRules {
             seasonAirDate = seasonAirDate,
             nextEpisodeToAir = nextEpisodeToAir,
             airDatesTrusted = airDatesTrusted,
+            finished = finished,
             today = today
         )
 
@@ -120,4 +123,18 @@ internal object MobileDetailRules {
      */
     fun staleSeasonDates(detail: TmdbDetail?): Set<Int> =
         DetailSeasonEpisodes.staleSeasons(detail)
+
+    /**
+     * Whether the show is over, from the same two TMDB fields the TV page uses
+     * (spec 2026-11-23, F3). A finished show's unopened seasons may be marked;
+     * a show still airing proves nothing about them.
+     */
+    fun isShowFinished(
+        detail: TmdbDetail?,
+        today: LocalDate = LocalDate.now()
+    ): Boolean = DetailSeasonEpisodes.isFinished(
+        status = detail?.status,
+        lastEpisodeAirDate = detail?.lastEpisodeToAir?.airDate,
+        today = today
+    )
 }

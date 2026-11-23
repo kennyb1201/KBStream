@@ -717,6 +717,8 @@ fun DetailScreenMobile(
             loadedSeason,
             tmdbDetail?.seasons,
             tmdbDetail?.nextEpisodeToAir,
+            tmdbDetail?.status,
+            tmdbDetail?.lastEpisodeToAir,
             staleSeasons,
             today
         ) {
@@ -732,9 +734,12 @@ fun DetailScreenMobile(
                     today = today,
                     // The next unaired episode and the season's own premiere:
                     // the two facts that keep an unloaded, still-airing season
-                    // from being marked watched to its scheduled end.
+                    // from being marked watched to its scheduled end. The
+                    // show's finished-ness is the third: it is the only thing
+                    // that may mark an unopened season outright.
                     nextEpisodeToAir = tmdbDetail?.nextEpisodeToAir,
-                    seasonAirDate = summary?.airDate
+                    seasonAirDate = summary?.airDate,
+                    finished = MobileDetailRules.isShowFinished(tmdbDetail, today)
                 )
             }
         }

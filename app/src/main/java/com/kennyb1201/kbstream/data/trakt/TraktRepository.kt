@@ -994,9 +994,24 @@ class TraktRepository private constructor(private val context: Context?) {
      * profile switch (a different profile's token) can never be served the
      * previous profile's history.
      */
-    suspend fun watchedSnapshot(forceRefresh: Boolean = false): TraktWatchedSnapshot {
-        if (!TraktConfig.isConfigured) return TraktWatchedSnapshot()
-        val token = validAccessToken() ?: return TraktWatchedSnapshot()
+    suspend fun watchedSnapshot(forceRefresh: Boolean = false): TraktWatchedSnapshot =
+        watchedSnapshotOrNull(forceRefresh) ?: TraktWatchedSnapshot()
+
+    /**
+     * [watchedSnapshot], saying whether it could answer at all.
+     *
+     * Null means there is no snapshot to speak from: not configured, no token,
+     * or a failed read with nothing in hand. The snapshot already in hand is an
+     * ANSWER, not a failure - it is what the account last said, and serving it
+     * is the whole reason the read above never returns a partial one - so it
+     * comes back non-null and the caller may set its marker on it
+     * (spec 2026-11-23, F1).
+     */
+    private suspend fun watchedSnapshotOrNull(
+        forceRefresh: Boolean = false
+    ): TraktWatchedSnapshot? {
+        if (!TraktConfig.isConfigured) return null
+        val token = validAccessToken() ?: return null
 
         /*
          * The next allowed window for anything queued when Trakt was
@@ -1075,7 +1090,7 @@ class TraktRepository private constructor(private val context: Context?) {
                     fetch = { page, limit ->
                         api.watchedShows(authorization, page = page, limit = limit)
                     }
-                ) ?: return@withLock previous ?: TraktWatchedSnapshot()
+                ) ?: return@withLock previous
             } else {
                 null
             }
@@ -1087,7 +1102,7 @@ class TraktRepository private constructor(private val context: Context?) {
                     fetch = { page, limit ->
                         api.watchedMovies(authorization, page = page, limit = limit)
                     }
-                ) ?: return@withLock previous ?: TraktWatchedSnapshot()
+                ) ?: return@withLock previous
             } else {
                 null
             }
@@ -1127,12 +1142,15 @@ class TraktRepository private constructor(private val context: Context?) {
     /**
      * The account's watched episodes for one show, by any of [showKeys].
      *
-     * Empty when the tracker has nothing on record; the caller distinguishes
-     * "no answer" by catching the call, exactly as the Simkl/MDBList union
-     * already does.
+     * Null when no snapshot could be spoken from (unconfigured, tokenless, a
+     * failed read with nothing in hand); an EMPTY set when a snapshot answered
+     * and the show is not in it. The two are not interchangeable: the Detail
+     * screen holds a complete tick set until every leg has ANSWERED, and a
+     * failed read reported as an empty one is what collapsed it
+     * (spec 2026-11-23, F1).
      */
-    suspend fun watchedEpisodesForShow(showKeys: List<String>): Set<Pair<Int, Int>> =
-        watchedSnapshot().watchedEpisodesFor(showKeys)
+    suspend fun watchedEpisodesForShow(showKeys: List<String>): Set<Pair<Int, Int>>? =
+        watchedSnapshotOrNull()?.watchedEpisodesFor(showKeys)
 
     /**
      * Another device's session was adopted (see

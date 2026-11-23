@@ -6,18 +6,21 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
 import com.kennyb1201.kbstream.data.tmdb.TmdbSeasonSummary
 import java.time.LocalDate
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * Which episode numbers a season-wide mark may cover.
  *
- * The loaded season's half was already right (drop the dated-future rows); the
- * unloaded half was `1..episode_count` for EVERY season, so "Mark Entire
- * Series as Watched" and a season chip on a never-loaded, still-airing season
- * wrote next week's episode into the local history and pushed it to Simkl,
- * MDBList and Trakt. `next_episode_to_air` is the fact that closes it without a
- * per-season request.
+ * The WRITE rule, and it fails closed (spec 2026-11-23, F3). A mark writes a
+ * local row and pushes to Simkl, MDBList and Trakt, so an episode is only
+ * marked when something proves it aired. The old filter failed open three
+ * ways: a stale season passed its whole listing, an unloaded season with no
+ * pointer fell through to its scheduled count, and a missing date counted as
+ * aired - which is how "Mark Entire Series as Watched" on The Simpsons swept
+ * next week's episode into every tracker.
  */
 class DetailSeasonEpisodesTest {
 
@@ -41,7 +44,8 @@ class DetailSeasonEpisodesTest {
         episodeCount: Int? = 10,
         seasonAirDate: String? = null,
         next: TmdbEpisodeAirInfo? = null,
-        airDatesTrusted: Boolean = true
+        airDatesTrusted: Boolean = true,
+        finished: Boolean = false
     ) = DetailSeasonEpisodes.numbers(
         season = season,
         loadedSeason = loadedSeason,
@@ -50,6 +54,7 @@ class DetailSeasonEpisodesTest {
         seasonAirDate = seasonAirDate,
         nextEpisodeToAir = next,
         airDatesTrusted = airDatesTrusted,
+        finished = finished,
         today = today
     )
 
@@ -64,11 +69,52 @@ class DetailSeasonEpisodesTest {
     }
 
     @Test
-    fun `untrusted dates keep the loaded listing whole`() {
+    fun `an episode with no date is not provably aired, so it is not marked`() {
+        // The display rule treats a missing date as aired (a card should not
+        // be labelled unreleased); the write rule cannot, and this is the
+        // boundary between them.
+        val episodes = listOf(
+            episode(1, "2026-10-01"),
+            episode(2),
+            episode(3, "not-a-date")
+        )
+        assertEquals(listOf(1), numbers(season = 1, episodes = episodes))
+    }
+
+    @Test
+    fun `untrusted dates mark by the show-level pointer, not the stale row`() {
         val episodes = listOf(episode(1, "2026-10-01"), episode(2, "2026-12-01"))
         assertEquals(
-            listOf(1, 2),
+            listOf(1),
+            numbers(
+                season = 1,
+                episodes = episodes,
+                airDatesTrusted = false,
+                next = TmdbEpisodeAirInfo(seasonNumber = 1, episodeNumber = 2)
+            )
+        )
+    }
+
+    @Test
+    fun `untrusted dates with no pointer mark nothing while the show is airing`() {
+        val episodes = listOf(episode(1, "2026-10-01"), episode(2, "2026-12-01"))
+        assertEquals(
+            emptyList<Int>(),
             numbers(season = 1, episodes = episodes, airDatesTrusted = false)
+        )
+    }
+
+    @Test
+    fun `untrusted dates with no pointer on a finished show mark the declared count`() {
+        val episodes = listOf(episode(1, "2026-10-01"), episode(2, "2026-12-01"))
+        assertEquals(
+            (1..10).toList(),
+            numbers(
+                season = 1,
+                episodes = episodes,
+                airDatesTrusted = false,
+                finished = true
+            )
         )
     }
 
@@ -124,13 +170,49 @@ class DetailSeasonEpisodesTest {
 
     @Test
     fun `no pointer leaves a finished show's count standing`() {
-        assertEquals((1..8).toList(), numbers(season = 2, episodeCount = 8, next = null))
+        assertEquals(
+            (1..8).toList(),
+            numbers(season = 2, episodeCount = 8, next = null, finished = true)
+        )
+    }
+
+    @Test
+    fun `no pointer marks nothing for a show still airing`() {
+        // The old fall-through: `1..episode_count` for every season, which is
+        // exactly the unaired sweep this spec closes.
+        assertEquals(
+            emptyList<Int>(),
+            numbers(season = 2, episodeCount = 8, next = null, finished = false)
+        )
     }
 
     @Test
     fun `a season no source can size is unknown, not an invented range`() {
-        assertNull(numbers(season = 2, episodeCount = null))
-        assertNull(numbers(season = 2, episodeCount = 0))
+        assertNull(numbers(season = 2, episodeCount = null, finished = true))
+        assertNull(numbers(season = 2, episodeCount = 0, finished = true))
+    }
+
+    @Test
+    fun `a still-airing show's unfetched season is skipped, not guessed`() {
+        assertEquals(
+            emptyList<Int>(),
+            numbers(season = 2, episodeCount = null, next = null)
+        )
+    }
+
+    @Test
+    fun `finished is the status or a last episode already aired`() {
+        assertTrue(DetailSeasonEpisodes.isFinished("Ended", null, today))
+        assertTrue(DetailSeasonEpisodes.isFinished("Canceled", null, today))
+        assertTrue(
+            DetailSeasonEpisodes.isFinished("Returning Series", "2026-10-01", today)
+        )
+        assertFalse(
+            DetailSeasonEpisodes.isFinished("Returning Series", "2026-10-26", today)
+        )
+        assertFalse(
+            DetailSeasonEpisodes.isFinished("Returning Series", null, today)
+        )
     }
 
     @Test

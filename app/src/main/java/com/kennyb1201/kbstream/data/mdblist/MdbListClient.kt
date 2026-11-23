@@ -1936,15 +1936,31 @@ object MdbListClient {
     suspend fun getWatchedSnapshot(
         context: Context,
         forceRefresh: Boolean = false
-    ): MdbListWatchedSnapshot {
+    ): MdbListWatchedSnapshot =
+        readWatchedSnapshot(context, forceRefresh) ?: MdbListWatchedSnapshot()
+
+    /**
+     * [getWatchedSnapshot], saying whether it could answer at all.
+     *
+     * Null means nothing was obtained: no key, a spent budget with no cached
+     * copy, a failed walk with no stale copy to fall back on. An EMPTY snapshot
+     * means the opposite - a body was obtained and the account holds nothing -
+     * which is an answer, and the difference is what keeps a failed read from
+     * emptying the Detail screen's ticks (spec 2026-11-23, F1). Serving the
+     * stale copy IS an answer: it is the last thing the account said.
+     */
+    private suspend fun readWatchedSnapshot(
+        context: Context,
+        forceRefresh: Boolean = false
+    ): MdbListWatchedSnapshot? {
         val apiKey = apiKey(context)
-        if (apiKey.isBlank()) return MdbListWatchedSnapshot()
+        if (apiKey.isBlank()) return null
 
         // A budget block means the day's allowance is gone: the interceptor
         // answers every attempt with the same synthetic 429, so re-entering
         // the download path can only produce the retry storm. Answer from
-        // what is already in hand instead - stale if there is one, empty if
-        // there is not - for as long as the block is fresh.
+        // what is already in hand instead - stale if there is one, and a
+        // did-not-answer if there is not - for as long as the block is fresh.
         //
         // Deliberately ahead of the disk layer and regardless of
         // [forceRefresh]: a refresh cannot conjure an allowance that has been
@@ -1954,7 +1970,6 @@ object MdbListClient {
             isBudgetBlockActive(budgetBlockedAt, System.currentTimeMillis(), SNAPSHOT_TTL_MS)
         ) {
             return cachedSnapshot?.takeIf { cachedSnapshotKey == apiKey }
-                ?: MdbListWatchedSnapshot()
         }
 
         // Fast path: a fresh cached snapshot answers instantly, so series
@@ -2109,7 +2124,7 @@ object MdbListClient {
 
                 // A spend budget stops the walk up front: the caller's block
                 // path below owns that answer.
-                if (blockedByLocalBudget) return@withContext MdbListWatchedSnapshot()
+                if (blockedByLocalBudget) return@withContext null
 
                 if (failedMidWalk) {
                     // A PARTIAL snapshot is not an option - a key that is not
@@ -2122,7 +2137,7 @@ object MdbListClient {
                                 .getOrNull()
                                 ?.takeIf { !it.isEmpty }
                         }
-                    return@withContext stale ?: MdbListWatchedSnapshot()
+                    return@withContext stale
                 }
 
                 MdbListWatchedSnapshot(
@@ -2130,11 +2145,11 @@ object MdbListClient {
                     startedShowKeys = startedShowKeys,
                     episodeKeys = episodeKeys
                 )
-            }.getOrDefault(MdbListWatchedSnapshot())
+            }.getOrNull()
             }
 
             // A budget block is served here, and only here: the snapshot the
-            // caller gets is the one already in hand (or empty), and the
+            // caller gets is the one already in hand (or nothing), and the
             // block's timestamp is stamped so the next calls short-circuit
             // instead of re-entering the download that just failed.
             if (blockedByLocalBudget) {
@@ -2147,14 +2162,14 @@ object MdbListClient {
                 // the cache, so this reads empty and the invalidation stands.
                 val stale = cachedSnapshot?.takeIf { cachedSnapshotKey == apiKey }
                 if (stale != null) cachedSnapshotAt = now
-                return@withLock stale ?: MdbListWatchedSnapshot()
+                return@withLock stale
             }
 
             // Only cache successful non-empty fetches: an empty result from
             // a transient API failure must not blank the badges for 5 min. And
             // never write back over an invalidate that landed mid-fetch
             // (LS-P2-14).
-            if (!result.isEmpty && generationAtStart == snapshotGeneration) {
+            if (result != null && !result.isEmpty && generationAtStart == snapshotGeneration) {
                 cachedSnapshot = result
                 cachedSnapshotAt = System.currentTimeMillis()
                 cachedSnapshotKey = apiKey
@@ -2183,18 +2198,19 @@ object MdbListClient {
      * history count as watched state at all.
      *
      * Reads the same cached snapshot the badges use, so this normally costs a
-     * map lookup. Empty when the key is unset, the snapshot cannot be fetched
-     * (offline, or the day's request budget is spent), or the tracker has no
-     * episode of the show on record - all of which the caller must read as "no
-     * evidence" rather than "nothing watched".
+     * map lookup. NULL when the snapshot could not be obtained (no key, offline
+     * with nothing cached, the day's request budget spent with nothing cached):
+     * the caller must read that as "no evidence", never as "nothing watched".
+     * An EMPTY set means a snapshot WAS obtained and the tracker has no episode
+     * of this show on record - a genuine answer (spec 2026-11-23, F1).
      */
     suspend fun watchedEpisodesForShow(
         context: Context,
         showKeys: List<String>
-    ): Set<Pair<Int, Int>> {
+    ): Set<Pair<Int, Int>>? {
         if (showKeys.isEmpty()) return emptySet()
 
-        val snapshot = getWatchedSnapshot(context)
+        val snapshot = readWatchedSnapshot(context) ?: return null
         if (snapshot.isEmpty) return emptySet()
 
         return watchedEpisodeIndexFor(snapshot).watchedEpisodesFor(showKeys)

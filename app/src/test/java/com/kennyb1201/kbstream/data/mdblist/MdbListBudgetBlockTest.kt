@@ -132,8 +132,9 @@ class MdbListBudgetBlockTest {
             block.contains("if (stale != null) cachedSnapshotAt = now")
         )
         assertTrue(
-            "no snapshot: the caller reads empty rather than retrying",
-            block.contains("return@withLock stale ?: MdbListWatchedSnapshot()")
+            "no snapshot: the read says it did not answer rather than \"nothing " +
+                "watched\", so Detail holds its ticks (spec 2026-11-23, F1)",
+            block.contains("return@withLock stale")
         )
     }
 
@@ -167,12 +168,17 @@ class MdbListBudgetBlockTest {
             )
         )
         assertTrue(
-            "and it still returns an empty snapshot",
-            body.contains("return@withContext MdbListWatchedSnapshot()")
+            "and it still serves the stale copy, or says it did not answer - " +
+                "never an empty snapshot it did not obtain",
+            body.contains("return@withContext stale")
         )
         assertTrue(
-            "the empty-result cache guard is exactly as it was",
-            body.contains("if (!result.isEmpty && generationAtStart == snapshotGeneration) {")
+            "the empty-result cache guard is exactly as it was, plus the null " +
+                "check F1 added: only an ANSWERED snapshot may be cached",
+            body.contains(
+                "if (result != null && !result.isEmpty && " +
+                    "generationAtStart == snapshotGeneration) {"
+            )
         )
     }
 
@@ -193,11 +199,8 @@ class MdbListBudgetBlockTest {
         )
         assertTrue(
             "the short-circuit answers from the caller's snapshot when there " +
-                "is one and empty when there is not",
-            body.contains(
-                "return cachedSnapshot?.takeIf { cachedSnapshotKey == apiKey } " +
-                    "?: MdbListWatchedSnapshot()"
-            )
+                "is one and did-not-answer when there is not",
+            body.contains("return cachedSnapshot?.takeIf { cachedSnapshotKey == apiKey }")
         )
         assertTrue(
             "it expires against the snapshot TTL, so the next day (or the " +
@@ -225,8 +228,8 @@ class MdbListBudgetBlockTest {
         )
         assertTrue(
             "the generation check is the only gate on the write-back",
-            snapshotBody()
-                .contains("if (!result.isEmpty && generationAtStart == snapshotGeneration) {")
+            snapshotBody().contains("generationAtStart == snapshotGeneration") &&
+                snapshotBody().contains("if (result != null && !result.isEmpty && ")
         )
         val body = snapshotBody()
         assertTrue(

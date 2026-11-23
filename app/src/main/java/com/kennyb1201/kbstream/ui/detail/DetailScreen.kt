@@ -228,8 +228,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
 import java.time.LocalDate
-import java.time.LocalDateTime
-import java.time.OffsetDateTime
 import java.util.Locale
 
 data class StreamsTarget(
@@ -3016,7 +3014,13 @@ fun DetailScreen(
                 episodeCount = summary?.episodeCount,
                 seasonAirDate = summary?.airDate,
                 nextEpisodeToAir = tmdbDetail?.nextEpisodeToAir,
-                airDatesTrusted = seasonNum !in seasonsWithStaleDates
+                airDatesTrusted = seasonNum !in seasonsWithStaleDates,
+                // A finished show may mark a season nobody has opened; a show
+                // still airing may not (spec 2026-11-23, F3).
+                finished = DetailSeasonEpisodes.isFinished(
+                    status = tmdbDetail?.status,
+                    lastEpisodeAirDate = tmdbDetail?.lastEpisodeToAir?.airDate
+                )
             )
         }
 
@@ -11798,36 +11802,6 @@ internal fun formatEpisodeAirDate(
         ?.format(DateFormats.DISPLAY_DATE)
         ?: formatDisplayDate(raw)
         ?: raw
-
-/**
- * The calendar day [raw] names, or null when it names none.
- *
- * Two shapes reach an episode card's [ResolvedEpisode.airDate]: TMDB's plain
- * `yyyy-MM-dd`, and - for a title TMDB has no record for, whose seasons are
- * synthesized from the add-on's own `Meta.videos` - Stremio's full ISO-8601
- * stamp (`2026-11-01T00:00:00.000Z`). The card used to parse only the first
- * shape, so an unreleased add-on episode's date failed to parse and read as
- * "aired": no UNAVAILABLE badge and a playable card that then died resolving a
- * stream for an episode nobody has. Accept either shape, and a local timestamp
- * with no offset too; a truly unreadable value stays null, never a guess.
- */
-private fun episodeAirDate(
-    raw: String?
-): LocalDate? {
-    val trimmed = raw?.trim().orEmpty()
-
-    if (trimmed.isEmpty()) {
-        return null
-    }
-
-    return runCatching {
-        LocalDate.parse(trimmed)
-    }.recoverCatching {
-        OffsetDateTime.parse(trimmed).toLocalDate()
-    }.recoverCatching {
-        LocalDateTime.parse(trimmed).toLocalDate()
-    }.getOrNull()
-}
 
 /**
  * True only when the episode has an announced air date that's still

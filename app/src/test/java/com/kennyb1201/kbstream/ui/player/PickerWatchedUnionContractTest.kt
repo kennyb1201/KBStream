@@ -102,9 +102,11 @@ class PickerWatchedUnionContractTest {
         val legs = flat(bodyOf(PLAYER_EPISODES, "private suspend fun readWatchedLegs("))
         assertTrue("the leg reader must exist", legs.isNotEmpty())
         assertEquals(
-            "each leg falls back to the empty set on its own - one dead tracker must not clear the rest",
+            "each leg falls back to the empty set on its own - one dead tracker must not clear the rest. " +
+                "The leg reads answer null when they could not answer (spec 2026-11-23, F1); the picker " +
+                "unions what it has, so no answer contributes nothing rather than being retried as a set",
             3,
-            legs.split(".getOrDefault(emptySet())").size - 1
+            legs.split(".getOrNull().orEmpty()").size - 1
         )
         assertTrue(
             "Simkl is gated on the connection, exactly as Detail gates it",

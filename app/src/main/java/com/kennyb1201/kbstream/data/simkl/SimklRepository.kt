@@ -2155,6 +2155,19 @@ class SimklRepository(
         return body.matchShow(imdbId, tmdbId)?.show?.ids
     }
 
+    /**
+     * This show's watched episodes, or null when the read could not answer.
+     *
+     * The distinction is the whole point (spec 2026-11-23, F1): an EMPTY set
+     * says "Simkl answered, and nothing of this show is watched", which lets
+     * the Detail screen's rebuild finish and replace the ticks it holds. A read
+     * that did not answer - a parked body with no memory cache, a failed
+     * fetch, a 429, no usable id - must never say that, because the merge then
+     * collapses every Simkl-only tick down to the handful with local rows.
+     *
+     * A show that the OBTAINED body simply does not contain is an answer, not a
+     * failure: that account genuinely has nothing for it.
+     */
     suspend fun getWatchedEpisodesForShowByImdb(
         imdbId: String,
         tmdbId: Int? =
@@ -2162,12 +2175,12 @@ class SimklRepository(
 
         accessToken: String =
             requireAccessToken()
-    ): Set<Pair<Int, Int>> {
+    ): Set<Pair<Int, Int>>? {
 
         if (
             imdbId.isBlank()
         ) {
-            return emptySet()
+            return null
         }
 
         val body =
@@ -2175,7 +2188,7 @@ class SimklRepository(
                 accessToken =
                     accessToken
             )
-                ?: return emptySet()
+                ?: return null
 
         val match =
             body.matchShow(
@@ -2210,7 +2223,7 @@ class SimklRepository(
                 }
             }
             ?.toSet()
-            .orEmpty()
+            ?: emptySet()
     }
 
     /**
@@ -3219,6 +3232,11 @@ class SimklRepository(
                                 sessionSeason != null &&
                                 sessionEpisode != null
                             ) {
+                                // Null means Simkl could not answer. The
+                                // decision below DELETES a session record, so
+                                // an unanswered read must not be read as
+                                // "not watched": only a positive answer may
+                                // drop it (spec 2026-11-23, F1).
                                 val watchedEpisodes =
                                     runCatchingCancellable {
                                         getWatchedEpisodesForShowByImdb(
@@ -3226,9 +3244,7 @@ class SimklRepository(
                                             tmdbId = show.ids?.tmdb
                                         )
                                     }
-                                        .getOrDefault(
-                                        emptySet()
-                                    )
+                                        .getOrNull()
 
                             val locallyCompleted =
                                 localCompletedEpisodeExists(
@@ -3241,7 +3257,7 @@ class SimklRepository(
                                 )
 
                             if (
-                                (sessionSeason to sessionEpisode) in watchedEpisodes ||
+                                watchedEpisodes?.contains(sessionSeason to sessionEpisode) == true ||
                                 locallyCompleted
                             ) {
                                 Log.d(

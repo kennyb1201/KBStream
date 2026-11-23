@@ -4,29 +4,41 @@ import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
 import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
 
 /**
- * The episode numbers a season-wide watched action may cover, for BOTH screens
- * and for the ViewModel that writes them.
+ * The episode numbers a season-wide MARK may cover, for BOTH screens and for
+ * the ViewModel that writes them.
  *
- * The loaded season is the easy half: its listing is in hand, so aired episodes
- * are the rows whose dates have passed (unless the season's dates are
- * contradicted by the show-level pointer - see [staleSeasons] - in which case
- * the listing is left intact rather than guessed at).
+ * This is the WRITE rule, and it fails closed (spec 2026-11-23, F3). A mark
+ * writes a completed local row and fans out to Simkl, MDBList and Trakt, so an
+ * episode may only be marked when something PROVES it aired. The display rule
+ * is deliberately the other shape - [isEpisodeUnavailable] treats a missing
+ * date as "aired", because a card with no date should not be labelled as
+ * unreleased - and it stays that way: this file decides writes, not what the
+ * cards say.
  *
- * Every OTHER season used to fall back to TMDB's `episode_count`, i.e. `1..n`,
- * which is a lie for a season that is still airing: "Mark Entire Series as
- * Watched" (or a season chip on an unloaded, currently-airing season) wrote a
- * completed row for next week's episode and pushed it to Simkl, MDBList and
- * Trakt. No extra request is needed to do better: `next_episode_to_air` names
- * the next unaired episode, so that season covers `1..(next - 1)`, seasons
- * after it have aired nothing, and seasons before it are complete. Only when
- * TMDB gives no pointer (a finished show) does the count stand for the whole
- * range. A season whose own `air_date` is still in the future is refused even
- * without a pointer.
+ * The three holes this closes, all of which swept next week's episode into the
+ * trackers:
  *
- * Null means "no source knows how many episodes there are"; callers keep their
- * old behaviour rather than inventing a range.
+ *  - a loaded listing whose dates are contradicted by `next_episode_to_air` was
+ *    passed WHOLE, future rows included;
+ *  - an unloaded season with no pointer fell through to `1..episode_count`, the
+ *    scheduled count, for a show that is still airing;
+ *  - a missing or unreadable date counted as aired.
+ *
+ * What proves an episode aired:
+ *
+ *  - the loaded listing, per episode: a parseable date on or before today;
+ *  - the show-level pointer: every episode of a season BEFORE the pointer's
+ *    season, and every episode below the pointer in its own season. This is the
+ *    only evidence that survives a stale season row;
+ *  - a finished show (status ended/canceled, or its last episode already
+ *    aired): its declared count, for a season with no other evidence.
+ *
+ * Anything else marks nothing. Null still means "no source knows how many
+ * episodes there are", and the marking callers treat that as nothing too.
  */
 internal object DetailSeasonEpisodes {
 
@@ -38,42 +50,142 @@ internal object DetailSeasonEpisodes {
         seasonAirDate: String?,
         nextEpisodeToAir: TmdbEpisodeAirInfo?,
         airDatesTrusted: Boolean,
+        finished: Boolean,
         today: LocalDate = LocalDate.now()
     ): List<Int>? {
-        if (season == loadedSeason && episodes.isNotEmpty()) {
-            return episodes
-                .filter { episode ->
-                    !airDatesTrusted || !isEpisodeUnavailable(episode.airDate, today)
-                }
-                .map { it.episodeNumber }
-                .filter { it > 0 }
-                .distinct()
-                .sorted()
+        val pointerSeason = nextEpisodeToAir?.seasonNumber?.takeIf { it > 0 }
+        val pointerEpisode = nextEpisodeToAir?.episodeNumber?.takeIf { it > 0 }
+
+        // A season whose own row says it has not premiered has nothing to mark,
+        // however many episodes it is scheduled to have. Only a parseable date
+        // proves that, same as below.
+        if (provablyFuture(seasonAirDate, today)) return emptyList()
+
+        /**
+         * The show-level cap: the pointer says what has aired so far, so a
+         * season after it has aired nothing and the pointer's own season stops
+         * at its episode.
+         */
+        fun capped(numbers: List<Int>): List<Int> = when {
+            pointerSeason == null -> numbers
+            season > pointerSeason -> emptyList()
+            season == pointerSeason ->
+                if (pointerEpisode == null) emptyList() else numbers.filter { it < pointerEpisode }
+            else -> numbers
         }
 
-        val count = episodeCount?.takeIf { it > 0 } ?: return null
+        if (season == loadedSeason && episodes.isNotEmpty()) {
+            if (!airDatesTrusted) {
+                // The listing's dates are contradicted by the pointer, so they
+                // prove nothing. Mark by the show-level cap instead - never by
+                // the stale row. With no cap, a season of a show still airing
+                // has nothing provable in it.
+                if (pointerSeason != null) {
+                    val count = episodeCount?.takeIf { it > 0 } ?: return emptyList()
+                    return capped((1..count).toList())
+                }
+                if (!finished) return emptyList()
+                val count = episodeCount?.takeIf { it > 0 } ?: return null
+                return (1..count).toList()
+            }
+            // A trusted listing proves each episode on its own date. A missing
+            // or unreadable date proves nothing and is not marked.
+            return capped(
+                episodes
+                    .filter { provablyAired(it.airDate, today) }
+                    .map { it.episodeNumber }
+                    .filter { it > 0 }
+                    .distinct()
+                    .sorted()
+            )
+        }
 
-        // A season that has not premiered yet has no episodes to mark, however
-        // many it is scheduled to have. Same date rule as an unaired episode
-        // (a missing date proves nothing, so it is not treated as future).
-        if (isEpisodeUnavailable(seasonAirDate, today)) return emptyList()
-
-        val pointer = nextEpisodeToAir
-        val pointerSeason = pointer?.seasonNumber?.takeIf { it > 0 }
+        // Not loaded: the pointer, then the show's own finished-ness, are the
+        // only evidence there is.
         if (pointerSeason != null) {
-            // A season after the one the next unaired episode belongs to has
-            // not started, so none of its episodes have aired.
             if (season > pointerSeason) return emptyList()
             if (season == pointerSeason) {
-                val next = pointer.episodeNumber?.takeIf { it > 0 }
-                    ?: return emptyList()
-                // The pointer is the season's next episode: everything before
-                // it has aired, and it plus everything after it has not.
+                val next = pointerEpisode ?: return emptyList()
                 return if (next > 1) (1 until next).toList() else emptyList()
+            }
+            return (episodeCount?.takeIf { it > 0 } ?: return null).let { count ->
+                (1..count).toList()
             }
         }
 
-        return (1..count).toList()
+        // No pointer. A finished show's declared count stands for its whole
+        // range; a show still airing cannot prove an unloaded season aired, so
+        // nothing is marked.
+        if (!finished) return emptyList()
+        return episodeCount?.takeIf { it > 0 }?.let { count -> (1..count).toList() }
+    }
+
+    /**
+     * True only when a parseable air date proves the episode has aired.
+     *
+     * The write path's half of the date rule. [isEpisodeUnavailable] is the
+     * display half and is one-sided on purpose; this one is not.
+     */
+    internal fun provablyAired(airDate: String?, today: LocalDate = LocalDate.now()): Boolean {
+        val date = episodeAirDate(airDate) ?: return false
+        return !date.isAfter(today)
+    }
+
+    /** True only when a parseable date proves the episode has not aired yet. */
+    internal fun provablyFuture(airDate: String?, today: LocalDate = LocalDate.now()): Boolean {
+        val date = episodeAirDate(airDate) ?: return false
+        return date.isAfter(today)
+    }
+
+    /**
+     * The calendar day [raw] names, or null when it names none.
+     *
+     * Two shapes reach an [ResolvedEpisode.airDate]: TMDB's plain `yyyy-MM-dd`,
+     * and - for a title TMDB has no record for, whose seasons are synthesized
+     * from the add-on's own `Meta.videos` - Stremio's full ISO-8601 stamp
+     * (`2026-11-01T00:00:00.000Z`). An unreleased add-on episode's date used to
+     * fail to parse and read as "aired"; accept either shape, and a local
+     * timestamp with no offset too. A truly unreadable value stays null, never a
+     * guess.
+     *
+     * It lives here, beside the two rules that read it, because the write rule
+     * and the display rule must not disagree about what a date says.
+     */
+    internal fun episodeAirDate(raw: String?): LocalDate? {
+        val trimmed = raw?.trim().orEmpty()
+
+        if (trimmed.isEmpty()) {
+            return null
+        }
+
+        return runCatching {
+            LocalDate.parse(trimmed)
+        }.recoverCatching {
+            OffsetDateTime.parse(trimmed).toLocalDate()
+        }.recoverCatching {
+            LocalDateTime.parse(trimmed).toLocalDate()
+        }.getOrNull()
+    }
+
+    /**
+     * Whether the show is over, from the two fields TMDB gives: its status, or
+     * a last episode that has already aired.
+     *
+     * A show with a pointer is still airing whatever its status says, so
+     * callers that gate on this only reach it when there is no pointer.
+     * Strictly before today: an episode airing today is not proof the run has
+     * finished.
+     */
+    fun isFinished(
+        status: String?,
+        lastEpisodeAirDate: String?,
+        today: LocalDate = LocalDate.now()
+    ): Boolean {
+        when (status?.trim()?.lowercase()) {
+            "ended", "canceled", "cancelled" -> return true
+        }
+        val last = episodeAirDate(lastEpisodeAirDate) ?: return false
+        return last.isBefore(today)
     }
 
     /**
@@ -83,7 +195,7 @@ internal object DetailSeasonEpisodes {
      *
      * Per-episode dates for those seasons cannot be trusted either, so the
      * episode cards keep their date but drop the UNAVAILABLE verdict, and a
-     * season mark/unmark covers the whole listing.
+     * season mark/unmark goes by the show-level cap rather than the listing.
      */
     fun staleSeasons(detail: TmdbDetail?): Set<Int> {
         val pointer = detail?.nextEpisodeToAir

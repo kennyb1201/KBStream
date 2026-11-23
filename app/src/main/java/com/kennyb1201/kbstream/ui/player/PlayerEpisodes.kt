@@ -229,7 +229,10 @@ internal object PlayerEpisodes {
                     tmdbId = tmdbId
                 )
             }
-        }.getOrDefault(emptySet())
+            // Null is "no answer" (spec 2026-11-23, F1). The picker unions
+            // whatever the legs have, so no answer contributes nothing - it
+            // has no complete set of its own to protect.
+        }.getOrNull().orEmpty()
         val mdbList = runCatchingCancellable {
             if (!MdbListClient.isConfigured(context)) {
                 emptySet<Pair<Int, Int>>()
@@ -239,7 +242,7 @@ internal object PlayerEpisodes {
                     showKeys = historyIds
                 )
             }
-        }.getOrDefault(emptySet())
+        }.getOrNull().orEmpty()
         val trakt = runCatchingCancellable {
             val repository = TraktRepository.getInstance(context)
             if (!repository.isConfigured() || !repository.hasToken()) {
@@ -247,7 +250,7 @@ internal object PlayerEpisodes {
             } else {
                 repository.watchedEpisodesForShow(showKeys = historyIds)
             }
-        }.getOrDefault(emptySet())
+        }.getOrNull().orEmpty()
         return WatchedLegs(simkl = simkl, mdbList = mdbList, trakt = trakt)
     }
 
@@ -419,7 +422,13 @@ internal object PlayerEpisodes {
                     episodeCount = summary.episodeCount,
                     seasonAirDate = summary.airDate,
                     nextEpisodeToAir = detail.nextEpisodeToAir,
-                    airDatesTrusted = season !in stale
+                    airDatesTrusted = season !in stale,
+                    // The same write rule as the Detail page: a finished show
+                    // may mark unopened seasons, one still airing may not.
+                    finished = DetailSeasonEpisodes.isFinished(
+                        status = detail.status,
+                        lastEpisodeAirDate = detail.lastEpisodeToAir?.airDate
+                    )
                 ).orEmpty()
                 numbers.takeIf { it.isNotEmpty() }?.let { season to it }
             }

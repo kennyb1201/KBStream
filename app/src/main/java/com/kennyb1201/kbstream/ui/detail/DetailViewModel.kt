@@ -659,6 +659,13 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     internal var imdbId: String = ""
     private var latestEpisodeSeasonRequest: Int? = null
 
+    /**
+     * The listings this screen has already healed (spec 2026-11-23, F4), keyed
+     * `parentId:season`, so switching seasons back and forth does not re-run
+     * the same read.
+     */
+    private val healedFutureMarkSeasons = mutableSetOf<String>()
+
     /** Normalized media type of the loaded detail ("movie"/"series"), used
      *  to resolve the title's IMDB twin for local-history lookups. */
     private var mediaType: String = "movie"
@@ -1230,11 +1237,10 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                     imdbId = parentId,
                     tmdbId = tmdbId
                 )
-            }.onSuccess { episodes ->
-                _simklWatchedEpisodes.value = episodes
-                _simklSeriesWatched.value = episodes.isNotEmpty()
-                simklKeysReadFor = parentId
-            }
+            }.fold(
+                onSuccess = { episodes -> applySimklLeg(parentId, episodes) },
+                onFailure = { error -> applySimklLeg(parentId, null, error) }
+            )
         }
 
         if (MdbListClient.isConfigured(getApplication())) {
@@ -1243,10 +1249,10 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                     context = getApplication(),
                     showKeys = localHistoryParentIds(parentId)
                 )
-            }.onSuccess { episodes ->
-                mdbListWatchedEpisodes = episodes
-                mdbListKeysReadFor = parentId
-            }
+            }.fold(
+                onSuccess = { episodes -> applyMdbListLeg(parentId, episodes) },
+                onFailure = { error -> applyMdbListLeg(parentId, null, error) }
+            )
         }
 
         if (traktRepository.isConfigured() && traktRepository.hasToken()) {
@@ -1254,11 +1260,81 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 traktRepository.watchedEpisodesForShow(
                     showKeys = localHistoryParentIds(parentId)
                 )
-            }.onSuccess { episodes ->
-                traktWatchedEpisodes = episodes
-                traktKeysReadFor = parentId
-            }
+            }.fold(
+                onSuccess = { episodes -> applyTraktLeg(parentId, episodes) },
+                onFailure = { error -> applyTraktLeg(parentId, null, error) }
+            )
         }
+    }
+
+    /**
+     * Applies ONE tracker leg's answer (spec 2026-11-23, F1/F2).
+     *
+     * A leg moves state only when it actually answered. A read that did not
+     * answer - a parked body, a dead network, a spent budget - keeps the
+     * previous set AND the read marker, so [trackerLegsComplete] still reports
+     * the rebuild incomplete and [WatchedKeysRebuild.shouldReplace] keeps the
+     * complete set on screen instead of replacing it with the local slice.
+     *
+     * The same call is the diagnostics line, so the next field paste says which
+     * leg went quiet instead of needing this code read again.
+     */
+    private fun applySimklLeg(
+        parentId: String,
+        episodes: Set<Pair<Int, Int>>?,
+        cause: Throwable? = null
+    ) {
+        if (episodes != null) {
+            _simklWatchedEpisodes.value = episodes
+            _simklSeriesWatched.value = episodes.isNotEmpty()
+            simklKeysReadFor = parentId
+        }
+        logWatchedLeg("simkl", parentId, episodes, cause)
+    }
+
+    private fun applyMdbListLeg(
+        parentId: String,
+        episodes: Set<Pair<Int, Int>>?,
+        cause: Throwable? = null
+    ) {
+        if (episodes != null) {
+            mdbListWatchedEpisodes = episodes
+            mdbListKeysReadFor = parentId
+        }
+        logWatchedLeg("mdblist", parentId, episodes, cause)
+    }
+
+    private fun applyTraktLeg(
+        parentId: String,
+        episodes: Set<Pair<Int, Int>>?,
+        cause: Throwable? = null
+    ) {
+        if (episodes != null) {
+            traktWatchedEpisodes = episodes
+            traktKeysReadFor = parentId
+        }
+        logWatchedLeg("trakt", parentId, episodes, cause)
+    }
+
+    /**
+     * One line per tracker leg per rebuild, in the "poster watched refresh"
+     * family: `watched leg simkl answered=780` or `watched leg simkl no-answer`.
+     * A paste of the log then answers "which leg left the set holding" without
+     * re-reading the merge.
+     */
+    private fun logWatchedLeg(
+        leg: String,
+        parentId: String,
+        episodes: Set<Pair<Int, Int>>?,
+        cause: Throwable?
+    ) {
+        val line = when {
+            episodes != null -> "watched leg $leg answered=${episodes.size} parent=$parentId"
+            cause != null ->
+                "watched leg $leg no-answer (${cause.javaClass.simpleName}) parent=$parentId"
+            else -> "watched leg $leg no-answer parent=$parentId"
+        }
+        Log.i("KBStream", line)
     }
 
     /**
@@ -2142,15 +2218,14 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
 
                     if (simklWatched != null) {
                         val (read, elapsedMs) = simklWatched.await()
-                        read.onSuccess { episodes ->
-                            _simklWatchedEpisodes.value = episodes
-                            _simklSeriesWatched.value = episodes.isNotEmpty()
-                            simklKeysReadFor = id
-                            // After the publish, so the state's own contract (the
-                            // three lines above, assignment only on success) keeps
-                            // its shape and the timer stays out of it.
-                            PerfTrace.record("detail.simkl", elapsedMs, ok = true)
-                        }
+                        // After the apply, so the state's own contract (the set
+                        // and the marker move together, and only on an answered
+                        // read) keeps its shape and the timer stays out of it.
+                        read.fold(
+                            onSuccess = { episodes -> applySimklLeg(id, episodes) },
+                            onFailure = { error -> applySimklLeg(id, null, error) }
+                        )
+                        PerfTrace.record("detail.simkl", elapsedMs, ok = read.isSuccess)
                     } else {
                         _simklWatchedEpisodes.value = emptySet()
                         _simklSeriesWatched.value = false
@@ -2175,14 +2250,16 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                     // both at once), so the index is asked for every flavor this
                     // title answers to and unions them.
                     if (mdbListWatched != null) {
-                        mdbListWatched.await().onSuccess { episodes ->
+                        mdbListWatched.await().fold(
                             // Kept so the freshness gate's local-only refresh can
                             // rebuild the merged keys without re-reading the cloud
-                            // snapshot - and kept on FAILURE too (F1): a read that
-                            // did not answer must not empty ticks that were right.
-                            mdbListWatchedEpisodes = episodes
-                            mdbListKeysReadFor = id
-                        }
+                            // snapshot - and STILL kept on a failure (F1): a read
+                            // that did not answer must not empty ticks that were
+                            // right. The apply helper is that rule now, for the
+                            // set and for the marker.
+                            onSuccess = { episodes -> applyMdbListLeg(id, episodes) },
+                            onFailure = { error -> applyMdbListLeg(id, null, error) }
+                        )
                     } else {
                         mdbListWatchedEpisodes = emptySet()
                     }
@@ -2192,10 +2269,10 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                     // previous set rather than clearing ticks that were already
                     // right (same posture as MDBList above).
                     if (traktWatched != null) {
-                        traktWatched.await().onSuccess { episodes ->
-                            traktWatchedEpisodes = episodes
-                            traktKeysReadFor = id
-                        }
+                        traktWatched.await().fold(
+                            onSuccess = { episodes -> applyTraktLeg(id, episodes) },
+                            onFailure = { error -> applyTraktLeg(id, null, error) }
+                        )
                     } else {
                         traktWatchedEpisodes = emptySet()
                     }
@@ -3101,6 +3178,17 @@ for ((metaAddon, response, error) in probeResults) {
                     _episodes.value = applyAirDateCorrections(seasonEpisodes, season)
                     _episodeError.value = null
                     _loadedSeason.value = season
+                    // F4: the page opens on a season whose listing is now in
+                    // hand, so its own dates can be checked against the marks
+                    // this show already carries. Once per season per screen, so
+                    // a switch back and forth does not re-run the read.
+                    if (healedFutureMarkSeasons.add("$imdbId:$season")) {
+                        healFutureDatedMarks(
+                            parentId = imdbId,
+                            season = season,
+                            episodes = _episodes.value
+                        )
+                    }
                     // How long the viewer waited for the episode row, counted
                     // from the moment the page appeared. `detail.tail` cannot
                     // show this: it stops when the LOAD stops, which is after
@@ -3911,12 +3999,28 @@ for ((metaAddon, response, error) in probeResults) {
                     imdbId = parentId,
                     tmdbId = showTmdbId
                 )
-            }.getOrDefault(
-                emptySet()
+            }.getOrNull()
+
+        // This rewrite REPLACES what the account holds with the list built
+        // below, so it may only run on an answered read: rebuilding "still
+        // watched" from a read that did not answer would clear episodes Simkl
+        // still has (spec 2026-11-23, F1). The local unmark already happened;
+        // leaving the tracker records alone is the recoverable outcome.
+        if (
+            simklPairs == null &&
+            simklRepository.isConfigured() &&
+            simklRepository.hasToken()
+        ) {
+            Log.w(
+                "KBStream",
+                "rewriteTrackers skipped: simkl no-answer parent=$parentId"
             )
+            refreshPostersAfterWatchedChange()
+            return
+        }
 
         val remainingBySeason =
-            (localPairs + simklPairs)
+            (localPairs + simklPairs.orEmpty())
                 .filterNot { pair -> pair in removed }
                 .groupBy(
                     keySelector = { pair -> pair.first },
@@ -4075,21 +4179,28 @@ for ((metaAddon, response, error) in probeResults) {
     }
 
     /**
-     * The subset of [numbers] that has actually aired in [season].
+     * The subset of [numbers] that has provably aired in [season] - the
+     * fail-closed write rule of spec 2026-11-23 (F3).
      *
-     * The menu builders are supposed to hand in aired-only numbers already,
-     * but they are three separate readers of the same rule (TV chip, TV
-     * episode card, phone menus) and this is the one place every mark passes
-     * through. Nothing is removed when the air dates cannot be re-derived
-     * (no detail payload, or no episode count for a season that was never
-     * loaded): "cannot prove it is unaired" keeps the caller's list, while a
-     * proven-unaired episode is dropped before it can reach a tracker.
+     * The menu builders hand in aired-only numbers already, but they are three
+     * separate readers of the same rule (TV chip, TV episode card, phone menus)
+     * and this is the one place every mark passes through before it becomes a
+     * local row and a tracker push. "Cannot prove it aired" now removes the
+     * episode instead of keeping it: no detail payload, no provable range, a
+     * missing date, or a season past the show's next-episode pointer all mark
+     * nothing. That last one is what swept next week's episode into every
+     * tracker from "Mark Entire Series as Watched".
      */
     private fun airedEpisodeNumbers(
         season: Int,
         numbers: List<Int>
     ): List<Int> {
-        val detail = _tmdbDetail.value ?: return numbers
+        // Fail CLOSED (spec 2026-11-23, F3). This is the one place every mark
+        // passes through, and a mark writes a local row and fans out to the
+        // trackers - so an episode is written only when something proves it
+        // aired. No detail payload, or no provable range for this season, marks
+        // nothing rather than everything.
+        val detail = _tmdbDetail.value ?: return emptyList()
         val summary = detail.seasons
             .firstOrNull { it.seasonNumber == season }
         val aired = DetailSeasonEpisodes.numbers(
@@ -4099,8 +4210,12 @@ for ((metaAddon, response, error) in probeResults) {
             episodeCount = summary?.episodeCount,
             seasonAirDate = summary?.airDate,
             nextEpisodeToAir = detail.nextEpisodeToAir,
-            airDatesTrusted = season !in DetailSeasonEpisodes.staleSeasons(detail)
-        ) ?: return numbers
+            airDatesTrusted = season !in DetailSeasonEpisodes.staleSeasons(detail),
+            finished = DetailSeasonEpisodes.isFinished(
+                status = detail.status,
+                lastEpisodeAirDate = detail.lastEpisodeToAir?.airDate
+            )
+        ) ?: return emptyList()
         val airedSet = aired.toSet()
         return numbers.filter { it in airedSet }
     }
@@ -4150,6 +4265,17 @@ for ((metaAddon, response, error) in probeResults) {
 
         val seasonsToMark =
             normalizeSeasonEpisodes(seasonEpisodes)
+
+        // Nothing provably aired (F3): write nothing at all - no local rows, no
+        // whole-show override on the poster, no tracker record. The old filter
+        // failed open here and marked everything it could not date.
+        if (seasonsToMark.isEmpty()) {
+            Log.i(
+                "KBStream",
+                "markSeriesWatched skipped: no provably aired episodes parent=$parentId"
+            )
+            return
+        }
 
         // Did the aired filter actually take episodes out? If it did, this is
         // a show with episodes still to come, and the tracker half below must
@@ -4588,6 +4714,65 @@ for ((metaAddon, response, error) in probeResults) {
         markSpecificEpisodesUnwatched(
             season = season,
             episodeNumbers = listOf(episode)
+        )
+    }
+
+    /**
+     * Self-heal for marks that were never aired (spec 2026-11-23, F4).
+     *
+     * A bulk mark used to sweep an episode into the local rows and every
+     * tracker before its air date, and nothing afterwards took it back out:
+     * Kenny's Simpsons page carried next week's episodes as watched. The one
+     * case a date can PROVE wrong is a local completed row whose episode air
+     * date is strictly in the future, so those rows are unmarked through
+     * exactly the fan-out a manual unmark uses - local delete, tracker slices
+     * and tracker removal together, fenced by `settleRemovedKeys` so a rebuild
+     * cannot read the mark straight back.
+     *
+     * Null-dated episodes are never touched: a date that does not parse is the
+     * one thing that cannot prove anything either way. Only the loaded season is
+     * checked, because it holds the only listing whose dates are in hand - the
+     * heal costs no fetch. One line per healed show, so a paste shows it ran.
+     */
+    private suspend fun healFutureDatedMarks(
+        parentId: String,
+        season: Int?,
+        episodes: List<ResolvedEpisode>
+    ) {
+        if (parentId.isBlank() || season == null || season < 0 || episodes.isEmpty()) return
+
+        val futureNumbers =
+            episodes
+                .filter { DetailSeasonEpisodes.provablyFuture(it.airDate) }
+                .map { it.episodeNumber }
+                .filter { it > 0 }
+                .toSet()
+        if (futureNumbers.isEmpty()) return
+
+        val completed =
+            runCatchingCancellable {
+                historyDao.getCompletedForParents(localHistoryParentIds(parentId))
+            }.getOrDefault(emptyList())
+
+        val healed =
+            completed
+                .filter { row ->
+                    val rowSeason = row.season
+                    val rowEpisode = row.episode
+                    rowSeason == season && rowEpisode != null && rowEpisode in futureNumbers
+                }
+                .mapNotNull { row -> row.episode }
+                .distinct()
+                .sorted()
+        if (healed.isEmpty()) return
+
+        Log.i(
+            "KBStream",
+            "healed ${healed.size} future-dated marks parent=$parentId s=$season numbers=$healed"
+        )
+        markSpecificEpisodesUnwatched(
+            season = season,
+            episodeNumbers = healed
         )
     }
 

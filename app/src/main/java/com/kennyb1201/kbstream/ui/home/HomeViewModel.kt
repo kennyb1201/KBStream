@@ -11116,6 +11116,13 @@ episodesTotal =
                                 tmdbId =
                                     tmdbShowId
                             )
+                            // A null read did not answer (spec 2026-11-23, F1):
+                            // this merge takes it as no evidence, the same as a
+                            // failed read, rather than as an empty history.
+                            ?: run {
+                                trackerReadFailed = true
+                                emptySet()
+                            }
 
                     } catch (_: Exception) {
                         trackerReadFailed = true
@@ -11132,9 +11139,9 @@ episodesTotal =
              * Simkl users already had. Guarded on isConfigured and read from
              * the same cached snapshot the badges use, so it normally costs a
              * map lookup; an unset key, an offline fetch or a spent request
-             * budget all come back empty, which the merge below reads as "no
-             * evidence" rather than "nothing watched" (the local rows and
-             * Simkl's set still answer).
+             * budget come back as NO ANSWER (null, spec 2026-11-23 F1), which
+             * the merge below reads as "no evidence" rather than "nothing
+             * watched" (the local rows and Simkl's set still answer).
              */
             val mdbListCompletedEpisodes =
                 if (MdbListClient.isConfigured(getApplication())) {
@@ -11149,6 +11156,10 @@ episodesTotal =
                                 showKeys =
                                     showParentIds
                             )
+                            ?: run {
+                                trackerReadFailed = true
+                                emptySet()
+                            }
 
                     } catch (_: Exception) {
                         trackerReadFailed = true
@@ -11178,6 +11189,10 @@ episodesTotal =
                             .watchedEpisodesForShow(
                                 showKeys = showParentIds
                             )
+                            ?: run {
+                                trackerReadFailed = true
+                                emptySet()
+                            }
 
                     } catch (_: Exception) {
                         trackerReadFailed = true

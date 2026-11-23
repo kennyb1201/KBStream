@@ -49,7 +49,11 @@ class MobileDetailRulesTest {
 
     @Test
     fun `the loaded season uses its listing`() {
-        val episodes = listOf(episode(1), episode(2), episode(3))
+        val episodes = listOf(
+            episode(1, "2026-10-01"),
+            episode(2, "2026-10-08"),
+            episode(3, "2026-10-15")
+        )
         val numbers = MobileDetailRules.seasonEpisodeNumbers(
             season = 1,
             loadedSeason = 1,
@@ -59,6 +63,22 @@ class MobileDetailRulesTest {
             today = today
         )
         assertEquals(listOf(1, 2, 3), numbers)
+    }
+
+    @Test
+    fun `an episode with no date is not provably aired, so it is not marked`() {
+        // The display rule still treats a missing date as aired; the WRITE
+        // rule cannot (spec 2026-11-23, F3).
+        val episodes = listOf(episode(1, "2026-10-01"), episode(2), episode(3))
+        val numbers = MobileDetailRules.seasonEpisodeNumbers(
+            season = 1,
+            loadedSeason = 1,
+            episodes = episodes,
+            episodeCount = 3,
+            airDatesTrusted = true,
+            today = today
+        )
+        assertEquals(listOf(1), numbers)
     }
 
     @Test
@@ -80,7 +100,25 @@ class MobileDetailRulesTest {
     }
 
     @Test
-    fun `untrusted dates keep the whole listing`() {
+    fun `untrusted dates mark by the pointer, never by the stale row`() {
+        val episodes = listOf(
+            episode(1, "2026-10-01"),
+            episode(2, "2026-11-05")
+        )
+        val numbers = MobileDetailRules.seasonEpisodeNumbers(
+            season = 1,
+            loadedSeason = 1,
+            episodes = episodes,
+            episodeCount = 2,
+            airDatesTrusted = false,
+            today = today,
+            nextEpisodeToAir = TmdbEpisodeAirInfo(seasonNumber = 1, episodeNumber = 2)
+        )
+        assertEquals(listOf(1), numbers)
+    }
+
+    @Test
+    fun `untrusted dates with no pointer mark nothing while the show is airing`() {
         val episodes = listOf(
             episode(1, "2026-10-01"),
             episode(2, "2026-11-05")
@@ -93,20 +131,34 @@ class MobileDetailRulesTest {
             airDatesTrusted = false,
             today = today
         )
-        assertEquals(listOf(1, 2), numbers)
+        assertEquals(emptyList<Int>(), numbers)
     }
 
     @Test
-    fun `a season that is not on screen falls back to its episode count`() {
+    fun `a finished show's unopened season falls back to its episode count`() {
         val numbers = MobileDetailRules.seasonEpisodeNumbers(
             season = 3,
             loadedSeason = 1,
-            episodes = listOf(episode(1)),
+            episodes = listOf(episode(1, "2026-10-01")),
+            episodeCount = 8,
+            airDatesTrusted = true,
+            today = today,
+            finished = true
+        )
+        assertEquals((1..8).toList(), numbers)
+    }
+
+    @Test
+    fun `an unopened season of a show still airing marks nothing`() {
+        val numbers = MobileDetailRules.seasonEpisodeNumbers(
+            season = 3,
+            loadedSeason = 1,
+            episodes = listOf(episode(1, "2026-10-01")),
             episodeCount = 8,
             airDatesTrusted = true,
             today = today
         )
-        assertEquals((1..8).toList(), numbers)
+        assertEquals(emptyList<Int>(), numbers)
     }
 
     @Test
@@ -115,20 +167,22 @@ class MobileDetailRulesTest {
             MobileDetailRules.seasonEpisodeNumbers(
                 season = 3,
                 loadedSeason = 1,
-                episodes = listOf(episode(1)),
+                episodes = listOf(episode(1, "2026-10-01")),
                 episodeCount = null,
                 airDatesTrusted = true,
-                today = today
+                today = today,
+                finished = true
             )
         )
         assertNull(
             MobileDetailRules.seasonEpisodeNumbers(
                 season = 3,
                 loadedSeason = 1,
-                episodes = listOf(episode(1)),
+                episodes = listOf(episode(1, "2026-10-01")),
                 episodeCount = 0,
                 airDatesTrusted = true,
-                today = today
+                today = today,
+                finished = true
             )
         )
     }
@@ -138,7 +192,7 @@ class MobileDetailRulesTest {
         val numbers = MobileDetailRules.seasonEpisodeNumbers(
             season = 1,
             loadedSeason = 1,
-            episodes = listOf(episode(0), episode(1)),
+            episodes = listOf(episode(0, "2026-10-01"), episode(1, "2026-10-01")),
             episodeCount = 1,
             airDatesTrusted = true,
             today = today
