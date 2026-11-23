@@ -27,7 +27,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
@@ -70,7 +70,7 @@ fun BingeCatPublicListsScreen(
     modifier: Modifier = Modifier,
     onBack: () -> Unit,
     onOpenTitle: (mediaType: String, id: String) -> Unit,
-    vm: BingeCatPublicListsViewModel = viewModel()
+    vm: BingeCatPublicListsViewModel = hiltViewModel()
 ) {
     // The phone entry: the same ViewModel and level stack, laid out for touch.
     if (!com.kennyb1201.kbstream.FormFactor.isTv) {

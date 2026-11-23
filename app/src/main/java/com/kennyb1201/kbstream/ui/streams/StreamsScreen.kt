@@ -61,7 +61,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
@@ -161,7 +161,7 @@ fun StreamsScreen(
         // StreamsViewModel.addonGroups).
         selectedAddon: String?
     ) -> Unit,
-    viewModel: StreamsViewModel = viewModel()
+    viewModel: StreamsViewModel = hiltViewModel()
 ) {
     // Phase 2's screen rule: one branch at the entry, the phone layout in a
     // separate tv-free file, the same ViewModel and the same auto-play rules

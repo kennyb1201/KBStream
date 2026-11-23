@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 /** One level of the browse surface; the stack of these is the Back path. */
 sealed interface PublicListLevel {
@@ -139,15 +141,16 @@ data class PublicListsUiState(
  *  - **Titles are only shown when a read produced them.** A list whose titles
  *    the provider will not serve says so instead of drawing an empty grid.
  */
-class PublicListsViewModel(app: Application) : AndroidViewModel(app) {
-
-    private val traktRepository = TraktRepository.getInstance(app.applicationContext)
+@HiltViewModel
+class PublicListsViewModel @Inject constructor(
+    app: Application,
+    private val traktRepository: TraktRepository,
+    // The rating ceiling's source - the same filter Library and the rails use.
+    private val tmdbRepository: TmdbRepository
+) : AndroidViewModel(app) {
 
     /** MDBList is an object, not an injected client; kept for symmetry. */
     private val context = app.applicationContext
-
-    /** The rating ceiling's source - the same filter Library and the rails use. */
-    private val tmdbRepository = TmdbRepository.getInstance(app.applicationContext)
 
     private val _uiState = MutableStateFlow(PublicListsUiState())
     val uiState: StateFlow<PublicListsUiState> = _uiState.asStateFlow()

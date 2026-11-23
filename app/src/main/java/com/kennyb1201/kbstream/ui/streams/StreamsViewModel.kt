@@ -43,6 +43,8 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 /**
  * One stream add-on's own results, beside the merged list the picker ranks.
@@ -137,9 +139,12 @@ data class CachedOnlyState(
     val keyMissing: Boolean = false
 )
 
-class StreamsViewModel(application: Application) : AndroidViewModel(application) {
-    private val repository = AddonRepository.getInstance()
-    private val addonManager = AddonManager.getInstance(application)
+@HiltViewModel
+class StreamsViewModel @Inject constructor(
+    application: Application,
+    private val repository: AddonRepository,
+    private val addonManager: AddonManager
+) : AndroidViewModel(application) {
 
     /**
      * Whether a Dolby Vision label is worth anything on this box, resolved once

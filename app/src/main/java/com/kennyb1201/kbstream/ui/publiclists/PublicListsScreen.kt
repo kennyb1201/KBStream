@@ -29,7 +29,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.publiclists.PublicListCard
@@ -87,7 +87,7 @@ fun PublicListsScreen(
     modifier: Modifier = Modifier,
     onBack: () -> Unit,
     onOpenTitle: (mediaType: String, id: String) -> Unit,
-    vm: PublicListsViewModel = viewModel()
+    vm: PublicListsViewModel = hiltViewModel()
 ) {
     LaunchedEffect(vendor) { vm.open(vendor) }
 

@@ -25,6 +25,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 /** One level of the browse surface; the stack of these is the Back path. */
 sealed interface BingeCatPublicLevel {
@@ -149,12 +151,13 @@ data class BingeCatPublicListsUiState(
  *    probes `/lists/{ref}/items` once (spec Q4) and says which world it is in;
  *    it never draws a grid from `cover_posters`.
  */
-class BingeCatPublicListsViewModel(app: Application) : AndroidViewModel(app) {
-
-    private val repository = BingeCatRepository.getInstance(app.applicationContext)
-
-    /** The rating ceiling's source - the same filter Library and the rails use. */
-    private val tmdbRepository = TmdbRepository.getInstance(app.applicationContext)
+@HiltViewModel
+class BingeCatPublicListsViewModel @Inject constructor(
+    app: Application,
+    private val repository: BingeCatRepository,
+    // The rating ceiling's source - the same filter Library and the rails use.
+    private val tmdbRepository: TmdbRepository
+) : AndroidViewModel(app) {
 
     private val _uiState = MutableStateFlow(BingeCatPublicListsUiState())
     val uiState: StateFlow<BingeCatPublicListsUiState> = _uiState.asStateFlow()
