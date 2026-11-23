@@ -26,7 +26,9 @@ class TasteWiderConsumersContractTest {
 
     @Test
     fun `the merged search order reads taste after the year, never before it`() {
-        val order = section(SEARCH_VM, "internal fun searchTitleOrder(", "class SearchViewModel(")
+        // The class header no longer ends in `(`: SearchViewModel is built by the
+        // graph since spec 2026-11-22, item 3, so the section ends at the name.
+        val order = section(SEARCH_VM, "internal fun searchTitleOrder(", "class SearchViewModel")
         val match = order.indexOf("searchMatchScore")
         val year = order.indexOf("it.year")
         val taste = order.indexOf("searchTastePlacement")

@@ -39,7 +39,12 @@ class TraktLibraryContractTest {
     fun `the view model reads, lists and removes Trakt like the other trackers`() {
         val vm = main("com/kennyb1201/kbstream/ui/library/LibraryViewModel.kt")
 
-        assertTrue("the repository is held", vm.contains("TraktRepository.getInstance"))
+        // Held as an injected field since spec 2026-11-22, item 3: the graph hands
+        // out the same instance the accessor owns.
+        assertTrue(
+            "the repository is held",
+            vm.contains("private val traktRepository: TraktRepository")
+        )
         assertTrue("the watchlist is read", vm.contains("traktRepository.watchlist()"))
         assertTrue("personal lists are read", vm.contains("traktRepository.userLists()"))
         // The user half of the route is the list's OWNER now, because a saved
