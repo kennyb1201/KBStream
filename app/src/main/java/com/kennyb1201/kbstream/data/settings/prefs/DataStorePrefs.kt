@@ -241,6 +241,9 @@ internal class DataStorePrefs(
         }
 
         override fun commit(): Boolean {
+            // A closed store has no writer left to answer, so a commit here is a
+            // failure rather than a wait for something that is never coming.
+            if (!job.isActive) return false
             val done = CompletableDeferred<Boolean>()
             submit(values.toMap(), clear, done)
             return runBlocking { done.await() }
@@ -262,6 +265,10 @@ internal class DataStorePrefs(
      * to the writer.
      */
     private fun submit(values: Map<String, Any?>, clear: Boolean, done: CompletableDeferred<Boolean>?) {
+        if (!job.isActive) {
+            done?.complete(false)
+            return
+        }
         ensureLoaded()
         val changed = synchronized(this) {
             val next = if (clear) LinkedHashMap() else LinkedHashMap(snapshot)
@@ -410,7 +417,15 @@ internal class DataStorePrefs(
      * wait cannot deadlock.
      */
     internal fun close() {
-        runBlocking { job.cancelAndJoin() }
+        runBlocking {
+            job.cancelAndJoin()
+            // Anything queued after the writer stopped would otherwise wait for
+            // an answer that never comes.
+            while (true) {
+                val leftover = writes.tryReceive().getOrNull() ?: break
+                leftover.done?.complete(false)
+            }
+        }
     }
 }
 

@@ -162,6 +162,18 @@ class DataStorePrefsTest {
     }
 
     @Test
+    fun `a commit on a closed store fails instead of waiting`() {
+        val name = "kbstream_shim_closed"
+        val shim = store(name)
+        shim.edit().putString("k", "v").commit()
+        assertTrue(Prefs.delete(context, name))
+
+        // Deleting a profile closes its stores. A caller still holding one must
+        // get a failure, not a commit that waits for a writer that is gone.
+        assertFalse(shim.edit().putString("k", "2").commit())
+    }
+
+    @Test
     fun `the name list covers both formats`() {
         // A store the shim has never opened is still XML on disk; the one below
         // it has already migrated. Deleting a profile must find both.
