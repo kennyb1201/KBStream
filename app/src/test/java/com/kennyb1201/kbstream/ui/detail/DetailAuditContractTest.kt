@@ -642,12 +642,19 @@ class DetailAuditContractTest {
             "remember(tmdbDetail?.videos?.results)",
             "remember(tmdbDetail?.seasons)",
             "remember(tmdbDetail?.credits)",
-            "remember(tmdbDetail?.recommendations,",
+            // The rail's own flow now answers the blend and the trim (spec
+            // 2026-11-22, item 7), so the key is the resolved SOURCE rather
+            // than a field of the payload the page is keyed on.
+            "remember(recommendationSource,",
             "remember(tmdbDetail?.images,",
             "remember(tmdbDetail?.backdropPath,"
         ).forEach { key ->
             assertTrue("expected the narrowed key $key", src.contains(key))
         }
+        assertTrue(
+            "and the source is the rail's flow first, the payload's own list after",
+            src.contains("val recommendationSource = recommendationsFlow ?: tmdbDetail?.recommendations")
+        )
     }
 
     @Test
