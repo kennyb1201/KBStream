@@ -27,7 +27,7 @@ class LegacySingletonsModuleContractTest {
         val providers = Regex("@Provides").findAll(module).count()
         val delegations = Regex("getInstance\\(").findAll(module).count()
 
-        assertEquals("one provider per legacy singleton", 11, providers)
+        assertEquals("one provider per legacy singleton", 12, providers)
         assertEquals(
             "every provider must hand out the accessor's instance, not a new one",
             providers,
@@ -39,7 +39,7 @@ class LegacySingletonsModuleContractTest {
     fun `only the profile-scoped databases are unscoped`() {
         // Line-anchored: the KDoc above the exceptions says `@Singleton` in prose.
         val singletons = Regex("^\\s*@Singleton\\s*$", RegexOption.MULTILINE).findAll(module).count()
-        assertEquals("nine process-wide singletons", 9, singletons)
+        assertEquals("ten process-wide singletons", 10, singletons)
 
         listOf("watchHistoryDatabase", "iptvDatabase").forEach { name ->
             val head = module.substringBefore("fun $name")
@@ -64,6 +64,7 @@ class LegacySingletonsModuleContractTest {
             "KBRepository.getInstance(",
             "TvmazeAirDateRepository.getInstance(",
             "KBStreamDownloader.getInstance(",
+            "FanartArtRepository.getInstance(",
             "WatchHistoryDatabase.getInstance(",
             "IptvDatabase.getInstance("
         ).forEach { call ->
@@ -72,18 +73,25 @@ class LegacySingletonsModuleContractTest {
     }
 
     /**
-     * `FanartArtRepository` is deliberately absent: it is `internal`, and a
-     * public provider may not expose an internal type. It joins the graph with
-     * its own `@Inject constructor` instead, so this test names the reason a
-     * future reader would otherwise be tempted to re-add it.
+     * `FanartArtRepository` was the one class absent from this module, because it
+     * was `internal` and neither a provider nor a `@HiltViewModel` parameter may
+     * expose an internal type. It is public now, and it is in - which is what let
+     * Home stop being the migration's last legacy accessor call. Pinned so that
+     * re-narrowing its visibility, and silently dropping it back out of the
+     * graph, cannot pass.
      */
     @Test
-    fun `the internal repository stays out of the module`() {
-        // The provider signature, not the name: the class doc above says why it
-        // is absent, and a scan for the name would flag that explanation.
+    fun `the formerly internal repository is a provider too`() {
         assertTrue(
-            "FanartArtRepository is internal and cannot be a provider's return type",
-            !module.contains("fun fanartArtRepository(")
+            "FanartArtRepository is a provider now, and it delegates",
+            module.contains("fun fanartArtRepository(") &&
+                module.contains("FanartArtRepository.getInstance(context)")
+        )
+        val companion =
+            source("com/kennyb1201/kbstream/data/fanart/FanartArtRepository.kt")
+        assertTrue(
+            "public, because the graph names it and Home takes it as a parameter",
+            companion.contains("class FanartArtRepository private constructor(context: Context)")
         )
     }
 

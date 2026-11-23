@@ -5,6 +5,7 @@ import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.airdates.TvmazeAirDateRepository
 import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
+import com.kennyb1201.kbstream.data.fanart.FanartArtRepository
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
 import com.kennyb1201.kbstream.data.kb.KBRepository
@@ -44,14 +45,15 @@ import javax.inject.Singleton
  * every resolution still asks the accessor, and their migration (a resolver or
  * a per-profile component) is deliberately left for its own phase.
  *
- * ## The one class that is not here yet
+ * ## The last class in, and why it needed a visibility change
  *
- * `FanartArtRepository` is `internal`, so a public provider returning it does not
- * compile ("'public' function exposes its 'internal' return type"), and an
- * `internal` provider would hand Dagger's generated Java a mangled name to call.
- * It therefore joins this module when its own construction moves, where it is a
- * `@Inject constructor` on the class - the class stays internal either way, and
- * its `getInstance` stays the single owner until then.
+ * `FanartArtRepository` was `internal`, so it could not be a provider's return
+ * type ("'public' function exposes its 'internal' return type") and could not be
+ * a `@HiltViewModel` parameter either. Home held the migration's last legacy
+ * accessor call in order to reach it. The class is public now - it is the graph
+ * that names it, not the app doing so casually - and this module delegates to
+ * its accessor like all the others, which is what emptied the migration's list of
+ * allowed accessor calls.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -99,6 +101,11 @@ object LegacySingletonsModule {
     @Provides
     @Singleton
     fun kbStreamDownloader(): KBStreamDownloader = KBStreamDownloader.getInstance()
+
+    @Provides
+    @Singleton
+    fun fanartArtRepository(@ApplicationContext context: Context): FanartArtRepository =
+        FanartArtRepository.getInstance(context)
 
     /** Unscoped on purpose: see the class comment. */
     @Provides

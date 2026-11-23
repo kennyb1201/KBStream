@@ -39,7 +39,13 @@ import java.util.concurrent.ConcurrentHashMap
  *   failure: 1h, and it can never be mistaken for a miss. A title never resolved
  *   still costs one call - that is the price of a first answer.
  */
-internal class FanartArtRepository private constructor(context: Context) {
+/**
+ * Public so the graph can name it: it was `internal` while its only way in was
+ * this companion, but a Hilt provider's return type - and a `@HiltViewModel`'s
+ * parameter, which is what Home takes - is part of a public signature. Nothing
+ * about the class's own construction changed; `getInstance` still owns it.
+ */
+class FanartArtRepository private constructor(context: Context) {
 
     private val appContext = context.applicationContext
 
@@ -362,7 +368,14 @@ internal class FanartArtRepository private constructor(context: Context) {
         @Volatile
         private var instance: FanartArtRepository? = null
 
-        /** Process-wide instance; context is retained as the application one. */
+        /**
+         * Process-wide instance; context is retained as the application one.
+         *
+         * Still the single owner: [com.kennyb1201.kbstream.di.LegacySingletonsModule]
+         * delegates to this accessor, exactly as it does for the other
+         * singletons, so a composable that asks here and a ViewModel that is
+         * injected with it hold the same object and the same caches.
+         */
         fun getInstance(context: Context): FanartArtRepository =
             instance ?: synchronized(this) {
                 instance ?: FanartArtRepository(context).also { instance = it }

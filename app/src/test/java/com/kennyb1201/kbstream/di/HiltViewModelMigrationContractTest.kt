@@ -238,17 +238,16 @@ class HiltViewModelMigrationContractTest {
         const val UI = "com/kennyb1201/kbstream/ui"
 
         /**
-         * The accessor calls each moved class is still allowed to make, and the
-         * reason it must. Home keeps exactly one: `FanartArtRepository` is
-         * `internal`, so it cannot be a provider's return type and cannot be
-         * injected until its own construction moves (see LegacySingletonsModule).
-         * Everything else on this map is empty - a call coming back is two owners
-         * for one singleton, which is the bug the delegation order exists to
-         * prevent.
+         * The accessor calls each moved class is still allowed to make.
+         *
+         * Empty, deliberately, and it stays empty: Home held the last one, for
+         * `FanartArtRepository`, which could not be a `@HiltViewModel` parameter
+         * while it was `internal`. It is a provider in the graph now (see
+         * LegacySingletonsModule), so every migrated class owns no accessor call
+         * at all - and a call coming back is two owners for one singleton, which
+         * is the bug the delegation order exists to prevent.
          */
-        val KNOWN_ACCESSOR_CALLS = mapOf(
-            "home/HomeViewModel" to listOf("FanartArtRepository.getInstance(")
-        )
+        val KNOWN_ACCESSOR_CALLS = emptyMap<String, List<String>>()
 
         /** The classes that have moved onto the graph, in migration order. */
         val MIGRATED = listOf(

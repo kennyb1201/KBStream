@@ -149,6 +149,12 @@ class HomeViewModel @Inject constructor(
     // MDBList's below; nothing here writes to it.
     private val traktRepository: TraktRepository,
     private val tmdbRepository: TmdbRepository,
+    // The artwork gap-filler (spec 2026-11-13): only ever asked AFTER TMDB
+    // answered nothing, cached per title, and silent in a build with no key.
+    // The last singleton to join the graph: it was `internal`, so Home held the
+    // migration's final accessor call until it became a provider (see
+    // LegacySingletonsModule). Same object the composables get, either way.
+    private val fanartArtRepository: FanartArtRepository,
     // Second-source air dates (see [AirDateCorrection]). Display-only, and
     // empty whenever that source has nothing - which leaves TMDB's own dates
     // in place.
@@ -174,11 +180,6 @@ class HomeViewModel @Inject constructor(
 
     private val tmdbHeroArtworkRepository =
         TmdbHeroArtworkRepository(application)
-
-    // The artwork gap-filler (spec 2026-11-13): only ever asked AFTER TMDB
-    // answered nothing, cached per title, and silent in a build with no key.
-    private val fanartArtRepository =
-        FanartArtRepository.getInstance(application)
 
     private val watchedStatusRepository =
         WatchedStatusRepository(application)
