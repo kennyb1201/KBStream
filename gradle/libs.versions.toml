@@ -39,6 +39,11 @@ constraintlayout = "2.2.2"
 recyclerview = "1.4.0"
 room = "2.8.5"
 work = "2.12.0"
+# Play In-App Updates, for the Play-distributed build only (`-PplayBuild`).
+# A Play install cannot install its own APK, so its updates come from the
+# store through this library's flexible flow - see PlayUpdater. The sideloaded
+# release never calls it and R8 strips it (PLAY_BUILD is false there).
+play-app-update = "2.1.0"
 
 # --- HTTP / JSON / images ---
 retrofit = "3.0.0"
@@ -82,6 +87,7 @@ androidx-profileinstaller = { module = "androidx.profileinstaller:profileinstall
 androidx-recyclerview = { module = "androidx.recyclerview:recyclerview", version.ref = "recyclerview" }
 androidx-constraintlayout = { module = "androidx.constraintlayout:constraintlayout", version.ref = "constraintlayout" }
 androidx-tv-material = { module = "androidx.tv:tv-material", version.ref = "tv-material" }
+google-play-app-update = { module = "com.google.android.play:app-update", version.ref = "play-app-update" }
 androidx-tv-foundation = { module = "androidx.tv:tv-foundation", version.ref = "tv-foundation" }
 
 # --- Compose (versions owned by androidx-compose-bom) ---

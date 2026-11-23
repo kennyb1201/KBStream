@@ -652,6 +652,14 @@ dependencies {
     // brings paging-common (Pager/PagingConfig/PagingSource); paging-runtime is
     // the LiveData/RxJava half and is not needed here.
     implementation(libs.androidx.paging.compose)
+    // Play In-App Updates: the updater for the Play-distributed build, and the
+    // reason that build has no GitHub-release offer at all. `-PplayBuild`
+    // strips REQUEST_INSTALL_PACKAGES from the merged manifest, so a Play
+    // install cannot replace its own APK - Play does it, through the flexible
+    // flow in PlayUpdater. The library is on the sideloaded classpath too, but
+    // nothing calls it there: PLAY_BUILD is a constant false, so R8 removes
+    // the object and its dependency from the released APK.
+    implementation(libs.google.play.app.update)
 
     // One view in the whole app draws with it: the player's clearlogo slot in
     // player_chrome.xml, where `layout_constraintWidth_max` is the only way to

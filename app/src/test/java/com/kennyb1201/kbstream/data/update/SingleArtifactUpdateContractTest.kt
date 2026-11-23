@@ -15,6 +15,12 @@ import org.junit.Test
  * that has to choose between them, and an install that could cross-grade itself
  * into the wrong layout. This pins the consequence: no product flavors in the
  * build, and no form-factor branch in the update path.
+ *
+ * The one form-factor branch in `data/update` is `PlayUpdater`'s, and it does
+ * not break this rule: that object is not this artifact's updater. It is the
+ * store flow for the Play build, deliberately phone-only, and it never touches
+ * the release feed or its APK. The pins below stay on [AppUpdater], which must
+ * keep answering the same way on every device the APK lands on.
  */
 class SingleArtifactUpdateContractTest {
 

@@ -630,8 +630,13 @@ class SettingsScreenMobileContractTest {
                 mobile.contains("AppUpdater.downloadAndInstall(context, s)")
         )
         assertTrue(
-            "the update row is not offered on a Play or debug build",
-            mobile.contains("!BuildConfig.PLAY_BUILD && !BuildConfig.DEBUG")
+            "a Play build gets Play's own updater row, not the APK one",
+            mobile.contains("if (BuildConfig.PLAY_BUILD) {") &&
+                mobile.contains("PlayUpdateCardMobile()")
+        )
+        assertTrue(
+            "and the GitHub-release row stays withheld from a debug install",
+            mobile.contains("} else if (!BuildConfig.DEBUG) {")
         )
     }
 

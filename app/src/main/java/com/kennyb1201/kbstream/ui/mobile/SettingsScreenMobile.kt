@@ -90,6 +90,7 @@ import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.update.AppUpdater
+import com.kennyb1201.kbstream.data.update.PlayUpdater
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import com.kennyb1201.kbstream.data.download.DownloadsManager
@@ -4476,7 +4477,15 @@ private fun AboutPaneMobile() {
             )
         }
 
-        if (!BuildConfig.PLAY_BUILD && !BuildConfig.DEBUG) {
+        // Each build gets the updater it can actually run: a Play install is
+        // updated by Play (the manifest overlay strips its own install
+        // permission, so the GitHub-release offer would be a dead end), and
+        // every sideloaded install by the release feed. Two flows with
+        // different state, so two rows rather than one branched row.
+        if (BuildConfig.PLAY_BUILD) {
+            Spacer(modifier = Modifier.height(10.dp))
+            PlayUpdateCardMobile()
+        } else if (!BuildConfig.DEBUG) {
             Spacer(modifier = Modifier.height(10.dp))
             KBCard(
                 onClick = {
@@ -4552,6 +4561,73 @@ private fun AboutPaneMobile() {
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth()
         )
+    }
+}
+
+/**
+ * The Play build's update row.
+ *
+ * Same shape as the sideloaded row above, different source: Play owns the
+ * download and the install, so the only action here is asking it to start and
+ * then to finish. A flexible download keeps running in the background and the
+ * viewer keeps watching, which is why this row is informational while it runs
+ * instead of holding a button open.
+ */
+@Composable
+private fun PlayUpdateCardMobile() {
+    val context = LocalContext.current
+    val state by PlayUpdater.state.collectAsStateWithLifecycle()
+
+    // Ask when the row appears, not at app start: the answer is shown here and
+    // nowhere else on a phone, and Play answers from its local cache.
+    LaunchedEffect(Unit) { PlayUpdater.checkForUpdate(context) }
+
+    val label = when (val s = state) {
+        is PlayUpdater.UpdateState.Available -> "Update available — tap to update"
+        is PlayUpdater.UpdateState.Downloading ->
+            if (s.percent >= 0) "Downloading update… ${s.percent}%" else "Downloading update…"
+        PlayUpdater.UpdateState.ReadyToInstall -> "Update ready — restart to finish"
+        PlayUpdater.UpdateState.Checking -> "Checking for updates…"
+        is PlayUpdater.UpdateState.Failed -> "Couldn't check for updates — tap to retry"
+        PlayUpdater.UpdateState.UpToDate -> "You're up to date — check again"
+        PlayUpdater.UpdateState.Idle -> "Check for updates"
+    }
+    val description = when (val s = state) {
+        is PlayUpdater.UpdateState.Available ->
+            "Play downloads it in the background — you can keep watching"
+        is PlayUpdater.UpdateState.Downloading ->
+            "Play is fetching the new build; it installs when you restart"
+        PlayUpdater.UpdateState.ReadyToInstall ->
+            "Play will install it and restart the app"
+        is PlayUpdater.UpdateState.Failed -> s.message
+        else -> "Updates on this install come from the Play Store"
+    }
+
+    KBCard(
+        onClick = {
+            when (state) {
+                is PlayUpdater.UpdateState.Available -> PlayUpdater.startUpdate(context)
+                PlayUpdater.UpdateState.ReadyToInstall -> PlayUpdater.completeUpdate()
+                is PlayUpdater.UpdateState.Checking,
+                is PlayUpdater.UpdateState.Downloading -> Unit
+                else -> PlayUpdater.checkForUpdate(context)
+            }
+        },
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Text(
+                text = label,
+                color = if (state is PlayUpdater.UpdateState.Available) KBAccent else KBTextHi,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                text = description,
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+        }
     }
 }
 

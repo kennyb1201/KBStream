@@ -461,6 +461,16 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                 com.kennyb1201.kbstream.data.update.AppUpdater
                     .maybeAutoCheck(this@MainApplication)
             }
+            // Play build only: adopt an update Play downloaded while this
+            // process was not running. A flexible download outlives the app,
+            // so without this the file would sit downloaded until someone
+            // opened Settings; `begin` hands it to Play, which installs it on
+            // the restart the viewer confirms. A no-op on every other build,
+            // on a debug install, and on a television (see PlayUpdater).
+            startupStep("startup.playUpdate", "app_create_play_update") {
+                com.kennyb1201.kbstream.data.update.PlayUpdater
+                    .begin(this@MainApplication)
+            }
         }
     }
 
