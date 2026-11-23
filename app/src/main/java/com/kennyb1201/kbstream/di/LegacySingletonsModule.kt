@@ -7,7 +7,7 @@ import com.kennyb1201.kbstream.data.airdates.TvmazeAirDateRepository
 import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.fanart.FanartArtRepository
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
-import com.kennyb1201.kbstream.data.iptv.IptvDatabase
+import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
 import com.kennyb1201.kbstream.data.kb.KBRepository
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
