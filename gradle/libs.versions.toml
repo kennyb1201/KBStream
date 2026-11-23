@@ -44,6 +44,15 @@ work = "2.12.0"
 # store through this library's flexible flow - see PlayUpdater. The sideloaded
 # release never calls it and R8 strips it (PLAY_BUILD is false there).
 play-app-update = "2.1.0"
+# Not a UI system this app adopted either: nothing here extends a Fragment. It
+# is pinned because app-update brings play-services-basement 18.1.0, whose POM
+# declares androidx.fragment 1.0.0 - and androidx.activity refuses to use
+# ActivityResult APIs against a Fragment older than 1.3.0 (before it,
+# FragmentActivity never called super.onRequestPermissionsResult, so result
+# callbacks could be dropped). Upgrading that transitive copy rather than
+# excluding it keeps basement's LifecycleActivity/SupportFragmentWrapper
+# resolvable, since they really do reference androidx.fragment.
+fragment = "1.9.1"
 
 # --- HTTP / JSON / images ---
 retrofit = "3.0.0"
@@ -80,6 +89,7 @@ benchmark-macro = "1.5.0"
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "core-ktx" }
 androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "security-crypto" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity-compose" }
+androidx-fragment = { module = "androidx.fragment:fragment", version.ref = "fragment" }
 androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
 androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
 androidx-paging-compose = { module = "androidx.paging:paging-compose", version.ref = "paging-compose" }

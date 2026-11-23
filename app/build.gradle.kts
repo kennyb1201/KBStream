@@ -660,6 +660,15 @@ dependencies {
     // nothing calls it there: PLAY_BUILD is a constant false, so R8 removes
     // the object and its dependency from the released APK.
     implementation(libs.google.play.app.update)
+    // `app-update` brings play-services-basement 18.1.0, whose POM declares
+    // androidx.fragment 1.0.0. Lint rejects that pairing with androidx.activity
+    // (InvalidFragmentVersionForActivityResult: FragmentActivity before 1.3.0
+    // never called super.onRequestPermissionsResult, so ActivityResult
+    // callbacks could be dropped) - and the nine call sites it flagged are the
+    // app's own registerForActivityResult uses, not this library's. Nothing here
+    // extends a Fragment. The pin only lifts that transitive copy to a supported
+    // one; see the catalog entry for why it is not an exclusion instead.
+    implementation(libs.androidx.fragment)
 
     // One view in the whole app draws with it: the player's clearlogo slot in
     // player_chrome.xml, where `layout_constraintWidth_max` is the only way to
