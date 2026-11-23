@@ -36,7 +36,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.simkl.SimklWatchedCounts
@@ -64,7 +64,7 @@ fun SimklConnectScreen(
     // tracker row and onboarding's setup card open it from different places),
     // so a label naming one of them was wrong on the other.
     onBack: () -> Unit,
-    vm: SimklViewModel = viewModel()
+    vm: SimklViewModel = hiltViewModel()
 ) {
     // Leaving ends the attempt (spec audit 2026-11-18, Onboarding M1): the
     // ViewModel outlives this page, so without it the poll kept running - and a

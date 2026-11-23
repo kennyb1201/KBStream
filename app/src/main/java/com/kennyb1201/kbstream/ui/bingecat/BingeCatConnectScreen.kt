@@ -28,7 +28,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.bingecat.BingeCatConfig
@@ -71,7 +71,7 @@ fun BingeCatConnectScreen(
      * the spec puts it ("alongside the connect screen").
      */
     onBrowsePublicLists: () -> Unit = {},
-    vm: BingeCatViewModel = viewModel()
+    vm: BingeCatViewModel = hiltViewModel()
 ) {
     // Leaving ends the attempt (spec audit 2026-11-18, Onboarding M1): the
     // ViewModel's own doc claimed BACK cancelled the poll, and nothing did.

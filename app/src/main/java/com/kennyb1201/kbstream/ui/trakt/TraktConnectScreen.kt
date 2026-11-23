@@ -36,7 +36,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.trakt.TraktWatchedCounts
@@ -73,7 +73,7 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 fun TraktConnectScreen(
     modifier: Modifier = Modifier,
     onBack: () -> Unit,
-    vm: TraktViewModel = viewModel()
+    vm: TraktViewModel = hiltViewModel()
 ) {
     // Leaving ends the attempt (spec audit 2026-11-18, Onboarding M1): stopPolling
     // existed but nothing on the way out called it.

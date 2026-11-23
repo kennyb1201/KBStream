@@ -25,6 +25,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 /**
  * The device-code flow, as the screen drives it.
@@ -47,10 +49,13 @@ import kotlinx.coroutines.launch
  *    synthetic-429 and a transport blip both land here; an unbounded loop is the
  *    MDBList storm this feature was told not to repeat.
  */
-class TraktViewModel(app: Application) : AndroidViewModel(app) {
+@HiltViewModel
+class TraktViewModel @Inject constructor(
+    app: Application,
+    private val repository: TraktRepository
+) : AndroidViewModel(app) {
 
     private val appContext = app.applicationContext
-    private val repository = TraktRepository.getInstance(appContext)
     private val guard = KidsTimeGuard
 
     private val _uiState = MutableStateFlow(

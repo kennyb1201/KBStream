@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 /**
  * The BingeCat device flow, as the screen drives it.
@@ -39,11 +41,14 @@ import kotlinx.coroutines.launch
  *  - **A failed poll is retried a bounded number of times.** A transport blip
  *    gets three tries; the code's own expiry ends the loop.
  */
-class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
+@HiltViewModel
+class BingeCatViewModel @Inject constructor(
+    app: Application,
+    private val repository: BingeCatRepository
+) : AndroidViewModel(app) {
 
     private val appContext = app.applicationContext
 
-    private val repository = BingeCatRepository.getInstance(appContext)
 
     private val _uiState = MutableStateFlow(initialState())
     val uiState: StateFlow<BingeCatUiState> = _uiState.asStateFlow()
