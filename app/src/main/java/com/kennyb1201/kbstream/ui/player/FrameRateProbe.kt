@@ -6,6 +6,7 @@ import android.util.Log
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -396,8 +397,11 @@ internal object FrameRateProbe {
                         Log.w(TAG, "probe head request: HTTP ${response.code}")
                         null
                     } else {
+                        // FileOutputStream, not File.outputStream(): only the
+                        // constructor takes the append flag the second-stage
+                        // range needs.
                         response.body.byteStream().use { input ->
-                            into.outputStream(append = append).use { output ->
+                            FileOutputStream(into, append).use { output ->
                                 input.copyTo(output)
                             }
                         }

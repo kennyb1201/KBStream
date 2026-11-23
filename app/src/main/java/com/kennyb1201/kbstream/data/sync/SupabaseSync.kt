@@ -2071,10 +2071,13 @@ object SupabaseSync {
     // the sync state. Profile-scoped because the tables hold every profile's
     // rows; table-scoped because the four tables are written independently.
 
-    /** Prefs key prefix; also what [clearPullWatermarks] sweeps. */
-    private companion object Watermarks {
-        const val PULL_WATERMARK_PREFIX = "pull_watermark_"
-    }
+    /**
+     * Prefs key prefix; also what [clearPullWatermarks] sweeps.
+     *
+     * A plain constant, not a nested object: this file IS an object, and a
+     * `companion object` inside one does not compile.
+     */
+    private const val PULL_WATERMARK_PREFIX = "pull_watermark_"
 
     private fun pullWatermarkKey(table: String, pid: String?): String =
         "$PULL_WATERMARK_PREFIX${table}_${pid ?: "legacy"}"
