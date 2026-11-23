@@ -42,8 +42,17 @@ class SplashClearLogoContractTest {
         assertTrue(
             "the Player branch must feed the same backdrop/logo/name the player gets",
             activity.contains("backdropUrl = playerSplash.backdropUrl") &&
-                activity.contains("clearLogoUrl = playerSplash.clearLogoUrl") &&
                 activity.contains("title = playerSplash.itemName")
+        )
+        assertTrue(
+            "...with Detail's resolved art behind both, because Screen.Player froze " +
+                "whatever the hand-off knew when it was built: a bare " +
+                "playerSplash.clearLogoUrl is the second-splash bug",
+            activity.contains("clearLogoUrl = resolvedLogoFor(") &&
+                activity.contains(
+                    "?: resolvedDetailBackdrops[\"\${playerSplash.parentType}:" +
+                        "\${playerSplash.parentId}\"]"
+                )
         )
         assertTrue(
             "one when() picks exactly one splash, so two can never stack",
@@ -394,9 +403,9 @@ class SplashClearLogoContractTest {
             activity.split("fun resolvedLogoFor(").size - 1
         )
         assertEquals(
-            "the three player hand-offs, the Streams picker's player, and the " +
-                "pending splash all ask it",
-            6,
+            "the three player hand-offs, the Streams picker's player, the " +
+                "pending splash and the player-screen splash all ask it",
+            7,
             activity.split("resolvedLogoFor(").size - 1
         )
         assertEquals(
@@ -405,8 +414,9 @@ class SplashClearLogoContractTest {
             activity.split("clearLogo = resolvedLogoFor(").size - 1
         )
         assertEquals(
-            "the Streams construction and the pending splash assign it",
-            2,
+            "the Streams construction, the pending splash and the player-screen " +
+                "splash assign it",
+            3,
             activity.split("clearLogoUrl = resolvedLogoFor(").size - 1
         )
         assertTrue(
@@ -414,6 +424,44 @@ class SplashClearLogoContractTest {
             activity.contains("carried?.takeIf { it.isNotBlank() }") &&
                 activity.contains("clearLogo ?: clearLogoUrl")
         )
+    }
+
+    /**
+     * The rule for every splash surface, not just the two that were fixed first.
+     *
+     * Reported 2026-11-23, on a build carrying that fix: the first splash showed
+     * the pulsing clearlogo and the SECOND one still printed plain text. The
+     * player screen's cover is painted from `Screen.Player`, whose `clearLogoUrl`
+     * and `backdropUrl` are frozen at construction - F3 fills them from the same
+     * maps, but only with what the map held at that moment. The two branches
+     * above re-read the snapshot map every frame and healed; this one read a
+     * field once and never did.
+     *
+     * So it is asserted over the call sites rather than by name: a new splash
+     * surface, or a fourth condition added to the picker, has to read through the
+     * map or the helper too. `resolvedLogoFor`'s own rule (carried value wins)
+     * keeps that a fallback rather than a replacement.
+     */
+    @Test
+    fun `every splash reads the resolved art behind the one it carries`() {
+        val activity = source(MAIN_ACTIVITY)
+        val sites = activity.split("AutoPlayLoadSplash(").drop(1)
+            // The arguments only: the picker's branches close at this indent, so
+            // one call's window can never read the next one's arguments.
+            .map { it.substringBefore("\n        )") }
+        assertEquals("the picker paints exactly three covers", 3, sites.size)
+        sites.forEachIndexed { index, body ->
+            assertTrue(
+                "splash #$index must consult the clearlogo Detail resolved, not only the " +
+                    "one its launch froze (a bare `clearLogoUrl` read is the bug)",
+                body.contains("resolvedLogoFor(") ||
+                    body.contains("resolvedDetailClearLogos[")
+            )
+            assertTrue(
+                "splash #$index must consult the still Detail resolved the same way",
+                body.contains("resolvedDetailBackdrops[")
+            )
+        }
     }
 
     @Test

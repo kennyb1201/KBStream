@@ -5024,8 +5024,22 @@ fun AppRoot(
         // the sources ARE found by the time we hand off, and this matches the
         // player's own splash, which never carries one.
         playerSplash != null -> AutoPlayLoadSplash(
-            backdropUrl = playerSplash.backdropUrl,
-            clearLogoUrl = playerSplash.clearLogoUrl,
+            // The same fallback the two branches above read, for the same
+            // reason: Screen.Player freezes its art at construction, and a
+            // title whose logo Detail resolved afterwards never reached it.
+            // This is the SECOND splash, and it was the one still printing the
+            // plain name after the first had healed (reported 2026-11-23): the
+            // cover re-reads the snapshot map every frame, this branch read a
+            // field once.
+            backdropUrl = playerSplash.backdropUrl
+                ?: resolvedDetailBackdrops["${playerSplash.parentType}:${playerSplash.parentId}"],
+            // Carried first, map second - resolvedLogoFor's rule everywhere, so
+            // a launch that named its own logo keeps exactly that one.
+            clearLogoUrl = resolvedLogoFor(
+                playerSplash.parentType,
+                playerSplash.parentId,
+                playerSplash.clearLogoUrl
+            ),
             title = playerSplash.itemName,
             subtitle = null,
             tmdbId = splashTmdbId(playerSplash.parentType, playerSplash.parentId)
