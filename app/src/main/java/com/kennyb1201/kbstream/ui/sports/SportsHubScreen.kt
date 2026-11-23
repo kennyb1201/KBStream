@@ -101,7 +101,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.tv.material3.Icon
 import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
 import androidx.tv.material3.MaterialTheme
@@ -225,7 +225,7 @@ private const val HUB_ENTRY_FOCUS_ATTEMPTS = 12
  */
 @Composable
 fun SportsHubScreen(
-    viewModel: SportsHubViewModel = viewModel(),
+    viewModel: SportsHubViewModel = hiltViewModel(),
     modifier: Modifier = Modifier,
     // The phone's header arrow; the TV page draws no back control.
     onBack: () -> Unit,
@@ -2321,7 +2321,7 @@ private fun LineupMissingNotice(
     // Created HERE, and only when this notice is composed: the IPTV ViewModel
     // resolves the cached playlist and starts the guide clock, which a session
     // with a working playlist has no reason to pay for on the hub.
-    val iptvViewModel: IptvViewModel = viewModel()
+    val iptvViewModel: IptvViewModel = hiltViewModel()
     val freeInstalled by iptvViewModel.freeLineupInstalled.collectAsStateWithLifecycle()
     val freeInstalling by iptvViewModel.freeLineupInstalling.collectAsStateWithLifecycle()
     val freeFailed by iptvViewModel.freeLineupFailed.collectAsStateWithLifecycle()

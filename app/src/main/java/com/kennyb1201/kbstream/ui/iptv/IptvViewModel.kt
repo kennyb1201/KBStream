@@ -61,8 +61,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.settings.prefs.Prefs
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
-class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
+@HiltViewModel
+class IptvViewModel @Inject constructor(
+    private val app: Application
+) : AndroidViewModel(app) {
 
     // Shared with the player: the in-player guide resolves matches against the
     // same memoized guide snapshot this screen reads, instead of building a

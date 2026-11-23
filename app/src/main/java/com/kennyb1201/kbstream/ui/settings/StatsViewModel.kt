@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 /**
  * Reads the viewing-stats numbers off the active profile's history database.
@@ -29,7 +31,10 @@ import kotlinx.coroutines.withContext
  * kept showing the numbers that one load produced, the previous profile's
  * included (stats C1). See [load].
  */
-class StatsViewModel(application: Application) : AndroidViewModel(application) {
+@HiltViewModel
+class StatsViewModel @Inject constructor(
+    application: Application
+) : AndroidViewModel(application) {
 
     data class UiState(
         val loading: Boolean = true,

@@ -184,7 +184,16 @@ class HiltViewModelMigrationContractTest {
             "collection/CollectionViewModel",
             "decade/DecadeViewModel",
             "studio/StudioViewModel",
-            "addons/CatalogBuilderViewModel"
+            "addons/CatalogBuilderViewModel",
+            "simkl/SimklViewModel",
+            "trakt/TraktViewModel",
+            "bingecat/BingeCatViewModel",
+            "publiclists/PublicListsViewModel",
+            "bingecat/BingeCatPublicListsViewModel",
+            "streams/StreamsViewModel",
+            "settings/StatsViewModel",
+            "iptv/IptvViewModel",
+            "sports/SportsHubViewModel"
         )
 
         val SCREENS = listOf(
@@ -194,7 +203,16 @@ class HiltViewModelMigrationContractTest {
             "collection/CollectionScreen.kt",
             "decade/DecadeScreen.kt",
             "studio/StudioScreen.kt",
-            "addons/CatalogBuilderScreen.kt"
+            "addons/CatalogBuilderScreen.kt",
+            "simkl/SimklConnectScreen.kt",
+            "trakt/TraktConnectScreen.kt",
+            "bingecat/BingeCatConnectScreen.kt",
+            "publiclists/PublicListsScreen.kt",
+            "bingecat/BingeCatPublicListsScreen.kt",
+            "streams/StreamsScreen.kt",
+            "settings/StatsScreen.kt",
+            "iptv/GuideScreen.kt",
+            "sports/SportsHubScreen.kt"
         )
     }
 }

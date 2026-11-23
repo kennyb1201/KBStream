@@ -83,7 +83,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import androidx.compose.ui.platform.LocalContext
@@ -167,7 +167,7 @@ private const val PROGRAM_HIT_CLOCK_MS = 30_000L
 // debounce() (the channel-prefetch window below) is still a @FlowPreview API.
 @OptIn(kotlinx.coroutines.FlowPreview::class)
 fun GuideScreen(
-    viewModel: IptvViewModel = viewModel(),
+    viewModel: IptvViewModel = hiltViewModel(),
     modifier: Modifier = Modifier,
     /**
      * Leaves the guide. Back uses it for the two states that have nothing of

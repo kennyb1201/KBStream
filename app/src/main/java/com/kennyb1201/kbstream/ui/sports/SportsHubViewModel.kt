@@ -65,6 +65,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.kennyb1201.kbstream.data.settings.prefs.Prefs
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 /**
  * Everything one league tab holds.
@@ -136,7 +138,10 @@ enum class LineupStatus {
  * scoreboards for those leagues, the playlist's channels, and the EPG rows
  * near each game.
  */
-class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
+@HiltViewModel
+class SportsHubViewModel @Inject constructor(
+    app: Application
+) : AndroidViewModel(app) {
 
     private val iptv = IptvRepository.shared(app)
     private val espn = EspnSportsRepository.shared()

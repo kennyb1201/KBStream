@@ -31,7 +31,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.tv.material3.Border
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
@@ -71,7 +71,7 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 @Composable
 fun StatsScreen(
     onBack: () -> Unit,
-    viewModel: StatsViewModel = viewModel()
+    viewModel: StatsViewModel = hiltViewModel()
 ) {
     // The phone entry: the same view model, the same numbers, laid out for a
     // finger. One branch; the TV page below is unchanged (see
@@ -89,7 +89,7 @@ fun StatsScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     // A fresh read on entry, and again whenever the active profile changes.
-    // StatsViewModel is activity-scoped (a plain viewModel()), so its numbers
+    // StatsViewModel is activity-scoped (one instance, from the entry point), so its numbers
     // used to be whatever its single process-lifetime load produced: a screen
     // reopened after another episode was finished never showed it, and after a
     // profile switch it showed the PREVIOUS profile's numbers under the "this
