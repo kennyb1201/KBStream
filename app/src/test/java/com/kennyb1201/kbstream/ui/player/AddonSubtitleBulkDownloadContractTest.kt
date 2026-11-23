@@ -25,6 +25,11 @@ import org.junit.Test
  * about the app-side handling around it. There is no device in CI, so the
  * structure is read out of the source the way this tree's other contracts are
  * - except the failure classification, which is a real unit test.
+ *
+ * Since perf spec 2026-11-22 (item 2) only the offers a URL cannot name are
+ * read at all - everything else attaches remote and is fetched on selection
+ * (see [AddonSubtitleRemoteAttachContractTest]). The batch machinery pinned
+ * here is unchanged for the offers that still need it.
  */
 class AddonSubtitleBulkDownloadContractTest {
 

@@ -16,6 +16,7 @@ import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.SubtitleEntry
 import com.kennyb1201.kbstream.data.player.fileEpisodeStreamId
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
+import com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import kotlinx.coroutines.CoroutineScope
@@ -105,7 +106,18 @@ class AddonSubtitleController(
      * merged audio, so addon tracks are skipped for them (embedded and
      * external-file subtitles still work).
      */
-    private val isSeparateAudioSession: () -> Boolean
+    private val isSeparateAudioSession: () -> Boolean,
+    /**
+     * Whether this session has already rendered a picture (perf spec
+     * 2026-11-22, item 2).
+     *
+     * The attach replaces the media item and re-prepares, which is cheap before
+     * the first frame and a visible stutter after it. It no longer waits on
+     * downloads (see [attachTracks]), so it normally lands before the frame -
+     * this only exists so the session trace can say which side of that line the
+     * attach fell on, rather than the field having to guess.
+     */
+    private val hasRenderedFirstFrame: () -> Boolean = { false }
 ) {
 
     companion object {
@@ -273,10 +285,23 @@ class AddonSubtitleController(
     }
 
     /**
-     * Merges the fetched offers into [player] as sidecar text tracks,
-     * downloading any not yet cached. Position is preserved so the video
-     * does not restart, and playback is unaffected until the user picks a
-     * track in the subtitle picker (prepare() keeps playWhenReady).
+     * Merges the fetched offers into [player] as sidecar text tracks. Position
+     * is preserved so the video does not restart, and playback is unaffected
+     * until the user picks a track in the subtitle picker (prepare() keeps
+     * playWhenReady).
+     *
+     * The tracks no longer wait for their files (perf spec 2026-11-22, item 2).
+     * Every offer used to be downloaded before the item could be rebuilt, so a
+     * title with twenty offers downloaded twenty files - most never selected -
+     * while the video was still filling its buffer, and the rebuild waited for
+     * the slowest of them, usually landing after the first frame.
+     *
+     * A URL that names its own type now gets the REMOTE uri and media3 fetches
+     * the text when the viewer selects it; only an offer whose URL cannot say
+     * what it holds is downloaded eagerly, and then the cached file doubles as
+     * its configuration uri. The MIME still has to be right at configuration
+     * time (an extensionless ASS script read as SubRip draws an empty track),
+     * which is exactly the case that still reads the bytes.
      */
     private fun attachTracks(player: Player) {
         if (offers.isEmpty()) return
@@ -310,10 +335,16 @@ class AddonSubtitleController(
         }
 
         activeScope().launch(Dispatchers.IO) {
-            // The batch downloads CONCURRENTLY, under a bounded cap. Serially,
-            // one dead host held every working track hostage: in the field log
-            // six good tracks could not attach until all fourteen refused
-            // attempts had drained, one blocking OkHttp call at a time.
+            // Discovery CONCURRENTLY, under a bounded cap. Serially, one dead
+            // host held every working track hostage: in the field log six good
+            // tracks could not attach until all fourteen refused attempts had
+            // drained, one blocking OkHttp call at a time.
+            //
+            // Most offers in this batch resolve WITHOUT a request now: a URL
+            // that names its type is attached remote and fetched on selection.
+            // The semaphore still bounds the ones that do read (a bare file id
+            // whose parser can only come from the bytes), and the video fill no
+            // longer queues behind a subtitle fetch burst.
             //
             // supervisorScope plus a per-offer catch: one track's unexpected
             // throw must not take its siblings down. The catch is load-bearing
@@ -335,15 +366,40 @@ class AddonSubtitleController(
                     async {
                         permits.withPermit {
                             runCatchingCancellable {
-                                val uri = downloadCache[offer.url] ?: download(offer.url, batch)
-                                uri?.let {
-                                    ResolvedSubtitle(
+                                // A copy this session already holds is the best
+                                // answer there is: no network now, no network on
+                                // selection, and the MIME can be sniffed.
+                                val cached = downloadCache[offer.url]
+                                when {
+                                    cached != null -> ResolvedSubtitle(
                                         url = offer.url,
                                         language = offer.lang,
                                         label = addonSubtitleRowLabel(offer),
-                                        uri = it,
-                                        mime = resolveAddonSubtitleMime(offer.url, it)
+                                        uri = cached,
+                                        mime = resolveAddonSubtitleMime(offer.url, cached)
                                     )
+
+                                    // The URL says what it is: let the text
+                                    // pipeline fetch it on selection.
+                                    subtitleMimeIsDecidedByUrl(offer.url) -> ResolvedSubtitle(
+                                        url = offer.url,
+                                        language = offer.lang,
+                                        label = addonSubtitleRowLabel(offer),
+                                        uri = Uri.parse(offer.url),
+                                        mime = resolveSubtitleMimeFrom(offer.url, "")
+                                    )
+
+                                    // It cannot: read the bytes now, because the
+                                    // parser is chosen from what they hold.
+                                    else -> download(offer.url, batch)?.let {
+                                        ResolvedSubtitle(
+                                            url = offer.url,
+                                            language = offer.lang,
+                                            label = addonSubtitleRowLabel(offer),
+                                            uri = it,
+                                            mime = resolveAddonSubtitleMime(offer.url, it)
+                                        )
+                                    }
                                 }
                             }.getOrNull()
                         }
@@ -390,6 +446,17 @@ class AddonSubtitleController(
                 )
                 player.prepare()
                 attachedPlayer = player
+                // Where this landed relative to the first frame is the whole
+                // acceptance question for item 2, and a paste is the only way
+                // to answer it on a TV: the rebuild is cheap before the frame
+                // and a stutter after it.
+                val local = resolved.count { track -> track.uri.scheme == "file" }
+                PlaybackSessionTrace.note(
+                    "addon subs: ${configs.size} track(s)" +
+                        (if (local > 0) " ($local fetched now)" else " (all remote)") +
+                        " attached " +
+                        (if (hasRenderedFirstFrame()) "after first frame" else "pre first frame")
+                )
                 Log.i(TAG, "Attached ${configs.size} addon subtitle track(s)")
             }
         }
@@ -734,6 +801,7 @@ internal fun addonSubtitleRowLabel(offer: SubtitleEntry): String? {
  */
 private fun resolveAddonSubtitleMime(url: String, local: Uri?): String =
     resolveSubtitleMimeFrom(url, local?.let { readSubtitleProbe(it) } ?: "")
+
 
 /**
  * The decision behind [resolveAddonSubtitleMime], split out so it can be unit

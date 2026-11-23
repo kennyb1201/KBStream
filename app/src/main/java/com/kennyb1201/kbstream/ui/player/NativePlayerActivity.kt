@@ -4004,12 +4004,18 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 hideControls()
             }
         }
-        addonSubtitleController = AddonSubtitleController(this) {
-            // Separate-audio sessions cannot be rebuilt via setMediaItem
-            // without losing the merged audio track, so addon subtitle
-            // tracks are skipped there (embedded subs still work).
-            !currentAudioUrl.isNullOrBlank()
-        }
+        addonSubtitleController = AddonSubtitleController(
+            context = this,
+            isSeparateAudioSession = {
+                // Separate-audio sessions cannot be rebuilt via setMediaItem
+                // without losing the merged audio track, so addon subtitle
+                // tracks are skipped there (embedded subs still work).
+                !currentAudioUrl.isNullOrBlank()
+            },
+            // Whether the picture is already up: only the session trace reads
+            // it, to say which side of the first frame the attach landed on.
+            hasRenderedFirstFrame = { firstFrameRendered }
+        )
         // The bulk path attaches every track at once and used to fail
         // completely silently: one dead host meant no subtitles at all and no
         // explanation, which reads as "this title has none". Parity with the
