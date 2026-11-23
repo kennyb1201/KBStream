@@ -27,7 +27,7 @@ class LegacySingletonsModuleContractTest {
         val providers = Regex("@Provides").findAll(module).count()
         val delegations = Regex("getInstance\\(").findAll(module).count()
 
-        assertEquals("one provider per legacy singleton", 12, providers)
+        assertEquals("one provider per legacy singleton", 11, providers)
         assertEquals(
             "every provider must hand out the accessor's instance, not a new one",
             providers,
@@ -39,7 +39,7 @@ class LegacySingletonsModuleContractTest {
     fun `only the profile-scoped databases are unscoped`() {
         // Line-anchored: the KDoc above the exceptions says `@Singleton` in prose.
         val singletons = Regex("^\\s*@Singleton\\s*$", RegexOption.MULTILINE).findAll(module).count()
-        assertEquals("ten process-wide singletons", 10, singletons)
+        assertEquals("nine process-wide singletons", 9, singletons)
 
         listOf("watchHistoryDatabase", "iptvDatabase").forEach { name ->
             val head = module.substringBefore("fun $name")
@@ -56,7 +56,6 @@ class LegacySingletonsModuleContractTest {
     fun `the delegation targets are the classes the graph exposes`() {
         listOf(
             "TmdbRepository.getInstance(",
-            "FanartArtRepository.getInstance(",
             "SimklRepository.getInstance(",
             "TraktRepository.getInstance(",
             "BingeCatRepository.getInstance(",
@@ -70,6 +69,20 @@ class LegacySingletonsModuleContractTest {
         ).forEach { call ->
             assertTrue("missing delegation: $call", module.contains(call))
         }
+    }
+
+    /**
+     * `FanartArtRepository` is deliberately absent: it is `internal`, and a
+     * public provider may not expose an internal type. It joins the graph with
+     * its own `@Inject constructor` instead, so this test names the reason a
+     * future reader would otherwise be tempted to re-add it.
+     */
+    @Test
+    fun `the internal repository stays out of the module`() {
+        assertTrue(
+            "FanartArtRepository is internal and cannot be a provider's return type",
+            !module.contains("FanartArtRepository")
+        )
     }
 
     private fun source(path: String): String {

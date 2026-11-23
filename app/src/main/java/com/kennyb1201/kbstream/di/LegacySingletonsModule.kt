@@ -5,7 +5,6 @@ import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.airdates.TvmazeAirDateRepository
 import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
-import com.kennyb1201.kbstream.data.fanart.FanartArtRepository
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
 import com.kennyb1201.kbstream.data.kb.KBRepository
@@ -44,6 +43,15 @@ import javax.inject.Singleton
  * profile switch is supposed to be unable to cause. They are unscoped here so
  * every resolution still asks the accessor, and their migration (a resolver or
  * a per-profile component) is deliberately left for its own phase.
+ *
+ * ## The one class that is not here yet
+ *
+ * `FanartArtRepository` is `internal`, so a public provider returning it does not
+ * compile ("'public' function exposes its 'internal' return type"), and an
+ * `internal` provider would hand Dagger's generated Java a mangled name to call.
+ * It therefore joins this module when its own construction moves, where it is a
+ * `@Inject constructor` on the class - the class stays internal either way, and
+ * its `getInstance` stays the single owner until then.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -53,11 +61,6 @@ object LegacySingletonsModule {
     @Singleton
     fun tmdbRepository(@ApplicationContext context: Context): TmdbRepository =
         TmdbRepository.getInstance(context)
-
-    @Provides
-    @Singleton
-    fun fanartArtRepository(@ApplicationContext context: Context): FanartArtRepository =
-        FanartArtRepository.getInstance(context)
 
     @Provides
     @Singleton
