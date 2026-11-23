@@ -132,7 +132,7 @@ class TvdbOrderWiringContractTest {
         )
         assertTrue(
             "and the call site is the detail paint, not a sweep",
-            detailVm.contains("_tmdbDetail.value = shownDetail") &&
+            detailVm.contains("_tmdbDetail.value = detail") &&
                 detailVm.contains("loadEpisodeOrders()")
         )
         assertTrue(

@@ -99,8 +99,40 @@ class FrameRateProbeTest {
         val ranges = synchronized(requests) { requests.toList() }
         assertTrue("a warm-up request is expected first", ranges.first().contains("bytes=0-0"))
         assertTrue(
-            "the head is the ~4 MB ranged fetch",
-            ranges.any { it.contains("bytes=0-4194303") }
+            "the head starts as the first 512 KB slice",
+            ranges.any { it.contains("bytes=0-524287") }
+        )
+        assertFalse(
+            "a slice that answers the rate must not pay for the rest of the 4 MB",
+            ranges.any { it.contains("bytes=524288-4194303") }
+        )
+    }
+
+    @Test
+    fun `a head that carries no rate is extended by the rest of the head, once`() = runBlocking {
+        // Stage one's slice has nothing the reader can use; the completed head
+        // does. This is the timestamp-fallback shape: the cadence needs samples
+        // the first slice did not hold.
+        var reads = 0
+        FrameRateProbe.fpsReader = {
+            reads += 1
+            if (reads == 1) null else 23.976
+        }
+        body = ByteArray(64)
+
+        val fps = FrameRateProbe.probe(url("staged.mkv"), emptyMap(), headDir)
+
+        assertEquals(23.976, fps ?: 0.0, 0.0)
+        val ranges = synchronized(requests) { requests.toList() }
+        assertTrue(
+            "the unreadable slice is extended by one ranged request",
+            ranges.any { it.contains("bytes=0-524287") } &&
+                ranges.any { it.contains("bytes=524288-4194303") }
+        )
+        assertEquals(
+            "and the head is fetched exactly twice after the warm-up, not per page",
+            3,
+            ranges.count { it != "" }
         )
     }
 

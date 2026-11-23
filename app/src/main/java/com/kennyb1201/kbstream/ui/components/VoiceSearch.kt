@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -162,6 +163,35 @@ internal fun VoiceSearchChip(
 ) {
     val context = LocalContext.current
     val launchVoiceSearch = rememberVoiceSearch(onTranscript, prompt)
+    // Constant chrome, remembered rather than rebuilt on every focus move
+    // (perf spec 2026-11-22, item 4). `shape` and `colors` are @Composable
+    // defaults calls, so they stay inline.
+    val chipScale = remember {
+        ClickableSurfaceDefaults.scale(
+            focusedScale = KBFocusChip,
+            pressedScale = KBFocusPressed
+        )
+    }
+    val chipBorder = remember {
+        Border(
+            border = BorderStroke(1.dp, KBTextLo.copy(alpha = 0.35f)),
+            shape = KBShapeChip
+        )
+    }
+    val chipFocusedBorder = remember {
+        Border(
+            border = BorderStroke(2.dp, KBAccent),
+            shape = KBShapeChip
+        )
+    }
+    val chipGlow = remember {
+        ClickableSurfaceDefaults.glow(
+            focusedGlow = Glow(
+                elevationColor = KBAccent,
+                elevation = KBFocusGlowSmall
+            )
+        )
+    }
 
     Surface(
         onClick = {
@@ -181,26 +211,12 @@ internal fun VoiceSearchChip(
             pressedContainerColor = KBAccent,
             pressedContentColor = KBVoid
         ),
-        scale = ClickableSurfaceDefaults.scale(
-            focusedScale = KBFocusChip,
-            pressedScale = KBFocusPressed
-        ),
+        scale = chipScale,
         border = ClickableSurfaceDefaults.border(
-            border = Border(
-                border = BorderStroke(1.dp, KBTextLo.copy(alpha = 0.35f)),
-                shape = KBShapeChip
-            ),
-            focusedBorder = Border(
-                border = BorderStroke(2.dp, KBAccent),
-                shape = KBShapeChip
-            )
+            border = chipBorder,
+            focusedBorder = chipFocusedBorder
         ),
-        glow = ClickableSurfaceDefaults.glow(
-            focusedGlow = Glow(
-                elevationColor = KBAccent,
-                elevation = KBFocusGlowSmall
-            )
-        ),
+        glow = chipGlow,
         modifier = modifier
     ) {
         Row(

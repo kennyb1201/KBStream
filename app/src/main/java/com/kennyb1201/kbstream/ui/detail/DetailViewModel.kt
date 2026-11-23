@@ -344,6 +344,31 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val _tmdbDetail = MutableStateFlow<TmdbDetail?>(null)
 
+    /**
+     * "More Like This", on its own flow (perf spec 2026-11-22, item 7a).
+     *
+     * The rail's list is trimmed by three rules and then replaced by the taste
+     * blend, and both publishes used to copy the WHOLE [TmdbDetail] just to swap
+     * `recommendations`. A new TmdbDetail is a new instance, so every
+     * `remember(tmdbDetail)` derivation on the page - people, media, seasons,
+     * keywords, the meta line, the trailer - re-ran because one rail changed.
+     * The page is the app's busiest composition, so that copy was the
+     * structural driver behind its busy windows.
+     *
+     * The rail now has its own flow: a trim or a blend publish touches this and
+     * nothing else. Detail is published once, whole.
+     */
+    private val _recommendations = MutableStateFlow<TmdbRecommendations?>(null)
+
+    /**
+     * The rail the screen draws: null until a detail answers, then the trimmed
+     * list (and, once it has run, the blend's picks).
+     *
+     * Readers fall back to `tmdbDetail.recommendations` when this is null, so a
+     * cached detail that never went through this flow still draws its own list.
+     */
+    val recommendations: StateFlow<TmdbRecommendations?> = _recommendations.asStateFlow()
+
     // Full review list = the page bundled with the detail payload plus every
     // additional page from the standalone paginated reviews endpoint. Kept
     // separate so the UI can render page 1 immediately while the rest loads.
@@ -885,7 +910,10 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
             _collection.value?.parts.orEmpty().forEach { part ->
                 add(PosterWatchItem(part.id, "movie", part.title))
             }
-            _tmdbDetail.value?.recommendations?.results.orEmpty().forEach { rec ->
+            // The rail's current list, from its own flow when it has one: the
+            // blend publishes there, not into the detail (perf spec item 7a).
+            val rail = _recommendations.value ?: _tmdbDetail.value?.recommendations
+            rail?.results.orEmpty().forEach { rec ->
                 add(PosterWatchItem(rec.id, normalizedType, rec.title ?: rec.name))
             }
         }.distinct()
@@ -1684,6 +1712,8 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         val ceilingAtLoad = tmdbRepository.kidsMaxAge()
         _meta.value = initialMeta.takeIf { ceilingAtLoad == null }
         _tmdbDetail.value = null
+        // The rail belongs to the title being left, like the detail itself.
+        _recommendations.value = null
         _isSyntheticDetail.value = false
         _airDateCorrections.value = AirDateCorrections.NONE
         _episodes.value = emptyList()
@@ -1958,6 +1988,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                     ) {
                         _meta.value = null
                         _tmdbDetail.value = null
+                        _recommendations.value = null
                         _error.value =
                             "This title isn't available on this profile."
                         Log.i(
@@ -2327,6 +2358,9 @@ for ((metaAddon, response, error) in probeResults) {
                 .mapNotNull { it.season }
                 .distinct()
                 .sorted()
+            // A synthetic detail has no recommendations at all: clear the rail
+            // so the previous title's list cannot stand in for this one.
+            _recommendations.value = null
             _tmdbDetail.value = TmdbDetail(
                 id = -1,
                 name = _meta.value?.name,
@@ -2364,7 +2398,7 @@ for ((metaAddon, response, error) in probeResults) {
                     // then the app-wide digital-release filter trims movies
                     // not yet available at home when the Settings toggle is
                     // on. Recs inherit this screen's media type.
-                    val shownDetail =
+                    val shownRecommendations =
                         if (
                             detail != null &&
                             detail.recommendations?.results.orEmpty().isNotEmpty()
@@ -2398,16 +2432,17 @@ for ((metaAddon, response, error) in probeResults) {
                                     ) { it.id to normalizedType }
                             }
 
-                            detail.copy(
-                                recommendations = detail.recommendations?.copy(
-                                    results = recs
-                                )
-                            )
+                            detail.recommendations?.copy(results = recs)
                         } else {
-                            detail
+                            detail?.recommendations
                         }
 
-                    _tmdbDetail.value = shownDetail
+                    // One whole-detail publish (perf spec 2026-11-22, item 7b):
+                    // the trimmed rail rides its own flow, so cast, media,
+                    // seasons, keywords and the meta line are not invalidated by
+                    // a change to one rail.
+                    _tmdbDetail.value = detail
+                    _recommendations.value = shownRecommendations
                     // The alternate-order row, once the page is up: its whole
                     // worth is "this show has more than one numbering", and a
                     // show with one must not pay for the question.
@@ -2420,7 +2455,7 @@ for ((metaAddon, response, error) in probeResults) {
                             "companies=${detail?.productionCompanies?.size} " +
                             "reviews=${detail?.reviews?.results?.size} " +
                             "recs=${detail?.recommendations?.results?.size} " +
-                            "recsShown=${shownDetail?.recommendations?.results?.size} " +
+                            "recsShown=${shownRecommendations?.results?.size} " +
                             // Whether TMDB returned any video at all decides
                             // whether the trailer button can exist; logging it
                             // separates "no video on TMDB" from "we hid it".
@@ -2512,11 +2547,14 @@ for ((metaAddon, response, error) in probeResults) {
                         val current = _tmdbDetail.value ?: return@launch
                         if (current.id != blendSeed.id) return@launch
                         if (items.isEmpty()) return@launch
-                        _tmdbDetail.value = current.copy(
-                            recommendations = (
-                                current.recommendations ?: TmdbRecommendations()
-                                ).copy(results = items)
-                        )
+                        // The rail only (perf spec 2026-11-22, item 7a): the
+                        // blend used to copy the whole detail to swap this list,
+                        // re-running every `remember(tmdbDetail)` on the page.
+                        val baseRecommendations =
+                            _recommendations.value
+                                ?: current.recommendations
+                                ?: TmdbRecommendations()
+                        _recommendations.value = baseRecommendations.copy(results = items)
                         // The rail's badge set was built against the list this
                         // just replaced, so the blend's own picks - backfilled
                         // similar titles included - came up with neither the

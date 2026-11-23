@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -50,6 +51,43 @@ fun StudioChip(
     modifier: Modifier = Modifier
 ) {
     val cardShape = KBShapeChip
+    // A chip recomposes on every focus move - that is what a rail walk is - and
+    // its chrome was rebuilt each time. All of it is constant here, so the plain
+    // builders and the two Border objects are remembered; `shape` and `colors`
+    // are @Composable defaults calls and stay inline (perf spec 2026-11-22,
+    // item 4).
+    val chipScale = remember {
+        ClickableSurfaceDefaults.scale(
+            focusedScale = KBFocusChip,
+            pressedScale = KBFocusPressed
+        )
+    }
+    val chipBorder = remember(cardShape) {
+        Border(
+            border = BorderStroke(
+                1.dp,
+                KBTextHi.copy(alpha = 0.35f)
+            ),
+            shape = cardShape
+        )
+    }
+    val chipFocusedBorder = remember(cardShape) {
+        Border(
+            border = BorderStroke(
+                3.dp,
+                KBAccent
+            ),
+            shape = cardShape
+        )
+    }
+    val chipGlow = remember {
+        ClickableSurfaceDefaults.glow(
+            focusedGlow = Glow(
+                elevationColor = KBAccent,
+                elevation = KBFocusGlow
+            )
+        )
+    }
 
     Surface(
         onClick = onClick,
@@ -64,32 +102,12 @@ fun StudioChip(
             pressedContainerColor = Color.White,
             pressedContentColor = Color.Black
         ),
-        scale = ClickableSurfaceDefaults.scale(
-            focusedScale = KBFocusChip,
-            pressedScale = KBFocusPressed
-        ),
+        scale = chipScale,
         border = ClickableSurfaceDefaults.border(
-            border = Border(
-                border = BorderStroke(
-                    1.dp,
-                    KBTextHi.copy(alpha = 0.35f)
-                ),
-                shape = cardShape
-            ),
-            focusedBorder = Border(
-                border = BorderStroke(
-                    3.dp,
-                    KBAccent
-                ),
-                shape = cardShape
-            )
+            border = chipBorder,
+            focusedBorder = chipFocusedBorder
         ),
-        glow = ClickableSurfaceDefaults.glow(
-            focusedGlow = Glow(
-                elevationColor = KBAccent,
-                elevation = KBFocusGlow
-            )
-        ),
+        glow = chipGlow,
         modifier = modifier
             .width(120.dp)
             .height(54.dp)

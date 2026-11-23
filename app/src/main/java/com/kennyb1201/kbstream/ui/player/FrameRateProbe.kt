@@ -51,11 +51,30 @@ internal object FrameRateProbe {
     private const val TAG = "PLAYER_AFR"
 
     /**
-     * The head fetched for parsing. A container declares its video track's rate
-     * in the first few kilobytes; 4 MB is generous headroom for a box that
-     * served a slow start.
+     * The most of the head this probe will fetch. A container declares its video
+     * track's rate in the first few kilobytes; 4 MB is generous headroom for a
+     * box that served a slow start, and for the timestamp fallback, which needs
+     * a couple of seconds of samples to see a cadence.
+     *
+     * It is a CEILING, not the request: see [FIRST_STAGE_BYTES].
      */
     private const val HEAD_BYTES = 4_194_304L
+
+    /**
+     * The slice fetched first, before anything else is asked for.
+     *
+     * The probe used to ranged-GET all 4 MB in one request while the player was
+     * still filling its start gate - competing with the video fill for the bytes
+     * the viewer was waiting on, and paying for them on every launch. Most
+     * containers answer from much less: MP4 and Matroska put the track header in
+     * the first few kilobytes, so the declared rate is readable from a slice.
+     *
+     * A head that carries no rate in this slice (the timestamp fallback needs
+     * samples to walk) is extended by one more ranged request for the rest of
+     * [HEAD_BYTES] - the difference, not the whole head again - and re-parsed. A
+     * source that answers in this slice never pays for the rest.
+     */
+    private const val FIRST_STAGE_BYTES = 524_288L
 
     /**
      * How many sample timestamps the fallback estimate walks. A dozen samples
@@ -303,26 +322,89 @@ internal object FrameRateProbe {
                 .close()
         }
         val temp = File.createTempFile("afrprobe", ".head", dir)
+        val deadlineAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budgetMs)
         try {
-            executeWithTimeout(request(url, headers, from = 0L, to = HEAD_BYTES - 1), budgetMs)
-                .use { response ->
-                    if (response.code != 206 && !response.isSuccessful) {
-                        Log.w(TAG, "probe head request: HTTP ${response.code}")
-                        return@withContext null
-                    }
-                    response.body.byteStream().use { input ->
-                        temp.outputStream().use { output -> input.copyTo(output) }
-                    }
-                }
+            // Stage one: the slice a container declares its cadence in.
+            val first = fetchHead(
+                url = url,
+                headers = headers,
+                into = temp,
+                from = 0L,
+                to = FIRST_STAGE_BYTES - 1,
+                budgetMs = budgetMs,
+                append = false
+            ) ?: return@withContext null
             if (temp.length() == 0L) {
                 Log.w(TAG, "probe head: empty body")
                 return@withContext null
             }
+            fpsReader(temp)?.let { fps ->
+                Log.i(TAG, "probe: rate read from the first ${FIRST_STAGE_BYTES / 1024} KB")
+                return@withContext HeadReading(fps)
+            }
+            // No rate in the slice. Either those bytes are all there is (the
+            // origin ignored the range), or this head needs the rest of the
+            // timestamp samples - fetched as the remaining range, not again.
+            if (first == HeadSlice.FULL_BODY || HEAD_BYTES <= FIRST_STAGE_BYTES) {
+                return@withContext HeadReading(null)
+            }
+            val remainingMs = TimeUnit.NANOSECONDS.toMillis(deadlineAt - System.nanoTime())
+            if (remainingMs <= 0L) return@withContext HeadReading(null)
+            fetchHead(
+                url = url,
+                headers = headers,
+                into = temp,
+                from = FIRST_STAGE_BYTES,
+                to = HEAD_BYTES - 1,
+                budgetMs = remainingMs,
+                append = true
+            ) ?: return@withContext null
             HeadReading(fpsReader(temp))
         } finally {
             runCatching { temp.delete() }
         }
     }
+
+    /** Whether a fetched slice was the requested range or the whole entity. */
+    private enum class HeadSlice { PARTIAL, FULL_BODY }
+
+    /**
+     * Fetches bytes [from]..[to] of [url] into [into], appending when asked.
+     *
+     * Null when the bytes did not arrive (HTTP error, timeout, connection) -
+     * the same answer the old single-request head gave, so the caller still
+     * records a NETWORK failure and the retry path is unchanged. A successful
+     * response is [HeadSlice.PARTIAL] for a 206 and [HeadSlice.FULL_BODY] for a
+     * 200, which is an origin that ignored the range: those bytes are the whole
+     * entity and asking for more would duplicate them.
+     */
+    private suspend fun fetchHead(
+        url: String,
+        headers: Map<String, String>,
+        into: File,
+        from: Long,
+        to: Long,
+        budgetMs: Long,
+        append: Boolean
+    ): HeadSlice? =
+        if (budgetMs <= 0L) {
+            null
+        } else {
+            executeWithTimeout(request(url, headers, from = from, to = to), budgetMs)
+                .use { response ->
+                    if (response.code != 206 && !response.isSuccessful) {
+                        Log.w(TAG, "probe head request: HTTP ${response.code}")
+                        null
+                    } else {
+                        response.body.byteStream().use { input ->
+                            into.outputStream(append = append).use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        if (response.code == 206) HeadSlice.PARTIAL else HeadSlice.FULL_BODY
+                    }
+                }
+        }
 
     private fun request(
         url: String,

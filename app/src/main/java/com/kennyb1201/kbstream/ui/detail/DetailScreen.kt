@@ -2396,9 +2396,15 @@ fun DetailScreen(
      * that is all about the title you just hid is the first place it comes
      * back.
      */
+    // "More Like This" comes from its own flow (perf spec 2026-11-22, item 7a):
+    // the trim and the taste blend publish there, so this rail changing no
+    // longer means the whole detail changed. A detail served from a cache that
+    // never ran the flow still draws its own list through the fallback.
+    val recommendationsFlow by viewModel.recommendations.collectAsStateWithLifecycle()
+    val recommendationSource = recommendationsFlow ?: tmdbDetail?.recommendations
     val recommendations =
-        remember(tmdbDetail?.recommendations, hiddenTitleKeys, normalizedType) {
-        tmdbDetail?.recommendations
+        remember(recommendationSource, hiddenTitleKeys, normalizedType) {
+        recommendationSource
             ?.results
             .orEmpty()
             .filterNot { rec ->
@@ -12311,6 +12317,40 @@ private fun DetailTabPill(
     // whether the pill EVER held the focus or whether the request itself was
     // dropped. Kept per pill, so a focus move between pills is a LOST/GAIN pair.
     var pillHadFocus by remember(tab) { mutableStateOf(false) }
+    // A pill recomposes on every focus move along the strip - that IS the strip
+    // - so its chrome is remembered rather than rebuilt per step (perf spec
+    // 2026-11-22, item 4). The rest border is the only one that depends on a
+    // value; `shape` and `colors` are @Composable defaults calls and stay inline.
+    val pillScale = remember {
+        ClickableSurfaceDefaults.scale(
+            focusedScale = KBFocusChip,
+            pressedScale = KBFocusPressed
+        )
+    }
+    val pillBorder = remember(selected) {
+        Border(
+            border = BorderStroke(
+                1.dp,
+                if (selected) KBAccent.copy(alpha = 0.7f)
+                else KBTextLo.copy(alpha = 0.25f)
+            ),
+            shape = KBShapeChip
+        )
+    }
+    val pillFocusedBorder = remember {
+        Border(
+            border = BorderStroke(2.dp, KBAccent),
+            shape = KBShapeChip
+        )
+    }
+    val pillGlow = remember {
+        ClickableSurfaceDefaults.glow(
+            focusedGlow = Glow(
+                elevationColor = KBAccent,
+                elevation = KBFocusGlowSmall
+            )
+        )
+    }
     Surface(
         onClick = { onSelect(tab) },
         shape = ClickableSurfaceDefaults.shape(shape = KBShapeChip),
@@ -12322,30 +12362,12 @@ private fun DetailTabPill(
             pressedContainerColor = KBSurfaceRaised,
             pressedContentColor = KBAccent
         ),
-        scale = ClickableSurfaceDefaults.scale(
-            focusedScale = KBFocusChip,
-            pressedScale = KBFocusPressed
-        ),
+        scale = pillScale,
         border = ClickableSurfaceDefaults.border(
-            border = Border(
-                border = BorderStroke(
-                    1.dp,
-                    if (selected) KBAccent.copy(alpha = 0.7f)
-                    else KBTextLo.copy(alpha = 0.25f)
-                ),
-                shape = KBShapeChip
-            ),
-            focusedBorder = Border(
-                border = BorderStroke(2.dp, KBAccent),
-                shape = KBShapeChip
-            )
+            border = pillBorder,
+            focusedBorder = pillFocusedBorder
         ),
-        glow = ClickableSurfaceDefaults.glow(
-            focusedGlow = Glow(
-                elevationColor = KBAccent,
-                elevation = KBFocusGlowSmall
-            )
-        ),
+        glow = pillGlow,
         modifier = Modifier
             .focusRequester(requester)
             .onFocusChanged { state ->

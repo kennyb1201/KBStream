@@ -402,6 +402,9 @@ fun DetailScreenMobile(
         // facts block rather than something the block waits for.
         val awards by viewModel.awards.collectAsStateWithLifecycle()
         val allReviews by viewModel.allReviews.collectAsStateWithLifecycle()
+        // The rail, on its own flow (perf spec 2026-11-22, item 7a) - see the TV
+        // screen; the fallback keeps a cached detail's own list drawable.
+        val recommendationsFlow by viewModel.recommendations.collectAsStateWithLifecycle()
         val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
         val error by viewModel.error.collectAsStateWithLifecycle()
 
@@ -2581,7 +2584,10 @@ fun DetailScreenMobile(
                     }
                 }
 
-                val recommendations = tmdbDetail?.recommendations?.results.orEmpty()
+                val recommendations =
+                    (recommendationsFlow ?: tmdbDetail?.recommendations)
+                        ?.results
+                        .orEmpty()
                 if (recommendations.isNotEmpty()) {
                     item(key = "recommendations") {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {

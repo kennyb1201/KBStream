@@ -2026,7 +2026,18 @@ object SupabaseSync {
      * needs a total order, and two rows sharing an updated stamp would
      * otherwise be able to repeat or vanish between pages.
      */
-    private suspend fun pullRows(table: String, keyColumn: String): List<SyncRowDto> {
+    private suspend fun pullRows(
+        table: String,
+        keyColumn: String,
+        /**
+         * The ISO-8601 server timestamp this pull starts at, or null for a full
+         * read (perf spec 2026-11-22, item 9).
+         *
+         * Comes from [SyncWatermark.windowStart], which applies the overlap the
+         * merge needs; this function only carries it to PostgREST.
+         */
+        updatedSince: String? = null
+    ): List<SyncRowDto> {
         val c = client ?: return emptyList()
         val rows = ArrayList<SyncRowDto>()
         var page = 0
@@ -2034,6 +2045,12 @@ object SupabaseSync {
             val from = page.toLong() * PULL_PAGE_SIZE
             val batch = c.from(table)
                 .select {
+                    // `updated_at` is the SERVER's write time (a column default),
+                    // not the payload's client clock - which is what makes it a
+                    // usable cursor across devices.
+                    if (updatedSince != null) {
+                        filter { gt("updated_at", updatedSince) }
+                    }
                     order(keyColumn, Order.ASCENDING)
                     range(from, from + PULL_PAGE_SIZE - 1)
                 }
@@ -2046,6 +2063,58 @@ object SupabaseSync {
         }
         Log.w(TAG, "pull $table hit the page limit; the tail was not read")
         return rows
+    }
+
+    // ── Pull watermarks (perf spec 2026-11-22, item 9) ───────────────
+    //
+    // One per (table, profile), in the same secure prefs store as the rest of
+    // the sync state. Profile-scoped because the tables hold every profile's
+    // rows; table-scoped because the four tables are written independently.
+
+    /** Prefs key prefix; also what [clearPullWatermarks] sweeps. */
+    private companion object Watermarks {
+        const val PULL_WATERMARK_PREFIX = "pull_watermark_"
+    }
+
+    private fun pullWatermarkKey(table: String, pid: String?): String =
+        "$PULL_WATERMARK_PREFIX${table}_${pid ?: "legacy"}"
+
+    /** The server timestamp this table was last read through, or null. */
+    private fun readPullWatermark(context: Context, table: String, pid: String?): Long? =
+        syncPrefs(context).getLong(pullWatermarkKey(table, pid), 0L).takeIf { it > 0L }
+
+    /**
+     * Records the newest server timestamp a pull APPLIED.
+     *
+     * Called only from a pull that finished applying under the profile it
+     * started with; a failed cycle or a mid-pull switch leaves the old value,
+     * so its window is read again rather than skipped.
+     */
+    private fun writePullWatermark(
+        context: Context,
+        table: String,
+        pid: String?,
+        through: Long?
+    ) {
+        if (through == null) return
+        syncPrefs(context).edit()
+            .putLong(pullWatermarkKey(table, pid), through)
+            .apply()
+    }
+
+    /**
+     * Forgets every table's watermark so the next pull reads everything.
+     *
+     * For a full resync only: the ordinary paths must keep their cursors, and a
+     * sign-out already drops the whole prefs store.
+     */
+    private fun clearPullWatermarks(context: Context) {
+        val prefs = syncPrefs(context)
+        val keys = prefs.all.keys.filter { it.startsWith(PULL_WATERMARK_PREFIX) }
+        if (keys.isEmpty()) return
+        val edit = prefs.edit()
+        keys.forEach { key -> edit.remove(key) }
+        edit.apply()
     }
 
     private suspend fun pullHistory(
@@ -2069,8 +2138,15 @@ object SupabaseSync {
         // must - one broken table cannot abort the other three), so without an
         // answer the stamp below claimed a sync that never happened.
         var ok = true
+        // Only what changed since the last applied cycle (with the merge's
+        // overlap); null on a first/forced sync, which reads as before.
+        val watermark = readPullWatermark(context, TABLE_HISTORY, pid)
         try {
-            val rows = pullRows(TABLE_HISTORY, "item_id")
+            val rows = pullRows(
+                TABLE_HISTORY,
+                "item_id",
+                SyncWatermark.windowStart(watermark)
+            )
 
             // Which profile each title belongs to, taken from the rows of ALL
             // profiles (see recordHistoryTitleOwners) - done before the merge
@@ -2211,6 +2287,18 @@ object SupabaseSync {
                     db.watchHistoryDao().getAll()
                 )
             }
+            // This window is fully applied: remember how far the server has
+            // answered, so the next cycle asks only for what came after it.
+            // Advancing to the newest timestamp SEEN keeps a cycle that read
+            // rows it then declined (an older remote) from re-reading them.
+            if (currentProfileId() == pid) {
+                writePullWatermark(
+                    context,
+                    TABLE_HISTORY,
+                    pid,
+                    SyncWatermark.nextThrough(watermark, rows.map { row -> row.updatedAt })
+                )
+            }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             ok = false
@@ -2234,8 +2322,13 @@ object SupabaseSync {
         // id on the switch path).
         val pid = profileId ?: currentProfileId()
         var ok = true
+        val watermark = readPullWatermark(context, TABLE_WATCHED, pid)
         try {
-            val rows = pullRows(TABLE_WATCHED, "item_key")
+            val rows = pullRows(
+                TABLE_WATCHED,
+                "item_key",
+                SyncWatermark.windowStart(watermark)
+            )
 
             val db = WatchHistoryDatabase.getInstanceScoped(context, pid)
             // Same N+1 fix as pullHistory: load the relevant local rows once
@@ -2278,6 +2371,14 @@ object SupabaseSync {
                 Log.i(TAG, "watched pull applied $applied rows")
                 WatchedStatusRepository.invalidateAllCaches()
             }
+            if (currentProfileId() == pid) {
+                writePullWatermark(
+                    context,
+                    TABLE_WATCHED,
+                    pid,
+                    SyncWatermark.nextThrough(watermark, rows.map { row -> row.updatedAt })
+                )
+            }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             ok = false
@@ -2316,8 +2417,13 @@ object SupabaseSync {
         // id on the switch path).
         val pid = profileId ?: currentProfileId()
         var ok = true
+        val watermark = readPullWatermark(context, TABLE_OVERRIDES, pid)
         try {
-            val rows = pullRows(TABLE_OVERRIDES, KEY_OVERRIDES)
+            val rows = pullRows(
+                TABLE_OVERRIDES,
+                KEY_OVERRIDES,
+                SyncWatermark.windowStart(watermark)
+            )
             for (row in rows) {
                 // Bail on a mid-pull profile switch (same rule as pullHistory).
                 if (currentProfileId() != pid) return false
@@ -2327,6 +2433,14 @@ object SupabaseSync {
             }
             if (rows.isNotEmpty()) {
                 Log.i(TAG, "override pull read ${rows.size} row(s) for profile=${pid ?: "legacy"}")
+            }
+            if (currentProfileId() == pid) {
+                writePullWatermark(
+                    context,
+                    TABLE_OVERRIDES,
+                    pid,
+                    SyncWatermark.nextThrough(watermark, rows.map { row -> row.updatedAt })
+                )
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -3177,6 +3291,10 @@ object SupabaseSync {
         // used to report as success.
         val syncedBefore = _lastSyncAtMs.value
         try {
+            // A full resync means "read everything again", so the cursors are
+            // dropped first (perf spec 2026-11-22, item 9). Ordinary syncs keep
+            // theirs.
+            clearPullWatermarks(context)
             flushOutbox()
             pullAllNow(context)
             pushAllNow(context)

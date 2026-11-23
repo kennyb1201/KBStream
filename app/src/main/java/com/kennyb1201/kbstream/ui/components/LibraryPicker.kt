@@ -757,6 +757,36 @@ private fun PickerRow(
 ) {
     var focused by remember { mutableStateOf(false) }
     val shape = KBShapeCard
+    // The row's chrome is constant and it recomposes on every focus move, so
+    // the plain builders and the two Border objects are remembered; `shape` and
+    // `colors` are @Composable defaults calls and stay inline (perf spec
+    // 2026-11-22, item 4).
+    val rowScale = remember {
+        androidx.tv.material3.ClickableSurfaceDefaults.scale(
+            focusedScale = KBFocusRow,
+            pressedScale = KBFocusPressed
+        )
+    }
+    val rowBorder = remember(shape) {
+        Border(
+            border = BorderStroke(1.dp, KBTextLo.copy(alpha = 0.25f)),
+            shape = shape
+        )
+    }
+    val rowFocusedBorder = remember(shape) {
+        Border(
+            border = BorderStroke(2.dp, KBAccent),
+            shape = shape
+        )
+    }
+    val rowGlow = remember {
+        androidx.tv.material3.ClickableSurfaceDefaults.glow(
+            focusedGlow = Glow(
+                elevationColor = KBAccent,
+                elevation = KBFocusGlowSmall
+            )
+        )
+    }
 
     // One TV clickable Surface, not `.focusable().clickable()`: that stack is
     // two focus targets, so the first D-pad press only landed focus and the
@@ -784,26 +814,12 @@ private fun PickerRow(
         // AddonListCard's value. The row keeps its layout height on focus
         // (see the clip note above), so the description cannot be pushed past
         // the list item it lives in.
-        scale = androidx.tv.material3.ClickableSurfaceDefaults.scale(
-            focusedScale = KBFocusRow,
-            pressedScale = KBFocusPressed
-        ),
+        scale = rowScale,
         border = androidx.tv.material3.ClickableSurfaceDefaults.border(
-            border = Border(
-                border = BorderStroke(1.dp, KBTextLo.copy(alpha = 0.25f)),
-                shape = shape
-            ),
-            focusedBorder = Border(
-                border = BorderStroke(2.dp, KBAccent),
-                shape = shape
-            )
+            border = rowBorder,
+            focusedBorder = rowFocusedBorder
         ),
-        glow = androidx.tv.material3.ClickableSurfaceDefaults.glow(
-            focusedGlow = Glow(
-                elevationColor = KBAccent,
-                elevation = KBFocusGlowSmall
-            )
-        ),
+        glow = rowGlow,
         modifier = modifier
             .fillMaxWidth()
             .onFocusChanged { focused = it.isFocused }
