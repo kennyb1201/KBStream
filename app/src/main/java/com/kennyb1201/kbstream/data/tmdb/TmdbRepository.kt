@@ -2077,9 +2077,10 @@ class TmdbRepository private constructor(context: Context) :
      * back is reported as NO answer, not as the primary: the caller already has
      * the primary, and at the size the caller holds it.
      *
-     * No clearlogo comes with it - TMDB publishes no logos for a collection - so
-     * a collection card keeps its plain title in the corner where a title card
-     * draws its English wordmark.
+     * No clearlogo comes with it: TMDB publishes no logos for a collection (its
+     * collection images are posters and backdrops only). The wordmark a
+     * collection tile draws comes from fanart, one layer up in
+     * `GlobalLandscapeArtCache` - this function is only ever the backdrop.
      */
     suspend fun fetchCollectionBackdropCached(
         collectionId: Int,

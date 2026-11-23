@@ -86,7 +86,10 @@ fun TouchGlobalPosterCard(
                 fallbackUrl = art.first?.takeIf { it.isNotBlank() } ?: posterUrl
             ),
             logoUrl = art.second,
-            fallbackTitle = contentDescription,
+            // Same rule as GlobalPosterCard: a collection tile draws its
+            // clearlogo or clean art, never its name on the art (spec
+            // 2026-11-23). contentDescription stays for accessibility.
+            fallbackTitle = contentDescription.takeUnless { isCollectionArtType(artType) },
             contentDescription = contentDescription,
             isWatched = isWatched,
             isPartiallyWatched = isPartiallyWatched,
@@ -165,7 +168,10 @@ fun TouchGlobalPosterTile(
                 fallbackUrl = art.first?.takeIf { it.isNotBlank() } ?: posterUrl
             ),
             logoUrl = art.second,
-            fallbackTitle = contentDescription,
+            // Same rule as GlobalPosterCard: a collection tile draws its
+            // clearlogo or clean art, never its name on the art (spec
+            // 2026-11-23). contentDescription stays for accessibility.
+            fallbackTitle = contentDescription.takeUnless { isCollectionArtType(artType) },
             contentDescription = contentDescription,
             isWatched = isWatched,
             isPartiallyWatched = isPartiallyWatched,

@@ -6,6 +6,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import com.kennyb1201.kbstream.data.fanart.FanartArtRepository
+import com.kennyb1201.kbstream.data.fanart.FanartKind
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
@@ -119,9 +121,15 @@ internal object GlobalLandscapeArtCache {
                     // detail response to append `images` to (see
                     // TmdbApiService.getCollectionImages), so the title lookup
                     // below could only answer for whatever TITLE happens to
-                    // share the collection's number. The ranked backdrop is the
-                    // whole answer - TMDB publishes no logos for a collection -
-                    // and the card keeps its plain title in the corner.
+                    // share the collection's number.
+                    //
+                    // TMDB publishes no logos for a collection, so its half is
+                    // the ranked text-free backdrop alone; the wordmark comes
+                    // from fanart, which does carry collection clearlogos
+                    // (spec 2026-11-23, collection tiles). The fanart id is the
+                    // COLLECTION id and the request declares that id space (see
+                    // fanartCollectionUrl): a bare numeric id there would answer
+                    // for the film that shares the number.
                     val collectionId = request.id.trim().toIntOrNull()
                     if (collectionId == null) {
                         null to null
@@ -133,8 +141,20 @@ internal object GlobalLandscapeArtCache {
                                     TmdbRepository.tmdbImagePath(request.addonBackdrop)
                             )
                         }
-                        answered = backdrop.isSuccess
-                        backdrop.getOrNull() to null
+                        val logo = runCatchingCancellable {
+                            FanartArtRepository.getInstance(context.applicationContext)
+                                .clearlogoAnswer(FanartKind.Collection, collectionId)
+                        }
+                        // File only a complete answer: the disk row keeps a
+                        // backdrop-without-logo for a MONTH, so a fanart call
+                        // that failed must not be written down as "fanart has
+                        // no wordmark for this collection". `answered` here is
+                        // the pair's - a failed backdrop also leaves the row
+                        // unwritten, exactly as before.
+                        answered = backdrop.isSuccess &&
+                            logo.isSuccess &&
+                            logo.getOrNull()?.answered == true
+                        backdrop.getOrNull() to logo.getOrNull()?.url
                     }
                 } else {
                     // The row's id is the address, and a "tmdb:<n>" one is a

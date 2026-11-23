@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -45,6 +44,8 @@ import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
 import com.kennyb1201.kbstream.ui.browse.collectionBrowseScreenKey
 import com.kennyb1201.kbstream.ui.collection.CollectionViewModel
+import com.kennyb1201.kbstream.ui.components.ART_TYPE_COLLECTION
+import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.trailerMenuAction
@@ -57,7 +58,6 @@ import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.touch.MobileLoading
 import com.kennyb1201.kbstream.ui.components.touch.MobileStatus
-import com.kennyb1201.kbstream.ui.components.touch.PosterCard
 import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterTile
 import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
 import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
@@ -219,6 +219,7 @@ fun CollectionScreenMobile(
                         MobileBackButton(onBack = onBack)
                         CollectionHeaderMobile(
                             name = collection?.name ?: collectionName,
+                            collectionId = collectionId,
                             overview = collection?.overview,
                             posterUrl = imageOverridePosterUrl(
                                 paths = overridePaths,
@@ -405,6 +406,7 @@ fun CollectionScreenMobile(
 @Composable
 private fun CollectionHeaderMobile(
     name: String,
+    collectionId: Int,
     overview: String?,
     posterUrl: String?,
     backdropUrl: String?,
@@ -443,16 +445,22 @@ private fun CollectionHeaderMobile(
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            PosterCard(
+            // The same tile the TV header draws (spec 2026-11-23): a
+            // collection header is a collection tile, so it resolves the
+            // collection's ranked text-free backdrop and its fanart clearlogo,
+            // and it draws no name over the art. Portrait keeps the poster and
+            // the exact size it had.
+            GlobalPosterCard(
                 posterUrl = posterUrl,
                 contentDescription = name,
                 isWatched = false,
-                onClick = {},
                 // Decoration, as on TV: the header poster's click was a no-op
                 // there and is not a tap target here either.
-                modifier = Modifier
-                    .width(92.dp)
-                    .height(138.dp)
+                onClick = {},
+                posterWidth = 92.dp,
+                posterHeight = 138.dp,
+                artId = collectionId.toString(),
+                artType = ART_TYPE_COLLECTION
             )
 
             Column(modifier = Modifier.padding(start = 14.dp).weight(1f)) {

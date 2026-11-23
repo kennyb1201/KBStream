@@ -807,8 +807,9 @@ internal fun StudioResultCard(
  * below route the card through the COLLECTION images endpoint, which is what
  * gives this tile the same textless-ranked backdrop every other card gets
  * instead of the key art the search result happens to carry. TMDB publishes no
- * logos for a collection, so it still shows its plain title in the corner where
- * a title card draws a clearlogo.
+ * logos for a collection, so the corner wordmark comes from fanart - and when
+ * fanart has none this tile draws clean art rather than a plain-text title
+ * (spec 2026-11-23: no text on collection art).
  */
 @Composable
 internal fun CollectionPosterTile(

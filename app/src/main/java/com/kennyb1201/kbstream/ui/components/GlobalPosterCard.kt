@@ -115,7 +115,13 @@ fun GlobalPosterCard(
                 fallbackUrl = art.first?.takeIf { it.isNotBlank() } ?: posterUrl
             ),
             logoUrl = art.second,
-            fallbackTitle = contentDescription,
+            // A COLLECTION tile never draws its name on the art (spec
+            // 2026-11-23): the backdrop already carries the franchise branding,
+            // an overlaid name repeats it, and the collection's own screens say
+            // the name in headline text right beside the tile. So the corner is
+            // the fanart clearlogo or nothing. The contentDescription below is
+            // untouched - that is the accessibility name, not a drawn one.
+            fallbackTitle = contentDescription.takeUnless { isCollectionArtType(artType) },
             contentDescription = contentDescription,
             isWatched = isWatched,
             isPartiallyWatched = isPartiallyWatched,

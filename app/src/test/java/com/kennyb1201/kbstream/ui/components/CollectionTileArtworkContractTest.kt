@@ -119,7 +119,7 @@ class CollectionTileArtworkContractTest {
 
     @Test
     fun `the resolver sends a collection to its own images, never to a title lookup`() {
-        val resolve = after(GLOBAL_LANDSCAPE_ART, "val tmdbArt =", length = 3000)
+        val resolve = after(GLOBAL_LANDSCAPE_ART, "val tmdbArt =", length = 6000)
 
         assertTrue(
             "the collection branch is chosen by the request's type",
@@ -144,6 +144,74 @@ class CollectionTileArtworkContractTest {
                 "rule, so the tile falls back to its own art",
             resolve.contains("landscapeArtEntry(")
         )
+    }
+
+    // ── spec 2026-11-23: the corner wordmark comes from fanart ──────────────
+
+    @Test
+    fun `a collection wordmark is requested as a collection, not as the film with that id`() {
+        val url = after(FANART_RULES, "internal fun fanartCollectionUrl(", length = 900)
+
+        assertTrue(
+            "the request declares the id space: fanart tries the TMDB MOVIE id " +
+                "first, so a bare collection id answers for whatever film shares " +
+                "the number (collection 35 vs film 35)",
+            url.contains("source = \"tmdb_collection\"")
+        )
+        assertTrue(
+            "a collection is its own cache space, so its bundle can never be " +
+                "the same row as a film's",
+            normalized(FANART_RULES).contains("FanartKind.Collection -> \"collection\"")
+        )
+    }
+
+    @Test
+    fun `the resolver asks fanart for the collection logo and files only answers`() {
+        val resolve = after(GLOBAL_LANDSCAPE_ART, "val tmdbArt =", length = 6000)
+
+        assertTrue(
+            "the logo is fanart's, addressed by the COLLECTION id",
+            resolve.contains("clearlogoAnswer(FanartKind.Collection, collectionId)")
+        )
+        assertTrue(
+            "a fanart call that failed is not written down as 'this collection " +
+                "has no logo': the disk row keeps that answer for a month",
+            resolve.contains("logo.getOrNull()?.answered == true")
+        )
+    }
+
+    @Test
+    fun `a collection tile never draws its name on the art`() {
+        // Kenny's rule: the backdrop already carries the franchise branding, and
+        // on a collection page the name is headline text right beside the tile.
+        // The no-logo fallback stays for TITLE cards, which is why this is a
+        // takeUnless on the type rather than a change to LandscapeCard.
+        assertTrue(
+            "a collection passes no fallback title to the card",
+            normalized(GLOBAL_POSTER_CARD).contains(
+                "fallbackTitle = contentDescription.takeUnless { isCollectionArtType(artType) },"
+            )
+        )
+        assertTrue(
+            "and the accessibility name is still passed - nulling the drawn " +
+                "title must not make the tile unlabeled",
+            normalized(GLOBAL_POSTER_CARD).contains("contentDescription = contentDescription,")
+        )
+    }
+
+    @Test
+    fun `both collection headers are resolved as collections`() {
+        listOf(COLLECTION_SCREEN, COLLECTION_MOBILE).forEach { screen ->
+            assertTrue(
+                "$screen's header card must carry the collection id, or the " +
+                    "header keeps cropping the flat poster with the name over it",
+                source(screen).contains("artId = collectionId.toString(),")
+            )
+            assertTrue(
+                "$screen's header card must say it is a collection",
+                source(screen).contains("artType = ART_TYPE_COLLECTION")
+            )
+        }
     }
 
     @Test
@@ -220,5 +288,10 @@ class CollectionTileArtworkContractTest {
         const val DECADE = "com/kennyb1201/kbstream/ui/decade/DecadeScreen.kt"
         const val STUDIO = "com/kennyb1201/kbstream/ui/studio/StudioScreen.kt"
         const val TAG = "com/kennyb1201/kbstream/ui/tag/TagScreen.kt"
+        const val FANART_RULES = "com/kennyb1201/kbstream/data/fanart/FanartRules.kt"
+        const val COLLECTION_SCREEN =
+            "com/kennyb1201/kbstream/ui/collection/CollectionScreen.kt"
+        const val COLLECTION_MOBILE =
+            "com/kennyb1201/kbstream/ui/mobile/CollectionScreenMobile.kt"
     }
 }

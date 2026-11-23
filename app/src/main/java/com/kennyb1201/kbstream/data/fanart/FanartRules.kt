@@ -37,13 +37,26 @@ internal const val FANART_FAILURE_TTL_MS = 60L * 60L * 1000L
 /** Session memo bound, matching the entity-logo cache's. */
 internal const val FANART_MEMORY_MAX_ENTRIES = 128
 
-/** The two id spaces fanart's v3 endpoint accepts, one each. */
+/** The id spaces fanart's v3 endpoint accepts, one each. */
 internal enum class FanartKind {
     /** `/v3/movies/{tmdbId}` */
     Movie,
 
     /** `/v3/tv/{tvdbId}` */
-    Tv
+    Tv,
+
+    /**
+     * `/v3/movies/{tmdbCollectionId}?source=tmdb_collection` - a TMDB
+     * COLLECTION's clearlogos (spec 2026-11-23, collection tiles).
+     *
+     * Its own kind, not `Movie` with a collection id, for two reasons: the
+     * cache key has to keep the two id spaces apart (collection 55 and film 55
+     * are different things), and the request has to carry
+     * `source=tmdb_collection`. fanart's movies endpoint tries the TMDB MOVIE id
+     * first and only reads the number as a collection when told to, so a bare
+     * collection id would answer for whatever film shares it.
+     */
+    Collection
 }
 
 /** One image entry: `{ id, url, lang, likes, season? }`. */
@@ -86,7 +99,11 @@ internal data class FanartArt(
 
 /** The memory/disk key for one title's bundle. One spelling, one prefix. */
 internal fun fanartCacheKey(kind: FanartKind, id: Int): String {
-    val space = if (kind == FanartKind.Movie) "movie" else "tv"
+    val space = when (kind) {
+        FanartKind.Movie -> "movie"
+        FanartKind.Tv -> "tv"
+        FanartKind.Collection -> "collection"
+    }
     return "$FANART_CACHE_DISK_PREFIX$space:$id"
 }
 
@@ -102,6 +119,31 @@ internal fun fanartMoviesUrl(tmdbId: Int, apiKey: String, clientKey: String?): S
     fanartUrl(path = "movies", id = tmdbId.toString(), apiKey = apiKey, clientKey = clientKey)
 
 /**
+ * A COLLECTION's art, at the movies endpoint with `source=tmdb_collection`.
+ *
+ * The parameter is the whole identity guard: TMDB collection ids and TMDB movie
+ * ids are both plain numbers, fanart's endpoint tries the movie id first, and
+ * the docs say outright that a collection id must be declared as one
+ * ("a TMDB collection ID is a number like a TMDB movie ID, so pass
+ * source=tmdb_collection to look one up"). Without it, The Simpsons collection
+ * (id 35) would answer for the film with id 35.
+ *
+ * fanart does answer collection ids here - its movie entries include the sets
+ * the Kodi scraper reads them from - with `hdmovielogo`/`movielogo` and a `name`.
+ */
+internal fun fanartCollectionUrl(
+    collectionId: Int,
+    apiKey: String,
+    clientKey: String?
+): String = fanartUrl(
+    path = "movies",
+    id = collectionId.toString(),
+    apiKey = apiKey,
+    clientKey = clientKey,
+    source = "tmdb_collection"
+)
+
+/**
  * The TV endpoint: by TVDB id, which the detail load already resolves alongside
  * the IMDb id (`TmdbRepository`'s `/external_ids`), so this needs no new id work.
  */
@@ -112,13 +154,16 @@ internal fun fanartUrl(
     path: String,
     id: String,
     apiKey: String,
-    clientKey: String?
+    clientKey: String?,
+    source: String? = null
 ): String {
     val query = buildString {
         append("api_key=").append(fanartEncode(apiKey))
         clientKey?.takeIf { it.isNotBlank() }?.let { personal ->
             append("&client_key=").append(fanartEncode(personal))
         }
+        // Last, so a URL with no source reads exactly as it always has.
+        source?.let { append("&source=").append(fanartEncode(it)) }
     }
     return "$FANART_API_BASE/$path/$id?$query"
 }

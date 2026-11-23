@@ -42,6 +42,7 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionPart
+import com.kennyb1201.kbstream.ui.components.ART_TYPE_COLLECTION
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
@@ -288,6 +289,7 @@ fun CollectionScreen(
             Box(Modifier.padding(horizontal = 24.dp)) {
                 CollectionHeader(
                     name = detail?.name ?: collectionName,
+                    collectionId = collectionId,
                     overview = detail?.overview,
                     // Keyed on the collection's own TMDB id, so a poster chosen
                     // for it is the one drawn; TMDB's own otherwise.
@@ -628,6 +630,7 @@ fun CollectionScreen(
 @Composable
 private fun CollectionHeader(
     name: String,
+    collectionId: Int,
     overview: String?,
     posterUrl: String?,
     backdropUrl: String?,
@@ -680,6 +683,14 @@ private fun CollectionHeader(
                 onClick = {},
                 posterWidth = 110.dp,
                 posterHeight = 165.dp,
+                // The header thumbnail is a collection tile like any other: it
+                // resolves through the collection images endpoint for the
+                // ranked text-free backdrop, and the corner wordmark comes from
+                // fanart (spec 2026-11-23). Without the id/type this tile drew
+                // the raw collection poster with the name written over it, and
+                // the name is already the headline beside it.
+                artId = collectionId.toString(),
+                artType = ART_TYPE_COLLECTION,
                 // The header's own poster is decoration, and it always was -
                 // its click was a no-op. It stayed focusable, so it was the
                 // first thing the D-pad highlighted on open, OK did nothing on

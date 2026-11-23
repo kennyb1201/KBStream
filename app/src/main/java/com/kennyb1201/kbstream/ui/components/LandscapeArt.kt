@@ -212,6 +212,11 @@ internal fun landscapeArtEntry(
     // nothing in the URL to test the language against, so the untestable source
     // is simply not drawn: with no English TMDB mark the card shows its plain
     // title rather than a mark of unknown language.
+    //
+    // A COLLECTION's mark is the exception, because TMDB has none to prefer: the
+    // resolver asks fanart for it (spec 2026-11-23) and hands it in here as the
+    // pair's logo, so this rule carries it through untouched. Fanart's collection
+    // clearlogos are the franchise wordmark itself, with no language variants.
     return (tmdbArt.first ?: addonBackdrop) to tmdbArt.second
 }
 

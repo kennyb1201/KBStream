@@ -77,6 +77,8 @@ internal object FanartTv {
         val url = when (kind) {
             FanartKind.Movie -> fanartMoviesUrl(id, apiKey, clientKey)
             FanartKind.Tv -> fanartTvUrl(id, apiKey, clientKey)
+            // The same endpoint as a movie, declared as the other id space.
+            FanartKind.Collection -> fanartCollectionUrl(id, apiKey, clientKey)
         }
 
         return try {

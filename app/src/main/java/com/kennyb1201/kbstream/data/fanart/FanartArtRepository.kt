@@ -61,8 +61,21 @@ internal class FanartArtRepository private constructor(context: Context) {
     /** When a call for this title failed (1h). */
     private val failures = ConcurrentHashMap<String, Long>()
 
-    /** Concurrent lookups of one title share one request. */
-    private val inFlight = HashMap<String, CompletableDeferred<FanartArt?>>()
+    /** Concurrent lookups of one title share one request (and its answer). */
+    private val inFlight = HashMap<String, CompletableDeferred<Lookup>>()
+
+    /**
+     * One lookup's outcome: the art (or null), and whether fanart actually
+     * ANSWERED.
+     *
+     * The second half is for callers that FILE the result: a null with
+     * `answered = true` is "fanart holds nothing", and may be cached as such,
+     * while a null with `answered = false` is "the call failed" and must not be
+     * written down as an answer (see GlobalLandscapeArtCache's write-through).
+     * A build with no fanart key answers too: nothing will ever come, so filing
+     * "none" is the truth rather than a lost retry.
+     */
+    internal data class Lookup(val art: FanartArt?, val answered: Boolean)
 
     private val personalKey: String
         get() = AppPreferences.getFanartClientKey(appContext)
@@ -75,24 +88,34 @@ internal class FanartArtRepository private constructor(context: Context) {
      * those recently. Callers treat them all the same, which is exactly what
      * fail-soft asks for.
      */
-    suspend fun art(kind: FanartKind, id: Int?): FanartArt? {
+    suspend fun art(kind: FanartKind, id: Int?): FanartArt? = lookup(kind, id).art
+
+    /** [art], plus whether the answer above is fanart's own (see [Lookup]). */
+    internal suspend fun lookup(kind: FanartKind, id: Int?): Lookup {
         // No project key: fanart is silently off, and no request is made at all.
-        if (!FanartTv.isConfigured) return null
-        val resolvedId = id?.takeIf { it > 0 } ?: return null
+        // Answered, though: this build will never have a logo for anything, so
+        // "none" is final and callers may file it.
+        if (!FanartTv.isConfigured) return Lookup(art = null, answered = true)
+        val resolvedId = id?.takeIf { it > 0 }
+            ?: return Lookup(art = null, answered = true)
         val key = fanartCacheKey(kind, resolvedId)
         val now = System.currentTimeMillis()
 
-        var shared: CompletableDeferred<FanartArt?>? = null
-        var own: CompletableDeferred<FanartArt?>? = null
+        var shared: CompletableDeferred<Lookup>? = null
+        var own: CompletableDeferred<Lookup>? = null
 
         mutex.withLock {
             memory[key]?.let { (fetchedAt, cached) ->
-                if (now - fetchedAt < FANART_MEMORY_TTL_MS) return cached
+                if (now - fetchedAt < FANART_MEMORY_TTL_MS) {
+                    return Lookup(cached, answered = true)
+                }
                 memory.remove(key)
             }
 
             misses[key]?.let { missAt ->
-                if (now - missAt < FANART_MISS_TTL_MS) return null
+                if (now - missAt < FANART_MISS_TTL_MS) {
+                    return Lookup(null, answered = true)
+                }
                 misses.remove(key)
             }
 
@@ -102,12 +125,12 @@ internal class FanartArtRepository private constructor(context: Context) {
                 if (parsed != null && !parsed.isEmpty) {
                     if (now - disk.updatedAt < FANART_DISK_TTL_MS) {
                         memory[key] = now to parsed
-                        return parsed
+                        return Lookup(parsed, answered = true)
                     }
                 } else if (disk.json == FANART_DISK_MISS_JSON) {
                     if (now - disk.updatedAt < FANART_MISS_TTL_MS) {
                         misses[key] = disk.updatedAt
-                        return null
+                        return Lookup(null, answered = true)
                     }
                 }
             }
@@ -118,22 +141,24 @@ internal class FanartArtRepository private constructor(context: Context) {
             }
 
             failures[key]?.let { failedAt ->
-                if (now - failedAt < FANART_FAILURE_TTL_MS) return null
+                if (now - failedAt < FANART_FAILURE_TTL_MS) {
+                    return Lookup(null, answered = false)
+                }
                 failures.remove(key)
             }
 
-            val registered = CompletableDeferred<FanartArt?>()
+            val registered = CompletableDeferred<Lookup>()
             inFlight[key] = registered
             own = registered
         }
 
         shared?.let { return it.await() }
-        val deferred = own ?: return null
+        val deferred = own ?: return Lookup(null, answered = false)
 
         val result = withContext(Dispatchers.IO) {
             FanartTv.fetch(kind, resolvedId, personalKey.ifBlank { null })
         }
-        val answer: FanartArt? = when (result) {
+        val answer: Lookup = when (result) {
             is FanartResult.Found -> {
                 val at = System.currentTimeMillis()
                 memory[key] = at to result.art
@@ -149,7 +174,7 @@ internal class FanartArtRepository private constructor(context: Context) {
                         )
                     )
                 }
-                result.art
+                Lookup(result.art, answered = true)
             }
             FanartResult.NotFound -> {
                 // A real answer, kept for a day: fanart has nothing for this
@@ -167,14 +192,14 @@ internal class FanartArtRepository private constructor(context: Context) {
                         )
                     )
                 }
-                null
+                Lookup(art = null, answered = true)
             }
             FanartResult.Failed -> {
                 // Never recorded as an answer - only as a reason not to hammer
                 // the service again for an hour.
                 failures[key] = System.currentTimeMillis()
                 trimOldest(failures, FANART_MEMORY_MAX_ENTRIES * 4) { it }
-                null
+                Lookup(art = null, answered = false)
             }
         }
 
@@ -281,6 +306,27 @@ internal class FanartArtRepository private constructor(context: Context) {
      */
     suspend fun clearlogo(kind: FanartKind, id: Int?): String? =
         art(kind, id)?.let { bundle -> pickFanartImage(bundle.logos)?.url }
+
+    /**
+     * A clearlogo for a surface that FILES the answer, and whether it is one.
+     *
+     * [clearlogo] answers `null` for "fanart has no logo" and "the call failed"
+     * alike, which is right for a caller drawing whatever it has, and wrong for
+     * one writing a disk row: the collection tiles cache backdrop-plus-logo for
+     * a month, so a single failed call filed as "no logo" would leave a
+     * franchise wordmark missing for a month. [LogoAnswer.answered] is false in
+     * exactly the case that must not be filed.
+     */
+    internal suspend fun clearlogoAnswer(kind: FanartKind, id: Int?): LogoAnswer {
+        val lookup = lookup(kind, id)
+        return LogoAnswer(
+            url = lookup.art?.let { bundle -> pickFanartImage(bundle.logos)?.url },
+            answered = lookup.answered
+        )
+    }
+
+    /** One clearlogo request's outcome: the URL (or none), and whether fanart answered. */
+    internal data class LogoAnswer(val url: String?, val answered: Boolean)
 
     /**
      * A backdrop for a title TMDB had none for, or null.

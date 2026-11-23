@@ -219,7 +219,17 @@ class FanartArtContractTest {
         assertTrue("404 is a proven miss", client.contains("response.code == 404"))
 
         val repository = source("$FANART_PKG/FanartArtRepository.kt")
-        assertTrue(repository.contains("if (!FanartTv.isConfigured) return null"))
+        assertTrue(
+            "no key is a definitive no (nothing will ever arrive), so the answer " +
+                "may be filed even though no request is made",
+            repository.contains(
+                "if (!FanartTv.isConfigured) return Lookup(art = null, answered = true)"
+            )
+        )
+        assertTrue(
+            "a FAILED call is the one outcome callers may not file as an answer",
+            repository.contains("Lookup(art = null, answered = false)")
+        )
         assertTrue(
             "the miss marker is its own row, so it can never parse as art",
             repository.contains("FANART_DISK_MISS_JSON")
