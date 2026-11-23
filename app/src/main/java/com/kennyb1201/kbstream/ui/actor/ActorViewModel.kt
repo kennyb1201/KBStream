@@ -13,6 +13,8 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbPersonDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -44,8 +46,14 @@ private val TALK_VARIETY_KEYWORDS: Regex = Regex(
         ")\\b"
 )
 
-class ActorViewModel(application: Application) : AndroidViewModel(application) {
-    private val tmdbRepository = TmdbRepository.getInstance(application)
+@HiltViewModel
+class ActorViewModel @Inject constructor(
+    application: Application,
+    // The graph hands out the instance the legacy accessor owns (see
+    // LegacySingletonsModule), so this class and every screen that has not moved
+    // yet still share one repository and one cache.
+    private val tmdbRepository: TmdbRepository
+) : AndroidViewModel(application) {
     private val watchedStatusRepository = WatchedStatusRepository(application)
 
     // Caps parallel TMDB imdb-id lookups so a prolific actor's credit list

@@ -53,8 +53,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Glow
@@ -336,7 +336,9 @@ fun ActorScreen(
     // is the way out), so this only reaches ActorScreenMobile.
     onBack: () -> Unit,
     onNavigateDetail: (String, String) -> Unit,
-    viewModel: ActorViewModel = viewModel()
+    // Built by the graph (spec 2026-11-22, item 3, F2), with the repository the
+    // legacy accessor owns inside it - the TV page below receives the same one.
+    viewModel: ActorViewModel = hiltViewModel()
 ) {
     // The phone entry: the same ViewModel, filmography sorting, hidden-title
     // filter and credit actions, laid out for touch. One branch; the TV page

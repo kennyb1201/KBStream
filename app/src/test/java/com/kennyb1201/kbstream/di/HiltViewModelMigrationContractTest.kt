@@ -1,7 +1,6 @@
 package com.kennyb1201.kbstream.di
 
 import java.io.File
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -23,7 +22,7 @@ class HiltViewModelMigrationContractTest {
     @Test
     fun `every migrated view model is graph-built`() {
         MIGRATED.forEach { name ->
-            val source = source("$UI$name.kt")
+            val source = source("$UI/$name.kt")
             assertTrue("$name is @HiltViewModel", source.contains("@HiltViewModel"))
             assertTrue(
                 "$name's constructor is the graph's",
@@ -50,17 +49,40 @@ class HiltViewModelMigrationContractTest {
         )
     }
 
+    /**
+     * The second move, and the one that proves the delegation: this class used
+     * to construct `TmdbRepository` itself. It is now handed the same instance
+     * from the graph, so the call is gone from the class while the shared cache
+     * the call used to guarantee is unchanged.
+     */
+    @Test
+    fun `a migrated class no longer constructs its repository`() {
+        val actor = source("$UI/actor/ActorViewModel.kt")
+        // assertTrue(String, Boolean) is the only message-bearing form JUnit 4
+        // offers; assertFalse has no message overload.
+        assertTrue(
+            "the graph constructs it now",
+            !actor.contains("TmdbRepository.getInstance(")
+        )
+        assertTrue(
+            "and it is still the same repository, injected",
+            actor.contains("private val tmdbRepository: TmdbRepository")
+        )
+    }
+
     @Test
     fun `the screen asks the graph instead of the default factory`() {
-        val screen = source("$UI/settings/YearReviewScreen.kt")
-        assertTrue(
-            "the screen resolves its view model from the entry point",
-            screen.contains("= hiltViewModel()")
-        )
-        assertFalse(
-            "the default factory would build a second instance beside the injected one",
-            screen.contains("= viewModel()")
-        )
+        listOf("settings/YearReviewScreen.kt", "actor/ActorScreen.kt").forEach { path ->
+            val screen = source("$UI/$path")
+            assertTrue(
+                "$path resolves its view model from the entry point",
+                screen.contains("= hiltViewModel()")
+            )
+            assertTrue(
+                "$path's default factory would build a second instance beside the injected one",
+                !screen.contains("= viewModel()")
+            )
+        }
     }
 
     @Test
@@ -90,9 +112,9 @@ class HiltViewModelMigrationContractTest {
             rootFile("app/build.gradle.kts")
                 .contains("libs.androidx.hilt.lifecycle.viewmodel.compose")
         )
-        assertFalse(
+        assertTrue(
             "navigation-compose belongs to item 5, not to this migration",
-            rootFile("app/build.gradle.kts").contains("navigation.compose")
+            !rootFile("app/build.gradle.kts").contains("navigation.compose")
         )
     }
 
@@ -137,6 +159,9 @@ class HiltViewModelMigrationContractTest {
         const val UI = "com/kennyb1201/kbstream/ui"
 
         /** The classes that have moved onto the graph, in migration order. */
-        val MIGRATED = listOf("settings/YearReviewViewModel")
+        val MIGRATED = listOf(
+            "settings/YearReviewViewModel",
+            "actor/ActorViewModel"
+        )
     }
 }
