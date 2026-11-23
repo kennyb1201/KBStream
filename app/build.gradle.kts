@@ -13,6 +13,9 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.sentry.android.gradle)
     alias(libs.plugins.ktlint)
+    // Hilt (spec 2026-11-22, item 3). The graph is being introduced to replace
+    // the getInstance companions, one class at a time.
+    alias(libs.plugins.hilt)
 }
 
 // Dead-import check. The rule set is one rule wide (see .editorconfig), so
@@ -647,6 +650,12 @@ dependencies {
     // that the storage under them changed. The one-time adoption of the old
     // XML stores is `SharedPreferencesMigration` in that shim.
     implementation(libs.androidx.datastore.preferences)
+    // The dependency graph that is replacing the getInstance companions (spec
+    // 2026-11-22, item 3). Its first job is delegation: every provider below
+    // returns the instance the legacy accessor already owns, so nothing has two
+    // copies of a repository while the call sites move.
+    implementation(libs.hilt.android)
+    ksp(libs.hilt.compiler)
     // The encrypted token store (spec 2026-11-22, DataStore phase 3): a DataStore
     // file whose bytes are Tink-encrypted under a keyset that lives in the
     // AndroidKeyStore, replacing the deprecated EncryptedSharedPreferences. The

@@ -22,6 +22,10 @@ plugins {
     // Kotlin lint, configured down to a single rule: see .editorconfig. It
     // exists to stop dead imports accumulating, not to re-style the tree.
     alias(libs.plugins.ktlint) apply false
+    // Hilt's bytecode transform (spec 2026-11-22, item 3). Declared here so the
+    // app module applies it once, alongside the KSP processor that reads the
+    // annotations.
+    alias(libs.plugins.hilt) apply false
     // Wires the baseline profile generator (:baselineprofile) to the app, so
     // `./gradlew :app:generateBaselineProfile` captures a profile from a
     // connected device and writes it into app/src/release/generated/

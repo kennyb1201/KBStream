@@ -43,6 +43,10 @@ work = "2.12.0"
 # current stable release; the shim needs SharedPreferencesMigration from this
 # artifact to adopt the existing XML stores, which every 1.x line ships.
 datastore = "1.3.0"
+# Hilt, for the dependency graph that replaces the getInstance companions
+# (spec 2026-11-22, item 3). 2.60.1 is the current release; its plugin is built
+# against Kotlin 2.3.21 and pairs with this tree's KSP (2.3.x / Kotlin 2.4).
+hilt = "2.60.1"
 # Tink, for the encrypted token store's keyset (spec 2026-11-22, DataStore
 # phase 3). 1.8.0 is the version androidx.security:security-crypto 1.1.0 already
 # resolves; pinned explicitly because this module now uses its API directly and
@@ -130,6 +134,12 @@ androidx-datastore-tink = { module = "androidx.datastore:datastore-tink", versio
 tink-android = { module = "com.google.crypto.tink:tink-android", version.ref = "tink" }
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
+# Hilt (spec 2026-11-22, item 3). The graph is introduced FIRST and delegates to
+# the existing getInstance singletons, so there is one instance of everything at
+# every point of the migration; classes move onto it one at a time and the
+# companions are deleted last.
+hilt-android = { module = "com.google.dagger:hilt-android", version.ref = "hilt" }
+hilt-compiler = { module = "com.google.dagger:hilt-compiler", version.ref = "hilt" }
 
 # --- HTTP / JSON ---
 retrofit-core = { module = "com.squareup.retrofit2:retrofit", version.ref = "retrofit" }
@@ -209,3 +219,4 @@ ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 sentry-android-gradle = { id = "io.sentry.android.gradle", version.ref = "sentry-gradle" }
 ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlint" }
 baseline-profile = { id = "androidx.baselineprofile", version.ref = "baseline-profile" }
+hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }

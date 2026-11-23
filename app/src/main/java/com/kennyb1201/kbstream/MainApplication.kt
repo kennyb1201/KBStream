@@ -36,6 +36,7 @@ import com.kennyb1201.kbstream.work.ReminderWorker
 import com.kennyb1201.kbstream.work.SimklSyncWorker
 import com.kennyb1201.kbstream.work.SportsNotificationWorker
 import com.kennyb1201.kbstream.work.TorBoxLibraryWorker
+import dagger.hilt.android.HiltAndroidApp
 import io.sentry.android.core.SentryAndroid
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
@@ -44,6 +45,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
+@HiltAndroidApp
 class MainApplication : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
