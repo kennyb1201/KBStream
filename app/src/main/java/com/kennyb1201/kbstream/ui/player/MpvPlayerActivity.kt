@@ -70,7 +70,6 @@ import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tvdb.shownEpisode
 import com.kennyb1201.kbstream.data.tvdb.shownSeason
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
-import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.domain.streamengine.AutoplayBitrate
 import com.kennyb1201.kbstream.domain.streamengine.DebridAddons
 import com.kennyb1201.kbstream.domain.streamengine.RowMediaType
@@ -7338,14 +7337,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         if (type != "movie" && type != "series") return
         clearLogoLookupStarted = true
         lifecycleScope.launch {
-            val path = runCatchingCancellable {
-                withContext(Dispatchers.IO) {
-                    TmdbRepository.getInstance(this@MpvPlayerActivity)
-                        .fetchEnrichedMetaCached(parentId, type)
-                }
-            }.getOrNull()?.bestLogoPath()?.takeIf { it.isNotBlank() }
-            if (path == null) return@launch
-            val url = TmdbRepository.LOGO_BASE + path
+            // The same shared chain the ExoPlayer session uses: TMDB's wordmark
+            // first, fanart's behind it (spec 2026-11-22, F4).
+            val url = runCatchingCancellable {
+                resolveClearLogoUrl(this@MpvPlayerActivity, parentId, type)
+            }.getOrNull() ?: return@launch
             // Recorded first: the guard above reads it.
             clearLogoUrl = url
             applyClearLogo(url)

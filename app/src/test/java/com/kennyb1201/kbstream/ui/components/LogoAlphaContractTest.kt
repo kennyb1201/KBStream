@@ -194,6 +194,53 @@ class LogoAlphaContractTest {
         return call.substring(i).trim()
     }
 
+    /**
+     * Every function declaration in one file, as (name, body start, body end).
+     *
+     * The draw-name check below needs to know WHICH function a draw sits in,
+     * because the failing site's model was a variable called `url`: the draw was
+     * a clearlogo, the name did not say so, and a contract that reads only the
+     * model expression could be dodged by renaming a variable (spec 2026-11-22,
+     * F1). The body is located by balancing the declaration's own braces; an
+     * expression-bodied function ends where the next declaration starts.
+     */
+    private fun functionSpans(code: String): List<Triple<String, Int, Int>> {
+        val pattern = Regex("fun\\s+(?:<[^>]*>\\s*)?(?:[A-Za-z0-9_.]+\\.)?([A-Za-z0-9_]+)\\s*\\(")
+        val starts = pattern.findAll(code).toList()
+        return starts.mapIndexed { index, match ->
+            val name = match.groupValues[1]
+            val bodyOpen = code.indexOf('{', match.range.last)
+            val nextStart = starts.getOrNull(index + 1)?.range?.first ?: code.length
+            val bodyEnd = if (bodyOpen in match.range.last until nextStart) {
+                var depth = 0
+                var end = bodyOpen
+                while (end < code.length) {
+                    when (code[end]) {
+                        '{' -> depth++
+                        '}' -> {
+                            depth--
+                            if (depth == 0) break
+                        }
+                    }
+                    end++
+                }
+                end
+            } else {
+                nextStart
+            }
+            Triple(name, match.range.first, bodyEnd)
+        }
+    }
+
+    /** The innermost function containing [offset], if any. */
+    private fun enclosingFunction(
+        spans: List<Triple<String, Int, Int>>,
+        offset: Int
+    ): String? =
+        spans.filter { offset in it.second..it.third }
+            .minByOrNull { it.third - it.second }
+            ?.first
+
     private fun isOptedOut(call: String): Boolean =
         call.contains("logoArt()") ||
             call.contains("logoRequest(") ||
@@ -223,6 +270,31 @@ class LogoAlphaContractTest {
         assertTrue(
             "a transparent logo decoded as RGB_565 draws as a solid block (the 2026-11-21 " +
                 "field report). Route the request through logoRequest(...) or logoArt():\n" +
+                violations.joinToString("\n"),
+            violations.isEmpty()
+        )
+    }
+
+    @Test
+    fun `a draw inside a logo-named function never decodes as 565`() {
+        // The splash's own clearlogo draw was named by its model's variable,
+        // not by its art: `model = ImageRequest.Builder(...).data(url)`. The
+        // function it sits in says `...Logo`, and that is the name a contract
+        // can hold on to - a variable rename cannot dodge this one.
+        val violations = mutableListOf<String>()
+        sources().forEach { file ->
+            val text = code(read(file))
+            val spans = functionSpans(text)
+            imageCalls(text).forEach { call ->
+                val at = text.indexOf(call)
+                val name = enclosingFunction(spans, at) ?: return@forEach
+                if (!name.contains("logo", ignoreCase = true)) return@forEach
+                if (isOptedOut(call)) return@forEach
+                violations += "${relative(file)}: $name"
+            }
+        }
+        assertTrue(
+            "a function that draws logo art must opt out, whatever its model is called:\n" +
                 violations.joinToString("\n"),
             violations.isEmpty()
         )

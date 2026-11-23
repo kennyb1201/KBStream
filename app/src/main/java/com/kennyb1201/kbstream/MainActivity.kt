@@ -622,7 +622,14 @@ private data class PendingPlay(
          * and what Continue Watching and every next-episode advance pass -
          * means the merged walk.
          */
-        selectedAddon: String? = null
+        selectedAddon: String? = null,
+        /**
+         * The clearlogo the caller resolved (see `resolvedLogoFor`): blank when
+         * the hand-off's own value is what this launch carries. A parameter
+         * rather than a lookup because this builder is outside the composable
+         * that owns Detail's resolved-art map.
+         */
+        clearLogo: String? = null
     ): Screen.Player {
         // A DRM stream cannot play on MPV (the engine's own handoff excludes
         // those too), so it must not inherit the anime route's engine choice.
@@ -646,7 +653,7 @@ private data class PendingPlay(
                 .takeIf { it.isNotBlank() && it != target.title },
             itemName = target.displayName,
             itemPoster = itemPoster,
-            clearLogoUrl = clearLogoUrl,
+            clearLogoUrl = clearLogo ?: clearLogoUrl,
             backdropUrl = backdropUrl,
             overview = overview,
             cast = cast.map { member ->
@@ -1685,6 +1692,25 @@ fun AppRoot(
     // pending branch, picker header).
     val resolvedDetailBackdrops = remember { mutableStateMapOf<String, String>() }
 
+    /**
+     * A launch's clearlogo, with Detail's resolved art behind it (spec
+     * 2026-11-22, F3).
+     *
+     * The hand-off that becomes a player can be BUILT before Detail's TMDB /
+     * fanart resolution lands - a Play pressed on open, or a Continue Watching
+     * deep link - so its carried logo is blank on a title whose header already
+     * shows one, and nothing downstream healed it: the splash and the player
+     * read only what the hand-off carried.
+     *
+     * Every player construction asks here instead of each doing its own map
+     * lookup. The carried value still wins when it exists: the map is the
+     * fallback, not a replacement, so a title whose own meta names a logo keeps
+     * exactly that one.
+     */
+    fun resolvedLogoFor(parentType: String, parentId: String, carried: String?): String? =
+        carried?.takeIf { it.isNotBlank() }
+            ?: resolvedDetailClearLogos["$parentType:$parentId"]
+
     LaunchedEffect(pendingAutoPlay) {
         val pending = pendingAutoPlay ?: return@LaunchedEffect
         // This effect IS the wait that follows the Play press (spec 2026-11-15,
@@ -1753,8 +1779,16 @@ fun AppRoot(
                 // all-unknown list (see PlayedLinkCache.CachedPlay.addons). An
                 // entry stored before they were kept answers an empty list,
                 // which is the old, safe default (see SourceAddonSession).
-                screen = pending.toPlayerScreen(replay, cached.sources, cached.addons)
-                    .copy(linkCacheKey = pending.streamKey)
+                screen = pending.toPlayerScreen(
+                    replay,
+                    cached.sources,
+                    cached.addons,
+                    clearLogo = resolvedLogoFor(
+                        pending.parentType,
+                        pending.parentId,
+                        pending.clearLogoUrl
+                    )
+                ).copy(linkCacheKey = pending.streamKey)
                 return@LaunchedEffect
             }
             // Every cached source is taller than the ceiling: resolve afresh,
@@ -2013,7 +2047,16 @@ fun AppRoot(
                 // hand the NEXT replay of this episode the same stale ordering
                 // the get above just refused. A fresh start (no binge identity)
                 // is the case the cache is for.
-                pending.toPlayerScreen(start.stream, startedSources, startedAddons)
+                pending.toPlayerScreen(
+                    start.stream,
+                    startedSources,
+                    startedAddons,
+                    clearLogo = resolvedLogoFor(
+                        pending.parentType,
+                        pending.parentId,
+                        pending.clearLogoUrl
+                    )
+                )
             } else {
                 // Remember what actually started - the RESOLVED stream, so a
                 // replay within the link's lifetime replays the CDN link rather
@@ -2039,8 +2082,16 @@ fun AppRoot(
                 // replayed the corpse. Only when there IS an entry to heal -
                 // a truncated answer was not cached (above), so there is no
                 // entry for this key and nothing to stamp.
-                pending.toPlayerScreen(start.stream, startedSources, startedAddons)
-                    .let { player ->
+                pending.toPlayerScreen(
+                    start.stream,
+                    startedSources,
+                    startedAddons,
+                    clearLogo = resolvedLogoFor(
+                        pending.parentType,
+                        pending.parentId,
+                        pending.clearLogoUrl
+                    )
+                ).let { player ->
                         if (completeAnswer) player.copy(linkCacheKey = pending.streamKey) else player
                     }
             }
@@ -4162,7 +4213,11 @@ fun AppRoot(
                             itemName =
                                 current.target.displayName,
                             itemPoster = current.itemPoster,
-                            clearLogoUrl = current.clearLogoUrl,
+                            clearLogoUrl = resolvedLogoFor(
+                                current.parentType,
+                                current.parentId,
+                                current.clearLogoUrl
+                            ),
                             backdropUrl = current.backdropUrl,
                             overview = current.overview,
                             cast = current.cast.map { member ->
@@ -4946,7 +5001,14 @@ fun AppRoot(
             // reached here without Detail's art still shows it.
             backdropUrl = pending.backdropUrl
                 ?: resolvedDetailBackdrops["${pending.parentType}:${pending.parentId}"],
-            clearLogoUrl = pending.clearLogoUrl,
+            // The logo's half of the same fallback (spec 2026-11-22, F2):
+            // Detail's resolution can land while this splash is up, and the
+            // map is a snapshot map, so the splash recomposes with it.
+            clearLogoUrl = resolvedLogoFor(
+                pending.parentType,
+                pending.parentId,
+                pending.clearLogoUrl
+            ),
             title = pending.target.displayName,
             subtitle = "Finding sources…",
             tmdbId = splashTmdbId(pending.parentType, pending.parentId)

@@ -278,10 +278,11 @@ fun PulsingClearLogo(
         }
 
         AsyncImage(
-            model = ImageRequest.Builder(LocalContext.current)
-                .data(url)
-                .crossfade(ART_FADE_MS)
-                .build(),
+            // The splash draws logo art, so it takes the logo format (spec
+            // 2026-11-22, F1): a palette+tRNS wordmark decoded as RGB_565 loses
+            // its alpha and arrives as a solid block. The crossfade is kept -
+            // it is this surface's own beat, not the format.
+            model = logoRequest(LocalContext.current, url, crossfadeMs = ART_FADE_MS),
             contentDescription = contentDescription,
             contentScale = ContentScale.Fit,
             onSuccess = { artState = ClearLogoState.PAINTED },

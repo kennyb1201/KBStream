@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.components
 import android.content.Context
 import coil3.request.ImageRequest
 import coil3.request.allowRgb565
+import coil3.request.crossfade
 
 /**
  * The one place a logo request is allowed to be built.
@@ -29,5 +30,13 @@ internal fun ImageRequest.Builder.logoArt(): ImageRequest.Builder = allowRgb565(
  * A null URL is allowed and is Coil's own "nothing to load" answer - a missing
  * logo is not art, and the caller's text fallback covers it.
  */
-internal fun logoRequest(context: Context, url: String?): ImageRequest =
-    ImageRequest.Builder(context).data(url).logoArt().build()
+internal fun logoRequest(
+    context: Context,
+    url: String?,
+    /** Crossfade in ms, for surfaces whose brand is to fade the art in. */
+    crossfadeMs: Int? = null
+): ImageRequest {
+    val builder = ImageRequest.Builder(context).data(url).logoArt()
+    if (crossfadeMs != null) builder.crossfade(crossfadeMs)
+    return builder.build()
+}

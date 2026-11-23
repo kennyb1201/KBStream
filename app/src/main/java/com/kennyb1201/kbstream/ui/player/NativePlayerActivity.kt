@@ -127,7 +127,6 @@ import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tvdb.shownEpisode
 import com.kennyb1201.kbstream.data.tvdb.shownSeason
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
-import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.settings.AppPreferences
@@ -3656,14 +3655,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         if (type != "movie" && type != "series") return
         clearLogoLookupStarted = true
         lifecycleScope.launch {
-            val path = runCatchingCancellable {
-                withContext(Dispatchers.IO) {
-                    TmdbRepository.getInstance(this@NativePlayerActivity)
-                        .fetchEnrichedMetaCached(parentId, type)
-                }
-            }.getOrNull()?.bestLogoPath()?.takeIf { it.isNotBlank() }
-            if (path == null) return@launch
-            val url = TmdbRepository.LOGO_BASE + path
+            // TMDB first, fanart behind it - the one shared chain both engines
+            // use (spec 2026-11-22, F4). A TMDB-only lookup left a title whose
+            // wordmark is fanart's with no logo here at all, though the Detail
+            // header had one.
+            val url = runCatchingCancellable {
+                resolveClearLogoUrl(this@NativePlayerActivity, parentId, type)
+            }.getOrNull() ?: return@launch
             // Recorded first: the policy pass early-returns once a logo exists,
             // so the loads below are what put it on screen.
             clearLogoUrl = url

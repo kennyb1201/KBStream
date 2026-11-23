@@ -67,8 +67,10 @@ class SplashClearLogoLoadingContractTest {
         assertFalse("and no alpha state drives the old stand-in", splash.contains("animateFloatAsState"))
         assertFalse("nor a nameAlpha layer", logo.contains("nameAlpha"))
         assertTrue(
-            "Coil's own art fade is still the only fade in the slot",
-            splash.contains("crossfade(ART_FADE_MS)")
+            "Coil's own art fade is still the only fade in the slot - and it rides " +
+                "the logo request now, so the draw cannot lose the 8888 opt-out " +
+                "(spec 2026-11-22, F1)",
+            logo.contains("logoRequest(LocalContext.current, url, crossfadeMs = ART_FADE_MS)")
         )
     }
 

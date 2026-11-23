@@ -123,17 +123,54 @@ class SplashClearLogoContractTest {
             resolve.contains("if (!clearLogoUrl.isNullOrBlank() || clearLogoLookupStarted) return")
         )
         assertTrue(
+            "both engines share ONE chain (spec 2026-11-22, F4), so the engine " +
+                "delegates instead of growing a second copy of it",
+            resolve.contains("resolveClearLogoUrl(this@MpvPlayerActivity, parentId, type)")
+        )
+
+        // ...and the chain itself carries the rules the engine used to hold. It
+        // is shared, so pinning it here would be a duplicate; the identity of
+        // the delegate is what this test owns.
+        val shared = source(CLEAR_LOGO_RESOLVE)
+        assertTrue(
             "only the two tmdb parent types are looked up",
-            resolve.contains("if (type != \"movie\" && type != \"series\") return")
+            shared.contains("if (normalized != \"movie\" && normalized != \"series\") return null")
         )
         assertTrue(
             "the cached enriched lookup the ExoPlayer splash uses",
-            resolve.contains(".fetchEnrichedMetaCached(parentId, type)") &&
-                resolve.contains("bestLogoPath()")
+            shared.contains(".fetchEnrichedMetaCached(parentId, normalized)") &&
+                shared.contains("bestLogoPath()")
         )
         assertTrue(
             "and the resolved path becomes an absolute TMDB logo URL",
-            resolve.contains("TmdbRepository.LOGO_BASE + path")
+            shared.contains("TmdbRepository.LOGO_BASE + path")
+        )
+        val body = shared.substringAfter("internal suspend fun resolveClearLogoUrl(")
+        assertTrue(
+            "TMDB's wordmark is tried FIRST, so a title that has one never " +
+                "reaches fanart",
+            body.indexOf("bestLogoPath()") in 0 until body.indexOf("FanartArtRepository")
+        )
+        assertTrue(
+            "and fanart is the step below it: movies by TMDB id, series by TVDB id",
+            shared.contains("FanartKind.Movie") &&
+                shared.contains("resolveTvdbId(artId, \"series\")") &&
+                shared.contains("FanartKind.Tv")
+        )
+    }
+
+    @Test
+    fun `the ExoPlayer engine resolves through the same shared chain`() {
+        val exo = source(NATIVE_PLAYER)
+        val resolve = exo.substringAfter("private fun resolveClearLogoFromTmdb() {")
+            .substringBefore("\n    private fun ")
+        assertTrue(
+            "one lookup per session, and the intent extra keeps precedence",
+            resolve.contains("if (!clearLogoUrl.isNullOrBlank() || clearLogoLookupStarted) return")
+        )
+        assertTrue(
+            "the same delegate MPV calls - two copies is the divergence F4 forbids",
+            resolve.contains("resolveClearLogoUrl(this@NativePlayerActivity, parentId, type)")
         )
     }
 
@@ -261,6 +298,8 @@ class SplashClearLogoContractTest {
         const val MPV_PLAYER =
             "com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt"
         const val MPV_LAYOUT = "layout/activity_mpv_player.xml"
+        const val CLEAR_LOGO_RESOLVE =
+            "com/kennyb1201/kbstream/ui/player/ClearLogoResolve.kt"
 
         const val CALLBACK = "onClearLogoResolved"
         const val BACKDROP_CALLBACK = "onBackdropResolved"
@@ -333,6 +372,47 @@ class SplashClearLogoContractTest {
                 "deep link's own (usually absent) logo",
             activity.contains("resolvedDetailClearLogos[") &&
                 activity.contains("?: detailAutoPlay.itemClearLogo")
+        )
+    }
+
+    /**
+     * F2/F3 of the 2026-11-22 report: the logo is absent at Play-delivery time.
+     *
+     * A Play pressed on open - or a Continue Watching deep link - builds its
+     * hand-off before Detail's resolution lands, so the carried logo is blank
+     * even on a title whose header already draws one. The backdrop half already
+     * healed from Detail's resolved-art map; the logo half did not, on the
+     * pending splash and on every player construction. One helper answers for
+     * both, and every construction asks it.
+     */
+    @Test
+    fun `every launch reads the resolved clearlogo behind the one it carries`() {
+        val activity = source(MAIN_ACTIVITY)
+        assertEquals(
+            "one helper, not a lookup copied per call site",
+            1,
+            activity.split("fun resolvedLogoFor(").size - 1
+        )
+        assertEquals(
+            "the three player hand-offs, the Streams picker's player, and the " +
+                "pending splash all ask it",
+            6,
+            activity.split("resolvedLogoFor(").size - 1
+        )
+        assertEquals(
+            "the three PendingPlay hand-offs pass it in",
+            3,
+            activity.split("clearLogo = resolvedLogoFor(").size - 1
+        )
+        assertEquals(
+            "the Streams construction and the pending splash assign it",
+            2,
+            activity.split("clearLogoUrl = resolvedLogoFor(").size - 1
+        )
+        assertTrue(
+            "and the carried value still wins when it exists",
+            activity.contains("carried?.takeIf { it.isNotBlank() }") &&
+                activity.contains("clearLogo ?: clearLogoUrl")
         )
     }
 
