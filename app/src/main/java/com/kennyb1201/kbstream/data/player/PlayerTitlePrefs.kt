@@ -5,7 +5,9 @@ import android.util.Log
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import com.kennyb1201.kbstream.data.settings.prefs.Prefs
+// Aliased: this object's stored blob is itself called `Prefs`, and a nested
+// declaration wins over an import inside the object.
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs as PrefsStore
 
 /**
  * Per-title playback preferences the user set *while watching*: audio
@@ -188,5 +190,5 @@ internal object PlayerTitlePrefs {
     }
 
     private fun prefs(context: Context) =
-        Prefs.file(context.applicationContext, ProfileStorage.prefsName(context.applicationContext, PREFS_BASE))
+        PrefsStore.file(context.applicationContext, ProfileStorage.prefsName(context.applicationContext, PREFS_BASE))
 }

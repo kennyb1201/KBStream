@@ -372,9 +372,10 @@ internal class DataStorePrefs(
  * The registry: one [DataStorePrefs] per store name per process.
  *
  * Stores are keyed by the resolved DataStore file path rather than by name, so
- * two `Context`s with different data directories (Robolectric gives each test
- * its own) never share a store, and the same `Context` never opens one file
- * twice.
+ * two `Context`s with different data directories never share a store, and the
+ * same `Context` never opens one file twice. An Application that is not the one
+ * that opened a store (a test runner hands out a new one per test) replaces it
+ * instead of inheriting it - see [Open].
  */
 object Prefs {
 
@@ -384,21 +385,40 @@ object Prefs {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val stores = ConcurrentHashMap<String, DataStorePrefs>()
+    /**
+     * One open store per file, plus the Application that opened it.
+     *
+     * The owner is not bookkeeping: a process has exactly one Application, but a
+     * test runner hands out a new one per test while reusing the data directory.
+     * The cached store would then serve the previous test's snapshot, and
+     * DataStore will not let a second owner open the file the old one still
+     * holds - so a different owner means the old store is closed and reopened.
+     */
+    private class Open(val prefs: DataStorePrefs, val owner: Context)
+
+    private val stores = ConcurrentHashMap<String, Open>()
 
     /** The store called [name], opened (and its legacy XML migrated) on first read. */
     fun file(context: Context, name: String): SharedPreferences = instance(context, name)
 
     internal fun instance(context: Context, name: String): DataStorePrefs {
-        val target = fileFor(context, name)
-        stores[target.absolutePath]?.let { return it }
+        val app = context.applicationContext
+        val target = fileFor(app, name)
+        val key = target.absolutePath
+        stores[key]?.let { if (it.owner === app) return it.prefs }
         return synchronized(stores) {
-            stores[target.absolutePath] ?: DataStorePrefs(
-                context = context.applicationContext,
-                name = name,
-                file = target,
-                parent = scope,
-            ).also { stores[target.absolutePath] = it }
+            val existing = stores[key]
+            if (existing != null && existing.owner === app) {
+                existing.prefs
+            } else {
+                existing?.prefs?.close()
+                DataStorePrefs(
+                    context = app,
+                    name = name,
+                    file = target,
+                    parent = scope,
+                ).also { stores[key] = Open(it, app) }
+            }
         }
     }
 
@@ -448,7 +468,7 @@ object Prefs {
     fun delete(context: Context, name: String): Boolean {
         val target = fileFor(context, name)
         synchronized(stores) {
-            stores.remove(target.absolutePath)?.close()
+            stores.remove(target.absolutePath)?.prefs?.close()
         }
         return runCatching { target.delete() }.getOrDefault(false)
     }
