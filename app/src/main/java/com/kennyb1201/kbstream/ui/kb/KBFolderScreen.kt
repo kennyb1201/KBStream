@@ -15,7 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.kennyb1201.kbstream.data.kb.KBContentItem
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
@@ -53,7 +53,7 @@ fun KBFolderScreen(
         backdrop: String?,
         title: String?
     ) -> Unit,
-    viewModel: KBFolderViewModel = viewModel()
+    viewModel: KBFolderViewModel = hiltViewModel()
 ) {
     // The phone entry: the same ViewModel, folder load and navigation calls,
     // drawn as the collection's poster grid. One branch; the TV page below is

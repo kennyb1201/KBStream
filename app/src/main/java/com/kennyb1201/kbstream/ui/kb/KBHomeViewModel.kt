@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 /** How many browse-shortcut art lookups run at once on a cold row. */
 private const val BROWSE_ART_CONCURRENCY = 3
@@ -30,7 +32,12 @@ private const val BROWSE_ART_CONCURRENCY = 3
  * interleaving with addon catalog rails. Cache-first so returning Home is
  * instant.
  */
-class KBHomeViewModel(application: Application) : AndroidViewModel(application) {
+@HiltViewModel
+class KBHomeViewModel @Inject constructor(
+    application: Application,
+    private val repository: KBRepository,
+    private val tmdbRepository: TmdbRepository
+) : AndroidViewModel(application) {
 
     data class UiState(
         val collections: List<KBCollectionProfile> = emptyList(),
@@ -49,8 +56,6 @@ class KBHomeViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
-
-    private val repository = KBRepository.getInstance(application)
 
     /**
      * Session memo of resolved artwork, so a Home resume republishes the tiles
@@ -157,7 +162,7 @@ class KBHomeViewModel(application: Application) : AndroidViewModel(application) 
             com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
 
         browseArtJob = viewModelScope.launch {
-            val tmdb = TmdbRepository.getInstance(getApplication())
+            val tmdb = tmdbRepository
             val semaphore = Semaphore(BROWSE_ART_CONCURRENCY)
 
             missing.forEach { shortcut ->

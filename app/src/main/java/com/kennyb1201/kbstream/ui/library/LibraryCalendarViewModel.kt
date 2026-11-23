@@ -50,6 +50,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 /**
  * Everything the Library calendar renders for one month.
@@ -98,14 +100,17 @@ data class LibraryCalendarUiState(
  * Nothing here runs on the Home or startup path. The pane calls [open] when it
  * is composed, which is the first and only trigger.
  */
-class LibraryCalendarViewModel(
-    application: Application
+@HiltViewModel
+class LibraryCalendarViewModel @Inject constructor(
+    application: Application,
+    private val tmdbRepository: TmdbRepository,
+    private val simklRepository: SimklRepository,
+    private val traktRepository: TraktRepository,
+    private val bingeCatRepository: BingeCatRepository,
+    private val airDateRepository: TvmazeAirDateRepository
 ) : AndroidViewModel(application), MemoryPressure.Releasable {
 
     private val appContext = application.applicationContext
-
-    private val tmdbRepository = TmdbRepository.getInstance(application)
-    private val simklRepository = SimklRepository.getInstance(application)
 
     /**
      * The read-only anime legs' caught-up candidates (spec 2026-11-13, F2).
@@ -156,10 +161,6 @@ class LibraryCalendarViewModel(
 
         return out
     }
-
-    private val traktRepository = TraktRepository.getInstance(application)
-    private val bingeCatRepository = BingeCatRepository.getInstance(application)
-    private val airDateRepository = TvmazeAirDateRepository.getInstance(application)
 
     private val _uiState = MutableStateFlow(LibraryCalendarUiState())
     val uiState: StateFlow<LibraryCalendarUiState> = _uiState.asStateFlow()

@@ -27,7 +27,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
@@ -81,7 +81,7 @@ fun SearchScreen(
     // Hoisted by MainActivity (survives Search -> Detail -> Back) so Back
     // lands on the same title. Defaults keep previews/standalone use working.
     listState: LazyListState = rememberIdleLazyListState(),
-    viewModel: SearchViewModel = viewModel()
+    viewModel: SearchViewModel = hiltViewModel()
 ) {
     // The phone entry: the same ViewModel, callbacks and hoisted list state,
     // laid out for touch. One branch; the TV page below is unchanged (see

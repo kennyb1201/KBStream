@@ -91,7 +91,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.kennyb1201.kbstream.data.reporting.SeasonRowRevealTrace
 import com.kennyb1201.kbstream.ui.components.GlobalLandscapeArtCache
 import com.kennyb1201.kbstream.ui.components.LandscapeArtRequest
@@ -1018,7 +1018,9 @@ fun DetailScreen(
     // previous title's meta/episodes/resume state into the next one — the
     // Continue Watching auto-play effect then fired with the previous card's
     // play target (second card opened the first card's stream screen).
-    viewModel: DetailViewModel = viewModel(key = "detail_${type}_$id")
+    // Keyed exactly as before: the key is what keeps one Detail page's state
+    // from being reused by the next title.
+    viewModel: DetailViewModel = hiltViewModel(key = "detail_${type}_$id")
 ) {
     // The phone entry: the same ViewModel and callbacks, laid out for touch.
     // One branch; the TV page below is unchanged (see DetailScreenMobile).

@@ -37,6 +37,7 @@ import com.kennyb1201.kbstream.data.publiclists.PublicListsAnswer
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.bingecat.BingeCatRow
 import com.kennyb1201.kbstream.data.bingecat.bingecatShelfId
 import com.kennyb1201.kbstream.data.trakt.TraktListEntry
@@ -53,6 +54,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 /**
  * Which flat view of the Library tab is showing.
@@ -272,20 +275,17 @@ data class LibraryUiState(
  * missing release years resolve through the TMDB detail cache so the sort +
  * captions match other screens.
  */
-class LibraryViewModel(
-    application: Application
+@HiltViewModel
+class LibraryViewModel @Inject constructor(
+    application: Application,
+    private val simklRepository: SimklRepository,
+    private val tmdbRepository: TmdbRepository,
+    private val traktRepository: TraktRepository,
+    private val bingecatRepository: BingeCatRepository
 ) : AndroidViewModel(application) {
 
-    private val simklRepository =
-        SimklRepository.getInstance(application)
     private val watchedRepository =
         WatchedStatusRepository(application)
-    private val tmdbRepository =
-        TmdbRepository.getInstance(application)
-    private val traktRepository =
-        TraktRepository.getInstance(application)
-    private val bingecatRepository =
-        com.kennyb1201.kbstream.data.bingecat.BingeCatRepository.getInstance(application)
 
     private val _uiState = MutableStateFlow(LibraryUiState())
     val uiState: StateFlow<LibraryUiState> = _uiState.asStateFlow()

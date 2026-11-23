@@ -130,20 +130,32 @@ import org.json.JSONObject
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.settings.prefs.Prefs
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 @OptIn(FlowPreview::class)
-class HomeViewModel(
-    application: Application
-) : AndroidViewModel(application) {
-
-    private val repository =
-        AddonRepository.getInstance()
-
+@HiltViewModel
+class HomeViewModel @Inject constructor(
+    application: Application,
+    private val repository: AddonRepository,
     // FIXED: was AddonManager(application) — bypassed the singleton so
     // Home held a stale copy of installed addons/catalogs whenever the
-    // Addons screen changed something. Now shares the same instance.
-    private val addonManager =
-        AddonManager.getInstance(application)
+    // Addons screen changed something. The graph hands out that same single
+    // instance, which is what keeps the fix holding now that construction is
+    // not Home's business.
+    private val addonManager: AddonManager,
+    private val simklRepository: SimklRepository,
+    // The third tracker's watched history. Reads are unioned with Simkl's and
+    // MDBList's below; nothing here writes to it.
+    private val traktRepository: TraktRepository,
+    private val tmdbRepository: TmdbRepository,
+    // Second-source air dates (see [AirDateCorrection]). Display-only, and
+    // empty whenever that source has nothing - which leaves TMDB's own dates
+    // in place.
+    private val airDateRepository: TvmazeAirDateRepository,
+    // The watched union's other leg; also the pending-completion retry's owner.
+    private val bingecatRepository: BingeCatRepository
+) : AndroidViewModel(application) {
 
     private val watchHistoryRepository =
         WatchHistoryRepository(application)
@@ -159,23 +171,6 @@ class HomeViewModel(
         get() = WatchHistoryDatabase
             .getInstanceScoped(getApplication())
             .watchHistoryDao()
-
-    private val simklRepository =
-        SimklRepository.getInstance(application)
-
-    // The third tracker's watched history. Reads are unioned with Simkl's and
-    // MDBList's below; nothing here writes to it.
-    private val traktRepository =
-        TraktRepository.getInstance(application)
-
-    private val tmdbRepository =
-        TmdbRepository.getInstance(application)
-
-    // Second-source air dates (see [AirDateCorrection]). Display-only, and
-    // empty whenever that source has nothing - which leaves TMDB's own dates
-    // in place.
-    private val airDateRepository =
-        TvmazeAirDateRepository.getInstance(application)
 
     private val tmdbHeroArtworkRepository =
         TmdbHeroArtworkRepository(application)
@@ -4307,7 +4302,7 @@ Log.d(
                 // would keep the play the rail card was built from. Silent,
                 // like the leg above.
                 runCatchingCancellable {
-                    val bingecat = BingeCatRepository.getInstance(getApplication())
+                    val bingecat = bingecatRepository
                     when (item.parentType?.lowercase()) {
                         "movie" -> bingecat.removeWatchedMovie(imdbId = parentId)
                         "series", "tv" -> bingecat.removeWatchedShow(showImdbId = parentId)
@@ -5518,7 +5513,7 @@ Log.d(
         // a failed page - an empty half.
         val bingecat =
             runCatchingCancellable {
-                BingeCatRepository.getInstance(getApplication())
+                bingecatRepository
                     .watchedHistorySnapshot()
             }.getOrNull()
                 ?.let { snapshot ->
@@ -6838,8 +6833,7 @@ Log.d(
             // just switched lands, and the replay must not wait for a player to
             // finish another episode.
             runCatching {
-                com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
-                    .getInstance(getApplication())
+                bingecatRepository
                     .schedulePendingHistoryFlush()
             }
 
@@ -10087,7 +10081,7 @@ Log.d(
      * show (see [preloadWatchedEpisodeStateForShow]).
      */
     private suspend fun loadBingeCatUpNextItems(): BingeCatNextUpResult {
-        val repository = BingeCatRepository.getInstance(getApplication())
+        val repository = bingecatRepository
 
         if (!repository.isReady()) return BingeCatNextUpResult.NotConfigured
 

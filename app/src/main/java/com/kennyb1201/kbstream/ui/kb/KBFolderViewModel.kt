@@ -46,6 +46,9 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.kb.KBRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 /** Per-rail load-more state, mirroring StudioScreen's paging model. */
 data class KBRailPagingState(
@@ -58,14 +61,16 @@ data class KBRailPagingState(
  * Home's exactly (TMDB meta + clearlogo/backdrop artwork + inline trailer)
  * so a FOLLOW_LAYOUT folder is a true replica of the home screen.
  */
-class KBFolderViewModel(application: Application) : AndroidViewModel(application) {
+@HiltViewModel
+class KBFolderViewModel @Inject constructor(
+    application: Application,
+    private val tmdbRepository: TmdbRepository,
+    private val repository: KBRepository
+) : AndroidViewModel(application) {
 
     private val contentLoader = KBContentLoader(application)
-    private val tmdbRepository = TmdbRepository.getInstance(application)
     private val heroArtworkRepository = TmdbHeroArtworkRepository(application)
     private val watchedStatusRepository = WatchedStatusRepository(application)
-    private val repository =
-        com.kennyb1201.kbstream.data.kb.KBRepository.getInstance(application)
 
     init {
         observeProfileSwitches()

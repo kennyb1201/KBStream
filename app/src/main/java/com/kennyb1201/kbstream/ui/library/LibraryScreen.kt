@@ -58,7 +58,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryHomeRailPin
 import com.kennyb1201.kbstream.data.library.LibraryHomeRails
@@ -149,7 +149,7 @@ fun LibraryScreen(
     /** Opens the year in review: the Library's year-round door beside the shelves. */
     onOpenYearReview: () -> Unit = {},
     viewModel: LibraryViewModel =
-        viewModel()
+        hiltViewModel()
 ) {
     // The phone entry: the same ViewModel, callbacks and filter/sort state,
     // laid out for touch. One branch; the TV page below is unchanged (see

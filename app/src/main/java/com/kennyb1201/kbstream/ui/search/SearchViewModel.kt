@@ -54,6 +54,8 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReferenceArray
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.settings.prefs.Prefs
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 /**
  * A searchable title result. `meta` is the navigation payload the detail
@@ -282,15 +284,13 @@ internal fun searchTitleOrder(
         .thenBy { lowerNames.getOrPut(it) { it.name.lowercase() } }
 }
 
-class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
-
-    private val repository = AddonRepository.getInstance()
-
-    private val addonManager =
-        AddonManager.getInstance(app)
-
-    private val tmdbRepository =
-        TmdbRepository.getInstance(app)
+@HiltViewModel
+class SearchViewModel @Inject constructor(
+    private val app: Application,
+    private val repository: AddonRepository,
+    private val addonManager: AddonManager,
+    private val tmdbRepository: TmdbRepository
+) : AndroidViewModel(app) {
 
     private val watchedStatusRepository =
         WatchedStatusRepository(app)

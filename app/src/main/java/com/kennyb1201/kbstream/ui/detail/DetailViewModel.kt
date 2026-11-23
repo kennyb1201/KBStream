@@ -86,6 +86,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 /**
  * Ceiling on the add-on meta probe, which stands between the Detail screen and
@@ -254,7 +256,24 @@ private const val MLT_PICK_COUNT = 30
 private const val EPISODE_STILL_WIDTH_DP = 250f
 private const val EPISODE_STILL_HEIGHT_DP = 170f
 
-class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
+@HiltViewModel
+class DetailViewModel @Inject constructor(
+    private val app: Application,
+    // The graph's instances, which are the ones the accessors own: this screen
+    // shares its caches with every screen that has not moved yet.
+    private val repository: AddonRepository,
+    private val addonManager: AddonManager,
+    internal val tmdbRepository: TmdbRepository,
+    internal val simklRepository: SimklRepository,
+    // Trakt is read-only on this screen (comments and the watched union); the
+    // "not connected" case is a no-op, never an error.
+    internal val traktRepository: TraktRepository,
+    // Second-source air dates (see [AirDateCorrection]). Display-only: it
+    // never writes back to history, watch state or the metadata caches.
+    private val airDateRepository: TvmazeAirDateRepository,
+    // The watched union's writer: push/remove season and episode marks.
+    private val bingecatRepository: BingeCatRepository
+) : AndroidViewModel(app) {
 
     // ── The season's episode stills, warmed ahead of the row's scroll ────
     //
@@ -317,13 +336,6 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private val repository = AddonRepository.getInstance()
-    private val addonManager = AddonManager.getInstance(app)
-    internal val tmdbRepository = TmdbRepository.getInstance(app)
-    internal val simklRepository = SimklRepository.getInstance(app)
-    // Trakt is read-only on this screen (comments and the watched union); the
-    // "not connected" case is a no-op, never an error.
-    internal val traktRepository = TraktRepository.getInstance(app)
     // Resolved per access: the scoped DB instance is bound to the ACTIVE
     // profile. Capturing the DAO once meant a Detail page opened before a
     // profile switch kept writing resume/watch progress into the previous
@@ -331,9 +343,6 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     private val historyDao: WatchHistoryDao
         get() = WatchHistoryDatabase.getInstanceScoped(app).watchHistoryDao()
     private val watchedStatusRepository = WatchedStatusRepository(app)
-    // Second-source air dates (see [AirDateCorrection]). Display-only: it
-    // never writes back to history, watch state or the metadata caches.
-    private val airDateRepository = TvmazeAirDateRepository.getInstance(app)
     // Awards text from OMDB (see [OmdbRepository]). Display-only, and fetched
     // concurrently with the rest of the load rather than as a dependency of
     // anything the screen paints with.
@@ -3687,7 +3696,7 @@ for ((metaAddon, response, error) in probeResults) {
             // 5. Trakt, the third tracker. One write per episode (Trakt's
             // history endpoint takes a whole season, but this app already
             // addresses episodes individually everywhere else).
-            val trakt = TraktRepository.getInstance(getApplication())
+            val trakt = traktRepository
             if (trakt.isConfigured() && trakt.hasToken()) {
                 runCatchingCancellable {
                     validEpisodes.forEach { episode ->
@@ -3712,7 +3721,7 @@ for ((metaAddon, response, error) in probeResults) {
             // (ready + history:write) decides whether a request is attempted
             // at all, and its failures are swallowed like the legs above.
             runCatchingCancellable {
-                BingeCatRepository.getInstance(getApplication()).pushWatchedSeason(
+                bingecatRepository.pushWatchedSeason(
                     showImdbId = parentId,
                     season = season,
                     title = showName.takeIf { it.isNotBlank() },
@@ -3906,7 +3915,7 @@ for ((metaAddon, response, error) in probeResults) {
             }
 
             // 6. And the same removal on Trakt.
-            val trakt = TraktRepository.getInstance(getApplication())
+            val trakt = traktRepository
             if (trakt.isConfigured() && trakt.hasToken()) {
                 runCatchingCancellable {
                     validEpisodes.forEach { episode ->
@@ -3929,7 +3938,7 @@ for ((metaAddon, response, error) in probeResults) {
             // 7. And the same removal on BingeCat: one seasons[] entry, the
             // write's mirror of the season mark above.
             runCatchingCancellable {
-                BingeCatRepository.getInstance(getApplication()).removeWatchedSeason(
+                bingecatRepository.removeWatchedSeason(
                     showImdbId = parentId,
                     season = season,
                     tmdbId = showTmdbId
@@ -4078,7 +4087,7 @@ for ((metaAddon, response, error) in probeResults) {
         // ids-only entry there too: drop the show, then re-add the episodes
         // that are still watched.
         runCatchingCancellable {
-            val bingecat = BingeCatRepository.getInstance(appContext)
+            val bingecat = bingecatRepository
             bingecat.removeWatchedShow(
                 showImdbId = parentId,
                 tmdbId = showTmdbId
@@ -4136,7 +4145,7 @@ for ((metaAddon, response, error) in probeResults) {
 
         // Trakt: drop the whole-show record, then re-mark only what is still
         // watched - the same two-step rewrite as the other trackers.
-        val trakt = TraktRepository.getInstance(appContext)
+        val trakt = traktRepository
         if (trakt.isConfigured() && trakt.hasToken()) {
             runCatchingCancellable {
                 trakt.removeWatchedShow(showId = parentId, tmdbId = showTmdbId)
@@ -4517,7 +4526,7 @@ for ((metaAddon, response, error) in probeResults) {
             // episode lists when unaired seasons were swept). One batch per
             // season/list: the action is one mark, not one call per episode.
             runCatchingCancellable {
-                val bingecat = BingeCatRepository.getInstance(getApplication())
+                val bingecat = bingecatRepository
                 val markTitle = showName.takeIf { it.isNotBlank() }
                 if (sweptUnaired) {
                     seasonsToMark.forEach { (season, episodes) ->
@@ -4950,7 +4959,7 @@ for ((metaAddon, response, error) in probeResults) {
             // BingeCat, the same removal: the episodes of this season, solved
             // by the batch rather than one call each.
             runCatchingCancellable {
-                BingeCatRepository.getInstance(getApplication()).removeWatchedEpisodes(
+                bingecatRepository.removeWatchedEpisodes(
                     showImdbId = parentId,
                     season = season,
                     episodes = validEpisodes,
@@ -4985,7 +4994,7 @@ for ((metaAddon, response, error) in probeResults) {
             }
 
             // 6. Trakt, the third tracker.
-            val trakt = TraktRepository.getInstance(getApplication())
+            val trakt = traktRepository
             if (trakt.isConfigured() && trakt.hasToken()) {
                 runCatchingCancellable {
                     validEpisodes.forEach { episode ->

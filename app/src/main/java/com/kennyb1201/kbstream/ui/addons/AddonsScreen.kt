@@ -51,7 +51,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
@@ -92,7 +92,7 @@ fun AddonsScreen(
     // The TV page deliberately draws no back control - the remote is the way
     // out there - so this only reaches AddonsScreenMobile.
     onBack: () -> Unit,
-    viewModel: AddonsViewModel = viewModel()
+    viewModel: AddonsViewModel = hiltViewModel()
 ) {
     // The phone entry: the same activity-scoped ViewModel and the same
     // management calls, laid out as a list with a detail sheet. One branch; the

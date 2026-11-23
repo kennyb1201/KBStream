@@ -248,10 +248,12 @@ class UpcomingCaughtUpGateTest {
 
         val viewModel = source("com/kennyb1201/kbstream/ui/home/HomeViewModel.kt")
         val leg = viewModel.slice("val bingecat =", "trackers = mdbList + trakt + bingecat")
+        // The repository is injected now (spec 2026-11-22, item 3): the leg
+        // reads the field, and stays inside the same caught read.
         assertTrue(
             "F2a: a thrown read is caught, not propagated",
             leg.contains("runCatchingCancellable {") &&
-                leg.contains("BingeCatRepository.getInstance(getApplication())") &&
+                leg.contains("bingecatRepository") &&
                 leg.contains(".watchedHistorySnapshot()") &&
                 leg.contains(".orEmpty()")
         )

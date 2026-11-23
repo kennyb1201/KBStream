@@ -170,9 +170,12 @@ class BingeCatPendingHistoryContractTest {
             "app start replays what the last session could not deliver",
             app.contains("BingeCatRepository .getInstance(applicationContext) .schedulePendingHistoryFlush()")
         )
+        // Home's repository comes from the graph now (spec 2026-11-22, item 3),
+        // so the door is the injected field rather than an accessor call. The
+        // property this pins is unchanged: every Home load replays.
         assertTrue(
             "and every Home load does, on the taste queue's own reasoning",
-            home.contains("BingeCatRepository .getInstance(getApplication()) .schedulePendingHistoryFlush()")
+            home.contains("bingecatRepository .schedulePendingHistoryFlush()")
         )
         assertFalse(
             "but nothing polls: no worker, no timer, no periodic replay",

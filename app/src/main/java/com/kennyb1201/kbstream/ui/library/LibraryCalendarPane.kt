@@ -48,7 +48,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.notifications.AirReminderRules
@@ -118,7 +118,7 @@ fun LibraryCalendarPane(
     onOpenDetails: (navigationId: String) -> Unit,
     modifier: Modifier = Modifier,
     takeInitialFocus: Boolean = false,
-    viewModel: LibraryCalendarViewModel = viewModel()
+    viewModel: LibraryCalendarViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val touch = !FormFactor.isTv

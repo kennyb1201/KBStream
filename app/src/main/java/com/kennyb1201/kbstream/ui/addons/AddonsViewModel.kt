@@ -32,14 +32,20 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
-class AddonsViewModel(application: Application) : AndroidViewModel(application) {
-
-    // Use the shared singleton so catalog changes are seen instantly by
-    // HomeViewModel's watcher (a fresh AddonManager would hold a stale
-    // StateFlow and Home would never pick up reorder/show-hide changes).
-    private val addonManager = AddonManager.getInstance(application)
-    private val repository = AddonRepository.getInstance()
+// The manager and the repository are the shared instances, from the graph, so
+// catalog changes are still seen instantly by HomeViewModel's watcher (a fresh
+// AddonManager would hold a stale StateFlow and Home would never pick up
+// reorder/show-hide changes).
+@HiltViewModel
+class AddonsViewModel @Inject constructor(
+    application: Application,
+    private val addonManager: AddonManager,
+    private val repository: AddonRepository,
+    private val kbRepository: KBRepository
+) : AndroidViewModel(application) {
 
     private val _addons = MutableStateFlow<List<InstalledAddon>>(emptyList())
     val addons: StateFlow<List<InstalledAddon>> = _addons.asStateFlow()
@@ -53,8 +59,6 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
 
     val catalogConfigurations: StateFlow<List<CatalogConfiguration>> =
         _catalogConfigurations.asStateFlow()
-
-    private val kbRepository = KBRepository.getInstance(application)
 
     /**
      * addonId -> manifestUrl, so rail keys match Home exactly. Home builds
