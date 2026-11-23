@@ -15,6 +15,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The app-level PARENT PIN (sweep-4 M11).
@@ -55,7 +56,7 @@ class ParentPinTest {
     }
 
     private fun prefs() =
-        context.getSharedPreferences("kids_time_guard", Context.MODE_PRIVATE)
+        Prefs.file(context, "kids_time_guard")
 
     /**
      * The hash as it is actually stored: the encrypted vault (Settings L2).

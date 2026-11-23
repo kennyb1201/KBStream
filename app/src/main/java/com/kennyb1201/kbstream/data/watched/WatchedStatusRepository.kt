@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 class WatchedStatusRepository(
     private val context: Context
@@ -93,13 +94,7 @@ class WatchedStatusRepository(
     private val overridesPrefs
         get() = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
             ?.let { appContext ->
-                appContext.getSharedPreferences(
-                    com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
-                        appContext,
-                        "kbstream_watched_overrides"
-                    ),
-                    Context.MODE_PRIVATE
-                )
+                Prefs.file(appContext, com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(appContext, "kbstream_watched_overrides"))
             }
                 // Never the unscoped name: AppContextHolder is null in the
                 // window before Application.onCreate, and falling back to the
@@ -108,13 +103,7 @@ class WatchedStatusRepository(
                 // shared across profiles during the window. Resolving through
                 // the repository's own context keeps the write on the active
                 // profile's file, which is the same one the primary path uses.
-                ?: context.getSharedPreferences(
-                    com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
-                        context,
-                        "kbstream_watched_overrides"
-                    ),
-                    Context.MODE_PRIVATE
-                )
+                ?: Prefs.file(context, com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, "kbstream_watched_overrides"))
 
     /*
      * Only one preload may refresh SIMKL sets at a time. This avoids:

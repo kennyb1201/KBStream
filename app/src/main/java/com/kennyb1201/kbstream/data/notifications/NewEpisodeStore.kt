@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.notifications
 
 import android.content.Context
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Remembers, per profile, which episode of each followed show was the newest
@@ -18,10 +19,7 @@ import com.kennyb1201.kbstream.data.sync.ProfileStorage
  */
 internal class NewEpisodeStore(context: Context) {
 
-    private val prefs = context.applicationContext.getSharedPreferences(
-        ProfileStorage.prefsName(context.applicationContext, PREFS_NAME),
-        Context.MODE_PRIVATE
-    )
+    private val prefs = Prefs.file(context.applicationContext, ProfileStorage.prefsName(context.applicationContext, PREFS_NAME))
 
     /** The episode recorded at the last check, or null if never seen. */
     fun lastSeen(showKey: String): String? =

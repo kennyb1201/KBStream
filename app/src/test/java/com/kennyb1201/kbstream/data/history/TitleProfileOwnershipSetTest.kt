@@ -11,6 +11,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The ownership store as a SET of owners per title (spec C10/D4).
@@ -34,10 +35,7 @@ class TitleProfileOwnershipSetTest {
     private val context: Context
         get() = ApplicationProvider.getApplicationContext()
 
-    private fun prefs() = context.getSharedPreferences(
-        "kbstream_title_profiles",
-        Context.MODE_PRIVATE
-    )
+    private fun prefs() = Prefs.file(context, "kbstream_title_profiles")
 
     @Before
     fun setUp() {

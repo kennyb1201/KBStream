@@ -27,6 +27,7 @@ import com.kennyb1201.kbstream.data.reporting.UpcomingDiagTrace
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The profile whose Simkl token produced this repository's process-wide
@@ -2694,7 +2695,7 @@ class SimklRepository(
     private val readParkPrefs
         get() = context
             ?.applicationContext
-            ?.getSharedPreferences(READ_PARK_PREFS, Context.MODE_PRIVATE)
+            ?.let { Prefs.file(it, READ_PARK_PREFS) }
 
     internal fun readsAreParked(): Boolean {
         restoreReadParkOnce()

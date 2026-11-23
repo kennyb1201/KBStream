@@ -1,7 +1,6 @@
 package com.kennyb1201.kbstream.ui.sports
 
 import android.app.Application
-import android.content.Context
 import android.content.SharedPreferences
 import android.os.SystemClock
 import android.util.Log
@@ -65,6 +64,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Everything one league tab holds.
@@ -183,10 +183,7 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     // Var, not val: the prefs FILE is per-profile (see [onProfileSwitched]).
-    private var prefs: SharedPreferences = app.getSharedPreferences(
-        ProfileStorage.prefsName(app, GuideFilesPrefs),
-        Context.MODE_PRIVATE
-    )
+    private var prefs: SharedPreferences = Prefs.file(app, ProfileStorage.prefsName(app, GuideFilesPrefs))
 
     private val _enabledLeagues = MutableStateFlow(AppPreferences.getSportsEnabledLeagues(app))
     val enabledLeagues: StateFlow<Set<String>> = _enabledLeagues.asStateFlow()
@@ -707,10 +704,7 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     /** The re-snapshot itself; see [observeProfileSwitches]. */
     private fun onProfileSwitched() {
         val app = getApplication<Application>()
-        prefs = app.getSharedPreferences(
-            ProfileStorage.prefsName(app, GuideFilesPrefs),
-            Context.MODE_PRIVATE
-        )
+        prefs = Prefs.file(app, ProfileStorage.prefsName(app, GuideFilesPrefs))
         // Everything the previous profile had read or matched goes with it,
         // including the unfinished lineup read (which would otherwise publish
         // the old profile's channels - see [lineupGeneration]).

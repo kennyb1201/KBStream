@@ -14,6 +14,7 @@ import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The store behind the next-episode subtitle prefetch.
@@ -29,10 +30,7 @@ class SubtitlePrefetchTest {
 
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val prefs by lazy {
-        context.getSharedPreferences(
-            ProfileStorage.prefsName(context, "kbstream_subtitle_prefetch"),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, ProfileStorage.prefsName(context, "kbstream_subtitle_prefetch"))
     }
 
     private val tempFiles = mutableListOf<File>()

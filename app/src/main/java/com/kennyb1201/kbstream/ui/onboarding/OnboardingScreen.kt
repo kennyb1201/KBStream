@@ -25,10 +25,8 @@ import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -66,6 +64,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.android.awaitFrame
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Frames to keep asking for a focus target before giving up (the verified-retry
@@ -82,7 +81,7 @@ object OnboardingPrefs {
     private const val KEY_COMPLETE = "complete"
 
     fun isComplete(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        Prefs.file(context, PREFS)
             .getBoolean(KEY_COMPLETE, false)
 
     fun setComplete(context: Context, complete: Boolean) {
@@ -90,7 +89,7 @@ object OnboardingPrefs {
         // per device, so the write costs nothing here - and apply() leaves a
         // window where a process killed between the tap and the flush came back
         // to a first-run screen the viewer had already finished (onboarding I2).
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        Prefs.file(context, PREFS)
             .edit()
             .putBoolean(KEY_COMPLETE, complete)
             .commit()

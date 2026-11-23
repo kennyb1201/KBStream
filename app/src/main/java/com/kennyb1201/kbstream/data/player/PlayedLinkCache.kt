@@ -8,6 +8,7 @@ import com.kennyb1201.kbstream.data.addon.StreamDrm
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Remembers the debrid link a title was last played from, so replaying it
@@ -262,12 +263,5 @@ internal object PlayedLinkCache {
 
     /** The store of one profile, or the active profile's when [profileId] is null. */
     private fun prefsFor(context: Context, profileId: String?): SharedPreferences =
-        context.applicationContext.getSharedPreferences(
-            if (profileId == null) {
-                ProfileStorage.prefsName(context.applicationContext, PREFS_BASE)
-            } else {
-                ProfileStorage.prefsName(profileId, PREFS_BASE)
-            },
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context.applicationContext, if (profileId == null) { ProfileStorage.prefsName(context.applicationContext, PREFS_BASE) } else { ProfileStorage.prefsName(profileId, PREFS_BASE) })
 }

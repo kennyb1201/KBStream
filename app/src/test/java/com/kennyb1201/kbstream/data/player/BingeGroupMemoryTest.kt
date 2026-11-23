@@ -13,6 +13,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The binge identity a show was last played with (audit S-F5).
@@ -39,10 +40,7 @@ class BingeGroupMemoryTest {
         get() = ApplicationProvider.getApplicationContext()
 
     private val prefs
-        get() = context.getSharedPreferences(
-            ProfileStorage.prefsName(context, BASE),
-            Context.MODE_PRIVATE
-        )
+        get() = Prefs.file(context, ProfileStorage.prefsName(context, BASE))
 
     @Before
     fun setUp() {

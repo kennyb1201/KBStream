@@ -20,6 +20,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Landscape cards, landscape posters and poster size are DEVICE-LOCAL
@@ -55,10 +56,7 @@ class DeviceLocalDisplayPrefsTest {
         get() = ApplicationProvider.getApplicationContext()
 
     private val store
-        get() = context.getSharedPreferences(
-            ProfileStorage.prefsName(context, DISPLAY_STORE),
-            Context.MODE_PRIVATE
-        )
+        get() = Prefs.file(context, ProfileStorage.prefsName(context, DISPLAY_STORE))
 
     @Before
     fun clearStore() {

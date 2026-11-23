@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.player
 
 import android.content.Context
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Remembers the [EpisodeScheme] detected for a show, so the NEXT session is
@@ -70,8 +71,7 @@ internal object EpisodeSchemeStore {
     private fun keyFor(stableShowId: String?): String? =
         stableShowId?.trim()?.takeIf { it.isNotBlank() }?.let { KEY_PREFIX + it }
 
-    private fun prefs(context: Context) = context.applicationContext
-        .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private fun prefs(context: Context) = Prefs.file(context.applicationContext, PREFS)
 }
 
 /**

@@ -25,6 +25,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * In-app self-update for sideloaded installs.
@@ -308,21 +309,21 @@ object AppUpdater {
     fun isPopupEligible(context: Context): Boolean {
         val s = state.value
         if (s !is UpdateState.Available) return false
-        val dismissed = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val dismissed = Prefs.file(context, PREFS)
             .getLong(KEY_DISMISSED_CODE, 0L)
         return s.versionCode > dismissed
     }
 
     /** Remember the offered versionCode so the popup stops re-appearing. */
     fun dismissPopup(context: Context, available: UpdateState.Available) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        Prefs.file(context, PREFS)
             .edit().putLong(KEY_DISMISSED_CODE, available.versionCode).apply()
     }
 
     /** Silent launch-time check, throttled to once per 12h. Failures are quiet. */
     fun maybeAutoCheck(context: Context) {
         if (BuildConfig.PLAY_BUILD || BuildConfig.DEBUG) return
-        val last = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val last = Prefs.file(context, PREFS)
             .getLong(KEY_LAST_CHECK_MS, 0L)
         if (System.currentTimeMillis() - last < AUTO_CHECK_INTERVAL_MS) return
         when (state.value) {
@@ -361,7 +362,7 @@ object AppUpdater {
             is UpdateState.ReadyToInstall -> return // APK already staged
             else -> Unit
         }
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        Prefs.file(context, PREFS)
             .edit().putLong(KEY_LAST_CHECK_MS, System.currentTimeMillis()).apply()
         state.value = UpdateState.Checking
         scope.launch {
@@ -434,7 +435,7 @@ object AppUpdater {
                 val dir = File(context.cacheDir, UPDATES_DIR).apply { mkdirs() }
                 dir.listFiles()?.forEach { it.delete() }
                 // Whatever was pending is being replaced by this download.
-                clearPendingInstall(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE))
+                clearPendingInstall(Prefs.file(context, PREFS))
                 val apk = File(
                     dir,
                     "kbstream-${available.versionName}-build${available.versionCode}.apk"
@@ -495,7 +496,7 @@ object AppUpdater {
      * leaves the marker alone rather than guessing.
      */
     fun confirmInstallOnLaunch(context: Context) {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val prefs = Prefs.file(context, PREFS)
         val pendingCode = prefs.getLong(KEY_PENDING_INSTALL_CODE, 0L)
         if (pendingCode <= 0L) return
         val stampedAt = prefs.getLong(KEY_PENDING_INSTALL_AT, 0L)
@@ -553,7 +554,7 @@ object AppUpdater {
     ) {
         val code = BUILD_NUMBER.find(apk.name)?.groupValues?.get(1)?.toLongOrNull() ?: return
         val name = apk.name.removePrefix("kbstream-").substringBefore("-build")
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+        Prefs.file(context, PREFS).edit()
             .putLong(KEY_PENDING_INSTALL_CODE, code)
             .putString(KEY_PENDING_INSTALL_NAME, name)
             .putLong(KEY_PENDING_INSTALL_AT, atMs)

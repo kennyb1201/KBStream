@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.history
 
 import android.content.Context
 import org.json.JSONObject
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Which profiles a title belongs to ON THIS DEVICE.
@@ -68,8 +69,7 @@ internal object TitleProfileOwnership {
     private fun map(context: Context): MutableMap<String, MutableMap<String, Long>> {
         cache?.let { return it }
 
-        val raw = context.applicationContext
-            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val raw = Prefs.file(context.applicationContext, PREFS)
             .getString(KEY_OWNERS, null)
 
         val loaded = LinkedHashMap<String, MutableMap<String, Long>>()
@@ -260,8 +260,7 @@ internal object TitleProfileOwnership {
     fun clear(context: Context) {
         cache = null
         runCatching {
-            context.applicationContext
-                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            Prefs.file(context.applicationContext, PREFS)
                 .edit()
                 .remove(KEY_OWNERS)
                 .apply()
@@ -282,8 +281,7 @@ internal object TitleProfileOwnership {
             runCatching { json.put(storedKey, entry) }
         }
 
-        context.applicationContext
-            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        Prefs.file(context.applicationContext, PREFS)
             .edit()
             .putString(KEY_OWNERS, json.toString())
             .apply()

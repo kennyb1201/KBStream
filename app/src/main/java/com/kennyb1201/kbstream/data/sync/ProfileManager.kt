@@ -14,6 +14,7 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Local profile management on top of ONE Supabase account.
@@ -157,7 +158,7 @@ object ProfileManager {
         val loaded = _profiles.value
         if (loaded.isNotEmpty()) return loaded.map { profile -> profile.id }
 
-        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val raw = Prefs.file(context, PREFS)
             .getString(KEY_PROFILES, null)
         idsCache?.takeIf { cached -> cached.raw == raw }?.let { cached -> return cached.ids }
 
@@ -195,7 +196,7 @@ object ProfileManager {
     internal fun resolveActiveId(context: Context): String? {
         _activeProfile.value?.id?.let { return it }
         return ProfileScopeRules.resolve(
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            Prefs.file(context, PREFS)
                 .getString(KEY_ACTIVE, null),
             loadProfiles(context).map { it.id }
         )
@@ -205,7 +206,7 @@ object ProfileManager {
         val list = loadProfiles(context)
         _profiles.value = list
 
-        val activeId = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val activeId = Prefs.file(context, PREFS)
             .getString(KEY_ACTIVE, null)
         _activeProfile.value = list.firstOrNull { it.id == activeId } ?: list.firstOrNull()
 
@@ -244,7 +245,7 @@ object ProfileManager {
      * Nothing can observe the new profile while an old store is still bound now.
      */
     fun setActive(context: Context, profile: Profile) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        Prefs.file(context, PREFS)
             .edit().putString(KEY_ACTIVE, profile.id).apply()
         // Persist first (anything falling back to disk must already name the new
         // profile), then drop with that id explicit, then announce it.
@@ -760,7 +761,7 @@ object ProfileManager {
             // the same one a switch runs, so no scoped handle, watched cache or
             // addon list keeps serving the deleted profile's data.
             _activeProfile.value = null
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            Prefs.file(context, PREFS)
                 .edit().remove(KEY_ACTIVE).apply()
             // No profile is active afterwards, so the drop has none to load for
             // (see the parameter's note).
@@ -775,7 +776,7 @@ object ProfileManager {
      * sign-in, a delete from Settings).
      */
     internal fun deletedIds(context: Context): Set<String> =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        Prefs.file(context, PREFS)
             .getStringSet(KEY_DELETED, emptySet())
             ?.toSet()
             ?: emptySet()
@@ -795,7 +796,7 @@ object ProfileManager {
     internal fun recordDeletion(context: Context, profileId: String) {
         if (profileId.isBlank()) return
         val merged = deletedIds(context) + profileId
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        Prefs.file(context, PREFS)
             .edit().putStringSet(KEY_DELETED, merged).apply()
     }
 
@@ -803,7 +804,7 @@ object ProfileManager {
         val fresh = ids.filter { it.isNotBlank() }
         if (fresh.isEmpty()) return
         val merged = deletedIds(context) + fresh
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        Prefs.file(context, PREFS)
             .edit().putStringSet(KEY_DELETED, merged).apply()
     }
 
@@ -818,7 +819,7 @@ object ProfileManager {
      */
     private fun wipeLocalProfileData(context: Context, profileId: String) {
         ProfileStorage.namespaces(context).filter { it.startsWith("$profileId.") }.forEach { ns ->
-            context.getSharedPreferences(ns, Context.MODE_PRIVATE).edit().clear().apply()
+            Prefs.file(context, ns).edit().clear().apply()
         }
         // ...and drop the cached ENCRYPTED stores for that namespace. The files
         // above are cleared, but the decrypted instances are held in
@@ -854,7 +855,7 @@ object ProfileManager {
      * published to the picker instead of being silently reported as "none".
      */
     private fun readProfiles(context: Context): ProfileLoad {
-        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val raw = Prefs.file(context, PREFS)
             .getString(KEY_PROFILES, null)
         if (raw == null) {
             servingUnreadableBlob = false
@@ -985,7 +986,7 @@ object ProfileManager {
                 profile.copy(pinHash = null)
             }
         }
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        Prefs.file(context, PREFS)
             .edit()
             .putString(KEY_PROFILES, json.encodeToString(kotlinx.serialization.builtins.ListSerializer(Profile.serializer()), stripped))
             .apply()
@@ -1078,7 +1079,7 @@ object ProfileManager {
      * stores. Copy it into the first created profile so nothing is lost.
      */
     private fun migrateLegacyDataIfNeeded(context: Context) {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val prefs = Prefs.file(context, PREFS)
         if (prefs.getBoolean(KEY_MIGRATED, false)) return
         if (loadProfiles(context).isNotEmpty()) {
             prefs.edit().putBoolean(KEY_MIGRATED, true).apply()
@@ -1095,7 +1096,7 @@ object ProfileManager {
         // KEY_MIGRATED gate: only the FIRST profile adopts the legacy
         // snapshot. Without this, every later profile would also receive a
         // copy of the frozen pre-profile history (a cross-profile leak).
-        val alreadyMigrated = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val alreadyMigrated = Prefs.file(context, PREFS)
             .getBoolean(KEY_MIGRATED, false)
         val hadLegacy = !alreadyMigrated && hadLegacyData(context)
         // Nothing to adopt when the create itself was refused (see create):
@@ -1109,7 +1110,7 @@ object ProfileManager {
             // runs while the new profile is already active, so the copied rows
             // are immediately the ones the scoped stores resolve.
             ProfileStorage.copyLegacyIntoProfile(context, profile.id)
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            Prefs.file(context, PREFS)
                 .edit().putBoolean(KEY_MIGRATED, true).apply()
             // setActive() already ran inside create(); re-run the switch
             // sequence so every singleton (watch history DB handle, watched
@@ -1135,7 +1136,7 @@ object ProfileManager {
             "iptv_guide_preferences", "simkl_sync", "search_prefs"
         )
         return legacyKeys.any {
-            context.getSharedPreferences(it, Context.MODE_PRIVATE).all.isNotEmpty()
+            Prefs.file(context, it).all.isNotEmpty()
         }
     }
 
@@ -1303,7 +1304,7 @@ object ProfileManager {
             // cleared, the cache-reset sequence runs, and choosing a profile is
             // its own authenticated act again (see KidsGate).
             _activeProfile.value = null
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            Prefs.file(context, PREFS)
                 .edit().remove(KEY_ACTIVE).apply()
             onActiveProfileChanged(null)
         }
@@ -1361,11 +1362,16 @@ object ProfileStorage {
         return dbName(active, baseName)
     }
 
-    /** All namespaced prefs files on this device (for deletion). */
-    fun namespaces(context: Context): List<String> {
-        val root = java.io.File(context.filesDir.parentFile, "shared_prefs")
-        return root.listFiles()?.map { it.nameWithoutExtension } ?: emptyList()
-    }
+    /**
+     * All prefs store names on this device (for deletion).
+     *
+     * Both formats are listed: a store this build has not opened yet is still
+     * `shared_prefs/<name>.xml`, and one it has is
+     * `files/datastore/<name>.preferences_pb`. Listing only the XML directory
+     * would leave every migrated profile's data behind on a delete.
+     */
+    fun namespaces(context: Context): List<String> =
+        com.kennyb1201.kbstream.data.settings.prefs.Prefs.names(context)
 
     /**
      * Copies legacy un-namespaced stores into a profile's namespace.
@@ -1390,9 +1396,9 @@ object ProfileStorage {
             "iptv_guide_preferences", "simkl_sync", "search_prefs"
         )
         legacyPrefs.forEach { base ->
-            val src = context.getSharedPreferences(base, Context.MODE_PRIVATE)
+            val src = Prefs.file(context, base)
             if (src.all.isEmpty()) return@forEach
-            val dst = context.getSharedPreferences("$profileId.$base", Context.MODE_PRIVATE).edit()
+            val dst = Prefs.file(context, "$profileId.$base").edit()
             src.all.forEach { (k, v) ->
                 when (v) {
                     is String -> dst.putString(k, v)

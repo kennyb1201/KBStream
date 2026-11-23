@@ -10,6 +10,7 @@ import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * What the hub remembers about the viewer's own channel corrections.
@@ -31,10 +32,7 @@ class SportsChannelMemoryTest {
     }
 
     private fun prefs() =
-        context.getSharedPreferences(
-            ProfileStorage.prefsName(context, "sports_channel_memory"),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, ProfileStorage.prefsName(context, "sports_channel_memory"))
 
     private fun channel(id: String, name: String = id) = IptvChannel(
         id = id,

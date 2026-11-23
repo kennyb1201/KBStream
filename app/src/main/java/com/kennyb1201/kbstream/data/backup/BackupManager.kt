@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Export/import of everything that makes a reinstall painful: player
@@ -56,10 +57,7 @@ object BackupManager {
      * no profiles these resolve to the legacy/global names unchanged.
      */
     private fun scopedPrefs(context: Context, baseName: String) =
-        context.getSharedPreferences(
-            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, baseName),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, baseName))
 
     /** Serializes current state and writes it to [uri]. Returns a summary. */
     suspend fun export(context: Context, uri: Uri): String =

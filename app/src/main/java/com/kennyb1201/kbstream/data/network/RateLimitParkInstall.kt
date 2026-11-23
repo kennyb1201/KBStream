@@ -9,6 +9,7 @@ import com.kennyb1201.kbstream.data.bingecat.bingeCatWriteGuard
 import com.kennyb1201.kbstream.data.kitsu.KitsuLibrary
 import com.kennyb1201.kbstream.data.mal.malRateGuard
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Installs the park that survives process death for every rate-limited leg but
@@ -22,8 +23,7 @@ import com.kennyb1201.kbstream.data.trakt.TraktRepository
  * A SharedPreferences read is cheap and the only write is one per 429.
  */
 internal fun installRateLimitParkStores(context: Context) {
-    val prefs = context.applicationContext
-        .getSharedPreferences(RATE_LIMIT_PARK_PREFS, Context.MODE_PRIVATE)
+    val prefs = Prefs.file(context.applicationContext, RATE_LIMIT_PARK_PREFS)
 
     bingeCatReadGuard.attachParkStore(prefsParkUntilStore(prefs, KEY_BINGECAT_READ))
     bingeCatWriteGuard.attachParkStore(prefsParkUntilStore(prefs, KEY_BINGECAT_WRITE))

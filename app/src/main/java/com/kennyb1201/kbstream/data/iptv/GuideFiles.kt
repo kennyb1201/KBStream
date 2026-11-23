@@ -4,6 +4,7 @@ import android.content.Context
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import java.security.MessageDigest
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * What a profile's guide file is CALLED — which is also the answer to how many
@@ -151,14 +152,14 @@ internal object GuideFiles {
      * switching profiles.
      */
     private fun prefsFor(context: Context, profileId: String?) =
-        context.getSharedPreferences(
+        Prefs.file(
+            context,
             when {
                 profileId == null -> ProfileStorage.prefsName(context, PREFS)
                 profileId == ProfileStorage.activeProfileId(context) ->
                     ProfileStorage.prefsName(context, PREFS)
                 else -> ProfileStorage.prefsName(profileId, PREFS)
-            },
-            Context.MODE_PRIVATE
+            }
         )
 }
 

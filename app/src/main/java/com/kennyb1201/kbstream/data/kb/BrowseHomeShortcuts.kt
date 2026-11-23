@@ -5,6 +5,7 @@ import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * One browse-menu chip the user mirrored onto Home.
@@ -271,10 +272,7 @@ object BrowseHomeShortcuts {
         return true
     }
 
-    private fun prefs(context: Context) = context.getSharedPreferences(
-        ProfileStorage.prefsName(context, PREFS),
-        Context.MODE_PRIVATE
-    )
+    private fun prefs(context: Context) = Prefs.file(context, ProfileStorage.prefsName(context, PREFS))
 }
 
 /** Identity of this chip as an entry in its rail. */

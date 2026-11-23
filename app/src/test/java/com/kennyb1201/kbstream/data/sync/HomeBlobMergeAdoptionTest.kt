@@ -22,6 +22,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * What a pulled blob WRITES once it has been adopted (see
@@ -55,10 +56,7 @@ class HomeBlobMergeAdoptionTest {
     }
 
     private fun prefs(baseName: String) =
-        context.getSharedPreferences(
-            ProfileStorage.prefsName(context, baseName),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, ProfileStorage.prefsName(context, baseName))
 
     private fun orderPrefs() = prefs("kbstream_kb_home_order")
 

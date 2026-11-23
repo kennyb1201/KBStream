@@ -16,6 +16,7 @@ import okhttp3.Request
 import java.io.File
 import java.util.concurrent.TimeUnit
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Loads KB collections profiles: JSON documents (a top-level array of
@@ -441,8 +442,5 @@ object KBProfilePrefs {
     }
 
     private fun prefs(context: Context) =
-        context.getSharedPreferences(
-            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, PREFS_NAME),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, PREFS_NAME))
 }

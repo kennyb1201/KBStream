@@ -20,6 +20,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * A profiles blob this build cannot read must not be replaced by the list this
@@ -47,7 +48,7 @@ class ProfileStoreReadSafetyTest {
         get() = ApplicationProvider.getApplicationContext()
 
     private fun prefs() =
-        context.getSharedPreferences("kbstream_profiles", Context.MODE_PRIVATE)
+        Prefs.file(context, "kbstream_profiles")
 
     /** A blob that stops mid-object: the shape a killed write leaves behind. */
     private val corrupt = """[{"id":"abc","name":"Main","avatarIndex":0}"""

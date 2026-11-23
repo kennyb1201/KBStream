@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.data.remote
 import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.json.JSONObject
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /** One phone this TV has paired with. */
 internal data class RemotePhone(
@@ -137,5 +138,5 @@ internal object RemotePairings {
     }
 
     private fun prefs(context: Context?) = context?.applicationContext
-        ?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        ?.let { Prefs.file(it, PREFS) }
 }

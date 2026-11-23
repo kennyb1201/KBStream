@@ -13,6 +13,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The numeric rating's semantics: one signal, one source of truth.
@@ -39,10 +40,7 @@ class TasteSignalsRatingTest {
         get() = ApplicationProvider.getApplicationContext()
 
     private val prefs
-        get() = context.getSharedPreferences(
-            ProfileStorage.prefsName(context, "kbstream_taste_signals"),
-            Context.MODE_PRIVATE
-        )
+        get() = Prefs.file(context, ProfileStorage.prefsName(context, "kbstream_taste_signals"))
 
     private val title = "Rating Title"
 

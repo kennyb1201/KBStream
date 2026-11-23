@@ -10,6 +10,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * What one title remembers about its addons.
@@ -39,10 +40,7 @@ class SourceAddonMemoryTest {
     }
 
     private fun prefs() =
-        context.getSharedPreferences(
-            ProfileStorage.prefsName(context, "kbstream_source_addons"),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, ProfileStorage.prefsName(context, "kbstream_source_addons"))
 
     @Test
     fun `a failed addon and a working one are both remembered for the title`() {

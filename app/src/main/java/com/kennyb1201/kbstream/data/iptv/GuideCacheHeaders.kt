@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.iptv
 
 import android.content.Context
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The HTTP validators a guide fetch can be resumed from.
@@ -39,10 +40,7 @@ internal object GuideCacheHeaders {
     private const val LASTMOD_PREFIX = "guide_last_modified_"
 
     private fun prefs(context: Context) =
-        context.getSharedPreferences(
-            ProfileStorage.prefsName(context, GuideFiles.PREFS),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, ProfileStorage.prefsName(context, GuideFiles.PREFS))
 
     /** The stored validators for [url], or null when this guide has none yet. */
     fun get(context: Context, url: String): GuideCacheValidators? {

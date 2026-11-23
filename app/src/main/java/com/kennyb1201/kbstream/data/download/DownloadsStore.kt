@@ -6,6 +6,7 @@ import android.util.Log
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The download records, and the two download toggles, on this device only.
@@ -68,10 +69,7 @@ object DownloadsStore {
     private val serializer = ListSerializer(DownloadRecord.serializer())
 
     private fun prefs(context: Context): SharedPreferences =
-        context.getSharedPreferences(
-            ProfileStorage.prefsName(context, PREFS_NAME),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, ProfileStorage.prefsName(context, PREFS_NAME))
 
     /** Every record for the active profile, newest enqueue first. */
     fun records(context: Context): List<DownloadRecord> = read(prefs(context))
@@ -85,10 +83,7 @@ object DownloadsStore {
      */
     fun recordsFor(context: Context, profileId: String): List<DownloadRecord> {
         if (profileId.isBlank()) return emptyList()
-        val scoped = context.getSharedPreferences(
-            ProfileStorage.prefsName(profileId, PREFS_NAME),
-            Context.MODE_PRIVATE
-        )
+        val scoped = Prefs.file(context, ProfileStorage.prefsName(profileId, PREFS_NAME))
         return read(scoped)
     }
 

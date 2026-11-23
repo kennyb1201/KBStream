@@ -8,6 +8,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * A list typed one per line imports exactly like one typed with semicolons.
@@ -62,10 +63,7 @@ class GuideSourceListSplitTest {
         return GuideFiles.guideUrls(context)
     }
 
-    private fun prefs() = context.getSharedPreferences(
-        ProfileStorage.prefsName(context, GuideFiles.PREFS),
-        Context.MODE_PRIVATE
-    )
+    private fun prefs() = Prefs.file(context, ProfileStorage.prefsName(context, GuideFiles.PREFS))
 
     private companion object {
         // Spelled as IptvViewModel writes them; GuideFiles keeps its own copies

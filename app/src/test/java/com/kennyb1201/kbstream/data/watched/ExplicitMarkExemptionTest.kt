@@ -16,6 +16,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The predicate every surface's sibling-ownership filter now reads:
@@ -54,10 +55,7 @@ class ExplicitMarkExemptionTest {
     private val repository by lazy { WatchedStatusRepository(context) }
 
     private fun overrides() =
-        context.getSharedPreferences(
-            ProfileStorage.prefsName(context, "kbstream_watched_overrides"),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, ProfileStorage.prefsName(context, "kbstream_watched_overrides"))
 
     /** Writes the override set the way [WatchedStatusRepository] stores it. */
     private fun store(keys: Set<String>) {

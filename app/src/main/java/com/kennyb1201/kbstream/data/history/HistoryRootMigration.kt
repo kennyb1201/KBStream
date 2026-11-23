@@ -10,6 +10,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The root a STORED row points at, or null when it names none to ask about.
@@ -343,5 +344,5 @@ object HistoryRootMigration {
     }
 
     private fun prefs(context: Context) =
-        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        Prefs.file(context.applicationContext, PREFS)
 }

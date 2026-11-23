@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.kennyb1201.kbstream.data.security.SecureTokenStore
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * A KBStream profile's view of the BingeCat session, encrypted at rest.
@@ -389,7 +390,7 @@ internal class BingeCatProfileMap(
         val appContext = context?.applicationContext ?: return null
         val name = profileId?.let { ProfileStorage.prefsName(it, PREFS_NAME) }
             ?: ProfileStorage.prefsName(appContext, PREFS_NAME)
-        return appContext.getSharedPreferences(name, Context.MODE_PRIVATE)
+        return Prefs.file(appContext, name)
     }
 
     fun mappedProfileId(): Long? =

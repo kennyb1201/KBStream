@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.home
 
 import android.content.Context
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The CATALOG rails as the last completed build left them (spec 2026-11-21,
@@ -41,7 +42,7 @@ internal object HomeCatalogSnapshot {
     /** The rails last written for [scope], or empty when there is none. */
     fun load(context: Context, scope: String): List<Rail> {
         val blob = runCatching {
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            Prefs.file(context, PREFS)
                 .getString("scope:" + scope, null)
         }.getOrNull() ?: return emptyList()
         return decode(blob)
@@ -55,7 +56,7 @@ internal object HomeCatalogSnapshot {
      */
     fun save(context: Context, scope: String, rails: List<Rail>) {
         runCatching {
-            val editor = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            val editor = Prefs.file(context, PREFS).edit()
             if (rails.isEmpty()) {
                 editor.remove("scope:" + scope)
             } else {

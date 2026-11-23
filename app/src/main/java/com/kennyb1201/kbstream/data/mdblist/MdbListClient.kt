@@ -46,6 +46,7 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * `progress` for POST /scrobble/{start,pause,stop}, as the whole percentage
@@ -388,7 +389,7 @@ object MdbListClient {
     }.getOrNull()
 
     private fun budgetPrefs(context: Context) =
-        context.getSharedPreferences(REQUEST_PREFS, Context.MODE_PRIVATE)
+        Prefs.file(context, REQUEST_PREFS)
 
     /** The count a SIBLING device last published for [profileId], today only. */
     private fun sharedSpend(context: Context, profileId: String, today: String): Int {

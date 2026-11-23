@@ -129,6 +129,7 @@ import java.time.ZoneId
 import org.json.JSONObject
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 @OptIn(FlowPreview::class)
 class HomeViewModel(
@@ -360,13 +361,12 @@ class HomeViewModel(
     private var landscapeEmptyAnswersLoaded = false
 
     private val landscapeEmptyPrefs: SharedPreferences
-        get() = getApplication<Application>()
-            .getSharedPreferences(
-                com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
-                    getApplication(), PREFS_LANDSCAPE_EMPTY
-                ),
-                Context.MODE_PRIVATE
+        get() = Prefs.file(
+            getApplication(),
+            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                getApplication(), PREFS_LANDSCAPE_EMPTY
             )
+        )
 
     /** Reads the stored empties once per process, dropping what has expired. */
     private fun loadLandscapeEmptyAnswers() {
@@ -481,12 +481,14 @@ class HomeViewModel(
     // pause), which then un-hides it automatically.
     private val dismissalPrefs: SharedPreferences
         get() = getApplication<Application>()
-            .getSharedPreferences(
-                com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
-                    getApplication(), PREFS_DISMISSED_UPNEXT
-                ),
-                Context.MODE_PRIVATE
-            )
+            .let {
+                Prefs.file(
+                    it,
+                    com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                        getApplication(), PREFS_DISMISSED_UPNEXT
+                    )
+                )
+            }
 
     private val dismissedContinueWatching: MutableMap<String, Long> =
         loadDismissedContinueWatching()

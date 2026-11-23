@@ -135,7 +135,7 @@ class HomeBrowseShortcutRemovalContractTest {
         assertTrue(
             "KBHomeViewModel must not grow its own read/write of the shortcut " +
                 "pref blob: the data layer owns the key and its encoding",
-            !vm.contains("putStringSet") && !vm.contains("getSharedPreferences")
+            !vm.contains("putStringSet") && !vm.contains("Prefs.file(")
         )
     }
 

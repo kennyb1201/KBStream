@@ -10,6 +10,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The durable, account-scoped staging of deletes made while SIGNED OUT.
@@ -34,7 +35,7 @@ class SyncDeferredDeletesTest {
     fun clearStore() {
         // The store's own prefs file (name is a stable contract; it is separate
         // from the session store precisely so sign-out does not clear it).
-        context.getSharedPreferences("kbstream_sync_deferred_deletes", Context.MODE_PRIVATE)
+        Prefs.file(context, "kbstream_sync_deferred_deletes")
             .edit().clear().commit()
     }
 

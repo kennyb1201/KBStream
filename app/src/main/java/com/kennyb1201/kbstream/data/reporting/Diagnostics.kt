@@ -39,6 +39,7 @@ import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * One-tap "what is actually going on" report.
@@ -934,7 +935,11 @@ object Diagnostics {
      *    and the history database's size is free pages a delete released but
      *    never returned, which is what
      *    [com.kennyb1201.kbstream.data.cache.TmdbJsonCacheMaintenance]
-     *    reclaims), plus the `files/` and `shared_prefs/` totals.
+     *    reclaims), plus the `files/`, `shared_prefs/` and `files/datastore/`
+     *    totals. Preference stores move from the second to the third the first
+     *    time a build opens them, so a device part way through that migration
+     *    splits its prefs between the two - reporting only one would show the
+     *    other as missing bytes.
      *  - `storage caches:` every cache child over [STORAGE_MIN_BYTES], largest
      *    first. Enumerated rather than checked against a fixed list of names:
      *    the list used to name four directories by hand, so a cache added later
@@ -964,6 +969,7 @@ object Diagnostics {
                     .append("/").append(jsonRows).append("row")
                 append(" files=").append(mb(dirBytes(context.filesDir)))
                 append(" prefs=").append(mb(dirBytes(java.io.File(dataDir, "shared_prefs"))))
+                    .append(" datastore=").append(mb(dirBytes(java.io.File(context.filesDir, "datastore"))))
                 appendLine()
                 append("storage caches: ").append(cacheBreakdown(context))
                 appendLine()
@@ -1195,10 +1201,7 @@ object Diagnostics {
 
     private suspend fun guideRefreshLine(context: Context): String? = withContext(Dispatchers.IO) {
         val prefs = runCatching {
-            context.getSharedPreferences(
-                ProfileStorage.prefsName(context, EPG_PREFS_NAME),
-                Context.MODE_PRIVATE
-            )
+            Prefs.file(context, ProfileStorage.prefsName(context, EPG_PREFS_NAME))
         }.getOrNull() ?: return@withContext null
         val now = System.currentTimeMillis()
         val lastImport = prefs.getLong(KEY_EPG_UPDATED_AT, 0L)
@@ -1372,10 +1375,7 @@ object Diagnostics {
 
     /** Manual "Mark as Watched" keys — they override everything from Simkl. */
     private fun overridesCount(context: Context, profileId: String): Int = runCatching {
-        context.getSharedPreferences(
-            ProfileStorage.prefsName(profileId, "kbstream_watched_overrides"),
-            Context.MODE_PRIVATE
-        ).getStringSet("watched_overrides", emptySet())?.size ?: 0
+        Prefs.file(context, ProfileStorage.prefsName(profileId, "kbstream_watched_overrides")).getStringSet("watched_overrides", emptySet())?.size ?: 0
     }.getOrDefault(0)
 
     /**

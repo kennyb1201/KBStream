@@ -15,6 +15,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Where a realtime prefs row lands.
@@ -51,7 +52,7 @@ class OwningProfileApplyTest {
         val json = ids.joinToString(separator = ",", prefix = "[", postfix = "]") {
             """{"id":"$it","name":"$it"}"""
         }
-        context.getSharedPreferences(PROFILES, Context.MODE_PRIVATE).edit()
+        Prefs.file(context, PROFILES).edit()
             .putString(KEY_PROFILES, json)
             .putString(KEY_ACTIVE, active)
             .commit()
@@ -68,13 +69,13 @@ class OwningProfileApplyTest {
 
     @After
     fun clearProfiles() {
-        context.getSharedPreferences(PROFILES, Context.MODE_PRIVATE).edit().clear().commit()
+        Prefs.file(context, PROFILES).edit().clear().commit()
         scoped(PROFILE_ONE).edit().clear().commit()
         scoped(PROFILE_THREE).edit().clear().commit()
     }
 
     private fun scoped(profileId: String) =
-        context.getSharedPreferences("$profileId.$DISPLAY_STORE", Context.MODE_PRIVATE)
+        Prefs.file(context, "$profileId.$DISPLAY_STORE")
 
     /** The profile's own display-prefs file, as the applier writes it. */
     private fun displayPrefs(profileId: String) = scoped(profileId)

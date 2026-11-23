@@ -6,6 +6,7 @@ import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.util.concurrent.ConcurrentHashMap
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The three trackers a taste signal can be written back to.
@@ -439,8 +440,5 @@ object TasteRatingQueue {
         ProfileStorage.prefsName(context, PREFS_BASE)
 
     private fun prefs(context: Context) =
-        context.applicationContext.getSharedPreferences(
-            ProfileStorage.prefsName(context.applicationContext, PREFS_BASE),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context.applicationContext, ProfileStorage.prefsName(context.applicationContext, PREFS_BASE))
 }

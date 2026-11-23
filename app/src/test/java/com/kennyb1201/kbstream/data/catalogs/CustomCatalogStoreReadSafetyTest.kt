@@ -11,6 +11,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The built-catalog store's read/write contract (deep dive B1 and B2).
@@ -39,7 +40,7 @@ class CustomCatalogStoreReadSafetyTest {
         get() = ApplicationProvider.getApplicationContext()
 
     private fun store() =
-        context.getSharedPreferences("kbstream_custom_catalogs", Context.MODE_PRIVATE)
+        Prefs.file(context, "kbstream_custom_catalogs")
 
     private val corrupt = """{"catalogs":[{"id":"""
 

@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.player
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Shared state used to communicate "next episode" navigation from
@@ -149,7 +150,7 @@ object NextEpisodeResult {
     }
 
     private fun prefs(context: Context): SharedPreferences =
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        Prefs.file(context, PREFS_NAME)
 
     /**
      * Serializes a handoff for the SharedPreferences copy. Internal (rather

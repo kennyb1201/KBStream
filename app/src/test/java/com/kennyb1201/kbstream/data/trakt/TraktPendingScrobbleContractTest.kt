@@ -218,7 +218,7 @@ class TraktPendingScrobbleContractTest {
 
         assertTrue(
             "durable across process death: a prefs blob, not a field",
-            store.contains("getSharedPreferences(") &&
+            store.contains("Prefs.file(") &&
                 store.contains("putString(KEY_ENTRIES, array.toString())")
         )
         assertTrue(

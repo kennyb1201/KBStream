@@ -6,6 +6,7 @@ import com.kennyb1201.kbstream.data.BackgroundWork
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import java.util.concurrent.atomic.AtomicBoolean
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The guide refresh that runs when a title ends (spec 2026-11-16).
@@ -81,10 +82,7 @@ internal object EpgRefreshCatchUp {
         // nothing to compare the window against.
         if (GuideFiles.guideUrls(context).isEmpty()) return false
 
-        val prefs = context.getSharedPreferences(
-            ProfileStorage.prefsName(context, PREFS_NAME),
-            Context.MODE_PRIVATE
-        )
+        val prefs = Prefs.file(context, ProfileStorage.prefsName(context, PREFS_NAME))
         val now = System.currentTimeMillis()
         val lastImport = prefs.getLong(EpgRefreshWorker.KEY_EPG_UPDATED_AT, 0L)
         val lastAttempt = prefs.getLong(EpgRefreshWorker.KEY_EPG_ATTEMPT_AT, 0L)

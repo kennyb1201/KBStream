@@ -6,6 +6,7 @@ import com.kennyb1201.kbstream.data.notifications.ReminderRules
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import org.json.JSONArray
 import org.json.JSONObject
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * IPTV program reminders: "notify me when this starts" on upcoming guide
@@ -47,10 +48,7 @@ object IptvReminderStore {
      * profile scoping (see PrefsPayloadBuilder.buildIptv).
      */
     fun prefsFor(context: Context): SharedPreferences =
-        context.getSharedPreferences(
-            ProfileStorage.prefsName(context, "iptv_guide_preferences"),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, ProfileStorage.prefsName(context, "iptv_guide_preferences"))
 
     fun notifiedKeys(prefs: SharedPreferences): Set<String> =
         prefs.getStringSet(KEY_NOTIFIED, emptySet()).orEmpty().toSet()

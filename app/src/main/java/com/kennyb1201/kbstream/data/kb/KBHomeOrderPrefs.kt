@@ -5,6 +5,7 @@ import android.util.Log
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * User-managed home rail ordering that spans BOTH addon catalog rails and
@@ -1127,8 +1128,5 @@ object KBHomeOrderPrefs {
     }
 
     private fun prefs(context: Context) =
-        context.getSharedPreferences(
-            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, PREFS_NAME),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, PREFS_NAME))
 }

@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.data.sync
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Durable, ACCOUNT-SCOPED staging for watch-history deletes made while SIGNED
@@ -53,7 +54,7 @@ internal object SyncDeferredDeletes {
     }
 
     private fun prefs(context: Context) =
-        context.getSharedPreferences(BASE_NAME, Context.MODE_PRIVATE)
+        Prefs.file(context, BASE_NAME)
 
     /**
      * Remembers the account a later signed-out delete belongs to, under BOTH

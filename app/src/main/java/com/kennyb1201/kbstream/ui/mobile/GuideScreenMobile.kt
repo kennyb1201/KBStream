@@ -1,6 +1,5 @@
 package com.kennyb1201.kbstream.ui.mobile
 
-import android.content.Context
 import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
@@ -51,12 +50,10 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -131,6 +128,7 @@ import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Live TV, for a finger.
@@ -220,10 +218,7 @@ fun GuideScreenMobile(
         val appContext = LocalContext.current.applicationContext
         val activeProfileId by ProfileManager.activeProfile.collectAsStateWithLifecycle()
         val guidePrefs = remember(appContext, activeProfileId) {
-            appContext.getSharedPreferences(
-                ProfileStorage.prefsName(appContext, GUIDE_PREFS_BASE),
-                Context.MODE_PRIVATE
-            )
+            Prefs.file(appContext, ProfileStorage.prefsName(appContext, GUIDE_PREFS_BASE))
         }
         var favorites by remember(activeProfileId) {
             mutableStateOf(

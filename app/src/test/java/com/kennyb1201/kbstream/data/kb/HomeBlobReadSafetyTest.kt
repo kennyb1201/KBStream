@@ -13,6 +13,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The two preference stores that preserve an unreadable blob but used to let the
@@ -35,10 +36,7 @@ class HomeBlobReadSafetyTest {
         get() = ApplicationProvider.getApplicationContext()
 
     private fun prefs(baseName: String) =
-        context.getSharedPreferences(
-            ProfileStorage.prefsName(context, baseName),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, ProfileStorage.prefsName(context, baseName))
 
     private val homeOrder get() = prefs("kbstream_kb_home_order")
     private val chips get() = prefs(BrowseHomeShortcuts.SYNC_STORE)

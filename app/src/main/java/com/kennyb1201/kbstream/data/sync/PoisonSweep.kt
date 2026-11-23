@@ -14,6 +14,7 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * One-time cross-profile poison sweep (split out of SupabaseSync — that
@@ -127,7 +128,7 @@ internal object PoisonSweep {
      * tell whether the cross-profile cleanup has run on this device.
      */
     fun status(context: Context): String {
-        val flags = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val flags = Prefs.file(context, PREFS)
         val local = flags.getBoolean(FLAG_LOCAL, false)
         val cloud = flags.getBoolean(FLAG_CLOUD, false)
         val base = when {
@@ -190,7 +191,7 @@ internal object PoisonSweep {
                 val outcome = runCatchingCancellable {
                     clearInProgressInternal(appCtx, client, isSignedIn, pullNow)
                 }.getOrElse { "failed: ${it.message}" }
-                appCtx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                Prefs.file(appCtx, PREFS)
                     .edit().putString(REPORT_RESET, outcome).apply()
                 runCatching { onDone(outcome) }
             }
@@ -320,7 +321,7 @@ internal object PoisonSweep {
         isSignedIn: () -> Boolean,
         pullNow: suspend (Context) -> Unit
     ) {
-        val flags = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val flags = Prefs.file(context, PREFS)
 
         val profiles = ProfileManager.profiles.value.sortedBy { it.createdAt }
         val orderedPids = profiles.map { it.id }
@@ -384,10 +385,7 @@ internal object PoisonSweep {
                     orderedPids.map { pid -> pid to localOverrideKeys(context, pid) }
                 )
                 for (pid in duplicates) {
-                    context.getSharedPreferences(
-                        ProfileStorage.prefsName(pid, OVERRIDES_PREFS_BASE),
-                        Context.MODE_PRIVATE
-                    ).edit().putStringSet(OVERRIDES_KEY, emptySet()).apply()
+                    Prefs.file(context, ProfileStorage.prefsName(pid, OVERRIDES_PREFS_BASE)).edit().putStringSet(OVERRIDES_KEY, emptySet()).apply()
                 }
                 if (duplicates.isNotEmpty()) {
                     val pending = flags.getStringSet(PENDING_OVERRIDE_CLEARS, emptySet()).orEmpty()
@@ -735,10 +733,7 @@ internal object PoisonSweep {
     /** This profile's local watched-override keys (scoped prefs file). */
     private fun localOverrideKeys(context: Context, pid: String): Set<String> =
         runCatching {
-            context.getSharedPreferences(
-                ProfileStorage.prefsName(pid, OVERRIDES_PREFS_BASE),
-                Context.MODE_PRIVATE
-            ).getStringSet(OVERRIDES_KEY, emptySet()).orEmpty()
+            Prefs.file(context, ProfileStorage.prefsName(pid, OVERRIDES_PREFS_BASE)).getStringSet(OVERRIDES_KEY, emptySet()).orEmpty()
         }.getOrDefault(emptySet())
 
     /**

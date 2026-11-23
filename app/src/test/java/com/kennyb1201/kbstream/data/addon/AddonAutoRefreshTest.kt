@@ -20,6 +20,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The automatic manifest refresh, driven for real.
@@ -74,7 +75,7 @@ class AddonAutoRefreshTest {
         host = null
         // No profiles are seeded, so the active store is the legacy one - the
         // same file a profile-less install uses.
-        context.getSharedPreferences(LEGACY_STORE, Context.MODE_PRIVATE)
+        Prefs.file(context, LEGACY_STORE)
             .edit().clear().commit()
         AppContextHolder.appContext = null
     }

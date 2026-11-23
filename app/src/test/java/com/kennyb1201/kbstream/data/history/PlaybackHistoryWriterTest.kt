@@ -15,6 +15,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Where a playback row is allowed to land.
@@ -62,7 +63,7 @@ class PlaybackHistoryWriterTest {
         val json = ids.joinToString(separator = ",", prefix = "[", postfix = "]") {
             """{"id":"$it","name":"$it"}"""
         }
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+        Prefs.file(context, PREFS).edit()
             .putString(KEY_PROFILES, json)
             .putString(KEY_ACTIVE, active)
             .commit()
@@ -70,7 +71,7 @@ class PlaybackHistoryWriterTest {
 
     @After
     fun clearProfiles() {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().commit()
+        Prefs.file(context, PREFS).edit().clear().commit()
     }
 
     private fun entry() = WatchHistoryEntity(

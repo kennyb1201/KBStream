@@ -8,6 +8,7 @@ import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Which of the account's TorBox torrents the library sync has already handled,
@@ -36,10 +37,7 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 internal class TorBoxCloudStore(context: Context) {
 
-    private val prefs = context.applicationContext.getSharedPreferences(
-        ProfileStorage.prefsName(context.applicationContext, PREFS_NAME),
-        Context.MODE_PRIVATE
-    )
+    private val prefs = Prefs.file(context.applicationContext, ProfileStorage.prefsName(context.applicationContext, PREFS_NAME))
 
     /** Torrent ids already dealt with by a previous round. */
     @Synchronized

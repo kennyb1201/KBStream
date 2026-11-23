@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.data.notifications
 import android.content.Context
 import android.content.SharedPreferences
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Which followed-team games have already been announced, so a game is never
@@ -38,10 +39,7 @@ object SportsReminderStore {
 
     /** The store for the profile in use. */
     fun prefsFor(context: Context): SharedPreferences =
-        context.getSharedPreferences(
-            ProfileStorage.prefsName(context, FILE),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, ProfileStorage.prefsName(context, FILE))
 
     /** Every remembered game id and when it was announced, epoch millis. */
     fun load(prefs: SharedPreferences): Map<String, Long> = readMap(prefs, KEY_NOTIFIED)

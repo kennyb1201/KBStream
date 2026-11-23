@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Titles the user hid from the app with the long-press "Hide" row.
@@ -580,10 +581,7 @@ object HiddenTitles {
         }
 
     private fun prefsFor(context: Context, profileId: String? = null) =
-        context.applicationContext.getSharedPreferences(
-            storeName(context.applicationContext, profileId),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context.applicationContext, storeName(context.applicationContext, profileId))
 
     private fun read(context: Context): Store {
         val raw = prefs(context).getString(KEY_ENTRIES, null) ?: return Store()

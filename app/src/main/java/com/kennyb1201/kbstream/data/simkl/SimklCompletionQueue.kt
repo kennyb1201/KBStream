@@ -6,6 +6,7 @@ import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.util.concurrent.ConcurrentHashMap
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The durable completion queue: `simkl_completion_queue_v1`, per profile, on disk.
@@ -261,8 +262,5 @@ object SimklCompletionQueue {
         ProfileStorage.prefsName(context, PREFS_BASE)
 
     private fun prefs(context: Context) =
-        context.applicationContext.getSharedPreferences(
-            ProfileStorage.prefsName(context.applicationContext, PREFS_BASE),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context.applicationContext, ProfileStorage.prefsName(context.applicationContext, PREFS_BASE))
 }

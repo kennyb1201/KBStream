@@ -22,6 +22,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /** One TV found on the current Wi-Fi. */
 internal data class RemoteDevice(
@@ -693,6 +694,5 @@ internal object RemotePhonePrefs {
     private fun key(tvName: String): String =
         tvName.trim().lowercase().replace(Regex("[^a-z0-9]+"), "_").ifEmpty { "tv" }
 
-    private fun prefs(context: Context) = context.applicationContext
-        .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private fun prefs(context: Context) = Prefs.file(context.applicationContext, PREFS)
 }

@@ -16,6 +16,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Thumbs, at the store.
@@ -45,11 +46,7 @@ class TasteSignalsTest {
         get() = ApplicationProvider.getApplicationContext()
 
     private fun store(profileId: String? = null) =
-        context.getSharedPreferences(
-            profileId?.let { ProfileStorage.prefsName(it, BASE) }
-                ?: ProfileStorage.prefsName(context, BASE),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, profileId?.let { ProfileStorage.prefsName(it, BASE) } ?: ProfileStorage.prefsName(context, BASE))
 
     private fun useProfile(profileId: String) {
         ProfileManager.setActive(
@@ -76,7 +73,7 @@ class TasteSignalsTest {
     }
 
     private fun profilesPrefs() =
-        context.getSharedPreferences(PROFILES, Context.MODE_PRIVATE)
+        Prefs.file(context, PROFILES)
 
     private fun signal(
         ids: List<String?> = TMDB_IDS,

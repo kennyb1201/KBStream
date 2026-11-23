@@ -14,6 +14,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The Downloads screen's 2026-10-27 deep dive, where the failures were all quiet.
@@ -49,10 +50,7 @@ class DownloadDeepDiveContractTest {
         get() = ApplicationProvider.getApplicationContext()
 
     /** The store the app itself would use, profile scoping included. */
-    private fun store() = context.getSharedPreferences(
-        ProfileStorage.prefsName(context, DownloadsStore.PREFS_NAME),
-        Context.MODE_PRIVATE
-    )
+    private fun store() = Prefs.file(context, ProfileStorage.prefsName(context, DownloadsStore.PREFS_NAME))
 
     private fun rawBlob(): String = store().getString(DownloadsStore.KEY_RECORDS, null).orEmpty()
 

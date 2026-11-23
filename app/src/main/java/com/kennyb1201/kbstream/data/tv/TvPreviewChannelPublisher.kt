@@ -27,6 +27,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Publishes the app's OWN launcher channel - "KBStream Continue Watching" - as a
@@ -147,7 +148,7 @@ object TvPreviewChannelPublisher {
     private fun syncLocked(context: Context, programs: List<PreviewProgramRow>) {
         if (!enabled(context)) return
         val resolver = context.contentResolver
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val prefs = Prefs.file(context, PREFS)
         val channelId = prefs.getString(KEY_CHANNEL_ID, null)?.toLongOrNull()
             ?.takeIf { channelExists(context, it) }
             ?: ensureChannel(context)

@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.data.player
 import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The binge identity a show was last played with: the Stremio `bingeGroup` of
@@ -122,8 +123,5 @@ internal object BingeGroupMemory {
             ).joinToString("\u001F")
         }
 
-    private fun prefs(context: Context) = context.getSharedPreferences(
-        ProfileStorage.prefsName(context, PREFS_BASE),
-        Context.MODE_PRIVATE
-    )
+    private fun prefs(context: Context) = Prefs.file(context, ProfileStorage.prefsName(context, PREFS_BASE))
 }

@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.data.watched
 import android.content.Context
 import android.content.SharedPreferences
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * When this device last WROTE watched state - a mark, an unmark, a finish.
@@ -53,9 +54,6 @@ internal object WatchedWriteStamp {
 
     private fun prefs(context: Context): SharedPreferences? =
         runCatching {
-            context.applicationContext.getSharedPreferences(
-                ProfileStorage.prefsName(context, PREFS_NAME),
-                Context.MODE_PRIVATE
-            )
+            Prefs.file(context.applicationContext, ProfileStorage.prefsName(context, PREFS_NAME))
         }.getOrNull()
 }

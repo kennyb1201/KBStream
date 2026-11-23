@@ -13,6 +13,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The taste line's CAUSE: why the ratings gave up, not just that they did
@@ -42,10 +43,7 @@ class TasteRatingCausePasteTest {
         get() = ApplicationProvider.getApplicationContext()
 
     private val prefs
-        get() = context.getSharedPreferences(
-            ProfileStorage.prefsName(context, "kbstream_taste_rating_queue"),
-            Context.MODE_PRIVATE
-        )
+        get() = Prefs.file(context, ProfileStorage.prefsName(context, "kbstream_taste_rating_queue"))
 
     @Before
     fun setUp() {

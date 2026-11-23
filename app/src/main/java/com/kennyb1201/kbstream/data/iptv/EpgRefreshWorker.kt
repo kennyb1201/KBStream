@@ -11,6 +11,7 @@ import com.kennyb1201.kbstream.work.WorkPolicies
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 class EpgRefreshWorker(
     appContext: Context,
@@ -67,13 +68,7 @@ class EpgRefreshWorker(
     }
 
     /** The ACTIVE profile's scoped store, as the run reads it. */
-    private fun iptvPrefs(): SharedPreferences = applicationContext.getSharedPreferences(
-        com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
-            applicationContext,
-            PREFS_NAME
-        ),
-        Context.MODE_PRIVATE
-    )
+    private fun iptvPrefs(): SharedPreferences = Prefs.file(applicationContext, com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(applicationContext, PREFS_NAME))
 
     /**
      * Records one pass: the durable verdict line the paste and Playlist Setup

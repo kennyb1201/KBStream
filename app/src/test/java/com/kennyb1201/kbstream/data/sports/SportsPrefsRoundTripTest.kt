@@ -10,6 +10,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The two sports sets the sync blob carries, at the storage layer.
@@ -26,10 +27,7 @@ class SportsPrefsRoundTripTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
 
     private val store by lazy {
-        context.getSharedPreferences(
-            ProfileStorage.prefsName(context, "kbstream_player_prefs"),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, ProfileStorage.prefsName(context, "kbstream_player_prefs"))
     }
 
     @Before

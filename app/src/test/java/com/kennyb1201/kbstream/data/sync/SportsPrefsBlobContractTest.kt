@@ -15,6 +15,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The sports hub's arrangement, at the blob boundary.
@@ -45,10 +46,7 @@ class SportsPrefsBlobContractTest {
         get() = ApplicationProvider.getApplicationContext()
 
     private val store
-        get() = context.getSharedPreferences(
-            ProfileStorage.prefsName(context, "kbstream_player_prefs"),
-            Context.MODE_PRIVATE
-        )
+        get() = Prefs.file(context, ProfileStorage.prefsName(context, "kbstream_player_prefs"))
 
     @Before
     fun clearStore() {

@@ -26,6 +26,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * One profile's add-on list as read from its store, and whether that read had to
@@ -71,7 +72,7 @@ class AddonManager(
                 "kbstream_addons"
             )
         }
-        return appContext.getSharedPreferences(name, Context.MODE_PRIVATE)
+        return Prefs.file(appContext, name)
     }
 
     /**

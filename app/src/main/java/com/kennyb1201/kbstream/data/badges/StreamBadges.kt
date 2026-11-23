@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Stream badge packs, KB-compatible: a pack is a JSON document with a
@@ -241,10 +242,7 @@ object StreamBadgeEngine {
     }
 
     private fun prefs(context: Context) =
-        context.getSharedPreferences(
-            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, PREFS_NAME),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, PREFS_NAME))
 
     // ------------------------------------------------------------------
     // Matching

@@ -56,6 +56,11 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         // so every mobile branch reads this rather than a build variant. It
         // only drives orientation today; the TV composables are untouched.
         FormFactor.init(this)
+        // The player preference stores, decoded in the background while the
+        // rest of startup runs (spec 2026-11-22, DataStore). Every prefs read in
+        // the app now goes through one shim whose first touch is a disk read;
+        // this pays for the two stores the launch path is about to read.
+        com.kennyb1201.kbstream.data.settings.AppPreferences.warm(this)
         // The two Simkl 429 parks, read back before anything can trigger a drain
         // (spec 2026-11-19, Simkl quota F1): a TV that updates or reboots during
         // a 16-hour park must not spend a quota call re-learning it.

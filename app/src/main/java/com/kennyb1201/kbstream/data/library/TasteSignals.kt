@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Thumbs up / thumbs down, one signal per title, per profile.
@@ -761,10 +762,7 @@ object TasteSignals {
             ProfileStorage.prefsName(profileId, PREFS_BASE)
         }
 
-    private fun storeFor(context: Context, profileId: String?) = context.getSharedPreferences(
-        storeName(context, profileId),
-        Context.MODE_PRIVATE
-    )
+    private fun storeFor(context: Context, profileId: String?) = Prefs.file(context, storeName(context, profileId))
 
     /**
      * Publishes the active profile's set. Cheap and idempotent, so any screen may
@@ -970,10 +968,7 @@ object TasteSignals {
         ProfileStorage.prefsName(context, PREFS_BASE)
 
     private fun prefs(context: Context) =
-        context.applicationContext.getSharedPreferences(
-            ProfileStorage.prefsName(context.applicationContext, PREFS_BASE),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context.applicationContext, ProfileStorage.prefsName(context.applicationContext, PREFS_BASE))
 }
 
 /**

@@ -28,6 +28,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The affinity profile's store: one JSON blob per profile, rebuilt lazily at
@@ -425,5 +426,5 @@ object TasteProfileStore {
     }
 
     private fun prefs(context: Context, name: String) =
-        context.applicationContext.getSharedPreferences(name, Context.MODE_PRIVATE)
+        Prefs.file(context.applicationContext, name)
 }

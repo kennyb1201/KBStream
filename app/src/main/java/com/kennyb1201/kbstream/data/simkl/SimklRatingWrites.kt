@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.data.simkl
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /*
  * Outbound rating writes for [SimklRepository]: POST /sync/ratings and
@@ -124,8 +125,7 @@ internal fun simklPlaybackParkLimitLabel(): String? =
  * [SimklRatingGuard]).
  */
 internal fun installSimklParkStores(context: Context) {
-    val prefs = context.applicationContext
-        .getSharedPreferences(SIMKL_PARK_PREFS, Context.MODE_PRIVATE)
+    val prefs = Prefs.file(context.applicationContext, SIMKL_PARK_PREFS)
     simklRatingGuard.attachParkStore(prefsParkStore(prefs, KEY_PARK_RATINGS))
     simklPlaybackGuard.attachParkStore(prefsParkStore(prefs, KEY_PARK_PLAYBACK))
 }

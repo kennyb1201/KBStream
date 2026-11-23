@@ -10,6 +10,7 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /** Media type of a built catalog: TMDB's own two values. */
 const val CATALOG_MEDIA_MOVIE = "movie"
@@ -493,10 +494,7 @@ object CustomCatalogStore {
     fun move(context: Context, id: String, delta: Int): List<CustomCatalog> =
         save(context, moveCatalog(list(context), id, delta))
 
-    private fun prefs(context: Context) = context.getSharedPreferences(
-        ProfileStorage.prefsName(context, PREFS),
-        Context.MODE_PRIVATE
-    )
+    private fun prefs(context: Context) = Prefs.file(context, ProfileStorage.prefsName(context, PREFS))
 }
 
 /** The stored blob: one list, so a read is a single pref lookup. */

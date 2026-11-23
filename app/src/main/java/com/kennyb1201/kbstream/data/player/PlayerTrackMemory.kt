@@ -5,6 +5,7 @@ import android.util.Log
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Remembers the subtitle the user attached to a specific video, so opening it
@@ -127,8 +128,5 @@ internal object PlayerTrackMemory {
     }
 
     private fun prefs(context: Context) =
-        context.applicationContext.getSharedPreferences(
-            ProfileStorage.prefsName(context.applicationContext, PREFS_BASE),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context.applicationContext, ProfileStorage.prefsName(context.applicationContext, PREFS_BASE))
 }

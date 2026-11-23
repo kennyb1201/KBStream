@@ -71,13 +71,19 @@ class StatePerfBatchContractTest {
             "both call sites must resolve the name through ProfileStorage",
             watched.split("ProfileStorage.prefsName(").size - 1 >= 2
         )
-        // No getSharedPreferences() addressed by the bare, unscoped name: that
-        // is what sent overrides to a file no profile reads afterwards (and
-        // shared them across profiles in the pre-onCreate window).
-        val unscoped = Regex("getSharedPreferences\\(\\s*\"kbstream_watched_overrides\"")
+        // And no store is opened around ProfileStorage: an unscoped name sent
+        // overrides to a file no profile reads afterwards (and shared them
+        // across profiles in the pre-onCreate window). Every store is opened by
+        // the prefs shim now, so the check is that the only way this file names
+        // its store is through ProfileStorage.
         assertFalse(
-            "an unscoped watched-overrides file must not be opened directly",
-            unscoped.containsMatchIn(watched)
+            "the watched-overrides store must not be opened outside the shim",
+            watched.contains("getSharedPreferences(")
+        )
+        val opened = watched.split("Prefs.file(").size - 1
+        assertTrue(
+            "every open goes through the shim",
+            opened >= 2
         )
     }
 

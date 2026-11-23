@@ -30,6 +30,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import org.json.JSONObject
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Coarse time bucket for the lineup memo key. The guide window slides with
@@ -778,12 +779,7 @@ class IptvRepository(
      * writes address, resolved through the same profile-scoped name so a
      * non-active profile can never answer for the active one's playlists.
      */
-    private fun iptvPrefs() = appContext.getSharedPreferences(
-        com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
-            appContext, "iptv_prefs"
-        ),
-        Context.MODE_PRIVATE
-    )
+    private fun iptvPrefs() = Prefs.file(appContext, com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(appContext, "iptv_prefs"))
 
     /**
      * Resolves each [GuideMatchQuery] against the guide imported for its

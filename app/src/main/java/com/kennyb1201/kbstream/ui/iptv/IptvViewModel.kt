@@ -1,7 +1,6 @@
 package com.kennyb1201.kbstream.ui.iptv
 
 import android.app.Application
-import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -61,6 +60,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
@@ -69,12 +69,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     // second copy of the whole guide (see IptvRepository.shared).
     private val repository = IptvRepository.shared(app)
     private val prefs
-        get() = app.getSharedPreferences(
-            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
-                app, PREFS_NAME
-            ),
-            Context.MODE_PRIVATE
-        )
+        get() = Prefs.file(app, com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(app, PREFS_NAME))
 
     private val _playlistUrl = MutableStateFlow(prefs.getString(KEY_PLAYLIST_URL, "").orEmpty())
     val playlistUrl: StateFlow<String> = _playlistUrl.asStateFlow()

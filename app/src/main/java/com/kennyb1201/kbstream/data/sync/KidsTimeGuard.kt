@@ -23,6 +23,7 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.launch
 import com.kennyb1201.kbstream.data.format.DateFormats
 import java.util.concurrent.TimeUnit
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Kids Mode time guard: enforces the two per-profile time locks —
@@ -346,12 +347,12 @@ object KidsTimeGuard {
     private fun parentPinHash(): String? {
         val context = appContext ?: return null
         PinVault.parentHash(context)?.let { return it }
-        val legacy = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val legacy = Prefs.file(context, PREFS)
             .getString(KEY_PARENT_PIN_HASH, null)
             ?.takeIf { it.isNotBlank() }
             ?: return null
         if (PinVault.setParentHash(context, legacy)) {
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            Prefs.file(context, PREFS)
                 .edit()
                 .remove(KEY_PARENT_PIN_HASH)
                 .apply()
@@ -380,7 +381,7 @@ object KidsTimeGuard {
         if (clean.isNotEmpty() && !ProfileManager.isValidPin(clean)) return false
         val context = appContext ?: return false
         val hash = clean.takeIf { it.isNotEmpty() }?.let { ProfileManager.hashPin(it) }
-        val legacy = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val legacy = Prefs.file(context, PREFS)
         // The vault is the store now (Settings L2). If it cannot be written the
         // PIN is still SET rather than silently dropped - it goes to the old
         // location, which the read path still honours - because "the parent set
@@ -413,12 +414,12 @@ object KidsTimeGuard {
             // legacy copy is dropped only once that read back (Settings L2).
             if (context != null) {
                 if (PinVault.setParentHash(context, upgraded)) {
-                    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    Prefs.file(context, PREFS)
                         .edit()
                         .remove(KEY_PARENT_PIN_HASH)
                         .apply()
                 } else {
-                    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    Prefs.file(context, PREFS)
                         .edit()
                         .putString(KEY_PARENT_PIN_HASH, upgraded)
                         .apply()
@@ -438,7 +439,7 @@ object KidsTimeGuard {
 
     /** The guard's own prefs file, or null before MainActivity hands it a Context. */
     private fun prefs(): android.content.SharedPreferences? =
-        appContext?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        appContext?.let { Prefs.file(it, PREFS) }
 
     /**
      * Whether the wall clock and the monotonic clock advanced together (M3).
@@ -617,7 +618,7 @@ object KidsTimeGuard {
      * here today, or never on this device at all).
      */
     internal fun usageSnapshot(context: Context, profileId: String): KidsDailyUsage? {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val prefs = Prefs.file(context, PREFS)
         val day = prefs.getString(KEY_DAY + profileId, null)?.takeIf { it.isNotBlank() }
             ?: return null
         // Seconds first, with the older minutes key as the migration source -
@@ -653,7 +654,7 @@ object KidsTimeGuard {
         if (profileId.isBlank() || day.isBlank() || seconds <= 0) return
         val today = dayKeyNow()
         if (day != today) return
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val prefs = Prefs.file(context, PREFS)
         val localDay = prefs.getString(KEY_DAY + profileId, null)
         val localSeconds = when (localDay) {
             day -> prefs.getInt(KEY_SECONDS + profileId, -1).takeIf { it >= 0 }

@@ -111,8 +111,9 @@ class DataStorePrefsTest {
     fun `a listener hears the key that changed`() {
         val shim = store("kbstream_shim_listener")
         val heard = mutableListOf<String>()
-        val listener =
-            SharedPreferences.OnSharedPreferenceChangeListener { _, key -> heard += key }
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key != null) heard.add(key)
+        }
 
         shim.registerOnSharedPreferenceChangeListener(listener)
         shim.edit().putBoolean("kids", true).apply()
@@ -134,6 +135,19 @@ class DataStorePrefsTest {
             store("kbstream_shim_one"),
             store("kbstream_shim_one")
         )
+    }
+
+    @Test
+    fun `the name list covers both formats`() {
+        // A store the shim has never opened is still XML on disk; the one below
+        // it has already migrated. Deleting a profile must find both.
+        legacy("kbstream_shim_xml_only").edit().putString("k", "v").commit()
+        store("kbstream_shim_migrated").edit().putString("k", "v").commit()
+
+        val names = Prefs.names(context)
+
+        assertTrue("not yet migrated", names.contains("kbstream_shim_xml_only"))
+        assertTrue("already migrated", names.contains("kbstream_shim_migrated"))
     }
 
     @Test

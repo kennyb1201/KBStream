@@ -7,6 +7,7 @@ import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The subtitle fetched for the NEXT episode while the current one's credits
@@ -246,8 +247,5 @@ internal object SubtitlePrefetch {
     }
 
     private fun prefs(context: Context) =
-        context.applicationContext.getSharedPreferences(
-            ProfileStorage.prefsName(context.applicationContext, PREFS_BASE),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context.applicationContext, ProfileStorage.prefsName(context.applicationContext, PREFS_BASE))
 }

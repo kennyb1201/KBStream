@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.search
 
 import android.content.Context
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Per-profile record of the browse chips the user hid from the long-press
@@ -78,8 +79,5 @@ object BrowseChipVisibility {
         return hidden.count { it.startsWith(prefix) }
     }
 
-    private fun prefs(context: Context) = context.getSharedPreferences(
-        ProfileStorage.prefsName(context, PREFS),
-        Context.MODE_PRIVATE
-    )
+    private fun prefs(context: Context) = Prefs.file(context, ProfileStorage.prefsName(context, PREFS))
 }

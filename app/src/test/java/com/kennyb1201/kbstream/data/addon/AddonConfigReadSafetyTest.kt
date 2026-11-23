@@ -10,6 +10,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * A read that cannot understand the stored add-on list must not destroy it
@@ -29,7 +30,7 @@ class AddonConfigReadSafetyTest {
         get() = ApplicationProvider.getApplicationContext()
 
     private fun store() =
-        context.getSharedPreferences("kbstream_addons", Context.MODE_PRIVATE)
+        Prefs.file(context, "kbstream_addons")
 
     @Before
     fun setUp() {

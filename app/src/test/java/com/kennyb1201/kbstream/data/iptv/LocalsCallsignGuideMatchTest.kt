@@ -21,6 +21,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Local affiliates survive the import prune AND resolve in the lineup.
@@ -129,10 +130,7 @@ class LocalsCallsignGuideMatchTest {
         assertNull(wftv.now)
     }
 
-    private fun prefs() = context.getSharedPreferences(
-        ProfileStorage.prefsName(context, GuideFiles.PREFS),
-        Context.MODE_PRIVATE
-    )
+    private fun prefs() = Prefs.file(context, ProfileStorage.prefsName(context, GuideFiles.PREFS))
 
     /** Two callsign-identified channels, one program each, with distinct titles. */
     private fun guideXml(startMs: Long, stopMs: Long): String {

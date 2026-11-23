@@ -21,6 +21,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * A profile deleted on one device must STAY deleted on every device.
@@ -47,7 +48,7 @@ class ProfileDeletionTombstoneTest {
     private val context: Context
         get() = ApplicationProvider.getApplicationContext()
 
-    private fun prefs() = context.getSharedPreferences(PROFILES, Context.MODE_PRIVATE)
+    private fun prefs() = Prefs.file(context, PROFILES)
 
     /**
      * Writes the profile store the way the app does, then pins the in-memory

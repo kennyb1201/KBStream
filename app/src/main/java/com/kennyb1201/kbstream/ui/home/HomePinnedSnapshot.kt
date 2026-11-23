@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.home
 
 import android.content.Context
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The pinned rails as the last build left them, for the paint-first publish
@@ -51,7 +52,7 @@ internal object HomePinnedSnapshot {
     /** The rails last written for [scope], or empty when there is none. */
     fun load(context: Context, scope: String): List<Rail> {
         val blob = runCatching {
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            Prefs.file(context, PREFS)
                 .getString("scope:" + scope, null)
         }.getOrNull() ?: return emptyList()
         return decode(blob)
@@ -61,7 +62,7 @@ internal object HomePinnedSnapshot {
     fun save(context: Context, scope: String, rails: List<Rail>) {
         if (rails.isEmpty()) return
         runCatching {
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            Prefs.file(context, PREFS)
                 .edit()
                 .putString("scope:" + scope, encode(rails))
                 .apply()

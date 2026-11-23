@@ -4,6 +4,7 @@ import android.content.Context
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import org.json.JSONArray
 import org.json.JSONObject
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The built watched snapshot, on disk (F1, spec 2026-11-20).
@@ -35,10 +36,7 @@ internal class TraktWatchedSnapshotCache(private val context: Context?) {
     )
 
     private fun prefs() = context?.applicationContext?.let { app ->
-        app.getSharedPreferences(
-            ProfileStorage.prefsName(app, PREFS_NAME),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(app, ProfileStorage.prefsName(app, PREFS_NAME))
     }
 
     /**

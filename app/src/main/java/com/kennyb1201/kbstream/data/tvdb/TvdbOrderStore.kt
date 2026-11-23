@@ -6,6 +6,7 @@ import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import java.util.concurrent.ConcurrentHashMap
 import org.json.JSONArray
 import org.json.JSONObject
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * A show's chosen episode order, and the cached answers TVDB gave about it
@@ -244,7 +245,7 @@ internal object TvdbOrderStore {
 
     private fun prefs(context: Context?) = context?.let { ctx ->
         val app = ctx.applicationContext
-        app.getSharedPreferences(ProfileStorage.prefsName(app, PREFS), Context.MODE_PRIVATE)
+        Prefs.file(app, ProfileStorage.prefsName(app, PREFS))
     }
 
     private fun decodeTypes(raw: String): List<TvdbSeasonType>? = runCatching {

@@ -7,6 +7,7 @@ import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Which channel the viewer picked for a game, so the matcher stops guessing
@@ -148,8 +149,5 @@ internal object SportsChannelMemory {
     }
 
     private fun prefs(context: Context): SharedPreferences =
-        context.applicationContext.getSharedPreferences(
-            ProfileStorage.prefsName(context.applicationContext, PREFS_BASE),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context.applicationContext, ProfileStorage.prefsName(context.applicationContext, PREFS_BASE))
 }

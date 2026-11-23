@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Publishes KBStream's in-progress titles to the Android TV "Watch Next"
@@ -144,7 +145,7 @@ object TvLauncherPublisher {
     ) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val resolver = context.contentResolver
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val prefs = Prefs.file(context, PREFS)
         val appContext = context.applicationContext
 
         // One program per parent — the most recently touched in-progress row,

@@ -20,6 +20,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The taste signals crossing devices.
@@ -45,10 +46,7 @@ class TasteSignalsSyncTest {
     private val context: Context
         get() = ApplicationProvider.getApplicationContext()
 
-    private fun prefs() = context.getSharedPreferences(
-        ProfileStorage.prefsName(context, BASE),
-        Context.MODE_PRIVATE
-    )
+    private fun prefs() = Prefs.file(context, ProfileStorage.prefsName(context, BASE))
 
     @Before
     fun setUp() {

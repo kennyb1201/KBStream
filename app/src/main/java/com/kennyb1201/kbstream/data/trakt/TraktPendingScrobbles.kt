@@ -5,6 +5,7 @@ import android.util.Log
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import org.json.JSONArray
 import org.json.JSONObject
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Durable, profile-scoped storage for [PendingScrobble].
@@ -25,10 +26,7 @@ import org.json.JSONObject
 internal class TraktPendingScrobbles(private val context: Context?) {
 
     private fun prefs() = context?.applicationContext?.let { app ->
-        app.getSharedPreferences(
-            ProfileStorage.prefsName(app, PREFS_NAME),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(app, ProfileStorage.prefsName(app, PREFS_NAME))
     }
 
     /** Every queued play, oldest first. A missing or unreadable blob is empty. */

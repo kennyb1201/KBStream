@@ -28,6 +28,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Prefs accessor resolved against the ACTIVE profile's namespace — the sync
@@ -70,10 +71,7 @@ private fun iptvSignature(context: Context, profileId: String? = null): String {
 }
 
 private fun scopedPrefs(context: Context, baseName: String) =
-    context.getSharedPreferences(
-        com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, baseName),
-        Context.MODE_PRIVATE
-    )
+    Prefs.file(context, com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, baseName))
 
 /**
  * [scopedPrefs] for ONE NAMED profile: the store a synced row's OWN key names,
@@ -89,10 +87,7 @@ private fun profilePrefs(context: Context, baseName: String, profileId: String?)
     if (profileId == null) {
         scopedPrefs(context, baseName)
     } else {
-        context.getSharedPreferences(
-            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(profileId, baseName),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(profileId, baseName))
     }
 
 /**
@@ -1773,10 +1768,7 @@ object PrefsPayloadBuilder {
 
     /** True when this profile's prefs file for [baseName] holds anything. */
     private fun hasLocalPrefs(context: Context, profileId: String, baseName: String): Boolean =
-        context.getSharedPreferences(
-            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(profileId, baseName),
-            Context.MODE_PRIVATE
-        ).all.isNotEmpty()
+        Prefs.file(context, com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(profileId, baseName)).all.isNotEmpty()
 
     /**
      * One cloud pref key per set of prefs files it is built from.

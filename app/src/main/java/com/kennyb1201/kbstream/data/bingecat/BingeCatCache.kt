@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.bingecat
 
 import android.content.Context
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The two things BingeCat used to re-read on every launch, on disk
@@ -42,10 +43,7 @@ internal class BingeCatCache(private val context: Context?) {
     internal data class CachedRows(val rows: List<BingeCatRow>, val savedAtMs: Long)
 
     private fun prefs() = context?.applicationContext?.let { app ->
-        app.getSharedPreferences(
-            ProfileStorage.prefsName(app, PREFS_NAME),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(app, ProfileStorage.prefsName(app, PREFS_NAME))
     }
 
     /** The stored snapshot for [token], or null when there is none or it is not its. */

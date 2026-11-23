@@ -13,6 +13,7 @@ import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The played-link cache: replaying a title within a few hours must reuse the
@@ -39,10 +40,7 @@ class PlayedLinkCacheTest {
 
     /** The store's own prefs file, resolved the way the cache resolves it. */
     private fun prefs() =
-        context.getSharedPreferences(
-            ProfileStorage.prefsName(context, "kbstream_played_links"),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, ProfileStorage.prefsName(context, "kbstream_played_links"))
 
     private fun stream(url: String) = Stream(
         name = "Provider",

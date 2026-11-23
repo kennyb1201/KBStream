@@ -6,6 +6,7 @@ import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import org.json.JSONArray
 import org.json.JSONObject
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Who put a row in this profile's LOCAL My List.
@@ -490,10 +491,7 @@ object LocalLibraryStore {
         "${ProfileStorage.prefsName(context, BASE_NAME)}::$key"
 
     private fun prefs(context: Context) =
-        context.getSharedPreferences(
-            ProfileStorage.prefsName(context, BASE_NAME),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, ProfileStorage.prefsName(context, BASE_NAME))
 
     private fun entryJson(item: LibraryItem): JSONObject = JSONObject()
         .put("mediaType", item.mediaType)
@@ -890,10 +888,7 @@ object LocalLibraryStore {
     private fun libraryPrefs(context: Context, profileId: String?): android.content.SharedPreferences {
         val id = profileId?.trim().orEmpty()
         if (id.isEmpty()) return prefs(context)
-        return context.applicationContext.getSharedPreferences(
-            ProfileStorage.prefsName(id, BASE_NAME),
-            Context.MODE_PRIVATE
-        )
+        return Prefs.file(context.applicationContext, ProfileStorage.prefsName(id, BASE_NAME))
     }
 
     private fun writeTombstones(
@@ -940,10 +935,7 @@ object LocalLibraryStore {
         if (id.isEmpty()) return emptyList()
 
         val appContext = context.applicationContext
-        val raw = appContext.getSharedPreferences(
-            ProfileStorage.prefsName(id, BASE_NAME),
-            Context.MODE_PRIVATE
-        ).getString(KEY_MY_LIST, null) ?: return emptyList()
+        val raw = Prefs.file(appContext, ProfileStorage.prefsName(id, BASE_NAME)).getString(KEY_MY_LIST, null) ?: return emptyList()
 
         val parsed = runCatching {
             val arr = JSONArray(raw)

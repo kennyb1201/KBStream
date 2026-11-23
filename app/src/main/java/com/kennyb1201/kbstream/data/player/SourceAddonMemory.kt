@@ -7,6 +7,7 @@ import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.domain.streamengine.SourceAddonPreference
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Which addon last worked, which kept stalling, and which last failed - for a
@@ -309,8 +310,5 @@ internal object SourceAddonMemory {
     }
 
     private fun prefs(context: Context): SharedPreferences =
-        context.applicationContext.getSharedPreferences(
-            ProfileStorage.prefsName(context.applicationContext, PREFS_BASE),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context.applicationContext, ProfileStorage.prefsName(context.applicationContext, PREFS_BASE))
 }

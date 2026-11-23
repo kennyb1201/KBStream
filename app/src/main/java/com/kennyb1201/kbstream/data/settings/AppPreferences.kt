@@ -8,6 +8,7 @@ import com.kennyb1201.kbstream.data.security.SecureTokenStore
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import com.kennyb1201.kbstream.domain.streamengine.AutoplayBitrate
 import kotlin.math.abs
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Persistent player defaults stored in SharedPreferences.
@@ -291,10 +292,25 @@ object AppPreferences {
     // PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
     private const val KEY_SHOW_PROFILE_PICKER = "show_profile_picker"
     private fun prefs(context: Context): SharedPreferences =
-        context.getSharedPreferences(
+        Prefs.file(context, com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, PREFS_NAME))
+
+    /**
+     * Decodes the two stores the launch path reads off the main thread.
+     *
+     * A preference file is a disk read, and after the move to DataStore it is
+     * still a disk read on first touch - the shim serves it from memory after
+     * that. This is the one place that knows which of the thousand-odd reads
+     * happen before the first frame, so it is the one place that warms them.
+     * Safe to call before a profile exists: the names resolve to whatever
+     * [prefs] would open right now.
+     */
+    fun warm(context: Context) {
+        Prefs.warm(
+            context,
             com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, PREFS_NAME),
-            Context.MODE_PRIVATE
+            DEVICE_PREFS_NAME
         )
+    }
 
     /**
      * The DEVICE store: the pre-move home of the Home arrangement family (spec
@@ -307,7 +323,7 @@ object AppPreferences {
      * switch draws THAT profile's Home instead of the box's.
      */
     private fun devicePrefs(context: Context): SharedPreferences =
-        context.getSharedPreferences(DEVICE_PREFS_NAME, Context.MODE_PRIVATE)
+        Prefs.file(context, DEVICE_PREFS_NAME)
 
     /**
      * A Home-arrangement value: THIS PROFILE's own, seeded once from the device
@@ -368,13 +384,7 @@ object AppPreferences {
         if (profileId == null) {
             prefs(context)
         } else {
-            context.getSharedPreferences(
-                com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
-                    profileId,
-                    PREFS_NAME
-                ),
-                Context.MODE_PRIVATE
-            )
+            Prefs.file(context, com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(profileId, PREFS_NAME))
         }
 
     // ── Buffer mode ──────────────────────────────────────────────────
@@ -958,10 +968,7 @@ object AppPreferences {
     private const val KEY_CONSECUTIVE_AUTOPLAYS = "consecutive_autoplays"
 
     private fun bingeStatePrefs(context: Context): SharedPreferences =
-        context.getSharedPreferences(
-            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, BINGE_STATE_PREFS),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, BINGE_STATE_PREFS))
 
     /** Episodes auto-advanced in a row without user input. */
     fun getConsecutiveAutoplays(context: Context): Int =

@@ -24,6 +24,7 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.put
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The store's own encoding of the pins (see [LibraryHomeRails.encode]).
@@ -349,11 +350,7 @@ object LibraryHomeRails {
     private fun prefs(context: Context) = prefsFor(context, null)
 
     /** The pins blob of one profile (null = the profile scoped to right now). */
-    private fun prefsFor(context: Context, profileId: String?) = context.getSharedPreferences(
-        if (profileId == null) ProfileStorage.prefsName(context, PREFS)
-        else ProfileStorage.prefsName(profileId, PREFS),
-        Context.MODE_PRIVATE
-    )
+    private fun prefsFor(context: Context, profileId: String?) = Prefs.file(context, if (profileId == null) ProfileStorage.prefsName(context, PREFS) else ProfileStorage.prefsName(profileId, PREFS))
 }
 
 /**

@@ -12,6 +12,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The removal record against the real stores: what leaves My List is written
@@ -34,10 +35,7 @@ class LibraryTombstoneLifecycleTest {
         get() = ApplicationProvider.getApplicationContext()
 
     private fun libraryPrefs() =
-        context.getSharedPreferences(
-            ProfileStorage.prefsName(context, "kbstream_library"),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(context, ProfileStorage.prefsName(context, "kbstream_library"))
 
     @Before
     fun reset() {

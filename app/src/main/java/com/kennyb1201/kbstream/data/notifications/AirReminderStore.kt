@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.notifications
 
 import android.content.Context
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Shows the viewer explicitly asked to be reminded about, per profile.
@@ -23,10 +24,7 @@ import com.kennyb1201.kbstream.data.sync.ProfileStorage
  */
 internal class AirReminderStore(context: Context) {
 
-    private val prefs = context.applicationContext.getSharedPreferences(
-        ProfileStorage.prefsName(context.applicationContext, PREFS_NAME),
-        Context.MODE_PRIVATE
-    )
+    private val prefs = Prefs.file(context.applicationContext, ProfileStorage.prefsName(context.applicationContext, PREFS_NAME))
 
     /** Every show this profile has flagged, as stored ids. */
     fun flagged(): Set<String> =

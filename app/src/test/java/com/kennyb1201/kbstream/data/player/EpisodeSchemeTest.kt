@@ -7,6 +7,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * Files are not episodes.
@@ -493,7 +494,7 @@ class EpisodeSchemeTest {
         assertEquals(EpisodeScheme(SchemeKind.SEGMENTS_PER_FILE, 4), EpisodeScheme.decode("sp9"))
     }
 
-    private fun prefs() = context.getSharedPreferences("kbstream_episode_scheme", Context.MODE_PRIVATE)
+    private fun prefs() = Prefs.file(context, "kbstream_episode_scheme")
 
     private fun clearStore() = prefs().edit().clear().commit()
 }

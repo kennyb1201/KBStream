@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.SystemClock
 import java.util.UUID
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The playback attempt that was running when the process died.
@@ -325,6 +326,5 @@ internal object PlaybackDeathMarker {
         return runCatching { Uri.parse(sourceUrl).host }.getOrNull().orEmpty()
     }
 
-    private fun prefs(context: Context) = context.applicationContext
-        .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private fun prefs(context: Context) = Prefs.file(context.applicationContext, PREFS)
 }

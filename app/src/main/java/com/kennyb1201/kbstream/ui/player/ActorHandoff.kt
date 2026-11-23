@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import com.kennyb1201.kbstream.Screen
 import org.json.JSONArray
 import org.json.JSONObject
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The ticket a cast tap in the player overlay leaves behind, made to outlive
@@ -152,7 +153,7 @@ object ActorHandoff {
     }
 
     private fun prefs(context: Context): SharedPreferences =
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        Prefs.file(context, PREFS_NAME)
 
     /**
      * Serializes a ticket for the SharedPreferences copy. Internal so the wire

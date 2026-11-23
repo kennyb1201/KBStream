@@ -1,7 +1,6 @@
 package com.kennyb1201.kbstream.ui.search
 
 import android.app.Application
-import android.content.Context
 import android.content.SharedPreferences
 import android.os.SystemClock
 import android.util.Log
@@ -54,6 +53,7 @@ import java.util.IdentityHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReferenceArray
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * A searchable title result. `meta` is the navigation payload the detail
@@ -298,12 +298,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     // Recent searches are per-profile (search history is part of a
     // profile's viewing footprint - same isolation as watch history).
     private val prefs
-        get() = app.getSharedPreferences(
-            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
-                app, PREFS_NAME
-            ),
-            Context.MODE_PRIVATE
-        )
+        get() = Prefs.file(app, com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(app, PREFS_NAME))
 
     private val _searchQuery =
         MutableStateFlow("")
@@ -3275,7 +3270,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private fun loadBrowseCatalogCache() {
         runCatchingCancellable {
-            val prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val prefs = Prefs.file(app, PREFS_NAME)
             val savedAt = prefs.getLong(KEY_BROWSE_CATALOG_SAVED_AT, 0L)
             val cached = readBrowseCatalogCache(prefs) ?: return
 
@@ -3394,7 +3389,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         collections: List<BrowseEntry>
     ) {
         runCatching {
-            val prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val prefs = Prefs.file(app, PREFS_NAME)
             val (existingKeywords, existingCollections) =
                 readBrowseCatalogCache(prefs) ?: (emptyList<BrowseEntry>() to emptyList())
             saveBrowseCatalogCache(
@@ -3420,7 +3415,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
                 return arr.toString()
             }
-            app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            Prefs.file(app, PREFS_NAME)
                 .edit()
                 .putLong(KEY_BROWSE_CATALOG_SAVED_AT, System.currentTimeMillis())
                 .putString(KEY_BROWSE_KEYWORD_IDS, toJson(keywords))

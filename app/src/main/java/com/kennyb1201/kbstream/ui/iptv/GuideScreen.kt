@@ -1,6 +1,5 @@
 package com.kennyb1201.kbstream.ui.iptv
 
-import android.content.Context
 import android.view.KeyEvent
 import androidx.tv.material3.Border
 import androidx.tv.material3.Surface
@@ -50,14 +49,12 @@ import android.os.Looper
 import androidx.compose.runtime.DisposableEffect
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -148,6 +145,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.withContext
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 private const val GUIDE_PREFETCH_BEFORE_COUNT = 12
 private const val GUIDE_PREFETCH_AFTER_COUNT = 36
@@ -259,12 +257,7 @@ fun GuideScreen(
     val activeProfileId by com.kennyb1201.kbstream.data.sync.ProfileManager
         .activeProfile.collectAsStateWithLifecycle()
     val guidePreferences = remember(appContext, activeProfileId) {
-        appContext.getSharedPreferences(
-            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
-                appContext, "iptv_guide_preferences"
-            ),
-            Context.MODE_PRIVATE
-        )
+        Prefs.file(appContext, com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(appContext, "iptv_guide_preferences"))
     }
     var favorites by remember(activeProfileId) {
         mutableStateOf(guidePreferences.getStringSet("favorites", emptySet())?.toSet().orEmpty())

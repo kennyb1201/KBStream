@@ -10,6 +10,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The video id a subtitles add-on is asked about has to be the file that is
@@ -202,7 +203,7 @@ class AddonSubtitleVideoIdTest {
     }
 
     private fun prefs() =
-        context.getSharedPreferences("kbstream_episode_scheme", Context.MODE_PRIVATE)
+        Prefs.file(context, "kbstream_episode_scheme")
 
     private fun clearStore() = prefs().edit().clear().commit()
 }

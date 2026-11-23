@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
+import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
  * The source the viewer picked with their own hands, per episode (spec
@@ -194,8 +195,5 @@ internal object SourcePickMemory {
 
     private fun prefsName(context: Context) = ProfileStorage.prefsName(context, PREFS_BASE)
 
-    private fun prefs(context: Context) = context.getSharedPreferences(
-        prefsName(context),
-        Context.MODE_PRIVATE
-    )
+    private fun prefs(context: Context) = Prefs.file(context, prefsName(context))
 }
