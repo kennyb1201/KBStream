@@ -78,7 +78,7 @@ class AddonRefreshTriggerContractTest {
         // first launch after the app was killed.
         assertTrue(
             "the application must kick off a throttled pass on startup",
-            flat(application).contains("AddonManager .getInstance(this@MainApplication) .refreshInstalledAddonsSoon()")
+            flat(application).contains("addonManager .refreshInstalledAddonsSoon()")
         )
         // Foreground transition (Activity.onStart) - the one that actually
         // happens on a box the launcher sits in front of for weeks.
@@ -86,7 +86,7 @@ class AddonRefreshTriggerContractTest {
             "returning to the app must kick off the same throttled pass",
             flat(activity).contains("override fun onStart()") &&
                 flat(activity).contains(
-                    "AddonManager .getInstance(applicationContext) .refreshInstalledAddonsSoon()"
+                    "addonManager .refreshInstalledAddonsSoon()"
                 )
         )
     }

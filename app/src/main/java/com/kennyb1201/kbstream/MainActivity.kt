@@ -212,6 +212,7 @@ import com.kennyb1201.kbstream.ui.components.rememberMotionMs
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.components.screenTransitionMs
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
@@ -859,6 +860,13 @@ private suspend fun recoveredEpisodeAlreadyWatched(
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
+    // A Hilt field, not an accessor: the activity is an injection point already
+    // (spec 2026-11-22, item 3), so the foreground refresh trigger reaches the
+    // same AddonManager the screens are handed. Filled in before onCreate, and
+    // read in onStart.
+    @Inject
+    lateinit var addonManager: com.kennyb1201.kbstream.data.addon.AddonManager
+
 
     // Kids-time accumulation is driven by KidsTimeGuard's own application-level
     // ActivityLifecycleCallbacks, NOT by this Activity's onStart/onStop. The
@@ -1220,8 +1228,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         runCatching {
-            com.kennyb1201.kbstream.data.addon.AddonManager
-                .getInstance(applicationContext)
+            addonManager
                 .refreshInstalledAddonsSoon()
         }.onFailure { error ->
             // Never let a refresh trigger take the Activity down: this runs on

@@ -168,7 +168,7 @@ class BingeCatPendingHistoryContractTest {
     fun `the doors are app start and the Home load, never a poll`() {
         assertTrue(
             "app start replays what the last session could not deliver",
-            app.contains("BingeCatRepository .getInstance(applicationContext) .schedulePendingHistoryFlush()")
+            app.contains("bingecatRepository .schedulePendingHistoryFlush()")
         )
         // Home's repository comes from the graph now (spec 2026-11-22, item 3),
         // so the door is the injected field rather than an accessor call. The

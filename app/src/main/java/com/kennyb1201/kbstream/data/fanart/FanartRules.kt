@@ -37,8 +37,14 @@ internal const val FANART_FAILURE_TTL_MS = 60L * 60L * 1000L
 /** Session memo bound, matching the entity-logo cache's. */
 internal const val FANART_MEMORY_MAX_ENTRIES = 128
 
-/** The id spaces fanart's v3 endpoint accepts, one each. */
-internal enum class FanartKind {
+/**
+ * The id spaces fanart's v3 endpoint accepts, one each.
+ *
+ * Public because the repository is: a public class cannot expose an internal
+ * type in a method signature, and [FanartArtRepository] is a graph provider now
+ * (spec 2026-11-22, item 3).
+ */
+enum class FanartKind {
     /** `/v3/movies/{tmdbId}` */
     Movie,
 
@@ -60,7 +66,7 @@ internal enum class FanartKind {
 }
 
 /** One image entry: `{ id, url, lang, likes, season? }`. */
-internal data class FanartImage(
+data class FanartImage(
     val url: String,
     val lang: String? = null,
     val likes: Int = 0,
@@ -72,7 +78,7 @@ internal data class FanartImage(
  * One title's whole artwork bundle - what a single `/v3` call returns, grouped by
  * what a consumer can use.
  */
-internal data class FanartArt(
+data class FanartArt(
     val logos: List<FanartImage> = emptyList(),
     val backgrounds: List<FanartImage> = emptyList(),
     val backgrounds4k: List<FanartImage> = emptyList(),

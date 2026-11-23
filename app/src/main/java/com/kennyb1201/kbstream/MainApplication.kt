@@ -21,6 +21,8 @@ import com.kennyb1201.kbstream.data.memory.ImageCacheTrim
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
 import com.kennyb1201.kbstream.data.memory.trimImageMemoryCache
+import com.kennyb1201.kbstream.data.addon.AddonManager
+import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.reporting.ImageLoadTrace
 import com.kennyb1201.kbstream.data.reporting.CrashReporter
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
@@ -39,6 +41,7 @@ import com.kennyb1201.kbstream.work.TorBoxLibraryWorker
 import dagger.hilt.android.HiltAndroidApp
 import io.sentry.android.core.SentryAndroid
 import java.util.concurrent.TimeUnit
+import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -47,6 +50,14 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 @HiltAndroidApp
 class MainApplication : Application(), SingletonImageLoader.Factory {
+
+    // ── The graph's singletons ───────────────────────────────────────────────
+    // Spec 2026-11-22, item 3. The application hosts the graph and is an
+    // injection point of its own, so the startup steps below replay against the
+    // same BingeCat queue and addon list every screen uses. Hilt fills these in
+    // before onCreate's body runs.
+    @Inject lateinit var addonManager: AddonManager
+    @Inject lateinit var bingecatRepository: BingeCatRepository
 
     override fun onCreate() {
         super.onCreate()
@@ -128,8 +139,7 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         // replayed here instead of dying with that player. Silent when the queue
         // is empty, when the profile is unmapped, or while the leg is parked.
         runCatching {
-            com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
-                .getInstance(applicationContext)
+            bingecatRepository
                 .schedulePendingHistoryFlush()
         }
         // Startup isolation: an exception thrown from Application.onCreate
@@ -355,8 +365,7 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             // MainActivity.onStart), which costs one throttled prefs read on
             // every return to the app.
             startupStep("startup.addonRefresh", "app_create_addon_launch_refresh") {
-                com.kennyb1201.kbstream.data.addon.AddonManager
-                    .getInstance(this@MainApplication)
+                addonManager
                     .refreshInstalledAddonsSoon()
             }
             // Home catalog warm: start the Home catalogs' first pages fetching
@@ -369,8 +378,7 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             startupScope.launch {
                 runCatchingCancellable {
                     PerfTrace.timedSuspend("startup.catalogWarm") {
-                        com.kennyb1201.kbstream.data.addon.AddonManager
-                            .getInstance(this@MainApplication)
+                        addonManager
                             .warmHomeCatalogCache()
                     }
                 }.onFailure { error ->
