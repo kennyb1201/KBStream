@@ -253,7 +253,9 @@ class LibraryP2ContractTest {
         val src = source(MDBLIST)
         assertTrue(src.contains("private var snapshotGeneration = 0"))
         val fetch = src.indexOf("val generationAtStart = snapshotGeneration")
-        val gate = src.indexOf("if (!result.isEmpty && generationAtStart == snapshotGeneration)")
+        // The guard learned a null check when a failed fetch started answering
+        // differently (0.9.479); the generation comparison is what this pins.
+        val gate = src.indexOf("!result.isEmpty && generationAtStart == snapshotGeneration)")
         assertTrue("the fetch must stamp the generation it started under", fetch >= 0)
         assertTrue("and refuse to cache over a later invalidation", gate > fetch)
         assertTrue(
