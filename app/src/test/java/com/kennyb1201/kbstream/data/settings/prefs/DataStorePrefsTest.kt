@@ -8,6 +8,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -135,6 +136,29 @@ class DataStorePrefsTest {
             store("kbstream_shim_one"),
             store("kbstream_shim_one")
         )
+    }
+
+    @Test
+    fun `a typed read of the wrong type throws, like the platform`() {
+        // A sync pull writes the value as a bare JSON number, so it lands as a
+        // Long where the device wrote an Int. AppPreferences.getAccentIndex
+        // catches exactly this and re-reads as a Long, so a shim that answered
+        // with the default instead would silently lose the synced value.
+        val shim = store("kbstream_shim_types")
+        shim.edit().putLong("accent_index", 7L).commit()
+
+        assertThrows(ClassCastException::class.java) { shim.getInt("accent_index", 0) }
+        assertEquals(7L, shim.getLong("accent_index", 0L))
+    }
+
+    @Test
+    fun `a write replaces the value even when its type changes`() {
+        val shim = store("kbstream_shim_retype")
+        shim.edit().putLong("accent_index", 7L).commit()
+        shim.edit().putInt("accent_index", 3).commit()
+
+        assertEquals(3, shim.getInt("accent_index", 0))
+        assertEquals("one value per key, not one per type", 1, shim.all.size)
     }
 
     @Test

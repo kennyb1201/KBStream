@@ -134,26 +134,50 @@ internal class DataStorePrefs(
         return HashMap(snapshot)
     }
 
-    override fun getString(key: String?, defValue: String?): String? =
-        stored(key) as? String ?: defValue
+    /**
+     * Reads are type-strict on purpose, exactly like the platform's.
+     *
+     * `getInt` on a key a sync pull wrote as a Long must throw
+     * `ClassCastException`, not quietly answer with the default: the app has
+     * read paths that catch that and re-read as the other type (see
+     * `AppPreferences.getAccentIndex`), and a shim that swallowed the type
+     * mismatch would turn "a synced value" into "no value" without a word.
+     * An ABSENT key still returns [defValue].
+     */
+    override fun getString(key: String?, defValue: String?): String? {
+        val value = stored(key) ?: return defValue
+        return value as String
+    }
 
     override fun getStringSet(
         key: String?,
         defValues: MutableSet<String>?,
     ): MutableSet<String>? {
-        val values = stored(key) as? Set<*> ?: return defValues
-        return LinkedHashSet(values.filterIsInstance<String>())
+        val values = stored(key) ?: return defValues
+        @Suppress("UNCHECKED_CAST")
+        val set = values as Set<String>
+        return LinkedHashSet(set)
     }
 
-    override fun getInt(key: String?, defValue: Int): Int = stored(key) as? Int ?: defValue
+    override fun getInt(key: String?, defValue: Int): Int {
+        val value = stored(key) ?: return defValue
+        return value as Int
+    }
 
-    override fun getLong(key: String?, defValue: Long): Long = stored(key) as? Long ?: defValue
+    override fun getLong(key: String?, defValue: Long): Long {
+        val value = stored(key) ?: return defValue
+        return value as Long
+    }
 
-    override fun getFloat(key: String?, defValue: Float): Float =
-        stored(key) as? Float ?: defValue
+    override fun getFloat(key: String?, defValue: Float): Float {
+        val value = stored(key) ?: return defValue
+        return value as Float
+    }
 
-    override fun getBoolean(key: String?, defValue: Boolean): Boolean =
-        stored(key) as? Boolean ?: defValue
+    override fun getBoolean(key: String?, defValue: Boolean): Boolean {
+        val value = stored(key) ?: return defValue
+        return value as Boolean
+    }
 
     override fun contains(key: String?): Boolean = stored(key) != null
 
@@ -298,8 +322,19 @@ internal class DataStorePrefs(
         prefs -= stringSetPreferencesKey(key)
     }
 
+    /**
+     * Writes [value] under [key], first dropping the other typed forms of it.
+     *
+     * In a [MutablePreferences] an int key and a long key with the same name are
+     * two different keys, so a value that CHANGES TYPE would otherwise leave the
+     * old one behind and the store would hold both. SharedPreferences holds one
+     * value per name, and the app changes types on purpose (a sync pull writes a
+     * Long where the device wrote an Int - see `getAccentIndex`), so a write here
+     * has to mean one value.
+     */
     @Suppress("UNCHECKED_CAST")
     private fun MutablePreferences.putValue(key: String, value: Any) {
+        remove(this, key)
         val typed = when (value) {
             is String -> stringPreferencesKey(key)
             is Int -> intPreferencesKey(key)
