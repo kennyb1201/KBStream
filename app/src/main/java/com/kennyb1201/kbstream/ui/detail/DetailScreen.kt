@@ -11793,12 +11793,12 @@ private fun formatDisplayDate(
  *
  * Internal rather than private because the phone's episode rail draws the same
  * line: the two surfaces must format one date the same way, and the TV page is
- * where every episode-card rule lives (see [episodeAirDate]).
+ * where every episode-card rule lives (see [DetailSeasonEpisodes.episodeAirDate]).
  */
 internal fun formatEpisodeAirDate(
     raw: String
 ): String =
-    episodeAirDate(raw)
+    DetailSeasonEpisodes.episodeAirDate(raw)
         ?.format(DateFormats.DISPLAY_DATE)
         ?: formatDisplayDate(raw)
         ?: raw
@@ -11816,7 +11816,7 @@ internal fun isEpisodeUnavailable(
     airDate: String?,
     today: LocalDate = LocalDate.now()
 ): Boolean {
-    val date = episodeAirDate(airDate) ?: return false
+    val date = DetailSeasonEpisodes.episodeAirDate(airDate) ?: return false
     return date.isAfter(today)
 }
 
