@@ -40,7 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
@@ -106,7 +106,7 @@ fun DecadeScreen(
     // The phone's header arrow; the TV page draws no back control.
     onBack: () -> Unit,
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
-    viewModel: DecadeViewModel = viewModel()
+    viewModel: DecadeViewModel = hiltViewModel()
 ) {
     // The phone entry: the same ViewModel, genre chips and rail actions, laid
     // out for touch. One branch; the TV page below is unchanged (see

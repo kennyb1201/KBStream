@@ -33,6 +33,8 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.supervisorScope
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import java.util.concurrent.ConcurrentHashMap
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 /**
  * ViewModel for the Decade screen (Screen.Decade): TMDB discover rails for
@@ -42,8 +44,11 @@ import java.util.concurrent.ConcurrentHashMap
  * Shares [RailPagingState] with TagViewModel so the infinite-scroll rails
  * behave identically.
  */
-class DecadeViewModel(application: Application) : AndroidViewModel(application) {
-    private val tmdbRepository = TmdbRepository.getInstance(application)
+@HiltViewModel
+class DecadeViewModel @Inject constructor(
+    application: Application,
+    private val tmdbRepository: TmdbRepository
+) : AndroidViewModel(application) {
     private val watchedStatusRepository = WatchedStatusRepository(application)
 
     private val _sections = MutableStateFlow<List<StudioSection>>(emptyList())

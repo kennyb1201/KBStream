@@ -36,7 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
@@ -90,7 +90,7 @@ fun CollectionScreen(
     // The phone's header arrow; the TV page draws no back control.
     onBack: () -> Unit,
     onNavigateDetail: (type: String, id: String) -> Unit,
-    viewModel: CollectionViewModel = viewModel()
+    viewModel: CollectionViewModel = hiltViewModel()
 ) {
     // The phone entry: the same ViewModel, release order, hidden-title filter
     // and part actions, laid out for touch. One branch; the TV page below is

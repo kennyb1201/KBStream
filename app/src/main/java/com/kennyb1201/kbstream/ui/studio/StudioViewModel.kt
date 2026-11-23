@@ -34,6 +34,8 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.supervisorScope
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import java.util.concurrent.ConcurrentHashMap
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 data class StudioRailPagingState(
     val nextPage: Int = 2,
@@ -41,8 +43,11 @@ data class StudioRailPagingState(
     val isLoadingMore: Boolean = false
 )
 
-class StudioViewModel(application: Application) : AndroidViewModel(application) {
-    private val tmdbRepository = TmdbRepository.getInstance(application)
+@HiltViewModel
+class StudioViewModel @Inject constructor(
+    application: Application,
+    private val tmdbRepository: TmdbRepository
+) : AndroidViewModel(application) {
     private val watchedStatusRepository = WatchedStatusRepository(application)
 
     private val _sections = MutableStateFlow<List<StudioSection>>(emptyList())

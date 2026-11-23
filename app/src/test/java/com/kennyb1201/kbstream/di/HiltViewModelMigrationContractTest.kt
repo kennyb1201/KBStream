@@ -50,6 +50,23 @@ class HiltViewModelMigrationContractTest {
     }
 
     /**
+     * The rule the whole migration turns on: a class that has moved owns no
+     * accessor call any more. If one comes back, the class and the graph can
+     * each believe they own the singleton, which is the one thing delegating
+     * first was supposed to make impossible.
+     */
+    @Test
+    fun `no migrated class reaches for a legacy accessor`() {
+        MIGRATED.forEach { name ->
+            val source = source("$UI/$name.kt")
+            assertTrue(
+                "$name still calls a getInstance accessor",
+                !source.contains("getInstance(")
+            )
+        }
+    }
+
+    /**
      * The second move, and the one that proves the delegation: this class used
      * to construct `TmdbRepository` itself. It is now handed the same instance
      * from the graph, so the call is gone from the class while the shared cache
@@ -72,7 +89,7 @@ class HiltViewModelMigrationContractTest {
 
     @Test
     fun `the screen asks the graph instead of the default factory`() {
-        listOf("settings/YearReviewScreen.kt", "actor/ActorScreen.kt").forEach { path ->
+        SCREENS.forEach { path ->
             val screen = source("$UI/$path")
             assertTrue(
                 "$path resolves its view model from the entry point",
@@ -104,17 +121,17 @@ class HiltViewModelMigrationContractTest {
     fun `the bridge is a declared dependency, and it is the navigation-free one`() {
         assertTrue(
             "the catalog names androidx.hilt:hilt-lifecycle-viewmodel-compose",
-            rootFile("gradle/libs.versions.toml")
+            rootText("gradle/libs.versions.toml")
                 .contains("androidx.hilt:hilt-lifecycle-viewmodel-compose")
         )
         assertTrue(
             "the app depends on it",
-            rootFile("app/build.gradle.kts")
+            rootText("app/build.gradle.kts")
                 .contains("libs.androidx.hilt.lifecycle.viewmodel.compose")
         )
         assertTrue(
             "navigation-compose belongs to item 5, not to this migration",
-            !rootFile("app/build.gradle.kts").contains("navigation.compose")
+            !rootText("app/build.gradle.kts").contains("navigation.compose")
         )
     }
 
@@ -139,14 +156,15 @@ class HiltViewModelMigrationContractTest {
         )
     }
 
-    private fun rootFile(path: String): File {
+    /** Read as text, not handed back as a [File]: these assertions scan it. */
+    private fun rootText(path: String): String {
         var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
         while (dir != null) {
             val settings = File(dir, "settings.gradle.kts")
             if (settings.isFile) {
                 val file = File(dir, path)
                 assertTrue("file missing: $file", file.isFile)
-                return file
+                return file.readText()
             }
             dir = dir.parentFile
         }
@@ -161,7 +179,22 @@ class HiltViewModelMigrationContractTest {
         /** The classes that have moved onto the graph, in migration order. */
         val MIGRATED = listOf(
             "settings/YearReviewViewModel",
-            "actor/ActorViewModel"
+            "actor/ActorViewModel",
+            "tag/TagViewModel",
+            "collection/CollectionViewModel",
+            "decade/DecadeViewModel",
+            "studio/StudioViewModel",
+            "addons/CatalogBuilderViewModel"
+        )
+
+        val SCREENS = listOf(
+            "settings/YearReviewScreen.kt",
+            "actor/ActorScreen.kt",
+            "tag/TagScreen.kt",
+            "collection/CollectionScreen.kt",
+            "decade/DecadeScreen.kt",
+            "studio/StudioScreen.kt",
+            "addons/CatalogBuilderScreen.kt"
         )
     }
 }

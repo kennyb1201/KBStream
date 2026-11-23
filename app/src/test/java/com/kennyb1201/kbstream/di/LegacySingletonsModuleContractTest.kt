@@ -79,9 +79,11 @@ class LegacySingletonsModuleContractTest {
      */
     @Test
     fun `the internal repository stays out of the module`() {
+        // The provider signature, not the name: the class doc above says why it
+        // is absent, and a scan for the name would flag that explanation.
         assertTrue(
             "FanartArtRepository is internal and cannot be a provider's return type",
-            !module.contains("FanartArtRepository")
+            !module.contains("fun fanartArtRepository(")
         )
     }
 

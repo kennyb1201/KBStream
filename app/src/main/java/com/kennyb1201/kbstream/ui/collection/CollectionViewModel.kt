@@ -24,14 +24,19 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.supervisorScope
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 /**
  * Loads a TMDB collection and its parts, resolving each part's TMDB id to
  * an IMDB id so watched badges and the long-press "Mark as Watched" action
  * can key off the same ids the rest of the app uses.
  */
-class CollectionViewModel(application: Application) : AndroidViewModel(application) {
-    private val tmdbRepository = TmdbRepository.getInstance(application)
+@HiltViewModel
+class CollectionViewModel @Inject constructor(
+    application: Application,
+    private val tmdbRepository: TmdbRepository
+) : AndroidViewModel(application) {
     private val watchedStatusRepository = WatchedStatusRepository(application)
 
     private val _collection = MutableStateFlow<TmdbCollectionDetail?>(null)

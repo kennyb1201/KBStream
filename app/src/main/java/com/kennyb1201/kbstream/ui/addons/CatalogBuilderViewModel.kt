@@ -30,6 +30,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 /** Items the builder's preview row draws. One discover page, like the rail. */
 private const val PREVIEW_LIMIT = 20
@@ -58,7 +60,11 @@ private const val SUGGESTION_DEBOUNCE_MS = 300L
  * fetched is the preview, which is explicitly asked for (the PREVIEW button) and
  * thrown away when the draft changes, so editing a rule never fires a query.
  */
-class CatalogBuilderViewModel(application: Application) : AndroidViewModel(application) {
+@HiltViewModel
+class CatalogBuilderViewModel @Inject constructor(
+    application: Application,
+    private val tmdbRepository: TmdbRepository
+) : AndroidViewModel(application) {
 
     data class UiState(
         val catalogs: List<CustomCatalog> = emptyList(),
@@ -129,8 +135,6 @@ class CatalogBuilderViewModel(application: Application) : AndroidViewModel(appli
     private var previewJob: Job? = null
     private var keywordJob: Job? = null
     private var peopleJob: Job? = null
-
-    private val tmdbRepository = TmdbRepository.getInstance(application)
 
     init {
         refresh()

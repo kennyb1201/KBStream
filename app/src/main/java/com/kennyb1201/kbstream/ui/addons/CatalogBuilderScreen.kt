@@ -48,7 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
@@ -100,7 +100,7 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 @Composable
 fun CatalogBuilderScreen(
     onBack: () -> Unit,
-    viewModel: CatalogBuilderViewModel = viewModel()
+    viewModel: CatalogBuilderViewModel = hiltViewModel()
 ) {
     // The phone entry: the same catalog store, draft and rule vocabulary, laid
     // out for touch. One branch; the TV page below is unchanged (see
