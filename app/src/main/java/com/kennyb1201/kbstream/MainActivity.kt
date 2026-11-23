@@ -211,6 +211,7 @@ import com.kennyb1201.kbstream.ui.components.KB_SCREEN_TRANSITION_MS
 import com.kennyb1201.kbstream.ui.components.rememberMotionMs
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.components.screenTransitionMs
+import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
@@ -843,7 +844,20 @@ private suspend fun recoveredEpisodeAlreadyWatched(
     } catch (_: Exception) {
         false
     }
-}class MainActivity : ComponentActivity() {
+}
+
+/**
+ * The process's one activity, and the entry point the first migrated ViewModel
+ * is built from (spec 2026-11-22, item 3, F1).
+ *
+ * The annotation changes nothing the activity itself does: it is what makes
+ * `hiltViewModel()` able to resolve a `@HiltViewModel` here, so a screen can stop
+ * naming a ViewModel's constructor in its default argument. Everything this
+ * activity builds by hand keeps working exactly as before - the ViewModels that
+ * have not moved yet still come from `viewModel()` and its default factory.
+ */
+@AndroidEntryPoint
+class MainActivity : ComponentActivity() {
 
 
     // Kids-time accumulation is driven by KidsTimeGuard's own application-level

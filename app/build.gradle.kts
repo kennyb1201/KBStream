@@ -656,6 +656,10 @@ dependencies {
     // copies of a repository while the call sites move.
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
+    // `hiltViewModel()`: a `@HiltViewModel` is built by the graph, so a screen
+    // stops naming the constructor in its default argument. The navigation-free
+    // bridge: this spec must not drag navigation-compose in ahead of item 5.
+    implementation(libs.androidx.hilt.lifecycle.viewmodel.compose)
     // The encrypted token store (spec 2026-11-22, DataStore phase 3): a DataStore
     // file whose bytes are Tink-encrypted under a keyset that lives in the
     // AndroidKeyStore, replacing the deprecated EncryptedSharedPreferences. The

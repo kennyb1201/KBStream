@@ -9,8 +9,10 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.YearReview
 import com.kennyb1201.kbstream.data.history.YearInReview
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
+import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
 import java.time.ZoneId
+import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,8 +44,18 @@ import kotlinx.coroutines.withContext
  *
  * The DAO is resolved from the SCOPED database on every load (the same rule
  * StatsViewModel follows), so a kids profile reads only its own rows.
+ *
+ * ## Built by the graph (F1)
+ *
+ * The constructor belongs to the dependency graph now (spec 2026-11-22, item
+ * 3), so the screen no longer names it: `hiltViewModel()` builds this class.
+ * Only the construction moved - the scoped database is still resolved per load,
+ * for the reason above, and the profile switch rule is unchanged.
  */
-class YearReviewViewModel(application: Application) : AndroidViewModel(application) {
+@HiltViewModel
+class YearReviewViewModel @Inject constructor(
+    application: Application
+) : AndroidViewModel(application) {
 
     data class UiState(
         val loading: Boolean = true,

@@ -29,8 +29,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
@@ -82,7 +82,9 @@ import java.time.format.DateTimeFormatter
 fun YearReviewScreen(
     onBack: () -> Unit,
     year: Int? = null,
-    viewModel: YearReviewViewModel = viewModel()
+    // Built by the graph (spec 2026-11-22, item 3, F1): the screen names the
+    // type, not the constructor, and the activity is the entry point.
+    viewModel: YearReviewViewModel = hiltViewModel()
 ) {
     // A phone composes under the phone's theme, like every other mobile surface.
     // This page is shared, so it was the one screen reaching a phone with only
