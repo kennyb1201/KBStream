@@ -20,9 +20,12 @@ import org.junit.Test
  */
 class PrefsShimContractTest {
 
-    /** Files that may still open a store of their own, and why. */
+    /**
+     * Files that may still open a store of their own, and why. Paths are
+     * relative to `src/main/java`, which is why they carry the package.
+     */
     private val allowed = mapOf(
-        "data/security/SecureTokenStore.kt" to
+        "com/kennyb1201/kbstream/data/security/SecureTokenStore.kt" to
             "EncryptedSharedPreferences; moves to DataStore + Tink in its own change"
     )
 

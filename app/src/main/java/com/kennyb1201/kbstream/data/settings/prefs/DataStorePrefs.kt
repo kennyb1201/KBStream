@@ -27,6 +27,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -363,8 +364,18 @@ internal class DataStorePrefs(
         return decoded.asMap().entries.associate { (key, value) -> key.name to value }
     }
 
+    /**
+     * Cancels this store's work and waits for the file to be released.
+     *
+     * The wait is the point: DataStore keeps a process-wide record of the files
+     * it owns and refuses a second owner, and cancelling a scope releases that
+     * record asynchronously. Reopening the same path - a profile deleted and
+     * recreated, a new Application over the same data directory - would race it
+     * and throw. Nothing calls this from inside the store's own scope, so the
+     * wait cannot deadlock.
+     */
     internal fun close() {
-        job.cancel()
+        runBlocking { job.cancelAndJoin() }
     }
 }
 
