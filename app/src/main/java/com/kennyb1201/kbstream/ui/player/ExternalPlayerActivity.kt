@@ -37,6 +37,8 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.displayRuntimeMinutes
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
+import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -87,7 +89,20 @@ import kotlinx.coroutines.withTimeoutOrNull
  *    ignore, and DRM streams cannot be handed to another app at all. Both are
  *    reported rather than silently failed.
  */
+@AndroidEntryPoint
 class ExternalPlayerActivity : ComponentActivity() {
+
+    // ── The graph's singletons ───────────────────────────────────────────────
+    //
+    // Spec 2026-11-22, item 3. An activity has no view model to hoist these
+    // into, so it is an injection point of its own: the fields below are the
+    // same instances every other screen is handed, and no call site here
+    // constructs a repository any more. Hilt fills them in before onCreate's
+    // body runs, so nothing reads one before it is set.
+    @Inject lateinit var tmdbRepository: TmdbRepository
+    @Inject lateinit var traktRepository: TraktRepository
+    @Inject lateinit var simklRepository: SimklRepository
+    @Inject lateinit var bingecatRepository: BingeCatRepository
 
     // ── Session: the same fields every engine carries ────────────────────────
 
@@ -1291,7 +1306,7 @@ class ExternalPlayerActivity : ComponentActivity() {
             } ?: return@launch
             val nextEp = withContext(Dispatchers.IO) {
                 runCatchingCancellable {
-                    TmdbRepository.getInstance(this@ExternalPlayerActivity)
+                    tmdbRepository
                         .getSeasonEpisodes(tmdb, targetSeason, parentId)
                 }.getOrNull()?.firstOrNull { it.episodeNumber == targetEpisode }
             } ?: return@launch
@@ -1643,7 +1658,7 @@ class ExternalPlayerActivity : ComponentActivity() {
         val showEpisode = episode
 
         val minutes = withContext(Dispatchers.IO) {
-            val repo = TmdbRepository.getInstance(this@ExternalPlayerActivity)
+            val repo = tmdbRepository
             if (showSeason != null && showEpisode != null) {
                 // An episode is measured against ITS runtime, not the show's.
                 runCatchingCancellable {
@@ -1889,7 +1904,7 @@ class ExternalPlayerActivity : ComponentActivity() {
                 }
             }
             runCatchingCancellable {
-                SimklRepository.getInstance(this@ExternalPlayerActivity).scrobble(
+                simklRepository.scrobble(
                     action = action,
                     parentId = parentId,
                     parentType = parentType,
@@ -1912,7 +1927,7 @@ class ExternalPlayerActivity : ComponentActivity() {
         // The token is the ACTIVE profile's, resolved at fire time (see the
         // Simkl path's guard above).
         if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return
-        val trakt = TraktRepository.getInstance(this)
+        val trakt = traktRepository
         if (!trakt.isConfigured() || !trakt.hasToken() || parentId.isBlank()) return
         trakt.scrobble(
             action = action,
@@ -1933,7 +1948,7 @@ class ExternalPlayerActivity : ComponentActivity() {
      */
     private suspend fun syncCompletionToTrakt(): Boolean {
         if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return true
-        val trakt = TraktRepository.getInstance(this)
+        val trakt = traktRepository
         if (!trakt.isConfigured() || !trakt.hasToken() || parentId.isBlank()) return true
         val tmdb = tmdbId()
         return when (parentType.lowercase()) {
@@ -2017,7 +2032,7 @@ class ExternalPlayerActivity : ComponentActivity() {
                     departed = true
                     false
                 } else {
-                    val simkl = SimklRepository.getInstance(this@ExternalPlayerActivity)
+                    val simkl = simklRepository
                     val tmdb = tmdbId()
                     when (parentType.lowercase()) {
                         "movie" -> simkl.pushWatchedMovie(
@@ -2109,7 +2124,7 @@ class ExternalPlayerActivity : ComponentActivity() {
                 ) {
                     true
                 } else {
-                    val bingecat = BingeCatRepository.getInstance(this@ExternalPlayerActivity)
+                    val bingecat = bingecatRepository
                     val tmdb = tmdbId()
                     when (parentType.lowercase()) {
                         "movie" -> bingecat.pushWatchedMovie(

@@ -75,6 +75,7 @@ import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.StreamBehaviorHints
 import com.kennyb1201.kbstream.data.badges.StreamBadge
+import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.download.DownloadsManager
 import com.kennyb1201.kbstream.data.iptv.ChannelRecall
@@ -127,6 +128,8 @@ import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tvdb.shownEpisode
 import com.kennyb1201.kbstream.data.tvdb.shownSeason
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.settings.AppPreferences
@@ -463,7 +466,20 @@ private const val CHANNEL_GUIDE_WATCH_MS = 2_500L
  */
 private const val CHANNEL_GUIDE_LOADING = "Loading guide…"
 
+@AndroidEntryPoint
 class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
+
+    // ── The graph's singletons ───────────────────────────────────────────────
+    // Spec 2026-11-22, item 3. The engine has no view model, so it is its own
+    // injection point: the trackers, TMDB and the addon list are the same
+    // instances every screen is handed, and no call site below constructs one.
+    // The two IptvDatabase lookups stay accessors on purpose - that database is
+    // profile-scoped, and a field would pin the profile the session started in.
+    @Inject lateinit var tmdbRepository: TmdbRepository
+    @Inject lateinit var traktRepository: TraktRepository
+    @Inject lateinit var simklRepository: SimklRepository
+    @Inject lateinit var bingecatRepository: BingeCatRepository
+    @Inject lateinit var addonManager: AddonManager
 
     /**
      * The MPV handoff's launch intent: this session replayed at the BACKUP
@@ -9592,8 +9608,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             return
         }
         val addon = try {
-            com.kennyb1201.kbstream.data.addon.AddonManager
-                .getInstance(applicationContext)
+            addonManager
                 .getEnabledAddons()
                 .firstOrNull { it.displayName.equals(name, ignoreCase = true) }
         } catch (_: Exception) {
@@ -14653,7 +14668,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             if (overlayNextPrefetchKey == key) return@launch
             overlayNextPrefetchKey = key
             val nextEp: com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode? = withContext(Dispatchers.IO) {
-                val repo = TmdbRepository.getInstance(this@NativePlayerActivity)
+                val repo = tmdbRepository
                 val tmdbId = resolveParentTmdbId() ?: return@withContext null
                 val episodes = runCatchingCancellable {
                     repo.getSeasonEpisodes(tmdbId, target.first, parentId)
@@ -14742,7 +14757,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
         currentEpisodeRuntimePrefetched = true
         val minutes = withContext(Dispatchers.IO) {
-            val repo = TmdbRepository.getInstance(this@NativePlayerActivity)
+            val repo = tmdbRepository
             val tmdbId = resolveParentTmdbId()
             val fromSeason = tmdbId?.let { id ->
                 runCatchingCancellable {
@@ -15198,7 +15213,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // popup shows real episode details instead of just S#E#.
         scope?.launch {
             val nextEp: com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode? = withContext(Dispatchers.IO) {
-                val repo = TmdbRepository.getInstance(this@NativePlayerActivity)
+                val repo = tmdbRepository
                 val tmdbId = resolveParentTmdbId() ?: return@withContext null
                 val episodes = runCatchingCancellable {
                     repo.getSeasonEpisodes(tmdbId, targetSeason, parentId)
@@ -16148,7 +16163,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // profile switch must not scrobble the departing episode to the
         // profile the viewer moved TO.
         if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return
-        val trakt = TraktRepository.getInstance(this)
+        val trakt = traktRepository
         if (!trakt.isConfigured() || !trakt.hasToken() || parentId.isBlank()) return
         trakt.scrobble(
             action = action,
@@ -16170,7 +16185,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      */
     private suspend fun syncCompletionToTrakt(): Boolean {
         if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return true
-        val trakt = TraktRepository.getInstance(this)
+        val trakt = traktRepository
         if (!trakt.isConfigured() || !trakt.hasToken() || parentId.isBlank()) return true
         val tmdb = resolveParentTmdbId()
         return when (parentType.lowercase()) {
@@ -16300,7 +16315,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         simklScrobbleJob = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             var departed = false
             val ok = runCatchingCancellable {
-                val simkl = SimklRepository.getInstance(applicationContext)
+                val simkl = simklRepository
                 val tmdbId = resolveParentTmdbId()
                 // TOCTOU re-check: the guard above ran before this coroutine's
                 // first suspension, and every tracker call resolves the ACTIVE
@@ -16354,7 +16369,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         simklSyncJob = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             var departed = false
             val ok = runCatchingCancellable {
-                val simkl = SimklRepository.getInstance(applicationContext)
+                val simkl = simklRepository
                 val tmdbId = resolveParentTmdbId()
                 // Same TOCTOU re-check as the scrobble path: the guard above ran
                 // before this coroutine's first suspension, and the tracker
@@ -16449,7 +16464,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 ) {
                     true
                 } else {
-                    val bingecat = BingeCatRepository.getInstance(this@NativePlayerActivity)
+                    val bingecat = bingecatRepository
                     val tmdb = resolveParentTmdbId()
                     when (parentType.lowercase()) {
                         "movie" -> bingecat.pushWatchedMovie(

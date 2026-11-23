@@ -48,8 +48,9 @@ class TraktIntegrationContractTest {
                 src.contains("trakt.isConfigured()") && src.contains("trakt.hasToken()")
             )
             assertTrue(
-                "$path resolves the active profile at fire time",
-                src.contains("TraktRepository.getInstance(this)")
+                "$path holds the one TraktRepository, injected - lookups inside it " +
+                    "still resolve the active profile's token at fire time",
+                src.contains("@Inject lateinit var traktRepository: TraktRepository")
             )
         }
     }

@@ -43,9 +43,12 @@ import com.kennyb1201.kbstream.ui.components.clipToPosterEdge
 import com.kennyb1201.kbstream.ui.detail.isEpisodeUnavailable
 import com.kennyb1201.kbstream.ui.home.looksLikeRawMediaId
 import com.kennyb1201.kbstream.ui.theme.themeAccentColor
+import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.SubtitleEntry
 import com.kennyb1201.kbstream.data.badges.StreamBadge
+import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.cache.DiskSweep
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
@@ -134,7 +137,18 @@ private const val MAX_ADDON_SUBTITLE_BYTES = 8 * 1024 * 1024
  * end-of-playback panels, which are the same Up Next card and the same
  * Because-you-watched row, built by the same shared code.
  */
+@AndroidEntryPoint
 class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCastHost {
+
+    // ── The graph's singletons ───────────────────────────────────────────────
+    // Spec 2026-11-22, item 3: the activity is its own injection point, so the
+    // trackers and the addon list it reaches for are the same instances every
+    // screen is handed. Filled in before onCreate's body runs.
+    @Inject lateinit var tmdbRepository: TmdbRepository
+    @Inject lateinit var traktRepository: TraktRepository
+    @Inject lateinit var simklRepository: SimklRepository
+    @Inject lateinit var bingecatRepository: BingeCatRepository
+    @Inject lateinit var addonManager: AddonManager
 
     /**
      * The switch-back's launch intent: this session replayed at the MAIN engine.
@@ -4301,8 +4315,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             return
         }
         val addon = try {
-            com.kennyb1201.kbstream.data.addon.AddonManager
-                .getInstance(applicationContext)
+            addonManager
                 .getEnabledAddons()
                 .firstOrNull { it.displayName.equals(name, ignoreCase = true) }
         } catch (_: Exception) {
@@ -5305,7 +5318,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         }
         currentEpisodeRuntimePrefetched = true
         val minutes = withContext(Dispatchers.IO) {
-            val repo = TmdbRepository.getInstance(this@MpvPlayerActivity)
+            val repo = tmdbRepository
             val tmdb = tmdbId()
             val fromSeason = tmdb?.let { id ->
                 runCatchingCancellable {
@@ -5574,7 +5587,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             } ?: return@launch
             val nextEp = withContext(Dispatchers.IO) {
                 runCatchingCancellable {
-                    TmdbRepository.getInstance(this@MpvPlayerActivity)
+                    tmdbRepository
                         .getSeasonEpisodes(tmdb, targetSeason, parentId)
                 }.getOrNull()?.firstOrNull { it.episodeNumber == targetEpisode }
             } ?: return@launch
@@ -6881,7 +6894,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // Independent scope: a stop scrobble has to outlive this activity.
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             runCatchingCancellable {
-                SimklRepository.getInstance(this@MpvPlayerActivity).scrobble(
+                simklRepository.scrobble(
                     action = action,
                     parentId = parentId,
                     parentType = parentType,
@@ -6974,7 +6987,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // The token is the ACTIVE profile's, resolved at fire time (see the
         // Simkl path's guard above).
         if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return
-        val trakt = TraktRepository.getInstance(this)
+        val trakt = traktRepository
         if (!trakt.isConfigured() || !trakt.hasToken() || parentId.isBlank()) return
         trakt.scrobble(
             action = action,
@@ -6996,7 +7009,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      */
     private suspend fun syncCompletionToTrakt(): Boolean {
         if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return true
-        val trakt = TraktRepository.getInstance(this)
+        val trakt = traktRepository
         if (!trakt.isConfigured() || !trakt.hasToken() || parentId.isBlank()) return true
         val tmdb = tmdbId()
         return when (parentType.lowercase()) {
@@ -7078,7 +7091,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                     departed = true
                     false
                 } else {
-                    val simkl = SimklRepository.getInstance(this@MpvPlayerActivity)
+                    val simkl = simklRepository
                     val tmdb = tmdbId()
                     when (parentType.lowercase()) {
                         "movie" -> simkl.pushWatchedMovie(
@@ -7175,7 +7188,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 ) {
                     true
                 } else {
-                    val bingecat = BingeCatRepository.getInstance(this@MpvPlayerActivity)
+                    val bingecat = bingecatRepository
                     val tmdb = tmdbId()
                     when (parentType.lowercase()) {
                         "movie" -> bingecat.pushWatchedMovie(

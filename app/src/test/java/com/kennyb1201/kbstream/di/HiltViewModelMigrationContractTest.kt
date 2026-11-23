@@ -190,6 +190,35 @@ class HiltViewModelMigrationContractTest {
         )
     }
 
+    /**
+     * The engines have no view model to hoist their collaborators into, so each
+     * activity is an injection point of its own. Pinned because the alternative
+     * - a `getInstance` per tracker - is invisible in a diff and would quietly
+     * give a playback session a second instance of a cache.
+     */
+    @Test
+    fun `the player activities are injection points, not call sites`() {
+        listOf(
+            "ui/player/NativePlayerActivity.kt",
+            "ui/player/MpvPlayerActivity.kt",
+            "ui/player/ExternalPlayerActivity.kt"
+        ).forEach { path ->
+            val activity = source("com/kennyb1201/kbstream/$path")
+            assertTrue("$path is a Hilt entry point", activity.contains("@AndroidEntryPoint\n"))
+            assertTrue(
+                "$path is handed TMDB, Trakt, Simkl and BingeCat",
+                activity.contains("@Inject lateinit var tmdbRepository: TmdbRepository") &&
+                    activity.contains("@Inject lateinit var traktRepository: TraktRepository") &&
+                    activity.contains("@Inject lateinit var simklRepository: SimklRepository") &&
+                    activity.contains("@Inject lateinit var bingecatRepository: BingeCatRepository")
+            )
+            assertTrue(
+                "$path constructs none of them any more",
+                !Regex("\\w+Repository\\.getInstance\\(").containsMatchIn(activity)
+            )
+        }
+    }
+
     private fun source(path: String): String {
         val file = File(findSourceRoot(), path)
         assertTrue("source missing: $file", file.isFile)
