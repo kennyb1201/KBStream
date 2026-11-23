@@ -92,10 +92,9 @@ private class Write(
  * one-instance-per-file rule.
  */
 internal class DataStorePrefs(
-    context: Context,
     private val name: String,
-    file: File,
     parent: CoroutineScope,
+    produceStore: (CoroutineScope) -> DataStore<Preferences>,
 ) : SharedPreferences {
 
     /** Own job so [close] can release the file for a later instance. */
@@ -103,11 +102,13 @@ internal class DataStorePrefs(
 
     private val scope = CoroutineScope(parent.coroutineContext + job)
 
-    private val store: DataStore<Preferences> = PreferenceDataStoreFactory.create(
-        migrations = listOf(SharedPreferencesMigration(context, name)),
-        scope = scope,
-        produceFile = { file },
-    )
+    /**
+     * The store is built from this instance's own scope, so cancelling [close]
+     * releases the file. A caller that needs a different serializer (the
+     * encrypted token store) supplies its own; [Prefs] supplies the ordinary
+     * preferences file with its one-time XML adoption.
+     */
+    private val store: DataStore<Preferences> = produceStore(scope)
 
     private val listeners =
         CopyOnWriteArrayList<SharedPreferences.OnSharedPreferenceChangeListener>()
@@ -473,12 +474,13 @@ object Prefs {
                 existing.prefs
             } else {
                 existing?.prefs?.close()
-                DataStorePrefs(
-                    context = app,
-                    name = name,
-                    file = target,
-                    parent = scope,
-                ).also { stores[key] = Open(it, app) }
+                DataStorePrefs(name = name, parent = scope) { child ->
+                    PreferenceDataStoreFactory.create(
+                        migrations = listOf(SharedPreferencesMigration(app, name)),
+                        scope = child,
+                        produceFile = { target },
+                    )
+                }.also { stores[key] = Open(it, app) }
             }
         }
     }

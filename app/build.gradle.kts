@@ -647,6 +647,14 @@ dependencies {
     // that the storage under them changed. The one-time adoption of the old
     // XML stores is `SharedPreferencesMigration` in that shim.
     implementation(libs.androidx.datastore.preferences)
+    // The encrypted token store (spec 2026-11-22, DataStore phase 3): a DataStore
+    // file whose bytes are Tink-encrypted under a keyset that lives in the
+    // AndroidKeyStore, replacing the deprecated EncryptedSharedPreferences. The
+    // okio dependency is this module naming the stream types datastore-tink's
+    // serializer hands back.
+    implementation(libs.androidx.datastore.tink)
+    implementation(libs.tink.android)
+    implementation(libs.okio)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)

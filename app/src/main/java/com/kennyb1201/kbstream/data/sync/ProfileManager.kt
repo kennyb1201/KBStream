@@ -821,12 +821,15 @@ object ProfileManager {
         ProfileStorage.namespaces(context).filter { it.startsWith("$profileId.") }.forEach { ns ->
             Prefs.file(context, ns).edit().clear().apply()
         }
-        // ...and drop the cached ENCRYPTED stores for that namespace. The files
-        // above are cleared, but the decrypted instances are held in
-        // SecureTokenStore's process cache; a profile recreated with the same id
-        // would otherwise inherit the deleted profile's secrets.
+        // ...and drop the ENCRYPTED stores for that namespace, cache and files
+        // both. The stores above are cleared through the prefs shim, but these
+        // live in files/secure/<id>.<name>.* - outside the prefs directory the
+        // loop above scans - so a profile delete has to sweep them explicitly.
+        // The cached instances matter too: a profile recreated with the same id
+        // would otherwise inherit the deleted profile's secrets from memory.
         runCatching {
-            com.kennyb1201.kbstream.data.security.SecureTokenStore.evictProfile(profileId)
+            com.kennyb1201.kbstream.data.security.SecureTokenStore
+                .discardProfile(context, profileId)
         }
         // And this profile's PIN hash, which is keyed by id inside one
         // account-wide vault rather than living in a profile-scoped store.

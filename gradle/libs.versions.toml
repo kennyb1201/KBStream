@@ -43,6 +43,14 @@ work = "2.12.0"
 # current stable release; the shim needs SharedPreferencesMigration from this
 # artifact to adopt the existing XML stores, which every 1.x line ships.
 datastore = "1.3.0"
+# Tink, for the encrypted token store's keyset (spec 2026-11-22, DataStore
+# phase 3). 1.8.0 is the version androidx.security:security-crypto 1.1.0 already
+# resolves; pinned explicitly because this module now uses its API directly and
+# the keyset format must not drift under an existing key.
+tink = "1.8.0"
+# okio: datastore-tink's serializer speaks BufferedSource/BufferedSink, and this
+# module names those types. Already present at runtime through DataStore.
+okio = "3.9.1"
 # Play In-App Updates, for the Play-distributed build only (`-PplayBuild`).
 # A Play install cannot install its own APK, so its updates come from the
 # store through this library's flexible flow - see PlayUpdater. The sideloaded
@@ -118,6 +126,9 @@ androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref =
 androidx-room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
 androidx-room-testing = { module = "androidx.room:room-testing", version.ref = "room" }
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
+androidx-datastore-tink = { module = "androidx.datastore:datastore-tink", version.ref = "datastore" }
+tink-android = { module = "com.google.crypto.tink:tink-android", version.ref = "tink" }
+okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 
 # --- HTTP / JSON ---

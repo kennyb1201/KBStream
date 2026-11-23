@@ -30,8 +30,13 @@ class TraktTokenStoreRebuildTest {
     private val profileId = "trakt_rebuild_profile"
     private val storeName = "$profileId.${TraktTokenStore.PREFS_NAME}"
 
+    /**
+     * The file the store owns on disk. The plain variant, because a Robolectric
+     * JVM has no keystore to encrypt with - what matters to this test is that
+     * the OPEN's file is deleted before the rebuild, not which mode wrote it.
+     */
     private fun storeFile(): File =
-        File(context.filesDir.parentFile, "shared_prefs/$storeName.xml")
+        File(File(context.filesDir, "secure"), "$storeName.plain")
 
     private fun token() = TraktToken(
         accessToken = "access",
@@ -41,11 +46,9 @@ class TraktTokenStoreRebuildTest {
 
     @Test
     fun `a store that will not open is rebuilt once and the token still saves`() {
-        // The shape of the fault: a file on disk whose KeyStore entry is gone.
-        context.getSharedPreferences(storeName, Context.MODE_PRIVATE)
-            .edit()
-            .putString(TraktTokenStore.KEY_ACCESS_TOKEN, "stale")
-            .commit()
+        // The shape of the fault: a store file on disk whose key is gone.
+        storeFile().parentFile?.mkdirs()
+        storeFile().writeText("stale ciphertext")
         assertTrue("the unreadable file exists to begin with", storeFile().exists())
 
         var opens = 0
