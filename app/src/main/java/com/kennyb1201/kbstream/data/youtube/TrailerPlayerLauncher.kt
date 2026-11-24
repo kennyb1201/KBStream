@@ -29,6 +29,40 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
     private const val TAG = "TrailerLauncher"
 
     /**
+     * The graph's TMDB instance, handed in by [install].
+     *
+     * Spec 2026-11-22, item 3: the IMDb ladder used to call TMDB's `getInstance`
+     * from inside itself, which is a second place that repository could come
+     * from. The trailer chain runs from static surfaces - a hero focus, a detail
+     * entry, the player's press - so there is no constructor to put it in; the
+     * Application installs it once, exactly as it does for the extractor's
+     * transport ([com.kennyb1201.kbstream.data.youtube.NewPipeManager.install]).
+     */
+    @Volatile
+    private var tmdbRepository: TmdbRepository? = null
+
+    /**
+     * Installs the one TMDB instance the app uses. Called once from
+     * `MainApplication`, before any trailer can resolve.
+     */
+    @Synchronized
+    fun install(tmdbRepository: TmdbRepository) {
+        this.tmdbRepository = tmdbRepository
+    }
+
+    /**
+     * No fallback construction on purpose: a second repository would carry its
+     * own caches beside the graph's, which is the duplication this migration
+     * removes. A resolve before the install is a startup-order bug, and saying
+     * so beats quietly warming a repository nobody reads.
+     */
+    private fun tmdb(): TmdbRepository =
+        tmdbRepository ?: error(
+            "TrailerPlayerLauncher.install() has not run - MainApplication must install " +
+                "the graph's TMDB before a trailer resolves"
+        )
+
+    /**
      * Serializes the BOOKKEEPING of a resolve, not the resolve itself (m21).
      *
      * It used to span the whole chain so concurrent callers "coalesce behind one
@@ -639,7 +673,7 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         // adaptive merge and no signed chunker to die against mid-play, and the
         // ladder falls back to YouTube when IMDb has nothing. There is no switch
         // - OFF only ever made trailers worse, so the default became the rule.
-        val id = imdbIdFor(context, imdbId, tmdbId, type) ?: return null
+        val id = imdbIdFor(imdbId, tmdbId, type) ?: return null
         return ImdbTrailerResolver.resolve(id, allowPage = false)
     }
 
@@ -653,15 +687,17 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
      * resolve.
      */
     private suspend fun imdbIdFor(
-        context: android.content.Context,
         imdbId: String?,
         tmdbId: Int?,
         type: String?
     ): String? {
         imdbId?.let { ImdbTrailerData.imdbIdOf(it) }?.let { return it }
         val tmdb = tmdbId ?: return null
+        // Resolved outside the runCatching: a missing install is not a TMDB
+        // answer, and swallowing it would read as "this title has no trailer".
+        val repository = tmdb()
         return runCatchingCancellable {
-            TmdbRepository.getInstance(context).resolveImdbId(tmdb, type ?: "movie")
+            repository.resolveImdbId(tmdb, type ?: "movie")
         }.getOrNull()?.takeIf { it.isNotBlank() }
     }
 
@@ -683,7 +719,7 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         // The pre-resolve is unconditional too (see resolveImdbSource): the
         // cache is only worth warming when the play will ask for it, and now it
         // always asks.
-        val id = imdbIdFor(context, imdbId, tmdbId, type) ?: return
+        val id = imdbIdFor(imdbId, tmdbId, type) ?: return
         ImdbTrailerResolver.prefetch(id)
     }
 

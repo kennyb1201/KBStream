@@ -121,6 +121,12 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             // be able to name that before it becomes a mystery crash.
             Log.w("APP_START", "NewPipe transport not installed", it)
         }
+        // The trailer ladder's TMDB, same shape and same reason: it runs from
+        // static surfaces (hero focus, detail entry, the player's press) and used
+        // to reach for the accessor (spec 2026-11-22, item 3).
+        runCatching { TrailerPlayerLauncher.install(tmdbRepository) }.onFailure {
+            Log.w("APP_START", "trailer TMDB not installed", it)
+        }
         // YouTube PO-token minting for trailers, installed once with the app
         // context. Nothing is created here: the WebView is built only when a
         // trailer resolve asks for a token, and the youtube_po_token_enabled

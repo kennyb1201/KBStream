@@ -177,10 +177,19 @@ class TrailerImdbWiringContractTest {
         assertTrue(
             "and there must be an id to look up - the caller's own, else TMDB's " +
                 "mapping (most rails are keyed on TMDB, not on tt…)",
-            body.contains("val id = imdbIdFor(context, imdbId, tmdbId, type) ?: return null") &&
+            body.contains("val id = imdbIdFor(imdbId, tmdbId, type) ?: return null") &&
                 body.contains(
-                    "TmdbRepository.getInstance(context).resolveImdbId(tmdb, type ?: \"movie\")"
+                    "val repository = tmdb() return runCatchingCancellable { " +
+                        "repository.resolveImdbId(tmdb, type ?: \"movie\")"
                 )
+        )
+        // The instance is installed by the Application, not fetched here (spec
+        // 2026-11-22, item 3): a getInstance call would be a second repository
+        // with its own caches beside the graph's.
+        assertTrue(
+            "the ladder takes TMDB from install(), like the extractor's transport",
+            body.contains("fun install(tmdbRepository: TmdbRepository)") &&
+                !body.contains("getInstance(")
         )
         assertTrue(
             "a play press gets the four-second service exchange, never the " +
