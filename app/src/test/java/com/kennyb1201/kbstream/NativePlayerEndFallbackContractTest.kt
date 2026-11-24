@@ -136,7 +136,11 @@ class NativePlayerEndFallbackContractTest {
 
     @Test
     fun `a finished session still refuses a play press`() {
-        val toggle = slice(native, "private fun togglePlayPause()", "private fun ")
+        val toggle = slice(
+            native,
+            "private fun togglePlayPause(fromOverlay: Boolean = false)",
+            "private fun "
+        )
         assertTrue(
             "the toggle returns early while the latch is set",
             toggle.contains("if (playbackEndedHandled) return")

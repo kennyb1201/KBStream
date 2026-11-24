@@ -833,6 +833,16 @@ internal class FrameRateMatcher(
      */
     private val isPlaybackActive: () -> Boolean = { true },
     /**
+     * Called when a confirm look is deferred because the picture is stopped
+     * (spec 2026-11-24, F2).
+     *
+     * The start site's tripwire: the three deferred confirms in the 2026-11-24
+     * Stick paste are what proved the stop happened ~1.5s after the mode ask,
+     * and nothing in the ring said who made it. This hook lets the player say
+     * whether any of its own pause paths did.
+     */
+    private val onConfirmDeferred: () -> Unit = {},
+    /**
      * Whether this panel's whole-number rate beats a fractional one that sits
      * closer to the content (audit AFR S1) - 24.000 Hz over 23.976 Hz for film.
      *
@@ -1571,6 +1581,7 @@ internal class FrameRateMatcher(
                 "afr confirm deferred: the picture was stopped (step=$step, serial=$serial)"
             )
             Log.i(TAG, "confirm at step $step deferred: playback is stopped")
+            onConfirmDeferred()
             return
         }
         deferredConfirm = null

@@ -77,7 +77,7 @@ class PlaybackEndedKeyGuardContractTest {
 
     @Test
     fun `native toggle refuses a post-end play press before it flips play state`() {
-        val body = functionBody(NATIVE, "private fun togglePlayPause() {")
+        val body = functionBody(NATIVE, "private fun togglePlayPause(fromOverlay: Boolean = false) {")
         assertTrue(
             "togglePlayPause must return early once the session has ended",
             body.contains("if (playbackEndedHandled) return")
@@ -131,7 +131,7 @@ class PlaybackEndedKeyGuardContractTest {
                     "return\n}\n" +
                     "if (playWhenReady && playbackEndedHandled) return\n" +
                     "if (!playWhenReady) {\n" +
-                    "PlaybackSessionTrace.note(\"pause landed: session-set-play-when-ready\")\n}" +
+                    "notePauseLanded(\"session-set-play-when-ready\")\n}" +
                     "\nsuper.setPlayWhenReady(playWhenReady)\n}"
             )
         )

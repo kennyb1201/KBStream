@@ -74,21 +74,128 @@ class SpuriousPauseAndFocusResumeContractTest {
         )
     }
 
-    // ── F1, Exo: the window opens with the load's first play ───────────────
+    // ── F3 (2026-11-24): the window opens at source-ready ──────────────────
 
+    /**
+     * Round 3 opened the window in `markFirstFrameRendered`. The 2026-11-24
+     * Stick paste is why that was wrong: the load's first-frame callback never
+     * fired, so the window never opened on exactly the load it guards. READY is
+     * the first playable moment and does not depend on a frame being painted;
+     * the pre-frame latch still covers everything before it.
+     */
     @Test
-    fun `Exo opens the window on the load's first play, not on every first frame`() {
+    fun `Exo opens the window at source-ready, not at the first frame`() {
+        val ready = native.slice(
+            "if (firstReadyAtMs == 0L) {",
+            "if (rebufferStartedAtMs != 0L) {"
+        )
+        assertTrue(
+            "the first READY of the load opens the window",
+            ready.contains("armSpuriousPauseGuard()")
+        )
         val firstFrame = block(native, "private fun markFirstFrameRendered() {")
-        val read = firstFrame.indexOf("val firstPlayOfThisLoad = !hasPlayedOnce")
-        val latch = firstFrame.indexOf("hasPlayedOnce = true")
-        val arm = firstFrame.indexOf("if (firstPlayOfThisLoad) armSpuriousPauseGuard()")
-        assertTrue("the load's first play is read from the latch", read >= 0)
-        assertTrue("before the latch is set, which is the whole point", read < latch)
-        assertTrue("and it is what opens the window", arm > latch)
+        assertTrue(
+            "the latch keeps its first-frame meaning",
+            firstFrame.contains("hasPlayedOnce = true")
+        )
+        assertFalse(
+            "and the window no longer hangs off a callback that may never arrive",
+            firstFrame.contains("armSpuriousPauseGuard()")
+        )
         assertTrue(
             "the arm itself is the one place that sets the deadline",
             block(native, "private fun armSpuriousPauseGuard() {")
                 .contains("spuriousPauseGuardUntilMs = SystemClock.elapsedRealtime() + SPURIOUS_PAUSE_GUARD_MS")
+        )
+    }
+
+    /**
+     * Every landing path goes through one recorder, which is what makes the
+     * 2026-11-24 F2 tripwire ("no pause traced") mean what it says.
+     */
+    @Test
+    fun `every pause that lands is recorded through one helper`() {
+        val helper = block(native, "private fun notePauseLanded(path: String) {")
+        assertTrue(
+            "the helper writes the line and clears the tripwire's question",
+            helper.contains("pauseTracedForLoad = true") &&
+                helper.contains("PlaybackSessionTrace.note(\"pause landed: \$path\")")
+        )
+        listOf("toggle", "session", "session-set-play-when-ready", "focus-loss", "media-pause-key")
+            .forEach { path ->
+                assertTrue(
+                    "Exo's $path pause is recorded through it",
+                    native.contains("notePauseLanded(\"$path\")")
+                )
+            }
+        assertEquals(
+            "and no Exo path writes a landed line behind the helper's back",
+            1,
+            Regex(Regex.escape("PlaybackSessionTrace.note(\"pause landed:"))
+                .findAll(native)
+                .count()
+        )
+    }
+
+    /** The tripwire the next field paste is read against (F2). */
+    @Test
+    fun `a stop with no traced pause says so at READY and at the AFR confirm`() {
+        val tripwire = block(native, "private fun noteStoppedWithoutPause(point: String) {")
+        assertTrue(
+            "it stays quiet when this load already named a pauser",
+            tripwire.contains("if (pauseTracedForLoad) return")
+        )
+        assertTrue(
+            "and says exactly what the paste needs to know",
+            tripwire.contains(
+                "PlaybackSessionTrace.note(\"playWhenReady false at \$point, no pause traced\")"
+            )
+        )
+        val ready = native.slice(
+            "if (firstReadyAtMs == 0L) {",
+            "if (rebufferStartedAtMs != 0L) {"
+        )
+        assertTrue(
+            "READY asks it, because playWhenReady is created true for every load but an actor return",
+            ready.contains("noteStoppedWithoutPause(\"READY\")")
+        )
+        val confirmHook = native.slice("onConfirmDeferred = {", "preferWholeRate =")
+        assertTrue(
+            "and so does the matcher's deferred confirm, which is where the paste first saw the stop",
+            confirmHook.contains("noteStoppedWithoutPause(\"AFR confirm\")")
+        )
+        assertTrue(
+            "an actor return is opened paused on purpose, so neither point calls it",
+            native.contains("if (!fromActorReturn) noteStoppedWithoutPause(\"AFR confirm\")") &&
+                native.contains("if (!fromActorReturn && exoPlayer?.playWhenReady == false) {")
+        )
+    }
+
+    /**
+     * F4 asks one question and changes nothing: does `onRenderedFirstFrame`
+     * reach the activity on a Stick? Answered "fired" or "missing after 10s".
+     */
+    @Test
+    fun `the first-frame callback is reported once per load`() {
+        val callback = block(native, "override fun onRenderedFirstFrame() {")
+        assertTrue(
+            "the callback names itself when it arrives",
+            callback.contains("PlaybackSessionTrace.note(\"first-frame callback: fired\")")
+        )
+        val watchdog = block(native, "private val firstFrameCallbackWatchdog = Runnable {")
+        assertTrue(
+            "and the watchdog names its absence instead",
+            watchdog.contains("first-frame callback: missing after 10s") &&
+                watchdog.contains("if (firstFrameCallbackNoted) return@Runnable")
+        )
+        val ready = native.slice(
+            "if (firstReadyAtMs == 0L) {",
+            "if (rebufferStartedAtMs != 0L) {"
+        )
+        assertTrue(
+            "posted from READY, which is the clock the line is measured against",
+            ready.contains("handler.postDelayed(") &&
+                ready.contains("FIRST_FRAME_CALLBACK_DIAGNOSTIC_MS")
         )
     }
 
@@ -360,12 +467,12 @@ class SpuriousPauseAndFocusResumeContractTest {
     fun `landed external pauses are traced on both engines`() {
         assertTrue(
             "Exo's session wrapper names both landed forms",
-            native.contains("pause landed: session\"") &&
-                native.contains("pause landed: session-set-play-when-ready")
+            native.contains("notePauseLanded(\"session\")") &&
+                native.contains("notePauseLanded(\"session-set-play-when-ready\")")
         )
         assertTrue(
             "both focus listeners name a landed pause",
-            native.contains("pause landed: focus-loss") &&
+            native.contains("notePauseLanded(\"focus-loss\")") &&
                 mpv.contains("pause landed: focus-loss")
         )
         assertTrue(

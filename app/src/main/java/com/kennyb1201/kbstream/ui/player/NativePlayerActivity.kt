@@ -357,13 +357,26 @@ internal const val NEXT_UP_COUNTDOWN_SECONDS = 5
  * BEFORE the first frame, so one of those events landed after it, paused the
  * session and nothing ever resumed it - "after initial load of a file it pauses
  * and I have to go and hit play". The window now opens with the load's first
- * play (Exo) / the file open (MPV) and closes ten seconds later, after which a
- * MEDIA_PAUSE pauses exactly as it always did.
+ * READY (Exo, since spec 2026-11-24 F3 - it used to wait for a first frame that
+ * a Stick load never delivered) / the file open (MPV) and closes ten seconds
+ * later, after which a MEDIA_PAUSE pauses exactly as it always did.
  *
  * The cost is one swallowed press inside those ten seconds: a viewer pausing
  * that early presses again and the second press lands.
  */
 internal const val SPURIOUS_PAUSE_GUARD_MS = 10_000L
+
+/**
+ * How long after a load's first READY the first-frame callback gets to arrive
+ * before the trace calls it missing (spec 2026-11-24, F4).
+ *
+ * Ten seconds because that is the stall watchdog's order of magnitude and well
+ * past any healthy ready→firstFrame gap: the 2026-11-24 Stick load reported
+ * `ready→firstFrame=—` at exit, with 894 frames released, so the callback was
+ * never going to arrive one second later. A device that is merely slow still
+ * answers the line with "fired" long before this.
+ */
+private const val FIRST_FRAME_CALLBACK_DIAGNOSTIC_MS = 10_000L
 
 // The Up Next panel now opens before the episode ends, so its auto-advance
 // countdown is held until this close to the end. A touch longer than
@@ -623,6 +636,15 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // backstop must not re-request the surface on a stopped picture
             // (see FrameRateMatcher).
             isPlaybackActive = { exoPlayer?.playWhenReady == true },
+            // F2's second evaluation point: a confirm that found the picture
+            // stopped is exactly the moment the 2026-11-24 paste had no answer
+            // for. Nothing new is traced when a pause was already named.
+            onConfirmDeferred = {
+                // An actor return is OPENED paused on purpose, so its deferred
+                // confirms are the exemption round 3 already established, not a
+                // mystery stop.
+                if (!fromActorReturn) noteStoppedWithoutPause("AFR confirm")
+            },
             // Whether this panel's whole-number rate beats a closer fractional
             // one (audit AFR S1): a device-local answer, read when the matcher is
             // built rather than mid-film.
@@ -3042,11 +3064,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * Until this **elapsed-realtime** instant a MEDIA_PAUSE is treated as the
      * spurious Fire OS kind, or 0 when no window is open (spec 2026-11-17, F1).
      *
-     * Armed by [markFirstFrameRendered] on the first play of a LOAD - the
-     * transition of [hasPlayedOnce], which is what a load resets. A mid-playback
-     * rebuild (sidecar attach, tunnel change, retry) renders its own "first
-     * frame" without being a load, and a viewer who pauses there is a viewer
-     * pausing, so that one does not reopen the window.
+     * Armed by the source's first READY for a load (spec 2026-11-24, F3), no
+     * longer by its first rendered frame. The 2026-11-24 Stick paste is why: the
+     * first-frame callback never fired on that load, so the window never opened
+     * on exactly the load that needed it. READY is the first moment the source is
+     * playable, and it happens whether or not a frame is ever painted. The
+     * pre-frame half of the guard ([hasPlayedOnce]) still covers everything
+     * before it, so the two halves together span the whole load.
      */
     private var spuriousPauseGuardUntilMs = 0L
 
@@ -3062,11 +3086,68 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     /**
-     * Opens the spurious-pause window for the load that just started playing.
+     * Whether any pause has been traced for this load (spec 2026-11-24, F2).
+     *
+     * Every path that lands a pause writes through [notePauseLanded], so this is
+     * the answer to "did the app pause this itself?". It exists for the
+     * tripwire: the 2026-11-24 Stick paste showed a load stopped ~1.5s in with
+     * ZERO pause lines anywhere, which meant the stop arrived from outside every
+     * traced path - and nothing in the ring could say so.
+     */
+    private var pauseTracedForLoad = false
+
+    /** The one way a pause is recorded, so the tripwire cannot miss one. */
+    private fun notePauseLanded(path: String) {
+        pauseTracedForLoad = true
+        PlaybackSessionTrace.note("pause landed: $path")
+    }
+
+    /**
+     * One line, per evaluation point, when `playWhenReady` is already false and
+     * no pause was traced for this load (F2).
+     *
+     * The next paste settles the question either way: no line means a traced
+     * path did it (F1) or the guards swallowed it; a line means the stop came
+     * from anywhere the app can pause - OS-level focus at the MediaSession
+     * layer, a CEC event this process never sees, a surface teardown - and the
+     * next fix belongs at that layer instead of another guard.
+     */
+    private fun noteStoppedWithoutPause(point: String) {
+        if (pauseTracedForLoad) return
+        PlaybackSessionTrace.note("playWhenReady false at $point, no pause traced")
+    }
+
+    /**
+     * Whether this load's first-frame trace line has been written (F4).
+     *
+     * The pair is "fired" or "missing after 10s", never both and never neither,
+     * so the next paste can answer the one question round 3 could not: does
+     * `onRenderedFirstFrame` reach this activity on a Stick at all?
+     */
+    private var firstFrameCallbackNoted = false
+
+    /**
+     * The F4 half that has to fire when the callback does not.
+     *
+     * Posted at the first READY of a load, cleared with the rest of [handler]'s
+     * work on teardown. No polling: one line, ten seconds after the source was
+     * ready, and only if the callback stayed silent.
+     */
+    private val firstFrameCallbackWatchdog = Runnable {
+        if (firstFrameCallbackNoted) return@Runnable
+        firstFrameCallbackNoted = true
+        PlaybackSessionTrace.note("first-frame callback: missing after 10s")
+    }
+
+    /**
+     * Opens the spurious-pause window for the source that just became ready.
      *
      * One place, so the two MEDIA_PAUSE arms and the log-free predicate cannot
-     * disagree about when the window is: it is the load's first play plus
-     * [SPURIOUS_PAUSE_GUARD_MS].
+     * disagree about when the window is: it is the load's first READY plus
+     * [SPURIOUS_PAUSE_GUARD_MS] (F3). A rebuild mid-playback re-READYs, but
+     * [hasPlayedOnce] is already true there, so the window it re-opens is the
+     * load's own - which is why the window is limited by the pre-frame latch in
+     * the guarded paths and not here.
      */
     private fun armSpuriousPauseGuard() {
         spuriousPauseGuardUntilMs = SystemClock.elapsedRealtime() + SPURIOUS_PAUSE_GUARD_MS
@@ -5452,7 +5533,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 // chrome's; see PlayerChrome.)
                 KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
                     if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                        togglePlayPause()
+                        // The overlay's own OK press, so it is the viewer's
+                        // intent and not guarded (see [togglePlayPause]).
+                        togglePlayPause(fromOverlay = true)
                     }
                     true
                 }
@@ -5814,13 +5897,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     //
                     // F1: those events keep coming AFTER the first frame too,
                     // which is why the guard is a ten-second window from the
-                    // load's first play rather than the first-frame latch alone
+                    // load's first READY rather than the first-frame latch alone
                     // (see [spuriousPauseGuardActive]).
                     if (!hasPlayedOnce || spuriousPauseGuardActive()) {
                         noteSpuriousPauseSwallowed("media-pause-key")
                         true
                     } else {
-                        PlaybackSessionTrace.note("pause landed: media-pause-key")
+                        notePauseLanded("media-pause-key")
                         exoPlayer?.pause(); showControls(); true
                     }
                 }
@@ -6014,10 +6097,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 // MEDIA_PAUSE during the initial load (Fire TV emits them around
                 // CEC / voice-remote events) would otherwise park the player on
                 // frame 1 with nothing to resume it - and F1 keeps swallowing
-                // them for the load's first ten seconds of play, because the
-                // events do not stop at the first frame.
+                // them for the load's first ten seconds after READY, because
+                // the events do not stop at the first frame.
                 if (hasPlayedOnce && !spuriousPauseGuardActive()) {
-                    PlaybackSessionTrace.note("pause landed: media-pause-key")
+                    notePauseLanded("media-pause-key")
                     exoPlayer?.pause(); showControls()
                 } else {
                     noteSpuriousPauseSwallowed("media-pause-key")
@@ -6522,6 +6605,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             kind = launchSourceKind()
         )
         firstReadyAtMs = 0L
+        // Per-attempt, with the rest of the load's state (F2/F4): a pause traced
+        // during the previous attempt says nothing about this one, and neither
+        // does its first-frame line.
+        pauseTracedForLoad = false
+        firstFrameCallbackNoted = false
+        handler.removeCallbacks(firstFrameCallbackWatchdog)
         blackVideoNoticeShown = false
         // Invalidate any black-video recovery scheduled for the previous
         // player instance. Without this, a watchdog armed on the old player
@@ -7506,7 +7595,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         noteSpuriousPauseSwallowed("session")
                         return
                     }
-                    PlaybackSessionTrace.note("pause landed: session")
+                    notePauseLanded("session")
                     super.pause()
                 }
 
@@ -7519,7 +7608,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     }
                     if (playWhenReady && playbackEndedHandled) return
                     if (!playWhenReady) {
-                        PlaybackSessionTrace.note("pause landed: session-set-play-when-ready")
+                        notePauseLanded("session-set-play-when-ready")
                     }
                     super.setPlayWhenReady(playWhenReady)
                 }
@@ -7663,6 +7752,33 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                                 firstReadyAtMs - startupTraceStartMs
                             )
                         }
+                        // F3: the spurious-pause window opens at SOURCE-READY,
+                        // not at the first painted frame. The 2026-11-24 Stick
+                        // load never reached a first-frame callback (see the F4
+                        // line below), so a window anchored there never opened on
+                        // exactly the loads the guard exists for. The pre-frame
+                        // latch still covers everything before this point.
+                        armSpuriousPauseGuard()
+                        // F2: the tripwire. playWhenReady is created true for
+                        // every load but an actor return, so false here means
+                        // something stopped the picture before it ever became
+                        // ready - and if nothing traced a pause, the stop came
+                        // from outside every path the app can see.
+                        if (!fromActorReturn && exoPlayer?.playWhenReady == false) {
+                            noteStoppedWithoutPause("READY")
+                        }
+                        // F4: one line per load, at whichever comes first - the
+                        // first-frame callback firing, or this. It is a
+                        // question, not a fix: the callback is left alone. The
+                        // answer decides whether the clearlogo's second repaint
+                        // (and the splash hide, and this latch) need a trigger
+                        // that does not depend on a callback the Stick may never
+                        // deliver.
+                        handler.removeCallbacks(firstFrameCallbackWatchdog)
+                        handler.postDelayed(
+                            firstFrameCallbackWatchdog,
+                            FIRST_FRAME_CALLBACK_DIAGNOSTIC_MS
+                        )
                     }
                     if (rebufferStartedAtMs != 0L) {
                         val rebufferStartMs = rebufferStartedAtMs
@@ -7804,6 +7920,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
 
         override fun onRenderedFirstFrame() {
+            // F4: the callback DID arrive for this load, so the watchdog stands
+            // down. Recorded here rather than in markFirstFrameRendered, which
+            // the P5 path also calls: the question is whether THIS callback
+            // fires, not whether some path rendered a frame.
+            if (!firstFrameCallbackNoted) {
+                firstFrameCallbackNoted = true
+                PlaybackSessionTrace.note("first-frame callback: fired")
+            }
             markFirstFrameRendered()
         }
 
@@ -8931,13 +9055,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // setting it on isPlaying turned any post-audio buffering into the
         // small-spinner branch instead of the full splash.
         //
-        // ...and its transition - false to true - is this load's first play, so
-        // that is where the spurious-pause window opens (F1). Reading it before
-        // the write is the whole point: a rebuilt player renders a "first frame"
-        // mid-episode, and the latch is already true there.
-        val firstPlayOfThisLoad = !hasPlayedOnce
+        // The latch keeps its first-frame meaning and nothing else moved with
+        // it: the spurious-pause window used to open here too, and that is what
+        // left the guard dead on a load whose first-frame callback never fired
+        // (spec 2026-11-24, F3). It opens at READY now - this is only the
+        // pre-frame half's other end.
         hasPlayedOnce = true
-        if (firstPlayOfThisLoad) armSpuriousPauseGuard()
         // Dolby Vision passthrough that actually renders is proof this box can
         // do it, so forget any recorded failure. A track that still carries the
         // dvhe/dvh1 label arrived as Dolby Vision (the extractor did not strip
@@ -12373,7 +12496,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                                 noteSpuriousPauseSwallowed("focus-loss")
                             } else {
                                 pausedByFocusLoss = true
-                                PlaybackSessionTrace.note("pause landed: focus-loss")
+                                notePauseLanded("focus-loss")
                                 player.pause()
                             }
                         }
@@ -12405,20 +12528,30 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         audioFocusRequest = null
     }
 
-    private fun togglePlayPause() {
+    /**
+     * The play/pause toggle.
+     *
+     * [fromOverlay] marks the two presses that are the VIEWER's own: the
+     * overlay's play/pause button ([onChromePlayPause]) and OK on the seekbar.
+     * Those are exempt from the spurious-pause guard - round 3's acceptance says
+     * a deliberate press inside the window still pauses, and a viewer who presses
+     * pause means it.
+     *
+     * Every other path is guarded (spec 2026-11-24, F1). This function used to be
+     * the one pause path with neither a guard nor a trace line, and the Stick
+     * paste that commissioned this spec is a load stopped ~1.5s in with no
+     * traced pauser: whichever caller reached it, the stop could not be named.
+     * Function-level rather than per-arm on purpose - the MEDIA_PLAY_PAUSE arms
+     * already guard (round-3 F3, kept as the outer check), and a guard in the
+     * one function every pause path funnels through cannot be walked around.
+     */
+    private fun togglePlayPause(fromOverlay: Boolean = false) {
         exoPlayer?.let {
             // A finished session stays finished: a play press after the end
             // (stray remote button, Bluetooth remote, assistant) must not
             // restart the episode from the top. Replay is an explicit seek or a
             // fresh session, not a toggle.
             if (playbackEndedHandled) return
-            // A press while a large seek is waiting for its buffer is the viewer
-            // saying what they want now: it wins, and the hold must not resume
-            // the player behind it later.
-            cancelLargeSeekHold()
-            // The viewer has an opinion again, so those are the terms: a focus
-            // gain must never undo a pause this press made (Player M3).
-            pausedByFocusLoss = false
             // playWhenReady, not isPlaying: they disagree while the player is
             // BUFFERING (playWhenReady=true, isPlaying=false). Reading isPlaying
             // there flipped playWhenReady from true to TRUE - a no-op - and took
@@ -12426,8 +12559,27 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // and the pause-point saveProgress never ran. The scrub code already
             // captures playWhenReady for exactly this reason.
             val wasPlaying = it.playWhenReady
+            // The pause direction is the guarded one; toggling TO play always
+            // passes. Nothing below this line runs on a swallowed press - no
+            // playWhenReady flip, no pausedByFocusLoss reset, no overlay work -
+            // which is what keeps a spurious event from leaving a visible mark.
+            if (wasPlaying && !fromOverlay && (!hasPlayedOnce || spuriousPauseGuardActive())) {
+                noteSpuriousPauseSwallowed("toggle")
+                return
+            }
+            // A press while a large seek is waiting for its buffer is the viewer
+            // saying what they want now: it wins, and the hold must not resume
+            // the player behind it later.
+            cancelLargeSeekHold()
+            // The viewer has an opinion again, so those are the terms: a focus
+            // gain must never undo a pause this press made (Player M3).
+            pausedByFocusLoss = false
             it.playWhenReady = !wasPlaying
             if (wasPlaying) {
+                // A pause that got past the guard, named like every other one
+                // (round-3 F4's rule, extended here): from now on no pause in a
+                // session can happen without a line saying which path made it.
+                notePauseLanded("toggle")
                 // Pausing — keep overlay visible
                 showControls()
                 removeAutoHide()
@@ -17721,7 +17873,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         return if (raw > 0L && raw != C.TIME_UNSET) raw else 0L
     }
 
-    override fun onChromePlayPause() = togglePlayPause()
+    override fun onChromePlayPause() = togglePlayPause(fromOverlay = true)
 
     override fun onChromeSeekTo(positionMs: Long) {
         // The bar's release is a landing exactly like [landScrub]'s: recorded

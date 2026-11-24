@@ -66,7 +66,11 @@ class AudioFocusParityContractTest {
 
     @Test
     fun `a permanent loss is remembered and a gain resumes exactly that pause`() {
-        val focus = slice(native, "private fun requestAudioFocus()", "private fun togglePlayPause()")
+        val focus = slice(
+            native,
+            "private fun requestAudioFocus()",
+            "private fun togglePlayPause("
+        )
         assertTrue(
             "a loss that stops a PLAYING session is remembered, once the load guard " +
                 "has closed",
@@ -120,7 +124,11 @@ class AudioFocusParityContractTest {
 
     @Test
     fun `the viewer's own press outranks a focus gain`() {
-        val toggle = slice(native, "private fun togglePlayPause()", "private fun ")
+        val toggle = slice(
+            native,
+            "private fun togglePlayPause(fromOverlay: Boolean = false)",
+            "private fun "
+        )
         assertTrue(
             "a play/pause press clears the debt, so a later gain cannot undo the viewer",
             toggle.contains("pausedByFocusLoss = false")

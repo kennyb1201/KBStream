@@ -97,7 +97,10 @@ class LargeSeekResumeContractTest {
     fun `a press or a new seek wins over a running hold`() {
         assertTrue(
             "play/pause wins immediately",
-            bodyOf("private fun togglePlayPause()", "private fun emptyPickerMessage(")
+            bodyOf(
+                "private fun togglePlayPause(fromOverlay: Boolean = false)",
+                "private fun emptyPickerMessage("
+            )
                 .contains("cancelLargeSeekHold()")
         )
         assertTrue(
