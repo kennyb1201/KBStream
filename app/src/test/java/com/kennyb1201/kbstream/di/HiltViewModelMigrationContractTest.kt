@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.di
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -286,6 +287,29 @@ class HiltViewModelMigrationContractTest {
                 !Regex("\\w+Repository\\.getInstance\\(").containsMatchIn(activity)
             )
         }
+    }
+
+    /**
+     * The search activity resolves a spoken title before any screen exists, so it
+     * has no view model to hoist TMDB into either - it is an entry point of its
+     * own. Pinned for the same reason as the players: an accessor here is
+     * invisible in a diff and would hand the pre-screen lookup a second instance.
+     */
+    @Test
+    fun `the search activity is an injection point too`() {
+        val activity = source("com/kennyb1201/kbstream/ui/search/VoiceSearchActivity.kt")
+        assertTrue(
+            "the voice-search activity is a Hilt entry point",
+            activity.contains("@AndroidEntryPoint\nclass VoiceSearchActivity")
+        )
+        assertTrue(
+            "it is handed TMDB instead of constructing it",
+            activity.contains("@Inject\n    lateinit var tmdbRepository: TmdbRepository")
+        )
+        assertFalse(
+            "it constructs nothing of its own",
+            Regex("TmdbRepository\\.getInstance\\(").containsMatchIn(activity)
+        )
     }
 
     private fun source(path: String): String {

@@ -10,10 +10,12 @@ import com.kennyb1201.kbstream.MainActivity
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
+import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import javax.inject.Inject
 
 /**
  * Receives a query handed over by the system's search surface — the TV remote's
@@ -45,7 +47,17 @@ import kotlinx.coroutines.withTimeoutOrNull
  * it finishes immediately, and for a play it stays alive only for as long as the
  * lookup takes (bounded by [LOOKUP_TIMEOUT_MS]).
  */
+@AndroidEntryPoint
 class VoiceSearchActivity : ComponentActivity() {
+
+    /**
+     * Injected rather than fetched: this activity resolves a spoken title on a
+     * background dispatcher before any screen exists, so it has no view model
+     * to hoist its collaborator into. An accessor here would be a second
+     * TmdbRepository the moment the graph already holds one.
+     */
+    @Inject
+    lateinit var tmdbRepository: TmdbRepository
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -136,7 +148,7 @@ class VoiceSearchActivity : ComponentActivity() {
         lifecycleScope.launch {
             val target = withTimeoutOrNull(LOOKUP_TIMEOUT_MS) {
                 withContext(Dispatchers.IO) {
-                    val tmdb = TmdbRepository.getInstance(applicationContext)
+                    val tmdb = tmdbRepository
                     // The external-id lookup wants the "series" spelling for the
                     // second kind, which is the app's own name for it everywhere
                     // history and scrobbling are concerned.
@@ -172,7 +184,7 @@ class VoiceSearchActivity : ComponentActivity() {
     private data class PlayTarget(val type: String, val id: String)
 
     private suspend fun resolveSpokenTitle(query: String): PlayTarget? {
-        val tmdb = TmdbRepository.getInstance(applicationContext)
+        val tmdb = tmdbRepository
         val movies =
             runCatchingCancellable { tmdb.searchMovies(query) }.getOrDefault(emptyList())
         val shows =
