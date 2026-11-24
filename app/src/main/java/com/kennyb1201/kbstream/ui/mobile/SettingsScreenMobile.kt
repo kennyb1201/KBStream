@@ -33,7 +33,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
-import androidx.compose.material3.SliderState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -3830,43 +3829,58 @@ private fun AccentSliderMobile(
         // The belt to the track slot's braces: the slider's own 48dp box cannot
         // reach the label row, whatever a launcher's font scale does to it.
         Spacer(modifier = Modifier.height(6.dp))
-        // The custom `track` slot lives on the STATE-based overload; the
-        // value-based one takes no track, and calling it with one is what did
-        // not compile. The state is remembered and follows the outside value,
-        // so a pref changed elsewhere still moves the thumb, while a drag stays
-        // one write at the end (see [onFinished]).
-        val sliderState = remember { SliderState(value = value, valueRange = valueRange) }
-        LaunchedEffect(value) {
-            if (sliderState.value != value) sliderState.value = value
+        // The gradient is drawn BEHIND the slider and the slider's own tracks
+        // are transparent, so the thin bar is what the viewer sees while the
+        // Slider keeps the 48dp touch target Material asks for. It is NOT the
+        // state-based overload's `track` slot: that overload is the one that
+        // did not compile here (the value-based Slider takes no track), and the
+        // bar's box is separate from the slider's layout either way, so the
+        // gradient can never inherit the touch target and cannot squash the
+        // label row above it again.
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    // Half the thumb at each end, which is the inset Material's
+                    // own track slot applies: at 0% and 100% the thumb is fully
+                    // on screen instead of half over the end cap.
+                    .padding(horizontal = AccentSliderThumbRadius)
+                    .height(AccentSliderTrackHeight)
+                    .background(trackBrush, KBShapePill)
+            )
+            Slider(
+                value = value,
+                onValueChange = onValueChange,
+                onValueChangeFinished = onFinished,
+                valueRange = valueRange,
+                // Material's own tracks are transparent: the gradient behind IS
+                // the track. The thumb stays opaque so it reads against every
+                // hue.
+                colors = SliderDefaults.colors(
+                    thumbColor = KBTextHi,
+                    activeTrackColor = Color.Transparent,
+                    inactiveTrackColor = Color.Transparent
+                ),
+                modifier = Modifier.fillMaxWidth()
+            )
         }
-        Slider(
-            state = sliderState,
-            onValueChange = onValueChange,
-            onValueChangeFinished = onFinished,
-            // Material's own tracks are transparent: the gradient below IS the
-            // track. The thumb stays opaque so it reads against every hue.
-            colors = SliderDefaults.colors(
-                thumbColor = KBTextHi,
-                activeTrackColor = Color.Transparent,
-                inactiveTrackColor = Color.Transparent
-            ),
-            track = { _ ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(AccentSliderTrackHeight)
-                        .background(trackBrush, KBShapePill)
-                )
-            },
-            // No forced height: the Slider keeps the touch target Material asks
-            // for, and the thin bar is what gets drawn inside it.
-            modifier = Modifier.fillMaxWidth()
-        )
     }
 }
 
 /** The mixing bars' visible thickness, well inside Material's 48dp touch area. */
 private val AccentSliderTrackHeight = 12.dp
+
+/**
+ * Half the thumb, the room the gradient bar leaves at each end.
+ *
+ * The thumb is 20dp across in this theme's Material defaults, so the bar starts
+ * and ends 10dp in - the same inset the slider's own track slot would apply,
+ * which is what keeps the thumb from hanging over the end caps at 0% and 100%.
+ */
+private val AccentSliderThumbRadius = 10.dp
 
 /**
  * The touch twin of `ui/settings/DialogueBoostRow.kt`: a level, minus and plus,
