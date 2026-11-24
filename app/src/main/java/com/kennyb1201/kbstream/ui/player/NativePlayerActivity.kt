@@ -137,6 +137,7 @@ import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import coil3.load
 import com.kennyb1201.kbstream.ui.components.logoRequest
+import com.kennyb1201.kbstream.ui.components.tracedLogoRequest
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -3675,7 +3676,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 engine = "exo",
                 carriedLogo = !clearLogoUrl.isNullOrBlank(),
                 parentId = parentId,
-                parentType = parentType
+                parentType = parentType,
+                // The shape, not the URL: a bare path, the image host, and a
+                // stale host are three different field reports (F2).
+                carriedUrl = clearLogoUrl
             )
         )
     }
@@ -3725,9 +3729,21 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * policy pass runs more than once.
      */
     private fun applyClearLogo(url: String) {
-        clearLogo.load(logoRequest(clearLogo.context, url))
+        clearLogo.load(
+            tracedLogoRequest(
+                clearLogo.context,
+                url,
+                surface = "chrome"
+            ) { restoreChromeTitleText() }
+        )
         clearLogo.visibility = View.VISIBLE
-        splashClearLogo.load(logoRequest(splashClearLogo.context, url))
+        splashClearLogo.load(
+            tracedLogoRequest(
+                splashClearLogo.context,
+                url,
+                surface = "splash"
+            )
+        )
         splashClearLogo.visibility = View.VISIBLE
         itemNameView.visibility = View.GONE
         splashItemName?.visibility = View.GONE
@@ -5274,6 +5290,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
         // Populate header info
         updateHeaderInfo()
+        // The chrome's own paint of the same facts - MPV's setupControls() does
+        // this, and this engine had no such call anywhere (spec 2026-11-23, F1):
+        // the title block was painted at setup by updateHeaderInfo() and then
+        // never repainted, so anything that reset it after setup left the plain
+        // name standing over a wordmark the launch did carry.
+        chrome?.refreshTitle()
         updateSettingsPanelState()
         // Match the end-of-episode popups to the AMOLED / pure-black toggles.
         applyPlayerPanelTheme()
@@ -8894,6 +8916,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         if (splashContainer.visibility == View.VISIBLE) {
             hideSplash()
         }
+        // The second of MPV's three repaints: the first frame is when the splash
+        // stops covering the chrome, and the logo load may only have landed
+        // while it was up (spec 2026-11-23, F1).
+        chrome?.refreshTitle()
         // The "player has started" latch also belongs to the first frame:
         // setting it on isPlaying turned any post-audio buffering into the
         // small-spinner branch instead of the full splash.
@@ -9579,11 +9605,27 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
 
         if (resolvedLogoUrl != null) {
-            clearLogo.load(logoRequest(clearLogo.context, resolvedLogoUrl))
+            // Traced, so a dead URL stops looking like a title block nobody
+            // painted (spec 2026-11-23, F2) - and a failed chrome load restores
+            // the text instead of leaving the slot empty (F3).
+            clearLogo.load(
+                tracedLogoRequest(
+                    clearLogo.context,
+                    resolvedLogoUrl,
+                    surface = "chrome"
+                ) { restoreChromeTitleText() }
+            )
             clearLogo.visibility = View.VISIBLE
             itemNameView.visibility = View.GONE
-            // Also load into splash overlay
-            splashClearLogo.load(logoRequest(splashClearLogo.context, resolvedLogoUrl))
+            // Also load into splash overlay. The splash keeps its own fallback
+            // (showSplashTitleFallback), so the trace line is the whole ask.
+            splashClearLogo.load(
+                tracedLogoRequest(
+                    splashClearLogo.context,
+                    resolvedLogoUrl,
+                    surface = "splash"
+                )
+            )
         } else if (itemName.isNotBlank()) {
             clearLogo.visibility = View.GONE
             itemNameView.text = itemName
@@ -9633,6 +9675,24 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             overviewText.visibility = View.VISIBLE
         }
         renderSourceBadges()
+    }
+
+    /**
+     * The chrome's text fallback for a logo load that FAILED (spec 2026-11-23,
+     * F3).
+     *
+     * The same state [updateHeaderInfo]'s no-logo case paints: the item name
+     * where the wordmark would have been. Without it a failed load left the
+     * logo slot empty AND the name still GONE, so the header showed nothing at
+     * all - and the paste said only `extra=present`. The splash keeps its own
+     * fallback ([showSplashTitleFallback]).
+     */
+    private fun restoreChromeTitleText() {
+        if (itemName.isBlank()) return
+        clearLogo.setImageDrawable(null)
+        clearLogo.visibility = View.GONE
+        if (itemNameView.text?.toString() != itemName) itemNameView.text = itemName
+        itemNameView.visibility = View.VISIBLE
     }
 
     /**
@@ -17192,6 +17252,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         } else {
             recreatePlayer(settleMs = SOURCE_SWITCH_SETTLE_MS)
         }
+        // The third of MPV's three repaints, and the one this engine's source
+        // switch was missing entirely (spec 2026-11-23, F1): a switch is a new
+        // source, and the title block has to be told so from the live facts
+        // rather than trusting whatever the setup-time load left behind.
+        // Posted, because the error ladder can switch from a player callback.
+        runOnUiThread { chrome?.refreshTitle() }
     }
 
     /**

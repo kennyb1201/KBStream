@@ -93,7 +93,7 @@ class PlayerClearLogoLadderTraceTest {
         assertEquals("a TMDB hit must not cost a fanart call", 0, fanartCalls)
         assertLadder(
             listOf(
-                "LOGO: start engine=exo extra=blank parentId=12345 parentType=series",
+                "LOGO: start engine=exo extra=blank parentId=12345 parentType=series host=none shape=none",
                 "LOGO: tmdb hit source=mem detailId=42 logoPath=/cops.png",
                 "LOGO: applied $LOGO_BASE/cops.png"
             )
@@ -125,7 +125,7 @@ class PlayerClearLogoLadderTraceTest {
         assertEquals("fanart's TV endpoint is keyed by the TVDB twin, not the TMDB id", 99, claimedId)
         assertLadder(
             listOf(
-                "LOGO: start engine=exo extra=blank parentId=12345 parentType=series",
+                "LOGO: start engine=exo extra=blank parentId=12345 parentType=series host=none shape=none",
                 "LOGO: tmdb hit source=disk detailId=42 logoPath=none",
                 "LOGO: tvdb 99 provenNone=false",
                 "LOGO: fanart https://assets.fanart.tv/cops.png reason=hit",
@@ -151,7 +151,7 @@ class PlayerClearLogoLadderTraceTest {
         assertNull(url)
         assertLadder(
             listOf(
-                "LOGO: start engine=exo extra=blank parentId=12345 parentType=series",
+                "LOGO: start engine=exo extra=blank parentId=12345 parentType=series host=none shape=none",
                 "LOGO: tmdb hit source=net detailId=42 logoPath=none",
                 "LOGO: tvdb none provenNone=false",
                 "LOGO: fanart none reason=no-twin",
@@ -212,7 +212,7 @@ class PlayerClearLogoLadderTraceTest {
 
         assertLadder(
             listOf(
-                "LOGO: start engine=exo extra=blank parentId=12345 parentType=series",
+                "LOGO: start engine=exo extra=blank parentId=12345 parentType=series host=none shape=none",
                 "LOGO: tmdb miss source=none detailId=none logoPath=none reason=call-failed",
                 "LOGO: fanart none reason=no-twin",
                 "LOGO: none text-stands"
@@ -246,23 +246,59 @@ class PlayerClearLogoLadderTraceTest {
             engine = "mpv",
             carriedLogo = true,
             parentId = "tt1234567",
-            parentType = "series"
+            parentType = "series",
+            carriedUrl = "https://image.tmdb.org/t/p/w780/cops.png"
         )
 
         assertEquals(
             "a launch carrying its own logo still names what it carried, and " +
                 "the id must appear unnormalized - that is what tells an IMDb id " +
                 "apart from a TMDB one in the paste",
-            "LOGO: start engine=mpv extra=present parentId=tt1234567 parentType=series",
+            "LOGO: start engine=mpv extra=present parentId=tt1234567 parentType=series " +
+                "host=image.tmdb.org shape=/t/p/w780/cops.png",
             line
         )
+    }
+
+    /**
+     * The carried URL's shape is the other half of F2: `extra=present` used to
+     * be the whole answer, so a bare path, the image host and a stale URL on
+     * somebody else's host all printed the same line.
+     */
+    @Test
+    fun `a carried URL is named by host and path, and its query never prints`() {
+        val full = logoLaunchShape(
+            "https://image.tmdb.org/t/p/w780/cops.png?token=SECRET&x=1#frag"
+        )
+        assertEquals("image.tmdb.org", full.host)
+        assertEquals("/t/p/w780/cops.png", full.path)
+
+        // The shape a Continue Watching launch carries: the app prefixes it.
+        val bare = logoLaunchShape("/t/p/w780/cops.png")
+        assertEquals("none", bare.host)
+        assertEquals("/t/p/w780/cops.png", bare.path)
+
+        // A stale URL from some other host has to read as a different line.
+        assertEquals(
+            "cdn.somewhere-else.example",
+            logoLaunchShape("https://cdn.somewhere-else.example/a/b/c.png").host
+        )
+
+        assertEquals(LogoLaunchShape("none", "none"), logoLaunchShape(null))
+        assertEquals(LogoLaunchShape("none", "none"), logoLaunchShape("  "))
+    }
+
+    @Test
+    fun `a long carried path is bounded, so a paste never carries a URL`() {
+        val long = "/" + "a".repeat(200)
+        assertEquals(LOGO_SHAPE_MAX_CHARS, logoLaunchShape(long).path.length)
     }
 
     @Test
     fun `a blank launch id is written as blank, not as an empty field`() {
         assertTrue(
             logoLaunchLine("exo", carriedLogo = false, parentId = "", parentType = "")
-                .endsWith("parentId=blank parentType=blank")
+                .contains("parentId=blank parentType=blank ")
         )
     }
 

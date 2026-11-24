@@ -4,6 +4,8 @@ import android.content.Context
 import coil3.request.ImageRequest
 import coil3.request.allowRgb565
 import coil3.request.crossfade
+import coil3.request.listener
+import com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace
 
 /**
  * The one place a logo request is allowed to be built.
@@ -40,3 +42,37 @@ internal fun logoRequest(
     if (crossfadeMs != null) builder.crossfade(crossfadeMs)
     return builder.build()
 }
+
+/**
+ * A logo request that says out loud whether it loaded (spec 2026-11-23, F2).
+ *
+ * A dead logo URL and a title block that was simply never painted looked
+ * identical in a field paste: both were "no logo on screen" with no `LOGO:`
+ * line after the launch one. Every logo load into a player title slot goes
+ * through here now, so one line names the surface and the outcome - and on a
+ * failure [onFailure] runs, which is how the chrome restores its text instead
+ * of leaving an empty slot (F3).
+ *
+ * Coil's own error travels as its class name: one line, no stack, no URL.
+ */
+internal fun tracedLogoRequest(
+    context: Context,
+    url: String?,
+    surface: String,
+    onFailure: (() -> Unit)? = null
+): ImageRequest =
+    logoRequest(context, url).newBuilder().listener(
+        onSuccess = { _, _ ->
+            PlaybackSessionTrace.note("LOGO: loaded $surface")
+        },
+        onError = { _, result ->
+            PlaybackSessionTrace.note(
+                "LOGO: load-failed $surface ${logoLoadFailureReason(result.throwable)}"
+            )
+            onFailure?.invoke()
+        }
+    ).build()
+
+/** One token for a Coil failure: the throwable's own name, never its message. */
+internal fun logoLoadFailureReason(throwable: Throwable): String =
+    throwable.javaClass.simpleName.takeIf { it.isNotBlank() } ?: "unknown"

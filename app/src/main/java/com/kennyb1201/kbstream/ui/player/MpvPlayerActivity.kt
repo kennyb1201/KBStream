@@ -7393,7 +7393,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 engine = "mpv",
                 carriedLogo = !clearLogoUrl.isNullOrBlank(),
                 parentId = parentId,
-                parentType = parentType
+                parentType = parentType,
+                // The host and path shape, so both engines' lines answer the
+                // same field question (spec 2026-11-23, F2).
+                carriedUrl = clearLogoUrl
             )
         )
     }

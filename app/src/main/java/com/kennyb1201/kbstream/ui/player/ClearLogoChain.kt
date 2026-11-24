@@ -48,11 +48,49 @@ internal fun logoLaunchLine(
     engine: String,
     carriedLogo: Boolean,
     parentId: String,
-    parentType: String
-): String =
-    "LOGO: start engine=$engine extra=${if (carriedLogo) "present" else "blank"} " +
+    parentType: String,
+    carriedUrl: String? = null
+): String {
+    val shape = logoLaunchShape(carriedUrl)
+    return "LOGO: start engine=$engine extra=${if (carriedLogo) "present" else "blank"} " +
         "parentId=${parentId.ifBlank { "blank" }} " +
-        "parentType=${parentType.ifBlank { "blank" }}"
+        "parentType=${parentType.ifBlank { "blank" }} " +
+        "host=${shape.host} shape=${shape.path}"
+}
+
+/**
+ * The carried logo URL in the two pieces a paste has to be able to tell apart:
+ * the host it names and the path it points at.
+ *
+ * A launch can carry a bare TMDB path (`/abc.png`, the shape the app prefixes
+ * itself), a full URL on the image host, or a stale URL on some other host -
+ * and before this every one of them printed as the same `extra=present`. The
+ * query string is dropped and the path is bounded, because a signed URL's
+ * query is a token and belongs in no diagnostics report.
+ */
+internal data class LogoLaunchShape(val host: String, val path: String)
+
+/** Bound on [LogoLaunchShape.path]: enough to name the file, never a paste. */
+internal const val LOGO_SHAPE_MAX_CHARS = 80
+
+internal fun logoLaunchShape(rawUrl: String?): LogoLaunchShape {
+    val url = rawUrl?.trim().orEmpty()
+    if (url.isEmpty()) return LogoLaunchShape(host = "none", path = "none")
+    val bare = url.substringBefore('?').substringBefore('#')
+    val uri = runCatching { java.net.URI(bare) }.getOrNull()
+    val host = uri?.host?.takeIf { it.isNotBlank() }
+    val path = if (host != null) {
+        uri?.rawPath?.takeIf { it.isNotBlank() } ?: "/"
+    } else {
+        // A bare path, or a URL the parser refused: keep what the launch
+        // carried minus the scheme, which is the part that identifies the file.
+        bare.substringAfter("://", bare)
+    }
+    return LogoLaunchShape(
+        host = host ?: "none",
+        path = path.take(LOGO_SHAPE_MAX_CHARS)
+    )
+}
 
 /**
  * What the TMDB step answered, in the shape the ladder reads.

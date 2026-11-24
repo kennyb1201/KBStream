@@ -10,7 +10,7 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import coil3.load
-import com.kennyb1201.kbstream.ui.components.logoRequest
+import com.kennyb1201.kbstream.ui.components.tracedLogoRequest
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.format.DateFormats
@@ -421,14 +421,34 @@ class PlayerChrome(
         }
     }
 
-    /** Re-paints the title block from the host's current facts. */
+    /**
+     * Re-paints the title block from the host's current facts.
+     *
+     * The load is traced, and a failure falls back to the name text (spec
+     * 2026-11-23, F2/F3). This is the call the Exo player had nowhere, so it is
+     * also the only place a repaint's logo actually loads - a dead URL here used
+     * to leave the wordmark slot empty with the title still hidden, which is
+     * the silent blank the field paste could not distinguish from "never
+     * painted".
+     */
     fun refreshTitle() {
         val info = host.chromeTitleInfo()
 
         val logoUrl = info.clearLogoUrl
         val logo = clearLogo
         if (logo != null && !logoUrl.isNullOrBlank()) {
-            runCatching { logo.load(logoRequest(logo.context, logoUrl)) }
+            runCatching {
+                logo.load(
+                    tracedLogoRequest(logo.context, logoUrl, surface = "chrome") {
+                        // A failed load restores the text: the same fallback the
+                        // no-logo case gets, so the header still names the title.
+                        logo.setImageDrawable(null)
+                        logo.visibility = View.GONE
+                        itemName?.text = info.itemName
+                        itemName?.visibility = View.VISIBLE
+                    }
+                )
+            }
             logo.visibility = View.VISIBLE
             itemName?.visibility = View.GONE
         } else {
