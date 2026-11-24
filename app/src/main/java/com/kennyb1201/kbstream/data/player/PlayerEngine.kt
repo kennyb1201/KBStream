@@ -367,6 +367,57 @@ object PlayerEngine {
         )
 
     /**
+     * Whether a persisted next-episode handoff still names the show the live
+     * session is playing.
+     *
+     * The handoff is built by the player that just ended (one persisted by
+     * [com.kennyb1201.kbstream.ui.player.NextEpisodeResult]), and the shell builds
+     * the next launch from the play request it currently holds. In a normal binge
+     * those are the same show, so every field of the launch is right by
+     * construction. When the handoff is delivered LATE - the viewer left the
+     * player, browsed and started something else before the result callback ran -
+     * the live request belongs to another title, and building from it adopts that
+     * title's identity while playing the handed-off episode: the 2026-11-23 field
+     * report, where Holy Marvels' E5 opened carrying Man on the Inside's id,
+     * poster and cast.
+     *
+     * Pure on purpose (the [launchPrefersMpv] model): ids in, verdict out, so
+     * the matrix is pinned by a unit test rather than by reading the branch. Both
+     * sides are normalized with [AnimeDetect.titleIdOf], which is the same strip
+     * the startup safety net
+     * ([com.kennyb1201.kbstream.ui.player.NextEpisodeResult.restoreIfDropped]'s
+     * caller) applies to the handoff, so `tt…:S:E` meets `tt…` and
+     * `tmdb:…:S:E` meets `tmdb:…`.
+     *
+     * Two answers are conservative on purpose:
+     *
+     *  - An id space that cannot be compared (a `tt…` live show against a
+     *    `tmdb:…` handoff) is a MATCH. Only dropping what is provably another
+     *    show is worth risking an ordinary binge for: the id spaces are resolved
+     *    elsewhere, and a caller here has no lookup to spend.
+     *  - A handoff that names no show, or a live session with no parent, is a
+     *    MISMATCH. Neither can be verified, and the cost of guessing wrong is the
+     *    hijack this exists to stop.
+     */
+    fun nextEpisodeHandoffMatches(pendingStreamId: String, liveParentId: String?): Boolean {
+        val pendingShow = AnimeDetect.titleIdOf(pendingStreamId)
+        val liveShow = liveParentId?.let { AnimeDetect.titleIdOf(it) }
+        if (pendingShow.isBlank() || liveShow.isNullOrBlank()) return false
+        if (idSpaceOf(pendingShow) != idSpaceOf(liveShow)) return true
+        return pendingShow.equals(liveShow, ignoreCase = true)
+    }
+
+    /**
+     * The id space a show id belongs to: `tt…` ids are IMDb, everything else is
+     * named by its own prefix (`tmdb:`, `kitsu:`, a catalog id).
+     *
+     * Only used to decide whether two ids may be compared at all - see
+     * [nextEpisodeHandoffMatches].
+     */
+    private fun idSpaceOf(showId: String): String =
+        if (showId.startsWith("tt", ignoreCase = true)) "imdb" else showId.substringBefore(':')
+
+    /**
      * Whether the "Play anime in MPV" setting can have any effect here - false
      * on a device without libmpv, so a caller does not spend its anime lookup
      * on a launch that was never going to MPV.

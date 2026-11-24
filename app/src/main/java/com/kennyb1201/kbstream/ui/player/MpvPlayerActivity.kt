@@ -850,11 +850,18 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      * being torn down must not chain out from behind the player that is
      * actually on screen: this countdown is a Handler tick, so it fires
      * whether or not the surface is playing, and a backgrounded session doing
-     * that starts the next episode a second time. The main player cancels the
-     * same countdown in its own teardown; this engine now does too.
+     * that starts the next episode a second time.
      *
-     * Called from the switch handoff ([startActivityForResult]) - the one place
-     * a switch leaves this activity - and from nothing else yet.
+     * Called from four places, and the first two are the session ending:
+     *  - [onStop], the ordinary way a session leaves the screen;
+     *  - [onDestroy], the safety net for a session destroyed without a stop;
+     *  - the switch handoff, where another engine takes the same title over;
+     *  - the panel dismiss and the sleep-timer exit, which hide the card it
+     *    belongs to ([hideEndPanels], [exitForSleepTimer]).
+     *
+     * Deliberately NOT in [onPause]: Picture-in-Picture calls it without a stop,
+     * and playback continues in the corner - the countdown has to survive that,
+     * exactly as the main player's does.
      */
     private fun cancelNextUpAutoAdvance() {
         nextUpCountdownHeld = false
@@ -8402,6 +8409,18 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // A hold-to-scrub has no release once the screen is left, so land it
         // here rather than leaving its timer ticking against a paused surface.
         endMpvHoldScrub()
+        // The Up Next countdown belongs to the session that just left the
+        // screen (mirror of NativePlayerActivity.onStop, whose runnables are
+        // also outside the handler that teardown clears). It is a Handler tick,
+        // so it fires whether or not the surface is playing - and this one
+        // HANDS OFF when it reaches zero: armed at the end of an episode and
+        // left running after a Back, it persisted the next episode's handoff and
+        // finished an activity that was already gone. The persisted handoff was
+        // then delivered to whichever session ran next, which is the 2026-11-23
+        // field report (Holy Marvels E4 -> Man on the Inside E1 became E5).
+        // A returning session re-arms the countdown from its own end panels, and
+        // the HELD state needs no handling here: it was never posted.
+        nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
         // mpv is paused just below, so guide writes may proceed again - except on
         // a handoff: Android starts the successor activity before this one's
         // onStop, so the successor has already set the gate active, and clearing
@@ -8559,6 +8578,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         stallWatchdogToken++
         handler.removeCallbacksAndMessages(null)
         clockHandler.removeCallbacksAndMessages(null)
+        // Safety net for a session destroyed without a stop of its own: the
+        // countdown must not outlive the activity that armed it, because firing
+        // it hands off from a dead session. The blanket clear below covers this
+        // handler too; the explicit call is the one that says why.
+        nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
         nextUpCountdownHandler.removeCallbacksAndMessages(null)
         // The scrub handler needs this one more than the three above do: its
         // runnable RE-POSTS itself from inside its own callback, so a session

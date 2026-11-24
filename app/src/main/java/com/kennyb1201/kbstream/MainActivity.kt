@@ -4355,6 +4355,34 @@ fun AppRoot(
                         )
                     )
                 } else if (next != null) {
+                    // A handoff that is no longer this session's show is DROPPED
+                    // (spec 2026-11-24, F2). The callback can run long after the
+                    // player finished - the viewer left the end card, browsed and
+                    // started something else - and then `current` is that other
+                    // title: building the launch from it adopted its id, poster,
+                    // logo and cast while playing the handed-off episode (Holy
+                    // Marvels E5 with Man on the Inside's identity). A drop is
+                    // silent by design: no launch, no Streams screen, and the
+                    // viewer stays in what they are already watching. The
+                    // pending show loses nothing - its Continue Watching card
+                    // already offers the next episode - and opening its Detail
+                    // from here would yank a live session out of playback, which
+                    // is the same hijack from the other side.
+                    if (
+                        !PlayerEngine.nextEpisodeHandoffMatches(
+                            pendingStreamId = next.streamId,
+                            liveParentId = current.parentId
+                        )
+                    ) {
+                        Log.i(
+                            "PlayerEngine",
+                            "next-episode handoff dropped: pending show=" +
+                                com.kennyb1201.kbstream.data.player.AnimeDetect
+                                    .titleIdOf(next.streamId) +
+                                " current show=${current.parentId}"
+                        )
+                        return@rememberLauncherForActivityResult
+                    }
                             val nextTarget = StreamsTarget(
                         contentType = current.parentType,
                         streamId = next.streamId,
@@ -4435,6 +4463,25 @@ fun AppRoot(
                             val nextBingeGroup = data.getStringExtra("next_binge_group")
                             val nextAddonName = data.getStringExtra("next_addon_name")
                             val nextOverview = data.getStringExtra("next_overview")
+                            // Same drop rule as the persisted branch above: this
+                            // result-extras shape is the external engine's
+                            // handoff, and it carries the same "built from the
+                            // live session" identity.
+                            if (
+                                !PlayerEngine.nextEpisodeHandoffMatches(
+                                    pendingStreamId = nextStreamId.orEmpty(),
+                                    liveParentId = current.parentId
+                                )
+                            ) {
+                                Log.i(
+                                    "PlayerEngine",
+                                    "next-episode handoff dropped: pending show=" +
+                                        com.kennyb1201.kbstream.data.player.AnimeDetect
+                                            .titleIdOf(nextStreamId.orEmpty()) +
+                                        " current show=${current.parentId}"
+                                )
+                                return@rememberLauncherForActivityResult
+                            }
                             val nextTarget = StreamsTarget(
                                 contentType = current.parentType,
                                 streamId = nextStreamId.orEmpty(),

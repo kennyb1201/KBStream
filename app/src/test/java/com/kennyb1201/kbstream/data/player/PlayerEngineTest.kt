@@ -194,4 +194,70 @@ class PlayerEngineTest {
             PlayerEngine.filmCadenceRefusal(null, 1_080, false)
         )
     }
+
+    // ── The late-delivery guard (spec 2026-11-24, F2) ───────────────────────
+
+    @Test
+    fun `a handoff for the show that is playing is a match`() {
+        assertTrue(
+            "the ordinary binge: the live session is the finished episode's show",
+            PlayerEngine.nextEpisodeHandoffMatches(
+                pendingStreamId = "tt32375380:1:5",
+                liveParentId = "tt32375380"
+            )
+        )
+        assertTrue(
+            "and a TMDB-keyed handoff in the same space matches the same way",
+            PlayerEngine.nextEpisodeHandoffMatches(
+                pendingStreamId = "tmdb:12345:2:3",
+                liveParentId = "tmdb:12345"
+            )
+        )
+    }
+
+    @Test
+    fun `a handoff for another show is not a match - the 2026-11-23 hijack`() {
+        assertFalse(
+            "Holy Marvels E5 delivered while Man on the Inside E1 plays",
+            PlayerEngine.nextEpisodeHandoffMatches(
+                pendingStreamId = "tt32375380:1:5",
+                liveParentId = "tt26670955"
+            )
+        )
+        assertFalse(
+            "and the same in the TMDB space",
+            PlayerEngine.nextEpisodeHandoffMatches(
+                pendingStreamId = "tmdb:111:1:5",
+                liveParentId = "tmdb:222"
+            )
+        )
+    }
+
+    @Test
+    fun `a handoff that cannot be verified is not a match`() {
+        assertFalse(
+            "a handoff naming no show cannot be checked, so it is dropped",
+            PlayerEngine.nextEpisodeHandoffMatches(pendingStreamId = "", liveParentId = "tt32375380")
+        )
+        assertFalse(
+            "and neither can a live session with no parent id",
+            PlayerEngine.nextEpisodeHandoffMatches(
+                pendingStreamId = "tt32375380:1:5",
+                liveParentId = null
+            )
+        )
+    }
+
+    @Test
+    fun `id spaces that cannot be compared do not drop an ordinary binge`() {
+        // The guard only drops what is provably another show. An IMDb handoff
+        // arriving during a TMDB-keyed session is not comparable without a
+        // lookup, and guessing "mismatch" there would end real binges.
+        assertTrue(
+            PlayerEngine.nextEpisodeHandoffMatches(
+                pendingStreamId = "tt32375380:1:5",
+                liveParentId = "tmdb:12345"
+            )
+        )
+    }
 }
