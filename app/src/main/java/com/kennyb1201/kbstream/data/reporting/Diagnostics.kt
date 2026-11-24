@@ -265,6 +265,15 @@ object Diagnostics {
         // differently from the rail beside it (see [CwFilterTrace] and the
         // `cw.filter:` spec). Absent until Home has filtered a rail.
         CwFilterTrace.lines().forEach { report.appendLine(it) }
+        // ...and what the RAIL itself did with that evaluation (spec 2026-11-24,
+        // F1): one `cwload: build=… t=+…` line per stage of each Continue
+        // Watching load - the seed, each publish with its cards-with-art count,
+        // the first paint, and whether the art settled or timed out. `homeload:`
+        // is the latest value per label, so it could not say when the rail
+        // painted or whether the paint it showed belonged to the same load as
+        // the publish beside it; these records carry their own build id for
+        // exactly that. Absent until Home has loaded a rail.
+        CwLoadTrace.lines().forEach { report.appendLine("cwload: $it") }
         // What the Continue Watching / Upcoming evaluation last decided, per show
         // and per leg: which shows the CW leg skipped and why (watched vs aired),
         // which it kept, and what the caught-up blob said when leg (c) read it

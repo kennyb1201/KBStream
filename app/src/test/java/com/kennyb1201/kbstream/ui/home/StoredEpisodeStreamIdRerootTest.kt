@@ -207,10 +207,14 @@ class StoredEpisodeStreamIdRerootTest {
         // pass replaces these cards a moment later. A seed that ever learns the
         // show's TMDB id has to go through the same helper, which is what this
         // pins: the bare read lives here and nowhere else.
+        // Re-pinned by the CW-load spec (2026-11-24, F2): the seed's card
+        // building moved out of the init-only read and into the function both
+        // callers share, so the section starts there now. What it pins is
+        // unchanged - the bare history row is read in one place.
         val snapshot =
             section(
                 home,
-                "private suspend fun publishInstantUpNextSnapshot()",
+                "private fun seedUpNextFromHistory(",
                 "private fun previousSimklUpNextItems()"
             )
         assertTrue(

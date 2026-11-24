@@ -4209,7 +4209,17 @@ private fun BuiltinContinueWatchingRail(
     onUpPressed: ((FocusRequester) -> Unit)? = null,
     // The Left-from-the-head-card opener, which every rail gets (see
     // [homeRailHeadLeftTopBarHook]).
-    onHeadLeftPressed: ((FocusRequester) -> Unit)? = null
+    onHeadLeftPressed: ((FocusRequester) -> Unit)? = null,
+    /**
+     * This rail's first paint with cards - how many, and how many of those have
+     * art - reported once per composition (spec 2026-11-24, F1).
+     *
+     * The rail is the only place that knows it composed: an empty list draws no
+     * rail at all (see `builtinWithContent`), so the first non-empty pass IS the
+     * paint, and a load that publishes cards and never reaches this is a load
+     * that never composed. Null for a test or a surface that does not report.
+     */
+    onFirstPaint: ((cards: Int, withArt: Int) -> Unit)? = null
 ) {
     // Where this rail's scroll position lives. The LazyRow used to keep its
     // state to itself; the landing below has to be able to put the rail back on
@@ -4252,6 +4262,21 @@ private fun BuiltinContinueWatchingRail(
     // head the enriched merge then replaces is corrected by the merge's own
     // pass, whose head is the final one.
     val headId = cards.firstOrNull()?.id
+
+    // One line per load, on the first pass that has a card to draw (spec
+    // 2026-11-24, F1). Keyed on the head rather than on the list: a republish
+    // that keeps the head is not a first paint, and the enriched merge that
+    // replaces the seed usually keeps it.
+    var firstPaintReported by remember { mutableStateOf(false) }
+    LaunchedEffect(headId) {
+        if (headId != null && !firstPaintReported) {
+            firstPaintReported = true
+            onFirstPaint?.invoke(
+                cards.size,
+                cards.count { item -> upNextCardHasArt(item) }
+            )
+        }
+    }
 
     // The value of [landOnHeadSignal] the landing last answered. A value that
     // has moved means an ACTION removed the card the viewer was on - their
@@ -6819,7 +6844,11 @@ fun HomeScreen(
                     onUpPressed = upHook,
                     // Ungated, unlike Up: no head card has a Left target (see
                     // [headLeftHook]).
-                    onHeadLeftPressed = headLeftHook
+                    onHeadLeftPressed = headLeftHook,
+                    // The load trace's one paint fact (spec 2026-11-24, F1).
+                    onFirstPaint = { cards, withArt ->
+                        viewModel.noteContinueWatchingFirstPaint(cards, withArt)
+                    }
                 )
             } else if (
                 key ==

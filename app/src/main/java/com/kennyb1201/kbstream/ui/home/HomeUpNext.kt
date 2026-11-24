@@ -1956,6 +1956,18 @@ internal fun collapseDuplicateUpNextCards(
 }
 
 /**
+ * Whether a Continue Watching card has art to draw.
+ *
+ * The card's own order, from `CompactUpNextCard`: the episode still, then the
+ * show's backdrop, then its poster. Named here so the load trace counts what the
+ * rail actually draws (spec 2026-11-24, F1) instead of a second reading of the
+ * card's fallback chain - a card counted as "with art" for a field it never
+ * draws would make every `cwload:` number a guess.
+ */
+internal fun upNextCardHasArt(item: UpNextItem): Boolean =
+    !(item.episodeThumbnail ?: item.backdrop ?: item.poster).isNullOrBlank()
+
+/**
  * One Continue Watching card built from a local watch-history row, and nothing
  * else.
  *

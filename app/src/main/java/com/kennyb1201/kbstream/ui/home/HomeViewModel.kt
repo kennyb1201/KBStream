@@ -44,6 +44,7 @@ import com.kennyb1201.kbstream.data.notifications.NewEpisodeRules
 import com.kennyb1201.kbstream.data.player.rerootedEpisodeStreamId
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.reporting.ImageLoadTrace
+import com.kennyb1201.kbstream.data.reporting.CwLoadTrace
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.reporting.SpotlightDiagTrace
 import com.kennyb1201.kbstream.data.reporting.UpcomingDiagTrace
@@ -99,6 +100,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -456,6 +458,37 @@ class HomeViewModel @Inject constructor(
         mutableSetOf<String>()
 
     private var upNextRequestVersion = 0L
+
+    /**
+     * The CW load's build id and clock, for [CwLoadTrace] (spec 2026-11-24, F1).
+     *
+     * The report's `homeload:` line is the latest value per label, so it cannot
+     * say when the rail painted, or whether the paint and the publish it shows
+     * came from the same load. Every record below carries the build it belongs
+     * to, which is what makes one load's timeline readable.
+     */
+    @Volatile
+    private var cwBuildId = 0L
+
+    @Volatile
+    private var cwBuildStartedAtMs = 0L
+
+    /** Cards-with-art at this load's first publish, for the late-arrival count. */
+    @Volatile
+    private var cwFirstPublishArt = -1
+
+    @Volatile
+    private var cwFirstPaintNoted = false
+
+    @Volatile
+    private var cwSettledNoted = false
+
+    /**
+     * The art-settle watchdog for the current load: fires when the rail is still
+     * short of art [CW_ART_SETTLE_MS] after its last publish, and says so rather
+     * than leaving the report to infer a load that never settled.
+     */
+    private var cwSettleWatchdog: Job? = null
 
     private var watchedRefreshVersion = 0L
 
@@ -8004,12 +8037,44 @@ Log.d(
      * observeUpNext pipeline later replaces this with enriched cards.
      */
     private suspend fun publishInstantUpNextSnapshot() {
+        // The init seed is a load of its own for the trace: on a device that
+        // never gets as far as the enriched pass, this line is the whole story.
+        beginCwBuild()
         val history = try {
             watchHistoryRepository.getContinueWatchingParentsSnapshot()
         } catch (e: Exception) {
             Log.w("HOME_UPNEXT", "Instant up-next snapshot failed", e)
             return
         }
+        seedUpNextFromHistory(history, source = "instant")
+    }
+
+    /**
+     * Puts the history rows on the rail as they are, with no enrichment.
+     *
+     * Called from TWO places since the CW-load spec (2026-11-24, F2): the init
+     * launch that seeds before Home composes, and the top of each upNext pass.
+     *
+     * The second caller is the fix. The enriched pass awaits one TMDB lookup per
+     * resume row (`localItems`, six permits) before its first publish, and the
+     * init seed was the only thing on screen in the meantime - a seed that ran
+     * once, before the history DB had necessarily answered, and that does
+     * nothing at all once any list is published. On a cold entry with a cold
+     * TMDB cache those two together are the rail that paints in a second or not
+     * for minutes, which is the field report in one sentence: warm cache, the
+     * enriched pass is quick; cold cache under a Home whose own 108 art lookups
+     * are already queued, the rail waits for the enrichment with nothing to show.
+     *
+     * Publishing here costs one history read this pass already did. It never
+     * clobbers a list that is on screen - only an empty rail is seeded - so the
+     * enriched cards, the tracker arrivals and every later publish replace it
+     * normally, and [applyContinueWatchingDismissals] still removes a hidden
+     * title from the seed exactly as it does from them.
+     */
+    private fun seedUpNextFromHistory(
+        history: List<com.kennyb1201.kbstream.data.history.WatchHistoryEntity>,
+        source: String
+    ) {
         // A resume row a later watched episode has overtaken is stale and
         // must not seed the rail (see supersededResumeRowIds).
         val visibleHistory = dropSupersededResumeRows(history)
@@ -8025,12 +8090,133 @@ Log.d(
         // Only seed when nothing is showing yet (cold start / fresh entry);
         // never clobber a live enriched list with the raw snapshot.
         if (_upNext.value.isEmpty()) {
-            _upNext.value = applyContinueWatchingDismissals(
+            val seeded = applyContinueWatchingDismissals(
                 dedupeAndSortUpNext(
                     collapseInstantSnapshotItems(items)
                 )
             )
+            _upNext.value = seeded
+            noteCwPublished(seeded, source = source)
         }
+    }
+
+    // ── The CW load's trace (spec 2026-11-24, F1) ────────────────────────────
+
+    /**
+     * Starts the clock for one upNext pass, and clears the last pass's verdicts.
+     *
+     * One pass is one load: the history read, its enrichment, the tracker
+     * arrivals, and everything the rail does with them until the next emission.
+     */
+    private fun beginCwBuild() {
+        cwBuildId += 1
+        cwBuildStartedAtMs = android.os.SystemClock.elapsedRealtime()
+        cwFirstPublishArt = -1
+        cwFirstPaintNoted = false
+        cwSettledNoted = false
+        cwSettleWatchdog?.cancel()
+        cwSettleWatchdog = null
+    }
+
+    /** The cards whose art the rail can actually draw (the card's own rule). */
+    private fun cwCardsWithArt(items: List<UpNextItem>): Int =
+        items.count { item -> upNextCardHasArt(item) }
+
+    /**
+     * Records one rail publish for the current load - and, the first time every
+     * card has art, the moment the rail settled.
+     *
+     * `art=` is the number of cards that carry a drawable URL, the count the
+     * report asks for: a build that publishes 7 cards with `art=2` is a rail of
+     * placeholders, not a rail that never loaded, and the two want different
+     * fixes. When the list is still short of art, a watchdog records the
+     * timeout instead of leaving the paste silent - "never settled" has to be a
+     * fact in the report, not the absence of one.
+     */
+    private fun noteCwPublished(items: List<UpNextItem>, source: String) {
+        val buildId = cwBuildId
+        if (buildId == 0L) return
+        val withArt = cwCardsWithArt(items)
+        if (cwFirstPublishArt < 0) cwFirstPublishArt = withArt
+        // The spec's own label, on the pinned `home.*` line as well: the paste's
+        // headline for one load is `home.cwPublish` / `home.cwFirstPaint` /
+        // `home.cwArtSettled`, and the `cwload:` lines below carry the per-build
+        // detail the latest-value-per-label view cannot.
+        PerfTrace.record(
+            "home.cwPublish",
+            android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs
+        )
+        PerfTrace.recordCount("home.cwCards", items.size.toLong())
+        CwLoadTrace.note(
+            buildId,
+            android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs,
+            "$source cards=${items.size} art=$withArt"
+        )
+        if (items.isNotEmpty() && withArt >= items.size) {
+            noteCwSettled(buildId, items.size, withArt, timedOut = false)
+            return
+        }
+        if (items.isEmpty() || cwSettledNoted) return
+        // Restart the window: the last publish is what the rail is waiting on.
+        cwSettleWatchdog?.cancel()
+        cwSettleWatchdog = viewModelScope.launch {
+            delay(CW_ART_SETTLE_MS)
+            noteCwSettled(
+                buildId = buildId,
+                cards = items.size,
+                withArt = withArt,
+                timedOut = true
+            )
+        }
+    }
+
+    private fun noteCwSettled(
+        buildId: Long,
+        cards: Int,
+        withArt: Int,
+        timedOut: Boolean
+    ) {
+        if (cwSettledNoted || buildId != cwBuildId) return
+        cwSettledNoted = true
+        cwSettleWatchdog?.cancel()
+        cwSettleWatchdog = null
+        val late = withArt - cwFirstPublishArt.coerceAtLeast(0)
+        PerfTrace.record(
+            "home.cwArtSettled",
+            android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs
+        )
+        PerfTrace.recordCount("home.cwArtCards", withArt.toLong())
+        CwLoadTrace.note(
+            buildId,
+            android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs,
+            if (timedOut) {
+                "artTimeout cards=$cards art=$withArt late=$late"
+            } else {
+                "settled cards=$cards art=$withArt late=$late"
+            }
+        )
+    }
+
+    /**
+     * The rail's first paint, reported by the composition that draws it.
+     *
+     * One line per load, and only when it landed with cards: a rail that never
+     * composed leaves no `firstPaint` behind, which is exactly the "sometimes it
+     * never loads" case the report could not see before.
+     */
+    fun noteContinueWatchingFirstPaint(cardCount: Int, withArt: Int) {
+        val buildId = cwBuildId
+        if (buildId == 0L || cwFirstPaintNoted || cardCount == 0) return
+        cwFirstPaintNoted = true
+        PerfTrace.record(
+            "home.cwFirstPaint",
+            android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs
+        )
+        CwLoadTrace.note(
+            buildId,
+            android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs,
+            "firstPaint cards=$cardCount art=$withArt"
+        )
     }
 
     /**
@@ -8063,6 +8249,11 @@ Log.d(
         if (items == _upNext.value) return
 
         _upNext.value = items
+
+        // The load's own timeline (spec 2026-11-24, F1): one line per publish, so
+        // the paste can tell a rail that published from one that never did, and
+        // a publish with art from one without.
+        noteCwPublished(items, source = "publish")
 
         publishContinueWatchingWidgetSnapshot(items)
 
@@ -8124,6 +8315,24 @@ Log.d(
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    /**
+     * The Continue Watching rail's one publisher.
+     *
+     * F2 of the CW-load spec (2026-11-24) asked where this publishes from, and
+     * the answer is checked at the call sites rather than assumed:
+     *
+     *  - NOT inside `railsRefreshMutex`: this pass is started from [init] and owns
+     *    its own flow, so neither the rail build nor the fan-out it holds the lock
+     *    across can delay a publish.
+     *  - NOT waiting on the catalog fan-out, the pinned refine or the landscape
+     *    art queue: this pass reads no rail, no art and no catalog.
+     *  - BUT its first ENRICHED publish did await `localItems` - one TMDB lookup
+     *    per resume row, six at a time - before `arrivals.publishLocal()`, and
+     *    those lookups share the repository and the host with Home's own ~108 art
+     *    lookups. That gate, and not the mutex, is what held the rail: the seed at
+     *    the top of the pass is the fix (see [seedUpNextFromHistory]), and the
+     *    per-row cap below bounds what a single lookup can cost the rail.
+     */
     private fun observeUpNext() {
 
         viewModelScope.launch {
@@ -8162,6 +8371,18 @@ Log.d(
                     val requestVersion =
                         nextUpNextRequestVersion()
 
+                    // One load, one timeline (spec 2026-11-24, F1).
+                    beginCwBuild()
+
+                    // PAINT FIRST (spec 2026-11-24, F2): the rows this pass has
+                    // just read go on the rail as they are, before the enrichment
+                    // below asks TMDB for one lookup per row. The enriched cards
+                    // publish over them the moment they land, and the tracker
+                    // arrivals after that; this only ever fills an EMPTY rail.
+                    if (isLatestUpNextRequest(requestVersion)) {
+                        seedUpNextFromHistory(history, source = "seed")
+                    }
+
                     try {
 
                     val lookupSemaphore =
@@ -8173,6 +8394,23 @@ Log.d(
     // including movies that were stopped before completion.
     history.map { entry ->
         async {
+            // A row whose enrichment has not answered in
+            // UP_NEXT_ROW_ENRICH_TIMEOUT_MS publishes the card it already IS
+            // (spec 2026-11-24, F3). The collection below used to await every
+            // row's TMDB lookup before the rail's first enriched publish, so one
+            // slow lookup - a title TMDB is slow for, or one queued behind
+            // Home's own art lookups for the same repository and the same host -
+            // held every card on the rail. That is the "sometimes it takes 3 min"
+            // half of the field report: the same 7 rows, the same rail, minutes
+            // apart, because the wait was never bounded.
+            //
+            // The fallback is exactly the card the seed publishes, so nothing is
+            // invented: a timed-out row keeps its poster/backdrop, its progress
+            // and its episode, and loses only the enrichment (next-episode,
+            // rating, episode still) the lookup would have added. The next pass
+            // asks again.
+            val enriched =
+                withTimeoutOrNull(UP_NEXT_ROW_ENRICH_TIMEOUT_MS) {
             lookupSemaphore.withPermit {
 
         val isEpisodePlayback =
@@ -8646,6 +8884,14 @@ Log.d(
             tmdbId = capturedTmdbId
         )
             }
+                }
+            if (enriched == null) {
+                // Counted so the paste can say how many cards the rail got
+                // WITHOUT their enrichment, rather than leaving a thin card to
+                // be read as a TMDB miss.
+                PerfTrace.recordCount("home.cwRowTimeout", 1)
+            }
+            enriched ?: instantContinueWatchingItem(entry)
         }
     }.awaitAll().filterNotNull()
 }
@@ -12917,6 +13163,17 @@ private suspend fun calculateEpisodesRemaining(
 
             railsRefreshMutex.withLock {
 
+                // How long this build waited for the one before it (spec
+                // 2026-11-24, F5). Every stage the paste showed was measured from
+                // buildStartedAtMs, which is taken BEFORE this lock - so a minute
+                // spent waiting for a predecessor's fan-out is indistinguishable
+                // from a minute spent decoding a snapshot, and the homeload line
+                // cannot say which. This one line settles it.
+                PerfTrace.record(
+                    "home.mutexWait",
+                    android.os.SystemClock.elapsedRealtime() - buildStartedAtMs
+                )
+
                 val catalogSnapshotBuildAtStart = ++catalogSnapshotBuild
 
                 // Rebuilding rails invalidates pagination bookkeeping: rail
@@ -12936,11 +13193,24 @@ private suspend fun calculateEpisodesRemaining(
                 previousLandscapeArt =
                     railsOnScreenAtStart.associate { rail -> railKeyOf(rail) to rail.landscapeArt }
 
-                // A new build asks TMDB again. The memo exists to stop the
-                // repeats WITHIN one build, not to outlive it: the repository
-                // deliberately does not cache a miss, and a lookup that came
-                // back empty while Wi-Fi was still coming up has to be retried.
-                landscapeLookupMemo.clear()
+                // Keep the HITS, drop the MISSES (spec 2026-11-24, F4a).
+                //
+                // The memo used to be cleared whole, so every build asked TMDB
+                // again for every card on Home - `home.artLookup n=108
+                // total=56991ms` on the field paste, re-paid on each entry and on
+                // every rebuild, on a box that had already evicted its image
+                // cache under trim pressure. The clear existed for one reason, and
+                // it is still honoured: the repository deliberately does not cache
+                // a miss, and a lookup that came back empty while Wi-Fi was still
+                // coming up has to be retried. A MISS is an empty answer, and empty
+                // answers are exactly what this drops; a hit is an answer the
+                // device already holds, and re-asking for it is a round trip that
+                // can only come back the same. The 30-day disk row is what makes
+                // that safe across a restart - the memo only spares the re-ask
+                // within one session.
+                landscapeLookupMemo.entries.removeAll { entry ->
+                    entry.value.first == null && entry.value.second == null
+                }
 
                 // PAINT FIRST (spec 2026-11-15, Home cold start F1): the pinned
                 // rails as the previous session left them, on screen before a
@@ -13084,7 +13354,10 @@ private suspend fun calculateEpisodesRemaining(
                 // rebuild (a manual add-on refresh rebuilds the whole list)
                 // reshuffled the catalogs on Home, which is the "catalog order
                 // on Home is switched up after Refresh all" report.
-                val catalogOrder = catalogOrderByKey(pendingCatalogs)
+                val catalogOrder =
+                    PerfTrace.timed("home.catalogOrder") {
+                        catalogOrderByKey(pendingCatalogs)
+                    }
 
                 // PAINT SECOND (spec 2026-11-21 F2): the catalog rails as the
                 // last completed build left them, on screen before the fan-out
@@ -13106,16 +13379,36 @@ private suspend fun calculateEpisodesRemaining(
                         profileId = profileIdAtStart.orEmpty(),
                         kidsCeiling = tmdbRepository.kidsMaxAge() != null
                     )
+                // Timed, and OFF the main thread (spec 2026-11-24, F5). This is
+                // the one segment between the pinned paint and the catalog
+                // publish whose cost is not fixed by construction: it reads a
+                // preferences string, decodes up to 32 rails x 40 items, and yes
+                // - runs the upcoming filter over every one of them. Everything
+                // else in the window is a prefs read or an in-memory filter; this
+                // ran on the ViewModel's Main dispatcher, where a trimmed box
+                // (`frame: p95=149ms max=999ms` on the same paste) turns a
+                // 1000-item decode into a stalled frame and then into a paint
+                // nobody sees. `home.snapshotLoad` now carries its own duration, so
+                // the next paste says whether this segment is the residue of the
+                // 59.7s or whether it is the mutex wait above.
                 val cachedCatalogRails =
-                    HomeCatalogSnapshot.load(
-                        getApplication<Application>(),
-                        catalogSnapshotScope
-                    )
-                        .filter { rail -> catalogOrder.containsKey(railKeyOf(rail)) }
-                        .map { rail ->
-                            if (hideUpcoming) rail.copy(items = filterUpcoming(rail.items)) else rail
+                    PerfTrace.timedSuspend("home.snapshotLoad") {
+                        withContext(Dispatchers.Default) {
+                            HomeCatalogSnapshot.load(
+                                getApplication<Application>(),
+                                catalogSnapshotScope
+                            )
+                                .filter { rail -> catalogOrder.containsKey(railKeyOf(rail)) }
+                                .map { rail ->
+                                    if (hideUpcoming) {
+                                        rail.copy(items = filterUpcoming(rail.items))
+                                    } else {
+                                        rail
+                                    }
+                                }
+                                .filter { rail -> rail.items.isNotEmpty() }
                         }
-                        .filter { rail -> rail.items.isNotEmpty() }
+                    }
                 if (
                     cachedCatalogRails.isNotEmpty() &&
                     // A refresh already has rows on screen; replacing them with
@@ -15955,6 +16248,37 @@ private suspend fun calculateEpisodesRemaining(
 
         private const val MAX_CONCURRENT_UP_NEXT_LOOKUPS =
             6
+
+        /**
+         * How long one resume row's enrichment may hold its card (spec 2026-11-24,
+         * F3).
+         *
+         * The rail publishes when every row has answered, so this is also the
+         * longest the enriched cards can be later than the seed. Eight seconds is
+         * three times the worst CW-relevant lookup the field paste recorded
+         * (`home.artLookup max=2906ms`), so `home.cwRowTimeout` firing means a
+         * request that is stuck rather than one that is merely slow.
+         *
+         * Cancelling it is deliberate, and it is what the repository already does
+         * for a cancelled caller: the in-flight entry is removed and anyone
+         * SHARING that fetch (`onSource = "shared"`) is unblocked with a miss
+         * rather than left awaiting a request that is not coming. A miss is not
+         * cached, so every surface retries on its own next pass.
+         */
+        private const val UP_NEXT_ROW_ENRICH_TIMEOUT_MS =
+            8_000L
+
+        /**
+         * How long the rail may stay short of art before the report says so
+         * (spec 2026-11-24, F1).
+         *
+         * The acceptance is "every card with art within 5s", so ten seconds is
+         * the point at which a load is worth reporting as unsettled rather than
+         * as slow - and `cwload: ... artTimeout` is a fact the paste can read,
+         * where a missing line was indistinguishable from a load that settled.
+         */
+        private const val CW_ART_SETTLE_MS =
+            10_000L
 
         private const val UP_NEXT_SEASON_BATCH =
             4
