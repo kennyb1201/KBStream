@@ -17532,7 +17532,27 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 if (firstFrameRendered) {
                     Log.i(TAG, "probe: head already rendered, keeping it")
                 } else {
-                    switchToSource(pick, isAutoRecovery = true)
+                    // Cancellable and REPORTED (2026-11-24). This rebuild runs
+                    // on the launch's own main-thread stack, so anything it
+                    // threw - a codec refused the surface, a lane pool closed
+                    // under it, the allocator refusing a budget - was an
+                    // uncaught exception in a scope with no handler, i.e. the
+                    // process died during the load. That is the shape of the
+                    // field report "it crashes sometimes while a title is
+                    // loading": intermittent because the branch only runs
+                    // when the probe proves the head dead before a frame. The
+                    // head is still on screen and playable, so a failed
+                    // rebuild is a kept session, not a death: the throw is
+                    // recorded for the diagnostics export and the optimistic
+                    // head plays on.
+                    runCatchingCancellable {
+                        switchToSource(pick, isAutoRecovery = true)
+                    }.onFailure { error ->
+                        com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+                            error,
+                            mapOf("source" to "player.start.probe_switch")
+                        )
+                    }
                 }
             } else if (pick != null && pick.url == currentUrl) {
                 Log.i(TAG, "probe: initial source live, keeping: ${pick.displayLabel()}")

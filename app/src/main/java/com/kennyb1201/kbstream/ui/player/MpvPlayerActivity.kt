@@ -1861,7 +1861,21 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 if (firstFrameRendered) {
                     Log.i(TAG, "probe: head already rendered, keeping it")
                 } else {
-                    switchToSource(pick, isAutoRecovery = true)
+                    // Cancellable and REPORTED, for the same reason as the Exo
+                    // engine's identical branch: the rebuild runs on the
+                    // launch's own main-thread stack, so a throw here - a
+                    // refused surface, an allocator that will not give mpv a
+                    // buffer - killed the process mid-load instead of costing
+                    // the probe's opinion. The optimistic head plays on and
+                    // the throw goes to the diagnostics export.
+                    runCatchingCancellable {
+                        switchToSource(pick, isAutoRecovery = true)
+                    }.onFailure { error ->
+                        com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+                            error,
+                            mapOf("source" to "player.start.probe_switch")
+                        )
+                    }
                 }
             } else if (pick != null && pick.url == currentUrl) {
                 Log.i(TAG, "probe: initial source live, keeping: ${pick.sourceLabel()}")
