@@ -8071,7 +8071,7 @@ Log.d(
      * normally, and [applyContinueWatchingDismissals] still removes a hidden
      * title from the seed exactly as it does from them.
      */
-    private fun seedUpNextFromHistory(
+    private suspend fun seedUpNextFromHistory(
         history: List<com.kennyb1201.kbstream.data.history.WatchHistoryEntity>,
         source: String
     ) {
@@ -8409,9 +8409,18 @@ Log.d(
             // and its episode, and loses only the enrichment (next-episode,
             // rating, episode still) the lookup would have added. The next pass
             // asks again.
+            //
+            // A row this pass DROPS (the zombie card) or fails to name has to
+            // leave the async as null, but the row body now sits inside
+            // withTimeoutOrNull + withPermit, and a labelled return cannot cross
+            // a non-inline lambda. The drop is carried out as a flag and
+            // returned at the async's own level instead; `run row@` is the inline
+            // boundary the two `?: return@row null` sites leave through.
+            var zombieRow = false
             val enriched =
                 withTimeoutOrNull(UP_NEXT_ROW_ENRICH_TIMEOUT_MS) {
             lookupSemaphore.withPermit {
+                run row@ {
 
         val isEpisodePlayback =
             entry.season != null && entry.episode != null
@@ -8606,7 +8615,8 @@ Log.d(
                 }
 
                 if (rowIsZombie) {
-                    return@async null
+                    zombieRow = true
+                    return@row null
                 }
 
                 // Capture the show's next aired episode for the Upcoming
@@ -8800,7 +8810,10 @@ Log.d(
                     // twin (Simkl / MDBList) still gets one, and the row stays
                     // resumable from Detail - a card titled with an internal
                     // id is worse than no card.
-                    ?: return@async null,
+                    ?: run {
+                        zombieRow = true
+                        return@row null
+                    },
             poster = entry.poster,
             badge = UpNextBadge.CONTINUE_WATCHING,
 
@@ -8883,8 +8896,10 @@ Log.d(
 
             tmdbId = capturedTmdbId
         )
+                }
             }
                 }
+            if (zombieRow) return@async null
             if (enriched == null) {
                 // Counted so the paste can say how many cards the rail got
                 // WITHOUT their enrichment, rather than leaving a thin card to
