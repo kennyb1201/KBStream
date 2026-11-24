@@ -2475,8 +2475,10 @@ fun SettingsScreen(
                     // contract pins, and splitting it across a concatenation
                     // would make the row say it while the source cannot be
                     // searched for it.
-                    description = "Add a cached torrent to your TorBox account so it plays at once " +
-                            "(TorBox may count it as a download). " +
+                    // One sentence (the settings copy rule), and it still states
+                    // the guarantee spec 9.2 exists for: the API cannot add a
+                    // torrent that is not already cached.
+                    description = "Add cached torrents to TorBox on play; " +
                             "Nothing that is not already cached is ever added.",
                     checked = torboxResolveCreate,
                     onToggle = {
@@ -4371,7 +4373,11 @@ fun SettingsScreen(
                 // choice stays theirs, and the decode it forces is stated.
                 ToggleRow(
                     label = "Night Mode",
-                    description = "Even out loud and quiet scenes so dialogue stays audible.",
+                    // One sentence, and it still states the cost (F4): Night Mode
+                    // decodes the audio itself, so the bitstream passthrough is
+                    // off while it is on.
+                    description = "Even out loud and quiet scenes so dialogue stays audible; " +
+                        "passthrough is off while it's on.",
                     checked = audioNightMode,
                     onToggle = {
                         audioNightMode = it

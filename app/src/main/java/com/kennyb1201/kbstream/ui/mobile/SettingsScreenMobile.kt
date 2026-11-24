@@ -1480,10 +1480,9 @@ private fun IntegrationsPaneMobile(
         }
         SyncedToggleMobile(
             label = "Add cached torrents to TorBox on play",
-            // The guarantee half, in the TV row's own words and on its own line:
-            // the API cannot add a torrent that is not already cached (spec 9.2).
-            description = "Add a cached torrent to your TorBox account so it plays at once " +
-                "(TorBox may count it as a download). " +
+            // One sentence like every row, and it still states the guarantee spec
+            // 9.2 exists for: nothing that is not already cached is ever added.
+            description = "Add cached torrents to TorBox on play; " +
                 "Nothing that is not already cached is ever added.",
             get = AppPreferences::getTorboxResolveCreate,
             set = AppPreferences::setTorboxResolveCreate
@@ -2716,7 +2715,10 @@ private fun VideoPaneMobile() {
         )
         SettingsToggleMobile(
             label = "Night Mode",
-            description = "Even out loud and quiet scenes so dialogue stays audible.",
+            // One sentence, and it still states the cost (F4): Night Mode decodes
+            // the audio itself, so the bitstream passthrough is off while it is on.
+            description = "Even out loud and quiet scenes so dialogue stays audible; " +
+                "passthrough is off while it's on.",
             checked = audioNightMode,
             onChange = {
                 audioNightMode = it
@@ -3104,7 +3106,9 @@ private fun InterfacePaneMobile() {
         )
         SettingsToggleMobile(
             label = "Pure black surfaces",
-            description = "Also paint card plates black. Requires AMOLED Black.",
+            // One sentence, and it still requires the AMOLED switch in the TV
+            // page's own words.
+            description = "Also paints card plates black; Requires AMOLED Black.",
             // Gated exactly as on the TV page: the theme needs BOTH switches
             // (`pureBlackActive`), so with AMOLED off this one is shown OFF and
             // cannot be moved. The stored value is untouched - a chosen ON is
