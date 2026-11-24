@@ -172,6 +172,12 @@ class HiltViewModelMigrationContractTest {
      * and would work, but it pulls navigation-compose in, and the relay's order
      * puts the navigation migration (item 5) after Cast. A migration must not
      * hand the next spec its dependencies early.
+     *
+     * The navigation migration has since started (item 5, F0 pinned
+     * navigation-compose itself), so the guard has moved one step out: the
+     * BRIDGE is still the navigation-free artifact - the one that would have
+     * pulled the dependency in months early - while the dependency now stands on
+     * its own, put there by the spec that owns it.
      */
     @Test
     fun `the bridge is a declared dependency, and it is the navigation-free one`() {
@@ -186,8 +192,17 @@ class HiltViewModelMigrationContractTest {
                 .contains("libs.androidx.hilt.lifecycle.viewmodel.compose")
         )
         assertTrue(
-            "navigation-compose belongs to item 5, not to this migration",
-            !rootText("app/build.gradle.kts").contains("navigation.compose")
+            "the bridge stays the navigation-free artifact: hilt-navigation-compose is " +
+                "the dependency that would have pulled navigation in early",
+            // The catalog names it in a comment explaining why it is absent, so
+            // this asks for a module ENTRY, not for the string.
+            !rootText("gradle/libs.versions.toml").contains("hilt-navigation-compose = {") &&
+                !rootText("app/build.gradle.kts").contains("hilt.navigation.compose")
+        )
+        assertTrue(
+            "and navigation-compose is present because item 5 started, not because " +
+                "this migration dragged it in",
+            rootText("app/build.gradle.kts").contains("libs.androidx.navigation.compose")
         )
     }
 

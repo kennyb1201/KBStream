@@ -199,9 +199,22 @@ class MobileTouchTwinContractTest {
     @Test
     fun `the mobile theme reuses the brand tokens instead of re-declaring them`() {
         val theme = source("com/kennyb1201/kbstream/ui/theme/MobileTheme.kt")
+        // material3 1.5.0's Expressive entry point (`MaterialExpressiveTheme`) is
+        // still the regular material3 theme - it is the same library applying the
+        // same scheme, with the expressive motion scheme on top (spec: material3
+        // expressive, F1). What this pins is that the phone shell is themed by
+        // material3 and not by tv-material3.
         assertTrue(
-            "MobileTheme must apply the regular material3 MaterialTheme",
-            theme.contains("import androidx.compose.material3.MaterialTheme")
+            "MobileTheme must apply a regular material3 theme (Expressive since " +
+                "material3 1.5.0), not the TV one",
+            (theme.contains("import androidx.compose.material3.MaterialTheme") &&
+                theme.contains("MaterialTheme(")) ||
+                theme.contains("import androidx.compose.material3.MaterialExpressiveTheme") &&
+                theme.contains("MaterialExpressiveTheme(")
+        )
+        assertTrue(
+            "and the tv theme is only ever READ from here, never applied",
+            !theme.contains("TvMaterialTheme(")
         )
         assertTrue(
             "the type scale must be mapped from the TV theme, not restated, so the " +

@@ -1197,7 +1197,10 @@ private fun IntegrationsPaneMobile(
         // artwork delay (2 days instead of 7). Synced like the keys around it.
         KeyCardMobile(
             title = "fanart.tv Personal Key",
-            description = "Use your own fanart.tv key for new artwork sooner.",
+            // What it buys, plainly, in the same words the TV row uses: the
+            // personal key moves a title's art from the 7-day tier to the
+            // 2-day one.
+            description = "Use your own fanart.tv key — new artwork appears in 2 days, not 7.",
             placeholder = "Paste key",
             loadedValue = AppPreferences.getFanartClientKey(context),
             onSave = { key -> AppPreferences.setFanartClientKey(context, key) },
@@ -1477,8 +1480,11 @@ private fun IntegrationsPaneMobile(
         }
         SyncedToggleMobile(
             label = "Add cached torrents to TorBox on play",
+            // The guarantee half, in the TV row's own words and on its own line:
+            // the API cannot add a torrent that is not already cached (spec 9.2).
             description = "Add a cached torrent to your TorBox account so it plays at once " +
-                "(TorBox may count it as a download).",
+                "(TorBox may count it as a download). " +
+                "Nothing that is not already cached is ever added.",
             get = AppPreferences::getTorboxResolveCreate,
             set = AppPreferences::setTorboxResolveCreate
         )
@@ -3098,7 +3104,7 @@ private fun InterfacePaneMobile() {
         )
         SettingsToggleMobile(
             label = "Pure black surfaces",
-            description = "Also paint card plates black (needs AMOLED Black).",
+            description = "Also paint card plates black. Requires AMOLED Black.",
             // Gated exactly as on the TV page: the theme needs BOTH switches
             // (`pureBlackActive`), so with AMOLED off this one is shown OFF and
             // cannot be moved. The stored value is untouched - a chosen ON is

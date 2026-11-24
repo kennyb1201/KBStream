@@ -2466,8 +2466,18 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(12.dp))
                 ToggleRow(
                     label = "Add cached torrents to TorBox on play",
+                    // The one-sentence rewrite (5bff3dc95) dropped the guarantee
+                    // half of this row, and the guarantee is the whole point:
+                    // the API cannot add a torrent that is not already cached, so
+                    // a row that only promised "plays at once" promised a power
+                    // it does not have (spec 9.2).
+                    // The guarantee stays on one line: it is the sentence the
+                    // contract pins, and splitting it across a concatenation
+                    // would make the row say it while the source cannot be
+                    // searched for it.
                     description = "Add a cached torrent to your TorBox account so it plays at once " +
-                            "(TorBox may count it as a download).",
+                            "(TorBox may count it as a download). " +
+                            "Nothing that is not already cached is ever added.",
                     checked = torboxResolveCreate,
                     onToggle = {
                         torboxResolveCreate = it
@@ -3824,7 +3834,11 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "TV Screensaver",
-                    description = "Show title artwork when Settings or Home is left idle.",
+                    // All three surfaces the host arms on: Home's rails, the
+                    // TV Detail page and this page. The one-sentence rewrite
+                    // (5bff3dc95) dropped the title's page from it, which is
+                    // the surface a viewer is most likely to leave idle.
+                    description = "Show title artwork when Home, a title's page or Settings is left idle.",
                     checked = screensaverEnabled,
                     onToggle = { enabled ->
                         screensaverEnabled = enabled

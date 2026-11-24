@@ -384,14 +384,20 @@ class SettingsScreenMobileContractTest {
             .substringAfter("private fun AccentSliderMobile(")
             .substringBefore("private val AccentSliderTrackHeight")
 
-        assertTrue(
-            "the gradient is drawn in Material's track slot, which is what insets it " +
-                "by half the thumb width",
+        // Re-pinned when the bar moved OUT of Material's track slot: the
+        // value-based `Slider` overload this screen compiles against takes no
+        // `track` at all, so the gradient is drawn in a Box behind the slider
+        // and the slider's own tracks are transparent. The property this test
+        // exists for is unchanged - the bars sit under the labels, at a thin
+        // height, and the gradient paints once.
+        assertFalse(
+            "the gradient is no longer drawn in Material's track slot - that slot is " +
+                "what inset it by half the thumb width, and this overload has none",
             bar.contains("track = {")
         )
         assertTrue(
-            "the gradient background is inside that slot, not on the slider's own box",
-            bar.indexOf(".background(trackBrush, KBShapePill)") > bar.indexOf("track = {")
+            "the gradient is its own bar BEHIND the slider, not part of the slider's layout",
+            bar.indexOf(".background(trackBrush, KBShapePill)") in 0 until bar.indexOf("Slider(")
         )
         assertFalse(
             "no forced height: the slider keeps the 48dp touch target instead of " +

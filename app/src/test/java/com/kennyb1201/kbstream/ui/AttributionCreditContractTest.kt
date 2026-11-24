@@ -190,11 +190,24 @@ class AttributionCreditContractTest {
         return file.readText()
     }
 
-    /** A file at the repository root - the README is a Trakt-mandated placement. */
+    /**
+     * A file at the repository root - the README is a Trakt-mandated placement.
+     *
+     * Found by walking up rather than by stepping a fixed number of parents from
+     * the source root: that step only lands on the repo root when the test task's
+     * working directory is the module (Gradle's default), so the same test
+     * answered differently under a runner that starts at the repository root.
+     */
     private fun readRepoFile(name: String): String {
-        val file = File(findMainRoot().parentFile.parentFile, name)
-        assertTrue("repo file missing: $file", file.isFile)
-        return file.readText()
+        var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
+        while (dir != null) {
+            val candidate = File(dir, name)
+            if (candidate.isFile) return candidate.readText()
+            dir = dir.parentFile
+        }
+        throw AssertionError(
+            "repo file not found walking up from " + System.getProperty("user.dir") + ": " + name
+        )
     }
 
     /** The directory holding `src/main/` for this module. */

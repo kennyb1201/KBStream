@@ -236,7 +236,11 @@ class PortraitBrowseContractTest {
         )
         assertTrue(
             "browse chips are three across in portrait and five on a wide window",
-            search.contains("screenWidthDp >= 600") &&
+            // The 600dp step is the Medium window class itself since the
+            // adaptive-layout work (spec 2026-11-22, F5): same numbers, one
+            // owner for the breakpoints. What this pins is unchanged - the
+            // column count follows the window, and the chips are chunked by it.
+            search.contains("MobileAdaptiveRules.searchChipColumns(") &&
                 search.contains("visibleEntries.chunked(browseChipColumns)")
         )
         val shell = flat("com/kennyb1201/kbstream/MainActivity.kt")
@@ -375,7 +379,11 @@ class PortraitBrowseContractTest {
         val shell = flat("com/kennyb1201/kbstream/MainActivity.kt")
         assertTrue(
             "the navigation destination survives activity recreation",
-            shell.contains("var screen by rememberSaveable(stateSaver = entrySaver)")
+            // The state is still the one rememberSaveable(entrySaver) builds; it
+            // is read and written through the navigation seam now (spec:
+            // navcompose, F0), which is what the second line says.
+            shell.contains("val screenState = rememberSaveable(stateSaver = entrySaver)") &&
+                shell.contains("var screen by navSeam")
         )
         listOf(
             "LibraryScreenMobile.kt",

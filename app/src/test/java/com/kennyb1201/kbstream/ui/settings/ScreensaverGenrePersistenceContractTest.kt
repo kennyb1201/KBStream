@@ -279,7 +279,7 @@ class ScreensaverGenrePersistenceContractTest {
         assertTrue(
             "the toggle's description names Home, a title's page and Settings",
             squash(settings).contains(
-                "When Home, a title's page or Settings is left idle, fill "
+                "Show title artwork when Home, a title's page or Settings is left idle."
             )
         )
         assertTrue(

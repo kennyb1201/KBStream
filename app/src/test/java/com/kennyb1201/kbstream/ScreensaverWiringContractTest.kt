@@ -678,7 +678,11 @@ class ScreensaverWiringContractTest {
         )
         assertTrue(
             "the toggle's description agrees",
-            squash(settings).contains("When Home, a title's page or Settings is left idle, fill ")
+            // The row speaks in one sentence since 5bff3dc95; what it must name
+            // is unchanged - all three surfaces the host arms on.
+            squash(settings).contains(
+                "Show title artwork when Home, a title's page or Settings is left idle."
+            )
         )
     }
 
