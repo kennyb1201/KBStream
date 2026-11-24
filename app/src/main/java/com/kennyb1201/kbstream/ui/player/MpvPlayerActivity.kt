@@ -1039,6 +1039,8 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private var episodeTitle: String? = null
     private var itemPoster: String? = null
     private var clearLogoUrl: String? = null
+    /** See noteLogoLaunchOnce: the `LOGO: start` line is written once per launch. */
+    private var logoLaunchTraced = false
     /**
      * See [resolveClearLogoFromTmdb]: one lookup per player session.
      *
@@ -1278,6 +1280,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // splash resolves it from TMDB when the extra is blank. Resolve it here
         // too, so the two engines cannot disagree about what the title looks
         // like. The intent-extra path keeps precedence (see the guard inside).
+        // The launch line comes first, whether the extra carried a logo or not
+        // (spec 2026-11-23).
+        noteLogoLaunchOnce()
         resolveClearLogoFromTmdb()
 
         // The settings panel is built in code from the same helpers the main
@@ -7357,6 +7362,25 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      * One lookup per session, silent on any outcome: a title with no logo art
      * is ordinary, and its text title is the designed no-logo state.
      */
+    /**
+     * The launch half of the `LOGO:` trace, the same line the main player
+     * writes: engine, whether the intent carried a logo, and the id flavor the
+     * splash is resolving. Guarded, because this engine asks for the logo from
+     * a setup path that a rebuilt player runs again.
+     */
+    private fun noteLogoLaunchOnce() {
+        if (logoLaunchTraced) return
+        logoLaunchTraced = true
+        com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+            logoLaunchLine(
+                engine = "mpv",
+                carriedLogo = !clearLogoUrl.isNullOrBlank(),
+                parentId = parentId,
+                parentType = parentType
+            )
+        )
+    }
+
     private fun resolveClearLogoFromTmdb() {
         if (!clearLogoUrl.isNullOrBlank() || clearLogoLookupStarted) return
         if (parentId.isBlank()) return

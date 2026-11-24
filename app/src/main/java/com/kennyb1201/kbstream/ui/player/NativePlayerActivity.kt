@@ -961,6 +961,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private var titleGraphicRechecksPosted = false
     /** See resolveClearLogoFromTmdb: one lookup per player session. */
     private var clearLogoLookupStarted = false
+    /** See noteLogoLaunchOnce: the `LOGO: start` line is written once per launch. */
+    private var logoLaunchTraced = false
     private lateinit var clearLogo: ImageView
     private lateinit var itemNameView: TextView
     private lateinit var episodeLabel: TextView
@@ -3652,6 +3654,28 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     /**
+     * The launch half of the `LOGO:` trace: one line, whatever the launch
+     * carried.
+     *
+     * Noted even when the intent DID carry a logo - "extra=present" is the
+     * answer for that launch, and it is also the control the field report is
+     * read against. Guarded, because the policy pass that calls the lookup runs
+     * several times.
+     */
+    private fun noteLogoLaunchOnce() {
+        if (logoLaunchTraced) return
+        logoLaunchTraced = true
+        com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+            logoLaunchLine(
+                engine = "exo",
+                carriedLogo = !clearLogoUrl.isNullOrBlank(),
+                parentId = parentId,
+                parentType = parentType
+            )
+        )
+    }
+
+    /**
      * Fetches the title's logo art when the launch handed the player none.
      *
      * Which logo a playback gets depends on WHERE it was started: the detail
@@ -4642,6 +4666,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         btnNext.visibility = if (season != null && episode != null) View.VISIBLE else View.GONE
 
         updateHeaderInfo()
+        // Before the first lookup can run: what this launch carried, and the id
+        // flavor it is resolving (spec 2026-11-23).
+        noteLogoLaunchOnce()
         // A poster is not a title graphic: see enforceTitleGraphicPolicy.
         enforceTitleGraphicPolicy()
         // Re-assert it as the images land. The poster comes from the image

@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.player
 import android.content.Context
 import com.kennyb1201.kbstream.data.fanart.FanartArtRepository
 import com.kennyb1201.kbstream.data.fanart.FanartKind
+import com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
@@ -27,7 +28,9 @@ import kotlinx.coroutines.withContext
  * Silent on failure, like everything else on this path: a logo is decoration,
  * and the caller's name-text fallback is already on screen. The callers keep
  * their one-lookup-per-session latch - this function does not remember
- * anything.
+ * anything. It also notes one `LOGO:` line per step into the playback session
+ * trace; see [resolveClearLogoChain], which is the ladder itself and the only
+ * place a step is decided.
  */
 internal suspend fun resolveClearLogoUrl(
     context: Context,
@@ -38,34 +41,57 @@ internal suspend fun resolveClearLogoUrl(
     if (normalized != "movie" && normalized != "series") return null
 
     val repository = TmdbRepository.getInstance(context)
-    val detail = runCatchingCancellable {
-        withContext(Dispatchers.IO) {
-            repository.fetchEnrichedMetaCached(parentId, normalized)
-        }
-    }.getOrNull()
+    val fanart = FanartArtRepository.getInstance(context)
 
-    detail?.bestLogoPath()?.takeIf { it.isNotBlank() }?.let { path ->
-        return TmdbRepository.LOGO_BASE + path
-    }
-
-    // The fanart twin: fanart has no collection endpoint and no answer for a
-    // title TMDB could not name, which is why this needs the detail's own id.
-    val artId = detail?.id?.takeIf { it > 0 } ?: return null
-    val isMovie = TmdbRepository.normalizeMediaType(normalized) != "series"
-    val fanartTwin = if (isMovie) {
-        artId
-    } else {
-        runCatchingCancellable {
-            withContext(Dispatchers.IO) { repository.resolveTvdbId(artId, "series") }
-        }.getOrNull()
-    } ?: return null
-
-    return runCatchingCancellable {
-        withContext(Dispatchers.IO) {
-            FanartArtRepository.getInstance(context).clearlogo(
-                kind = if (isMovie) FanartKind.Movie else FanartKind.Tv,
-                id = fanartTwin
+    return resolveClearLogoChain(
+        parentId = parentId,
+        type = normalized,
+        logoBase = TmdbRepository.LOGO_BASE,
+        trace = PlaybackSessionTrace::note,
+        fetchDetail = { id ->
+            var source: String? = null
+            val fetched = runCatchingCancellable {
+                withContext(Dispatchers.IO) {
+                    // `onSource` is the repository's own answer to "where did
+                    // this come from" (mem/disk/net/shared), threaded through
+                    // rather than inferred from timings here.
+                    repository.fetchEnrichedMetaCached(id, normalized) { source = it }
+                }
+            }
+            val detail = fetched.getOrNull()
+            LogoDetailAnswer(
+                answered = detail != null,
+                callFailed = fetched.isFailure,
+                logoPath = detail?.bestLogoPath()?.takeIf { it.isNotBlank() },
+                detailId = detail?.id?.takeIf { it > 0 } ?: 0,
+                source = source
+            )
+        },
+        resolveTvdbId = { artId ->
+            runCatchingCancellable {
+                withContext(Dispatchers.IO) { repository.resolveTvdbId(artId, "series") }
+            }.getOrNull()
+        },
+        provenNoTvdbId = { artId ->
+            // Read-only: the remembered-miss state is what tells "TMDB has
+            // proven there is no twin" from "the call failed".
+            repository.hasProvenNoTvdbMapping(artId, "series")
+        },
+        fanartLogo = { isMovie, fanartId ->
+            // `clearlogoAnswer`, not `clearlogo`: "fanart has no logo for this
+            // twin" and "the call failed" are different facts.
+            val answer = runCatchingCancellable {
+                withContext(Dispatchers.IO) {
+                    fanart.clearlogoAnswer(
+                        kind = if (isMovie) FanartKind.Movie else FanartKind.Tv,
+                        id = fanartId
+                    )
+                }
+            }.getOrNull()
+            FanartLogoAnswer(
+                url = answer?.url,
+                answered = answer?.answered == true
             )
         }
-    }.getOrNull()?.takeIf { it.isNotBlank() }
+    )
 }
