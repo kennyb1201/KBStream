@@ -22,7 +22,10 @@ import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
 import com.kennyb1201.kbstream.data.memory.trimImageMemoryCache
 import com.kennyb1201.kbstream.data.addon.AddonManager
+import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
+import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.reporting.ImageLoadTrace
 import com.kennyb1201.kbstream.data.reporting.CrashReporter
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
@@ -61,6 +64,9 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
     @Inject lateinit var addonManager: AddonManager
     @Inject lateinit var bingecatRepository: BingeCatRepository
     @Inject lateinit var kbStreamDownloader: KBStreamDownloader
+    @Inject lateinit var tmdbRepository: TmdbRepository
+    @Inject lateinit var addonRepository: AddonRepository
+    @Inject lateinit var traktRepository: TraktRepository
 
     override fun onCreate() {
         super.onCreate()
@@ -85,7 +91,10 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         // reads and writes, Kitsu's reads and writes, AniList, MAL and Trakt.
         // A restart must not re-learn a 429 by firing the fan-out that earned
         // it - which is exactly what the 0.9.407 paste showed happening.
-        com.kennyb1201.kbstream.data.network.installRateLimitParkStores(this)
+        com.kennyb1201.kbstream.data.network.installRateLimitParkStores(
+            this,
+            traktRepository
+        )
         // Build fingerprint, logged before anything that can fail. The question
         // every device test turns on is "which build is this?": a logcat full of
         // behavior from a stale APK wastes the whole session, and a suppression
@@ -414,8 +423,11 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             startupScope.launch {
                 runCatchingCancellable {
                     PerfTrace.timedSuspend("startup.pinnedWarm") {
-                        com.kennyb1201.kbstream.data.home.HomePinnedWarm
-                            .warm(this@MainApplication)
+                        com.kennyb1201.kbstream.data.home.HomePinnedWarm.warm(
+                            this@MainApplication,
+                            tmdbRepository,
+                            addonRepository
+                        )
                     }
                 }.onFailure { error ->
                     CrashReporter.recordNonFatal(

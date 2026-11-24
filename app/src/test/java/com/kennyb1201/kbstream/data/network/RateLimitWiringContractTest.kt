@@ -190,15 +190,15 @@ class RateLimitWiringContractTest {
             "KitsuLibrary.attachParkStore(",
             "AniListClient.attachParkStore(",
             "malRateGuard.attachParkStore(",
-            "TraktRepository.getInstance(context).guard"
+            "traktRepository.guard"
         ).forEach { expected ->
             assertTrue("installer is missing $expected", install.contains(expected))
         }
 
         assertTrue(
-            "the installer must run at app start",
+            "the installer must run at app start, with the graph's Trakt instance",
             source(MAIN_APPLICATION)
-                .contains("installRateLimitParkStores(this)")
+                .contains("installRateLimitParkStores(\n            this,\n            traktRepository\n        )")
         )
     }
 }

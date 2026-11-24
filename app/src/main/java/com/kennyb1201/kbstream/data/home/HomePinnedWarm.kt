@@ -46,9 +46,21 @@ import kotlinx.coroutines.launch
  */
 internal object HomePinnedWarm {
 
-    /** Warms the pinned rails' first pages, all legs at once. */
-    suspend fun warm(context: Context) = coroutineScope {
-        val repository = AddonRepository.getInstance()
+    /**
+     * Warms the pinned rails' first pages, all legs at once.
+     *
+     * The two repositories arrive from the application rather than being
+     * fetched here (spec 2026-11-22, item 3): the app already holds both from
+     * the graph, and a warm that reached for its own copy would be the one
+     * place a second instance could appear. [context] stays for the custom
+     * catalog store, which is still read through its accessor.
+     */
+    suspend fun warm(
+        context: Context,
+        tmdbRepository: TmdbRepository,
+        addonRepository: AddonRepository
+    ) = coroutineScope {
+        val repository = addonRepository
         val baseUrl = PinnedRailsSpec.baseUrl
         PinnedRailsSpec.catalogs.forEach { (catalogId, type, _) ->
             launch {
@@ -62,8 +74,7 @@ internal object HomePinnedWarm {
                 }
             }
         }
-        val tmdb = runCatching { TmdbRepository.getInstance(context) }.getOrNull()
-            ?: return@coroutineScope
+        val tmdb = tmdbRepository
         val catalogs = runCatching { CustomCatalogStore.list(context) }.getOrNull().orEmpty()
         catalogs.forEach { catalog ->
             launch {

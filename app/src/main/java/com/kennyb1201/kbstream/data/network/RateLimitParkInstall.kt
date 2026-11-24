@@ -21,8 +21,15 @@ import com.kennyb1201.kbstream.data.settings.prefs.Prefs
  * written over by a Trakt write, which is what a shared key would do.
  *
  * A SharedPreferences read is cheap and the only write is one per 429.
+ *
+ * Trakt's repository is passed in rather than fetched through its accessor
+ * (spec 2026-11-22, item 3): the application already holds it from the graph,
+ * and the guard this attaches belongs to that one instance.
  */
-internal fun installRateLimitParkStores(context: Context) {
+internal fun installRateLimitParkStores(
+    context: Context,
+    traktRepository: TraktRepository
+) {
     val prefs = Prefs.file(context.applicationContext, RATE_LIMIT_PARK_PREFS)
 
     bingeCatReadGuard.attachParkStore(prefsParkUntilStore(prefs, KEY_BINGECAT_READ))
@@ -31,7 +38,7 @@ internal fun installRateLimitParkStores(context: Context) {
     KitsuLibrary.attachParkStore(prefsParkUntilStore(prefs, KEY_KITSU_WRITE))
     AniListClient.attachParkStore(prefsParkUntilStore(prefs, KEY_ANILIST))
     malRateGuard.attachParkStore(prefsParkUntilStore(prefs, KEY_MAL))
-    TraktRepository.getInstance(context).guard
+    traktRepository.guard
         .attachParkStore(prefsParkUntilStore(prefs, KEY_TRAKT))
 }
 
