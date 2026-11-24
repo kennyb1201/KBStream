@@ -46,6 +46,7 @@ import androidx.compose.material3.Icon
 import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.ui.components.IdleListCacheWindow
 import com.kennyb1201.kbstream.ui.components.LocalGlideActive
+import com.kennyb1201.kbstream.ui.components.logoLoadFailureReason
 import com.kennyb1201.kbstream.ui.components.keepComposedWhileFocused
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
 import com.kennyb1201.kbstream.data.kb.browseChipSuccessor
@@ -112,6 +113,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import com.kennyb1201.kbstream.ui.player.SplitModeRenderersFactory
+import com.kennyb1201.kbstream.ui.player.logoLaunchShape
 import com.kennyb1201.kbstream.ui.screensaver.rememberScreensaver
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MergingMediaSource
@@ -167,6 +169,8 @@ import com.kennyb1201.kbstream.data.reporting.CwFilterTrace
 import com.kennyb1201.kbstream.data.reporting.ImageLoadTrace
 import com.kennyb1201.kbstream.data.reporting.RecompositionTrace
 import com.kennyb1201.kbstream.data.reporting.SpotlightDiagTrace
+import com.kennyb1201.kbstream.data.tmdb.HeroArtTrace
+import com.kennyb1201.kbstream.data.tmdb.HeroLogoTrace
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
 import com.kennyb1201.kbstream.ui.browse.FocusLandingVerdict
 import com.kennyb1201.kbstream.ui.browse.rememberFocusHandBack
@@ -1469,6 +1473,13 @@ internal fun HeroClearLogo(
     url: String,
     name: String,
     modifier: Modifier = Modifier,
+    /**
+     * The title's TMDB id, for the draw trace only - it changes nothing about
+     * the request, the decode or the tint. Both callers have it in scope; a
+     * caller that genuinely does not leaves it null and the trace says
+     * `tmdb=none` rather than inventing one.
+     */
+    tmdbId: Int? = null,
     /** Draw the name while the art loads. False when the caller draws it itself. */
     showPlaceholder: Boolean = true,
     /** Called with true the first time the art paints (never with false). */
@@ -1476,6 +1487,13 @@ internal fun HeroClearLogo(
 ) {
     var logoIsDark by remember(url) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    // The file this draw is about, masked the way the player's `LOGO:` lines
+    // mask it (host + bounded path, no query): the shape IS the identity, and a
+    // paste is public. Computed once per URL, beside the request it names.
+    val logoShape = remember(url) {
+        val shape = logoLaunchShape(url)
+        "${shape.host}${shape.path}"
+    }
     // One request per URL, not per hero recomposition. The hero recomposes on
     // every focus step; rebuilding the request re-executed Coil's request and
     // reset the painter's state each time (a memory hit, but churn on the
@@ -1529,14 +1547,47 @@ internal fun HeroClearLogo(
                 // the frame it landed on. The tint arrives a frame later at
                 // most, which is the same visual result without the stall.
                 val image = state.result.image
+                val dataSource = state.result.dataSource
                 scope.launch {
-                    val dark = withContext(Dispatchers.Default) {
-                        runCatching {
-                            isDarkMonochromeArtwork(image.toBitmap())
-                        }.getOrDefault(false)
+                    // The bitmap is materialized ONCE and both the verdict and
+                    // the trace read it: the draw trace exists to say whether a
+                    // slab is the decode's fault, so it has to report the very
+                    // bitmap this paint drew.
+                    val (bitmap, dark) = withContext(Dispatchers.Default) {
+                        val drawn = runCatching { image.toBitmap() }.getOrNull()
+                        val verdict = if (drawn == null) {
+                            false
+                        } else {
+                            runCatching { isDarkMonochromeArtwork(drawn) }
+                                .getOrDefault(false)
+                        }
+                        drawn to verdict
                     }
                     logoIsDark = dark
+                    // Recorded AFTER the verdict so the tint lands in the same
+                    // line, and inside this coroutine because the bitmap it
+                    // reports is already here (spec 2026-11-24, F2). A failed
+                    // analysis is not a missing entry: it records tint=no.
+                    HeroLogoTrace.recordDraw(
+                        tmdbId = tmdbId,
+                        shape = logoShape,
+                        layer = heroLogoLayer(dataSource),
+                        width = bitmap?.width ?: 0,
+                        height = bitmap?.height ?: 0,
+                        config = bitmap?.config?.name ?: "none",
+                        tint = dark
+                    )
                 }
+            },
+            // A failed load keeps the name standing in (by design), so without
+            // this the paste could not tell a failed logo from a title TMDB
+            // holds no wordmark for (spec 2026-11-24, F3).
+            onError = { state ->
+                HeroLogoTrace.recordFailure(
+                    tmdbId = tmdbId,
+                    shape = logoShape,
+                    reason = logoLoadFailureReason(state.result.throwable)
+                )
             },
             colorFilter = if (logoIsDark) ColorFilter.tint(KBTextHi) else null,
             modifier = Modifier.fillMaxSize()
@@ -1571,6 +1622,25 @@ private fun isDarkMonochromeArtwork(bitmap: android.graphics.Bitmap): Boolean {
 
     return luminanceSum / count < 148L && saturationSum / count < 42L
 }
+
+/**
+ * Coil's answer for this draw, in the vocabulary [HeroArtTrace.Layer] already
+ * prints - so the draw line and the resolve line above it can be read side by
+ * side in one paste (spec 2026-11-24, F1).
+ *
+ * MEMORY_CACHE and MEMORY are both "memory" to a report: whether Coil found a
+ * decoded bitmap in its cache or drew one it had already decoded from that cache,
+ * neither paid for a decode. Anything a future Coil adds answers [NONE] rather
+ * than being reported as a layer this app never asked for.
+ */
+private fun heroLogoLayer(dataSource: coil3.decode.DataSource): HeroArtTrace.Layer =
+    when (dataSource) {
+        coil3.decode.DataSource.MEMORY_CACHE,
+        coil3.decode.DataSource.MEMORY -> HeroArtTrace.Layer.MEMORY
+        coil3.decode.DataSource.DISK -> HeroArtTrace.Layer.DISK
+        coil3.decode.DataSource.NETWORK -> HeroArtTrace.Layer.NETWORK
+        else -> HeroArtTrace.Layer.NONE
+    }
 
 /**
  * Public alias so KB FOLLOW_LAYOUT folder screens can render the exact
@@ -2847,6 +2917,13 @@ private fun HomeHero(
                     HeroClearLogo(
                         url = clearLogo,
                         name = title,
+                        // The title's own id, for the draw trace: the detail
+                        // first (it is TMDB's answer), else whatever namespace
+                        // the catalog meta or the preview id spells. A meta id
+                        // that names an add-on id rather than a TMDB one
+                        // answers null, and the trace says `tmdb=none`.
+                        tmdbId = tmdbDetail?.id
+                            ?: ImageOverrides.tmdbIdOf(meta?.id ?: preview.id),
                         // Fixed size, coerced by the parent column's constraints
                         // on narrow screens; Collection manifests get the larger
                         // box so their wordmark logos carry the hero.

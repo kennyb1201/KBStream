@@ -482,6 +482,9 @@ internal fun SpotlightPreviewPanel(
                 HeroClearLogo(
                     url = settledLogo,
                     name = titleText,
+                    // The panel's own title id, so its draw lands in the same
+                    // trace as the hero's (spec 2026-11-24, F1).
+                    tmdbId = tmdbId,
                     showPlaceholder = false,
                     onPainted = { logoPainted = it },
                     modifier = Modifier

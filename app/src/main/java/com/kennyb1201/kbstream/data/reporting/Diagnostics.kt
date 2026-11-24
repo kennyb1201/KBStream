@@ -33,6 +33,7 @@ import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.sports.SportsTier1Trace
 import com.kennyb1201.kbstream.data.tmdb.HeroArtTrace
+import com.kennyb1201.kbstream.data.tmdb.HeroLogoTrace
 import com.kennyb1201.kbstream.data.trakt.TraktPollTrace
 import com.kennyb1201.kbstream.data.youtube.PoTokenTrace
 import java.io.File
@@ -257,6 +258,17 @@ object Diagnostics {
         SportsTier1Trace.block()?.lines()?.forEach { line -> report.appendLine(line) }
         artLine()?.let { report.appendLine(it) }
         heroArtLine()?.let { report.appendLine(it) }
+        // ...and what the hero's clear-logo DRAWS did with what those resolves
+        // handed over (spec 2026-11-24, F1). The line above is the resolve: it
+        // can say `logo=true` for a title whose logo draws as a solid slab,
+        // because a handed-over URL is not a painted bitmap. This block is the
+        // draw - the masked file, the layer, the decoded size, the bitmap's own
+        // config and the dark-mark verdict - which is what settles a white slab
+        // as a decode (RGB_565) or a file (ARGB_8888/HARDWARE). It turns over
+        // only on hero paints, so it survives the walk to Settings that evicts
+        // the four-entry resolve trace. Absent until the hero has painted a
+        // logo.
+        heroLogoLine()?.let { report.appendLine(it) }
         // What the hidden-titles filter decided for each Continue Watching card,
         // and the identity it decided by. The rails log the same title's meta id
         // and drop it correctly, so a hidden title surviving on CW could not be
@@ -840,6 +852,20 @@ object Diagnostics {
         val lines = HeroArtTrace.lines()
         if (lines.isEmpty()) return null
         return "heroart: " + lines.joinToString(" · ")
+    }
+
+    /**
+     * What the hero's clear-logo draws did - see [HeroLogoTrace].
+     *
+     * A separate block from `heroart:` on purpose: resolve and draw are two
+     * different requests, and a report needs to show them disagreeing (the
+     * resolve found a logo, the draw never painted) without either overwriting
+     * the other.
+     */
+    private fun heroLogoLine(): String? {
+        val lines = HeroLogoTrace.lines()
+        if (lines.isEmpty()) return null
+        return "herologo: " + lines.joinToString(" · ")
     }
 
     private fun accountLine(): String {
