@@ -969,6 +969,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private var clearLogoLookupStarted = false
     /** See noteLogoLaunchOnce: the `LOGO: start` line is written once per launch. */
     private var logoLaunchTraced = false
+    /**
+     * The splash's wordmark URL already asked for.
+     *
+     * Both setup passes call updateHeaderInfo(), and a second `load` into the
+     * same ImageView cancels the request the first one started - which is how a
+     * carried logo could vanish while the paste carried no `LOGO:` failure line
+     * at all (spec 2026-11-24, F1). The chrome's slot keeps the same bookkeeping
+     * itself (PlayerChrome.showTitleLogo).
+     */
+    private var splashLogoUrlIssued: String? = null
     private lateinit var clearLogo: ImageView
     private lateinit var itemNameView: TextView
     private lateinit var episodeLabel: TextView
@@ -3729,21 +3739,19 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * policy pass runs more than once.
      */
     private fun applyClearLogo(url: String) {
-        clearLogo.load(
-            tracedLogoRequest(
-                clearLogo.context,
-                url,
-                surface = "chrome"
-            ) { restoreChromeTitleText() }
-        )
-        clearLogo.visibility = View.VISIBLE
-        splashClearLogo.load(
-            tracedLogoRequest(
-                splashClearLogo.context,
-                url,
-                surface = "splash"
+        // The chrome slot loads through the shared chrome, which knows which URL
+        // it already painted or is fetching (spec 2026-11-24, F1/F3).
+        chrome?.showTitleLogo(url) { restoreChromeTitleText() }
+        if (url != splashLogoUrlIssued) {
+            splashLogoUrlIssued = url
+            splashClearLogo.load(
+                tracedLogoRequest(
+                    splashClearLogo.context,
+                    url,
+                    surface = "splash"
+                )
             )
-        )
+        }
         splashClearLogo.visibility = View.VISIBLE
         itemNameView.visibility = View.GONE
         splashItemName?.visibility = View.GONE
@@ -5288,14 +5296,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             }
         renderSourceBadges()
 
-        // Populate header info
+        // Populate header info. This is the setup paint of both title slots - one
+        // chrome load and one splash load for a carried URL (spec 2026-11-24,
+        // F1). There is deliberately no refreshTitle() after it: that would be a
+        // third request into the same chrome slot, cancelling the one that is
+        // still on its way. The repaints that matter are the first frame and a
+        // source switch.
         updateHeaderInfo()
-        // The chrome's own paint of the same facts - MPV's setupControls() does
-        // this, and this engine had no such call anywhere (spec 2026-11-23, F1):
-        // the title block was painted at setup by updateHeaderInfo() and then
-        // never repainted, so anything that reset it after setup left the plain
-        // name standing over a wordmark the launch did carry.
-        chrome?.refreshTitle()
         updateSettingsPanelState()
         // Match the end-of-episode popups to the AMOLED / pure-black toggles.
         applyPlayerPanelTheme()
@@ -9605,27 +9612,26 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
 
         if (resolvedLogoUrl != null) {
-            // Traced, so a dead URL stops looking like a title block nobody
-            // painted (spec 2026-11-23, F2) - and a failed chrome load restores
-            // the text instead of leaving the slot empty (F3).
-            clearLogo.load(
-                tracedLogoRequest(
-                    clearLogo.context,
-                    resolvedLogoUrl,
-                    surface = "chrome"
-                ) { restoreChromeTitleText() }
-            )
-            clearLogo.visibility = View.VISIBLE
+            // The chrome's slot is the shared chrome's to load: it remembers the
+            // URL it already painted or is fetching, so the second setup paint -
+            // and every repaint after it - does not cancel this one (spec
+            // 2026-11-24, F1/F3). A failed load still restores the text (F3 of
+            // the 2026-11-23 spec).
+            chrome?.showTitleLogo(resolvedLogoUrl) { restoreChromeTitleText() }
             itemNameView.visibility = View.GONE
-            // Also load into splash overlay. The splash keeps its own fallback
-            // (showSplashTitleFallback), so the trace line is the whole ask.
-            splashClearLogo.load(
-                tracedLogoRequest(
-                    splashClearLogo.context,
-                    resolvedLogoUrl,
-                    surface = "splash"
+            // The splash keeps its own fallback (showSplashTitleFallback), so
+            // the trace line is the whole ask - and one load per URL, because
+            // this pass runs twice at setup.
+            if (resolvedLogoUrl != splashLogoUrlIssued) {
+                splashLogoUrlIssued = resolvedLogoUrl
+                splashClearLogo.load(
+                    tracedLogoRequest(
+                        splashClearLogo.context,
+                        resolvedLogoUrl,
+                        surface = "splash"
+                    )
                 )
-            )
+            }
         } else if (itemName.isNotBlank()) {
             clearLogo.visibility = View.GONE
             itemNameView.text = itemName

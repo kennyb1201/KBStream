@@ -192,6 +192,20 @@ class PlayerChrome(
     private val overlay: View? = root.findViewById(R.id.chrome_root)
     private val clearLogo: ImageView? = root.findViewById(R.id.chrome_clear_logo)
     private val itemName: TextView? = root.findViewById(R.id.chrome_item_name)
+
+    /**
+     * The logo URLs this slot has painted and is still waiting on.
+     *
+     * A repaint is only cheap if it does not re-issue the load: Coil cancels the
+     * request already on its way to an ImageView when a new `load` lands on it,
+     * so three setup paints and a first-frame repaint used to throw away every
+     * fetch but the last - which is how a carried logo vanished while the paste
+     * showed no failure (spec 2026-11-24, F1/F3). A new URL simply supersedes
+     * both, because issuing it cancels the old request; the old success can no
+     * longer mark the new URL.
+     */
+    private var loadedLogoUrl: String? = null
+    private var requestedLogoUrl: String? = null
     private val episodeLabel: TextView? = root.findViewById(R.id.chrome_episode_label)
     private val episodeTitle: TextView? = root.findViewById(R.id.chrome_episode_title)
     private val overview: TextView? = root.findViewById(R.id.chrome_overview)
@@ -422,38 +436,64 @@ class PlayerChrome(
     }
 
     /**
+     * Puts [url] into the chrome's wordmark slot, or its name text when the
+     * launch carries no logo.
+     *
+     * The one place the slot is loaded from - setup on both engines, a
+     * first-frame repaint and a source switch all come through here - so the
+     * chrome can tell a fresh URL from one it already painted or is already
+     * fetching. The load is traced, and [onFailure] restores the name text
+     * instead of leaving an empty slot over a hidden title (spec 2026-11-23,
+     * F3).
+     */
+    internal fun showTitleLogo(url: String?, onFailure: (() -> Unit)? = null) {
+        val logo = clearLogo
+        if (logo == null || url.isNullOrBlank()) {
+            // No art is the slot's reset: forget the URL so the same logo
+            // returning later is loaded again instead of being "already
+            // painted" into a slot this branch just emptied.
+            loadedLogoUrl = null
+            requestedLogoUrl = null
+            logo?.setImageDrawable(null)
+            logo?.visibility = View.GONE
+            itemName?.visibility = View.VISIBLE
+            return
+        }
+        if (url != loadedLogoUrl && url != requestedLogoUrl) {
+            requestedLogoUrl = url
+            runCatching {
+                logo.load(
+                    tracedLogoRequest(
+                        logo.context,
+                        url,
+                        surface = "chrome",
+                        onLoaded = { loadedLogoUrl = url },
+                        onFailure = onFailure
+                    )
+                )
+            }
+        }
+        logo.visibility = View.VISIBLE
+        itemName?.visibility = View.GONE
+    }
+
+    /**
      * Re-paints the title block from the host's current facts.
      *
-     * The load is traced, and a failure falls back to the name text (spec
-     * 2026-11-23, F2/F3). This is the call the Exo player had nowhere, so it is
-     * also the only place a repaint's logo actually loads - a dead URL here used
-     * to leave the wordmark slot empty with the title still hidden, which is
-     * the silent blank the field paste could not distinguish from "never
-     * painted".
+     * The paint is [showTitleLogo], so a repaint whose logo already landed - or
+     * is still on its way - issues no request at all (spec 2026-11-24, F3). That
+     * is what makes the first-frame, source-switch and overlay-raise repaints
+     * safe instead of each one cancelling the previous load.
      */
     fun refreshTitle() {
         val info = host.chromeTitleInfo()
 
-        val logoUrl = info.clearLogoUrl
-        val logo = clearLogo
-        if (logo != null && !logoUrl.isNullOrBlank()) {
-            runCatching {
-                logo.load(
-                    tracedLogoRequest(logo.context, logoUrl, surface = "chrome") {
-                        // A failed load restores the text: the same fallback the
-                        // no-logo case gets, so the header still names the title.
-                        logo.setImageDrawable(null)
-                        logo.visibility = View.GONE
-                        itemName?.text = info.itemName
-                        itemName?.visibility = View.VISIBLE
-                    }
-                )
-            }
-            logo.visibility = View.VISIBLE
-            itemName?.visibility = View.GONE
-        } else {
-            logo?.setImageDrawable(null)
-            logo?.visibility = View.GONE
+        showTitleLogo(info.clearLogoUrl) {
+            // A failed load restores the text: the same fallback the no-logo
+            // case gets, so the header still names the title.
+            clearLogo?.setImageDrawable(null)
+            clearLogo?.visibility = View.GONE
+            itemName?.text = info.itemName
             itemName?.visibility = View.VISIBLE
         }
         itemName?.text = info.itemName

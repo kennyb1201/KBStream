@@ -52,17 +52,34 @@ internal fun logoRequest(
  * failure [onFailure] runs, which is how the chrome restores its text instead
  * of leaving an empty slot (F3).
  *
+ * A CANCELLED load is a third outcome, and until 2026-11-24 it was the silent
+ * one: a second `ImageView.load()` into the same slot cancels the request that
+ * is already on its way, so setup painting one surface three times back to back
+ * threw away every fetch but the last and the paste showed none of it (spec
+ * 2026-11-24, F2). It is traced here, where every player title slot loads, so a
+ * cancellation can never again be indistinguishable from art that never
+ * arrived.
+ *
+ * [onLoaded] lets an owner that reuses one slot remember which URL actually
+ * landed, which is what makes a later repaint of the same facts bookkeeping
+ * instead of a fresh fetch (F3).
+ *
  * Coil's own error travels as its class name: one line, no stack, no URL.
  */
 internal fun tracedLogoRequest(
     context: Context,
     url: String?,
     surface: String,
+    onLoaded: (() -> Unit)? = null,
     onFailure: (() -> Unit)? = null
 ): ImageRequest =
     logoRequest(context, url).newBuilder().listener(
         onSuccess = { _, _ ->
             PlaybackSessionTrace.note("LOGO: loaded $surface")
+            onLoaded?.invoke()
+        },
+        onCancel = { _ ->
+            PlaybackSessionTrace.note("LOGO: cancelled $surface")
         },
         onError = { _, result ->
             PlaybackSessionTrace.note(

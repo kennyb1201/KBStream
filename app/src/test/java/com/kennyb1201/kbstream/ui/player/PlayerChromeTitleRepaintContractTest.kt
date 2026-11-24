@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -39,10 +40,22 @@ class PlayerChromeTitleRepaintContractTest {
             "the chrome-setup paint goes through the shared chrome",
             native.contains("chrome = PlayerChrome(findViewById(R.id.chrome_layer), this)")
         )
-        assertTrue(
-            "chrome setup, the first frame and a source switch each repaint it:\n" +
+        assertEquals(
+            "the first frame and a source switch repaint it - setup must not, " +
+                "because updateHeaderInfo() has just painted the same facts and a " +
+                "second load would cancel the one it started (spec 2026-11-24, F1):\n" +
                 callSites(native, "chrome?.refreshTitle()"),
-            count(native, "chrome?.refreshTitle()") >= 3
+            2,
+            count(native, "chrome?.refreshTitle()")
+        )
+        assertTrue(
+            "and the setup paint is updateHeaderInfo()'s alone",
+            native.substringAfter("private fun bindViews()")
+                .substringBefore("\n    private fun ")
+                .contains("updateHeaderInfo()") &&
+                !native.substringAfter("private fun bindViews()")
+                    .substringBefore("\n    private fun ")
+                    .contains("chrome?.refreshTitle()")
         )
         assertTrue(
             "and the repaint sits on the splash-hide path, where a logo load " +
@@ -89,18 +102,30 @@ class PlayerChromeTitleRepaintContractTest {
             val body = native.substringAfter("private fun $painter(")
                 .substringBefore("\n    private fun ")
             assertTrue(
-                "$painter loads both title slots through the traced request",
-                body.contains("tracedLogoRequest(") &&
-                    body.contains("surface = \"chrome\"") &&
-                    body.contains("surface = \"splash\"")
+                "$painter paints the chrome slot through the shared chrome and the " +
+                    "splash slot through the traced request",
+                body.contains("chrome?.showTitleLogo(") &&
+                    body.contains("tracedLogoRequest(") &&
+                    body.contains("surface = \"splash\"") &&
+                    !Regex("(?<![A-Za-z])clearLogo\\.load\\s*\\(").containsMatchIn(body)
             )
         }
+        val slot = chrome.substringAfter("internal fun showTitleLogo(")
+            .substringBefore("fun refreshTitle()")
         assertTrue(
             "and the repaint's own load is traced too - it is the one that runs " +
-                "after setup",
+                "after setup, through the one method that owns the chrome slot",
+            slot.contains("tracedLogoRequest(") &&
+                slot.contains("surface = \"chrome\"")
+        )
+        assertTrue(
+            "refreshTitle paints through it rather than loading the slot itself",
             chrome.substringAfter("fun refreshTitle()")
                 .substringBefore("fun setSkipIntro(")
-                .contains("tracedLogoRequest(logo.context, logoUrl, surface = \"chrome\")")
+                .contains("showTitleLogo(info.clearLogoUrl)") &&
+                !chrome.substringAfter("fun refreshTitle()")
+                    .substringBefore("fun setSkipIntro(")
+                    .contains("logo.load(")
         )
     }
 
@@ -108,7 +133,7 @@ class PlayerChromeTitleRepaintContractTest {
     fun `a failed chrome load restores the title text instead of leaving it blank`() {
         assertTrue(
             "the chrome hands its own fallback to the traced load",
-            chrome.contains("logo.visibility = View.GONE") &&
+            chrome.contains("clearLogo?.visibility = View.GONE") &&
                 chrome.contains("itemName?.text = info.itemName") &&
                 chrome.contains("itemName?.visibility = View.VISIBLE")
         )
