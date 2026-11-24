@@ -129,8 +129,15 @@ class StatePerfBatchContractTest {
         val home = readSource(HOME)
         assertTrue(
             "the analysis must be dispatched to a background worker",
+            // The bitmap is materialized into a local since the hero's draw
+            // trace (spec 2026-11-24, F2) records its size and config from the
+            // same bitmap, so the sampler reads that local rather than calling
+            // toBitmap() again - one readback, still off the main thread.
             home.contains("withContext(Dispatchers.Default) {") &&
-                home.contains("isDarkMonochromeArtwork(image.toBitmap())")
+                home.contains("runCatching { image.toBitmap() }.getOrNull()") &&
+                home.contains("runCatching { isDarkMonochromeArtwork(drawn) }") &&
+                home.indexOf("withContext(Dispatchers.Default) {") <
+                home.indexOf("isDarkMonochromeArtwork(drawn)")
         )
         assertTrue(
             "and the composition must supply the scope that dispatch runs on",
