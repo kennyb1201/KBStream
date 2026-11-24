@@ -11,7 +11,7 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import coil3.load
-import com.kennyb1201.kbstream.ui.components.tracedLogoRequest
+import com.kennyb1201.kbstream.ui.components.loadLogo
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace
@@ -573,14 +573,16 @@ class PlayerChrome(
     }
 
     /**
-     * The one load call, traced at the instant it runs (F1).
+     * The one load call.
      *
-     * `LOGO: start` proves the launch carried a URL; it says nothing about
-     * whether a request was ever made. With `issued` beside it, the next paste
-     * separates "never issued" (a call-site failure) from "issued and silent"
-     * (Coil never calling back) - the one question this round has to answer.
+     * It goes through [loadLogo], Coil's builder-block overload, rather than a
+     * pre-built request (spec 2026-11-24, F2): the pre-built form is what went
+     * silent on the player's setup load, and this call site runs during setup.
+     * The `issued` line and the traced callbacks live in the block; `LOGO:
+     * start` plus `issued` is what separates a call-site failure from Coil-level
+     * silence.
      *
-     * The issue is no longer wrapped in a swallowed `runCatching` (F3): a throw
+     * The issue is no longer wrapped in a swallowed `runCatching` (F4): a throw
      * is traced by name and clears the request, so a throwing load cannot leave
      * the dedup poisoned for the rest of the session.
      */
@@ -588,19 +590,15 @@ class PlayerChrome(
         requestedLogoUrl = url
         requestedAtMs = SystemClock.elapsedRealtime()
         logoAttempts++
-        PlaybackSessionTrace.note("LOGO: issued chrome")
         try {
-            logo.load(
-                tracedLogoRequest(
-                    logo.context,
-                    url,
-                    surface = "chrome",
-                    onLoaded = { loadedLogoUrl = url },
-                    onFailure = {
-                        requestedLogoUrl = null
-                        onFailure?.invoke()
-                    }
-                )
+            logo.loadLogo(
+                url = url,
+                surface = "chrome",
+                onLoaded = { loadedLogoUrl = url },
+                onFailure = {
+                    requestedLogoUrl = null
+                    onFailure?.invoke()
+                }
             )
         } catch (error: Exception) {
             // Not swallowed: named, and the dedup is cleared so the next

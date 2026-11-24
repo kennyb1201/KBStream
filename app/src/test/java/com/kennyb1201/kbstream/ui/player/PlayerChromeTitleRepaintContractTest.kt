@@ -98,10 +98,17 @@ class PlayerChromeTitleRepaintContractTest {
     fun `a logo load into a title slot says whether it loaded`() {
         assertTrue(
             "one helper owns the trace, so no surface can load untraced",
-            logoArt.contains("internal fun tracedLogoRequest(") &&
+            logoArt.contains("internal fun ImageView.loadLogo(") &&
+                logoArt.contains("PlaybackSessionTrace.note(\"LOGO: issued \$surface\")") &&
                 logoArt.contains("PlaybackSessionTrace.note(\"LOGO: loaded \$surface\")") &&
                 logoArt.contains("\"LOGO: load-failed \$surface ") &&
                 logoArt.contains("onFailure?.invoke()")
+        )
+        assertTrue(
+            "and it is Coil's builder-block form, not a pre-built request: the " +
+                "player issues during setup, before its views are attached " +
+                "(spec 2026-11-24 round 3, F2)",
+            logoArt.contains("load(url) {") && logoArt.contains("logoArt()")
         )
         assertTrue(
             "the reason is Coil's own error class, never its message or the URL",
@@ -121,9 +128,9 @@ class PlayerChromeTitleRepaintContractTest {
         val splashLoad = native.substringAfter("private fun issueSplashLogo(")
             .substringBefore("\n    private fun ")
         assertTrue(
-            "and the helper loads through the traced request, so the splash cannot " +
-                "load untraced either",
-            splashLoad.contains("tracedLogoRequest(") &&
+            "and the helper loads through the builder-block wrapper, so the splash " +
+                "cannot load untraced either",
+            splashLoad.contains("loadLogo(") &&
                 splashLoad.contains("surface = \"splash\"")
         )
         val issue = chrome.substringAfter("private fun issue(logo")
@@ -131,7 +138,7 @@ class PlayerChromeTitleRepaintContractTest {
         assertTrue(
             "and the repaint's own load is traced too - it is the one that runs " +
                 "after setup, through the one method that owns the chrome slot",
-            issue.contains("tracedLogoRequest(") &&
+            issue.contains("loadLogo(") &&
                 issue.contains("surface = \"chrome\"")
         )
         val repaintBody = chrome.substringAfter("fun refreshTitle(repaint: LogoRepaint")

@@ -40,7 +40,7 @@ class PlayerLogoLoadOnceContractTest {
             "the chrome slot has exactly one load call, so no pass can add a second " +
                 "into the same ImageView:\n$slot",
             1,
-            Regex("logo\\.load\\(").findAll(issue).count()
+            Regex("logo\\.loadLogo\\(").findAll(issue).count()
         )
         assertTrue(
             "and the load is issued only for a URL that has not landed - the second " +
@@ -56,7 +56,7 @@ class PlayerLogoLoadOnceContractTest {
         assertEquals(
             "the splash slot has exactly one load call:\n$header",
             1,
-            Regex("splashClearLogo\\.load\\(").findAll(
+            Regex("splashClearLogo\\.loadLogo\\(").findAll(
                 native.substringAfter("private fun issueSplashLogo(")
                     .substringBefore("\n    private fun ")
             ).count()
@@ -118,7 +118,7 @@ class PlayerLogoLoadOnceContractTest {
 
     @Test
     fun `a cancelled logo load is traced, not silent`() {
-        val wrapper = logoArt.substringAfter("internal fun tracedLogoRequest(")
+        val wrapper = logoArt.substringAfter("internal fun ImageView.loadLogo(")
             .substringBefore("/** One token for a Coil failure")
         assertTrue(
             "the wrapper Coil's cancellation calls back into must trace it",
@@ -128,11 +128,26 @@ class PlayerLogoLoadOnceContractTest {
         // All three outcomes, one wrapper: a cancellation can never again be
         // mistaken for art that simply never arrived.
         listOf(
+            "PlaybackSessionTrace.note(\"LOGO: issued \$surface\")",
             "PlaybackSessionTrace.note(\"LOGO: loaded \$surface\")",
             "\"LOGO: load-failed \$surface ",
             "PlaybackSessionTrace.note(\"LOGO: cancelled \$surface\")"
         ).forEach { line ->
-            assertTrue("the traced request must emit: $line", wrapper.contains(line))
+            assertTrue("the traced load must emit: $line", wrapper.contains(line))
+        }
+        // Spec 2026-11-24 round 3, F2: the setup loads stop handing Coil a
+        // pre-built request. The player issues during setup, into views that are
+        // inflated but not attached, which is the one combination every silent
+        // paste shares.
+        assertTrue(
+            "the load goes through Coil's builder block, with the opt-out inside it",
+            wrapper.contains("load(url) {") && wrapper.contains("logoArt()")
+        )
+        listOf("chrome", "splash").forEach { surface ->
+            assertTrue(
+                "and $surface's issue site uses it",
+                !Regex("load\\(\\s*tracedLogoRequest").containsMatchIn(chrome + native)
+            )
         }
     }
 

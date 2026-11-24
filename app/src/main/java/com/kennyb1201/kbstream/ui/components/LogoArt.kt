@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream.ui.components
 
 import android.content.Context
+import android.widget.ImageView
+import coil3.load
 import coil3.request.ImageRequest
 import coil3.request.allowRgb565
 import coil3.request.crossfade
@@ -43,51 +45,63 @@ internal fun logoRequest(
 }
 
 /**
- * A logo request that says out loud whether it loaded (spec 2026-11-23, F2).
+ * The player's title-slot load, issued through Coil's builder-block overload.
  *
- * A dead logo URL and a title block that was simply never painted looked
- * identical in a field paste: both were "no logo on screen" with no `LOGO:`
- * line after the launch one. Every logo load into a player title slot goes
- * through here now, so one line names the surface and the outcome - and on a
- * failure [onFailure] runs, which is how the chrome restores its text instead
- * of leaving an empty slot (F3).
+ * Spec 2026-11-24, F2. This used to hand Coil a PRE-BUILT request
+ * (`view.load(tracedLogoRequest(...))`), and the player is the only surface that
+ * issues its logo loads during activity setup, before `onResume`, when its views
+ * are inflated but not yet attached to a window. Every paste since that change
+ * is silent: no `loaded`, no `load-failed`, no `cancelled`. The same views
+ * loaded fine for months when the call was the builder block, and every other
+ * surface that moved to the pre-built form loads after attachment.
+ *
+ * So the form that worked is the form now: Coil builds the request itself, with
+ * the view as target and the view's lifecycle attached, and the 565 opt-out plus
+ * the traced callbacks are applied inside the block. That covers both live
+ * hypotheses - the pre-built form stalling on a detached view, and a timing
+ * window the pre-built call opens - without guessing which one it was.
+ *
+ * The `issued` line is written HERE, at the instant the load call runs, because
+ * that is the one thing the trace could not prove (F1): `LOGO: start` says the
+ * launch carried a URL, not that a request was ever made. With both, the next
+ * paste separates a call-site failure from Coil-level silence.
  *
  * A CANCELLED load is a third outcome, and until 2026-11-24 it was the silent
- * one: a second `ImageView.load()` into the same slot cancels the request that
- * is already on its way, so setup painting one surface three times back to back
- * threw away every fetch but the last and the paste showed none of it (spec
- * 2026-11-24, F2). It is traced here, where every player title slot loads, so a
+ * one: a second `load()` into the same slot cancels the request already on its
+ * way. It is traced here, where every player title slot loads, so a
  * cancellation can never again be indistinguishable from art that never
- * arrived.
- *
- * [onLoaded] lets an owner that reuses one slot remember which URL actually
- * landed, which is what makes a later repaint of the same facts bookkeeping
- * instead of a fresh fetch (F3).
+ * arrived. [onLoaded] lets an owner that reuses one slot remember which URL
+ * actually landed, which is what makes a later repaint of the same facts
+ * bookkeeping instead of a fresh fetch.
  *
  * Coil's own error travels as its class name: one line, no stack, no URL.
  */
-internal fun tracedLogoRequest(
-    context: Context,
+internal fun ImageView.loadLogo(
     url: String?,
     surface: String,
     onLoaded: (() -> Unit)? = null,
     onFailure: (() -> Unit)? = null
-): ImageRequest =
-    logoRequest(context, url).newBuilder().listener(
-        onSuccess = { _, _ ->
-            PlaybackSessionTrace.note("LOGO: loaded $surface")
-            onLoaded?.invoke()
-        },
-        onCancel = { _ ->
-            PlaybackSessionTrace.note("LOGO: cancelled $surface")
-        },
-        onError = { _, result ->
-            PlaybackSessionTrace.note(
-                "LOGO: load-failed $surface ${logoLoadFailureReason(result.throwable)}"
-            )
-            onFailure?.invoke()
-        }
-    ).build()
+) {
+    PlaybackSessionTrace.note("LOGO: issued $surface")
+    load(url) {
+        logoArt()
+        listener(
+            onSuccess = { _, _ ->
+                PlaybackSessionTrace.note("LOGO: loaded $surface")
+                onLoaded?.invoke()
+            },
+            onCancel = { _ ->
+                PlaybackSessionTrace.note("LOGO: cancelled $surface")
+            },
+            onError = { _, result ->
+                PlaybackSessionTrace.note(
+                    "LOGO: load-failed $surface ${logoLoadFailureReason(result.throwable)}"
+                )
+                onFailure?.invoke()
+            }
+        )
+    }
+}
 
 /** One token for a Coil failure: the throwable's own name, never its message. */
 internal fun logoLoadFailureReason(throwable: Throwable): String =

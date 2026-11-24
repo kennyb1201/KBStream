@@ -25,8 +25,11 @@ class PlayerClearlogoRetryContractTest {
         val issue = method(chrome, "private fun issue(")
 
         assertTrue(
-            "the load call itself is the line the trace was missing",
-            issue.contains("PlaybackSessionTrace.note(\"LOGO: issued chrome\")")
+            "the load call itself is the line the trace was missing - written by the " +
+                "helper at the instant the call runs (F1), never by the caller above it",
+            issue.contains("loadLogo(") &&
+                issue.contains("surface = \"chrome\"") &&
+                !issue.contains("PlaybackSessionTrace.note(\"LOGO: issued chrome\")")
         )
         assertTrue(
             "and it records the request so a retry can be timed and capped",
@@ -67,7 +70,9 @@ class PlayerClearlogoRetryContractTest {
 
         assertTrue(
             "the splash load is issued through one traced call",
-            issue.contains("PlaybackSessionTrace.note(\"LOGO: issued splash\")")
+            issue.contains("loadLogo(") &&
+                issue.contains("surface = \"splash\"") &&
+                !issue.contains("PlaybackSessionTrace.note(\"LOGO: issued splash\")")
         )
         assertTrue(
             "a landed splash is the only thing that skips a load",

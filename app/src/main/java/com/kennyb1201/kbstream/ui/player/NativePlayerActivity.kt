@@ -137,7 +137,7 @@ import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import coil3.load
 import com.kennyb1201.kbstream.ui.components.logoRequest
-import com.kennyb1201.kbstream.ui.components.tracedLogoRequest
+import com.kennyb1201.kbstream.ui.components.loadLogo
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -3929,28 +3929,30 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     /**
-     * The one splash load call, traced at the instant it runs (F1).
+     * The one splash load call.
+     *
+     * It goes through [loadLogo], Coil's builder-block overload, rather than a
+     * pre-built request (spec 2026-11-24, F2). The splash is the OTHER setup
+     * load - it runs from `updateHeaderInfo` before `onResume`, into a view that
+     * is inflated but not attached - so it is the second half of the same
+     * silence, and the `issued` line it writes is the half the paste lacked.
      *
      * No `runCatching` on purpose: the chrome's swallowed issue was one of the
      * silent deaths the 2026-11-24 paste could not name, and a throw here must
-     * stay visible (F3).
+     * stay visible (F4).
      */
     private fun issueSplashLogo(url: String) {
         splashLogoRequestedUrl = url
         splashLogoRequestedAtMs = SystemClock.elapsedRealtime()
         splashLogoAttempts++
-        PlaybackSessionTrace.note("LOGO: issued splash")
-        splashClearLogo.load(
-            tracedLogoRequest(
-                splashClearLogo.context,
-                url,
-                surface = "splash",
-                onLoaded = { splashLogoLoadedUrl = url },
-                // A failed load is not a landed one: clearing the request means
-                // the next repaint treats it as a fresh issue rather than a
-                // duplicate.
-                onFailure = { splashLogoRequestedUrl = null }
-            )
+        splashClearLogo.loadLogo(
+            url = url,
+            surface = "splash",
+            onLoaded = { splashLogoLoadedUrl = url },
+            // A failed load is not a landed one: clearing the request means
+            // the next repaint treats it as a fresh issue rather than a
+            // duplicate.
+            onFailure = { splashLogoRequestedUrl = null }
         )
     }
 

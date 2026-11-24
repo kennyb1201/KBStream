@@ -216,10 +216,10 @@ class SplashClearLogoContractTest {
         val apply = mpv.substringAfter("private fun applyClearLogo(url: String) {")
             .substringBefore("\n    private fun ")
         assertTrue(
-            "the splash logo view gets the art, built as logo art so it cannot " +
-                "decode as RGB_565 (see LogoArt)",
-            apply.contains("val request = logoRequest(this, url)") &&
-                apply.contains("loadingLogoView?.load(request)") &&
+            "the splash logo view gets the art through the builder-block load, so it " +
+                "cannot decode as RGB_565 (see LogoArt) and is issued like the main " +
+                "player's setup load (spec 2026-11-24 round 3, F2)",
+            apply.contains("loadingLogoView?.loadLogo(url, surface = \"mpv-splash\")") &&
                 apply.contains("loadingLogoView?.visibility = View.VISIBLE")
         )
         assertTrue(

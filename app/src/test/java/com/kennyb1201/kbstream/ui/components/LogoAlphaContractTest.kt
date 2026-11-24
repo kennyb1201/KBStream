@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.components
 
 import java.io.File
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -243,14 +244,15 @@ class LogoAlphaContractTest {
 
     /**
      * The names a logo request may be built through, each one ending in the
-     * opt-out. [tracedLogoRequest] is the tracing wrapper added on 2026-11-23
-     * (spec F2): it delegates to [logoRequest], so a draw through it is opted
-     * out too - see `the traced logo wrapper keeps the opt-out` below.
+     * opt-out. [com.kennyb1201.kbstream.ui.components.loadLogo] is the player's
+     * title-slot load (spec 2026-11-24 round 3, F2): it applies [logoArt] inside
+     * Coil's builder block, so a draw through it is opted out too - see
+     * `the traced logo load keeps the opt-out` below.
      */
     private fun isOptedOut(call: String): Boolean =
         call.contains("logoArt()") ||
             call.contains("logoRequest(") ||
-            call.contains("tracedLogoRequest(") ||
+            call.contains("loadLogo(") ||
             call.contains("allowRgb565(false)")
 
     @Test
@@ -378,25 +380,33 @@ class LogoAlphaContractTest {
             val source = read(File(sourceRoot, path))
             assertTrue(
                 "$path draws logo art, so it must carry logoRequest(...), " +
-                    "tracedLogoRequest(...) or logoArt()",
+                    "loadLogo(...) or logoArt()",
                 source.contains("logoRequest(") ||
-                    source.contains("tracedLogoRequest(") ||
+                    source.contains("loadLogo(") ||
                     source.contains("logoArt()")
             )
         }
     }
 
     @Test
-    fun `the traced logo wrapper keeps the opt-out`() {
-        // The player's title slots load through tracedLogoRequest so the log can
-        // say whether the art arrived (spec 2026-11-23, F2). That wrapper is only
-        // allowed to exist if it is built FROM logoRequest: a traced request that
-        // rebuilt its own ImageRequest would be a logo draw back on the 565
-        // default while every line above still said "opted out".
+    fun `the traced logo load keeps the opt-out`() {
+        // The player's title slots load through loadLogo so the log can say
+        // whether the art arrived and what was issued (spec 2026-11-23 F2, then
+        // 2026-11-24 F2 for the call form). The wrapper is only allowed to exist
+        // if the opt-out is applied INSIDE its block: a draw that rebuilt its own
+        // ImageRequest, or handed Coil a pre-built one, would be a logo draw back
+        // on the 565 default while every line above still said "opted out".
         val helper = read(File(sourceRoot, "com/kennyb1201/kbstream/ui/components/LogoArt.kt"))
+        val body = helper.substringAfter("internal fun ImageView.loadLogo(")
+            .substringBefore("/** One token for a Coil failure")
         assertTrue(
-            "tracedLogoRequest must delegate to logoRequest, not build its own request",
-            helper.contains("logoRequest(context, url).newBuilder()")
+            "loadLogo must apply logoArt() inside Coil's builder block",
+            body.contains("load(url) {") && body.contains("logoArt()")
+        )
+        assertFalse(
+            "and it must never hand Coil a pre-built request again",
+            body.contains("load(logoRequest(") ||
+                body.contains("load(tracedLogoRequest(")
         )
     }
 }

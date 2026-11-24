@@ -27,6 +27,7 @@ import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import coil3.load
+import com.kennyb1201.kbstream.ui.components.loadLogo
 import com.kennyb1201.kbstream.ui.components.logoRequest
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -7364,10 +7365,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      * for the drawable rather than assuming it (see [startSplashLogoPulse]).
      */
     private fun applyClearLogo(url: String) {
-        // One request, built once: the splash wordmark is transparent art, so
-        // it decodes as 8888 (see [logoRequest]), never the loader's 565.
-        val request = logoRequest(this, url)
-        loadingLogoView?.load(request)
+        // Coil's builder-block overload, not a pre-built request (spec
+        // 2026-11-24, F2): this load is issued from setup, into a view that is
+        // inflated but not yet attached, which is exactly the shape that went
+        // silent on the main player. The block carries the 8888 opt-out (the
+        // splash wordmark is transparent art - see [logoArt]) and the `LOGO:`
+        // lines, so this engine's splash answers a field paste the same way.
+        loadingLogoView?.loadLogo(url, surface = "mpv-splash")
         loadingLogoView?.visibility = View.VISIBLE
         loadingTitle?.visibility = View.GONE
         startSplashLogoPulse()
