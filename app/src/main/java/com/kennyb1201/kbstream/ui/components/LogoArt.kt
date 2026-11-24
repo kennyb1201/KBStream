@@ -4,7 +4,6 @@ import android.content.Context
 import coil3.request.ImageRequest
 import coil3.request.allowRgb565
 import coil3.request.crossfade
-import coil3.request.listener
 import com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace
 
 /**
