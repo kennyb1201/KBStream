@@ -199,6 +199,15 @@
             android:name="io.sentry.auto-init"
             android:value="false" />
 
+        <!-- Cast sender options (spec: cast-sender v1). The provider names the
+             receiver - Play's default media receiver, so no receiver app of
+             ours exists - and is what CastContext reads before it will talk to
+             a device. Nothing on a television ever asks for a session; the
+             sender is phone-only (see CastRules.senderAllowed). -->
+        <meta-data
+            android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
+            android:value="com.kennyb1201.kbstream.data.cast.CastOptions" />
+
         <!-- android:theme is the launch splash: the system paints its window
              background (the centred brass mark on the void) until this app
              composes its first frame, which is where the branded splash takes

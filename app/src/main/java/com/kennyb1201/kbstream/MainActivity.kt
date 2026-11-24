@@ -150,6 +150,8 @@ import com.kennyb1201.kbstream.ui.onboarding.OnboardingScreen
 import com.kennyb1201.kbstream.data.player.PlayedLinkCache
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.ui.player.ActorHandoff
+import com.kennyb1201.kbstream.data.cast.CastLauncher
+import com.kennyb1201.kbstream.data.cast.CastWatchSession
 import com.kennyb1201.kbstream.ui.player.ExternalPlayerActivity
 import com.kennyb1201.kbstream.ui.player.MpvPlayerActivity
 import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
@@ -4763,6 +4765,38 @@ fun AppRoot(
                 // ours to request, so another app handed the URL alone could
                 // not play it. The external wrapper says the same thing on a
                 // card; deciding it here just skips the detour.
+                // Cast routes AHEAD of the engine `when` (spec: cast-sender v1).
+                // With a receiver connected the launch loads onto the television
+                // and NO local player opens; with nothing connected, or a source
+                // the default receiver cannot fetch (see CastRules), this is
+                // false and every engine below behaves exactly as before.
+                val castTookTheLaunch = CastLauncher.castIfCasting(
+                    context = context,
+                    url = current.url,
+                    headers = current.streamHeaders,
+                    drmProtected = current.drmLicenseUrl != null,
+                    title = current.itemName,
+                    subtitle = current.episodeTitle,
+                    posterUrl = current.itemPoster,
+                    startPositionMs = current.startPositionMs,
+                    phone = !FormFactor.isTv,
+                    kidsProfile =
+                        com.kennyb1201.kbstream.data.sync.ProfileManager
+                            .activeProfile.value?.kidsMaxAge != null,
+                    seed = CastWatchSession.Seed(
+                        parentId = current.parentId,
+                        type = current.parentType,
+                        name = current.itemName,
+                        poster = current.itemPoster,
+                        season = current.season,
+                        episode = current.episode,
+                        episodeStreamId = current.episodeStreamId,
+                        streamUrl = current.url,
+                        startPositionMs = current.startPositionMs
+                    )
+                )
+                if (castTookTheLaunch) return@LaunchedEffect
+
                 val playerActivity = when {
                     PlayerEngine.prefersExternal(context) && current.drmLicenseUrl == null ->
                         ExternalPlayerActivity::class.java

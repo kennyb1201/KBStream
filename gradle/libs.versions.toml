@@ -67,6 +67,15 @@ okio = "3.9.1"
 # store through this library's flexible flow - see PlayUpdater. The sideloaded
 # release never calls it and R8 strips it (PLAY_BUILD is false there).
 play-app-update = "2.1.0"
+# Chromecast sender (spec: cast-sender v1). The app plays on the default
+# receiver (CC1AD845), so this is the sender half only: media is loaded onto the
+# remote player and the phone keeps driving it. It brings mediarouter, which is
+# what the phone's own device chooser enumerates.
+play-cast = "21.5.0"
+# mediarouter is the discovery half of that sender: the device list the phone's
+# chooser enumerates. Declared explicitly rather than relied on from cast's own
+# POM, because the app's code names its types (MediaRouter, MediaRouteSelector).
+mediarouter = "1.7.0"
 # Not a UI system this app adopted either: nothing here extends a Fragment. It
 # is pinned because app-update brings play-services-basement 18.1.0, whose POM
 # declares androidx.fragment 1.0.0 - and androidx.activity refuses to use
@@ -121,6 +130,8 @@ androidx-recyclerview = { module = "androidx.recyclerview:recyclerview", version
 androidx-constraintlayout = { module = "androidx.constraintlayout:constraintlayout", version.ref = "constraintlayout" }
 androidx-tv-material = { module = "androidx.tv:tv-material", version.ref = "tv-material" }
 google-play-app-update = { module = "com.google.android.play:app-update", version.ref = "play-app-update" }
+google-play-services-cast = { module = "com.google.android.gms:play-services-cast-framework", version.ref = "play-cast" }
+androidx-mediarouter = { module = "androidx.mediarouter:mediarouter", version.ref = "mediarouter" }
 androidx-tv-foundation = { module = "androidx.tv:tv-foundation", version.ref = "tv-foundation" }
 
 # --- Compose (versions owned by androidx-compose-bom) ---

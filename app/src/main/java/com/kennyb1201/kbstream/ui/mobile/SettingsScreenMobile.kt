@@ -38,6 +38,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
@@ -102,6 +103,8 @@ import com.kennyb1201.kbstream.ui.settings.connectedAsLabel
 import com.kennyb1201.kbstream.ui.settings.rememberBingeCatProfileName
 import com.kennyb1201.kbstream.ui.settings.rememberSimklAccountName
 import com.kennyb1201.kbstream.ui.settings.rememberTraktAccountName
+import com.kennyb1201.kbstream.data.cast.CastSender
+import com.kennyb1201.kbstream.data.cast.castSenderAllowed
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBCard
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
@@ -1914,6 +1917,14 @@ private fun PlaybackPaneMobile() {
                 "libass typesetting and software decoders; External hands the title " +
                 "to any video app installed here."
         )
+        // Cast (spec: cast-sender v1): a ROUTE, not an engine - see
+        // CastSectionMobile. A kids profile is not offered it for the same
+        // reason it is not offered the External engine (audit C8): the time
+        // locks live in this app's own players, and a cast plays on the TV.
+        if (castSenderAllowed(phone = true, kidsProfile = kidsProfile)) {
+            CastSectionMobile()
+        }
+
         SettingsToggleMobile(
             label = "Open anime in MPV",
             description = "Use MPV for anime even when the engine above is ExoPlayer.",
@@ -3898,6 +3909,110 @@ private fun DialogueBoostMobile(level: Int, onLevelChange: (Int) -> Unit) {
 }
 
 /** Which installed video app receives a title when the engine is External. */
+/**
+ * Cast, under the engine rows (spec: cast-sender v1).
+ *
+ * A ROUTE rather than an engine, which is why this is a row of its own instead
+ * of a fifth pill: picking "Cast" as an engine would mean choosing it before a
+ * television exists, and a launch with no receiver would have nothing to fall
+ * back to. Here the viewer connects the TV once, and from then on every Play
+ * loads there (see CastLauncher, ahead of the engine `when`).
+ *
+ * The chooser is the app's own dialog over the discovered routes rather than
+ * Google's MediaRouteButton: this screen is Compose, the app has no AppCompat
+ * theme for the SDK's chooser dialog, and the list is three lines of UI.
+ */
+@Composable
+private fun CastSectionMobile() {
+    val context = LocalContext.current
+    val connected by CastSender.connected.collectAsStateWithLifecycle()
+    val deviceName by CastSender.deviceName.collectAsStateWithLifecycle()
+    val devices by CastSender.devices.collectAsStateWithLifecycle()
+    var showChooser by remember { mutableStateOf(false) }
+
+    // Discovery starts with the section and stops with it: a route callback
+    // left registered keeps the Wi-Fi radio asking for cast devices on a screen
+    // the viewer has left.
+    LaunchedEffect(Unit) { CastSender.start(context) }
+    DisposableEffect(Unit) { onDispose { CastSender.stop(context) } }
+
+    SettingsSectionMobile("Cast")
+    SettingsNavRowMobile(
+        label = if (connected) {
+            "Casting to ${deviceName ?: "your TV"}"
+        } else {
+            "Cast to TV"
+        },
+        description = if (connected) {
+            "Tap to disconnect. Titles play on the TV; history stays here."
+        } else {
+            "Pick a device once, then every Play loads on it."
+        },
+        onClick = {
+            if (connected) {
+                CastSender.disconnect(context)
+            } else {
+                CastSender.start(context)
+                showChooser = true
+            }
+        }
+    )
+    if (showChooser) {
+        CastChooserMobile(
+            devices = devices,
+            onPick = { name ->
+                CastSender.selectRoute(context, name)
+                showChooser = false
+            },
+            onDismiss = { showChooser = false }
+        )
+    }
+}
+
+/**
+ * The device list. Empty is a real state and says so: discovery takes a moment
+ * after the row is tapped, and a dialog that just looked blank would read as a
+ * broken feature rather than as a TV that has not answered yet.
+ */
+@Composable
+private fun CastChooserMobile(
+    devices: List<String>,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        KBDialogPanel(title = "Cast to") {
+            Text(
+                text = "Televisions and speakers on this network. The TV plays the " +
+                    "title itself; your phone stays the remote.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            if (devices.isEmpty()) {
+                Text(
+                    text = "No devices yet - make sure the TV is on the same network.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            } else {
+                devices.forEach { name ->
+                    KBButton(
+                        label = name,
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { onPick(name) }
+                    )
+                }
+            }
+            KBButton(
+                label = "DONE",
+                modifier = Modifier.fillMaxWidth(),
+                onClick = onDismiss
+            )
+        }
+    }
+}
+
 @Composable
 private fun ExternalPlayerPickerMobile(
     players: List<ExternalPlayer.Installed>,

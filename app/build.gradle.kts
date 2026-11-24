@@ -687,6 +687,13 @@ dependencies {
     // nothing calls it there: PLAY_BUILD is a constant false, so R8 removes
     // the object and its dependency from the released APK.
     implementation(libs.google.play.app.update)
+    // Chromecast sender, phones only (spec: cast-sender v1). The receiver is
+    // Play's own default media receiver - no branded receiver app - so the
+    // phone loads a URL onto the TV and keeps the session. Cast is deliberately
+    // NOT an engine: it routes ahead of the engine `when` at launch, which is
+    // why only the sender half of the SDK is here.
+    implementation(libs.google.play.services.cast)
+    implementation(libs.androidx.mediarouter)
     // `app-update` brings play-services-basement 18.1.0, whose POM declares
     // androidx.fragment 1.0.0. Lint rejects that pairing with androidx.activity
     // (InvalidFragmentVersionForActivityResult: FragmentActivity before 1.3.0
