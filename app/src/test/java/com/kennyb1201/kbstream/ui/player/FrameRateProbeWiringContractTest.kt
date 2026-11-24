@@ -247,12 +247,13 @@ class FrameRateProbeWiringContractTest {
         assertTrue(
             "a cache hit must log the rate it returned, or the field log cannot tell a hit " +
                 "from a probe that never ran",
-            probe.contains("probe cache hit: \$it fps (host=\${hostOf(url)})")
+            probe.contains("probe cache hit: \${cached.fps} fps (host=\${hostOf(url)})")
         )
         assertTrue(
             "and it is logged where the cache is read, before any download (the read goes " +
-                "through cachedFps now that the map is a bounded LRU, audit AFR C12)",
-            probe.indexOf("cachedFps(url)?.let {") in 0 until probe.indexOf("val reading = ")
+                "through cachedReading now that the map is a bounded LRU of full readings, " +
+                "audit AFR C12)",
+            probe.indexOf("cachedReading(url)?.let {") in 0 until probe.indexOf("val reading = ")
         )
     }
 

@@ -4725,13 +4725,21 @@ fun AppRoot(
                     // when this session has not already filed one (see
                     // PlayerEngine.prefersMpvForLaunch), which is what makes the
                     // setting hold on a source picked from a picker that has
-                    // been open a while. A DRM stream never goes to MPV, so it
-                    // never asks.
+                    // been open a while.
+                    //
+                    // The URL and its headers go with it for the "Play 24 fps
+                    // titles in MPV" setting: that rule is a property of the
+                    // FILE, which the engine reads from its own head. The same
+                    // pair the intent below carries, so the probe asks for the
+                    // bytes this launch is about to play. A DRM stream never
+                    // goes to MPV, so it never asks.
                     current.drmLicenseUrl == null &&
                         PlayerEngine.prefersMpvForLaunch(
                             context = context,
                             parentId = current.parentId,
-                            parentType = current.parentType
+                            parentType = current.parentType,
+                            streamUrl = current.url,
+                            streamHeaders = current.streamHeaders
                         ) ->
                         MpvPlayerActivity::class.java
 

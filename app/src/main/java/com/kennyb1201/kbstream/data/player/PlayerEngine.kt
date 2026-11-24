@@ -7,6 +7,9 @@ import android.util.Log
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.sync.ProfileManager
+import com.kennyb1201.kbstream.ui.player.FrameRateMatch
+import com.kennyb1201.kbstream.ui.player.FrameRateProbe
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -31,7 +34,9 @@ import kotlinx.coroutines.withTimeoutOrNull
  *  1. A launch: MainActivity asks [prefersMpvForLaunch] to decide whether to
  *     open MPV straight away (the "MPV" setting, plus the "Play anime in MPV"
  *     setting for a title [AnimeDetect] recognizes as anime - the fansub
- *     typesetting and 10-bit releases above are the common case on that side).
+ *     typesetting and 10-bit releases above are the common case on that side -
+ *     plus the "Play 24 fps titles in MPV" setting, a property of the FILE
+ *     rather than the title; see [routesFilmCadenceToMpv]).
  *  2. A failure: NativePlayerActivity asks [mpvFallbackEnabled] before handing
  *     its own launch intent to the MPV player (the default setting).
  *
@@ -139,14 +144,82 @@ object PlayerEngine {
         chosenEngine: Int,
         mpvAvailable: Boolean,
         mpvForAnime: Boolean,
-        isAnime: Boolean
+        isAnime: Boolean,
+        mpvFor24Fps1080: Boolean = false,
+        fps: Double? = null,
+        height: Int? = null,
+        isDolbyVision: Boolean = false
     ): Boolean =
         mpvAvailable &&
             chosenEngine != AppPreferences.PLAYER_ENGINE_EXTERNAL &&
             (
                 chosenEngine == AppPreferences.PLAYER_ENGINE_MPV ||
-                    (mpvForAnime && isAnime)
+                    (mpvForAnime && isAnime) ||
+                    (mpvFor24Fps1080 && routesFilmCadenceToMpv(fps, height, isDolbyVision))
                 )
+
+    /**
+     * The tallest picture the 24 fps rule may hand to MPV. 1080p is the whole
+     * carve-out: any 4K on the TCL makes mpv's default `vo=gpu-next` run every
+     * frame through libplacebo on a GPU that box cannot spare (its `profile=fast`
+     * already concedes the same point), and the `hwdec` chain may end up in
+     * copy-back or FFmpeg software decode.
+     */
+    private const val MPV_FILM_CADENCE_MAX_HEIGHT = 1080
+
+    /**
+     * Whether [fps], after [FrameRateMatch.normalise], is film cadence: 23.976
+     * or 24.0.
+     *
+     * Only those two. 25 fps is a different standard rate, not a sloppier 24 —
+     * PAL titles are not what 3:2 pulldown judder is about, so folding them in
+     * here would redirect a whole library the rule was never checked against.
+     */
+    fun isFilmCadence(fps: Double?): Boolean {
+        val rate = fps?.let { FrameRateMatch.normalise(it) } ?: return false
+        return rate == 23.976 || rate == 24.0
+    }
+
+    /**
+     * The 24 fps rule itself, free of prefs, probes and device state so its
+     * matrix is unit-tested: MPV only for film cadence whose measured height is
+     * 1080 or less, and never for Dolby Vision.
+     *
+     * Every unknown fails closed. An absent rate or height is "the probe could
+     * not say", not a guess: release names lie about resolution (StreamRanker
+     * documents a "2160p" tag on a file that cannot carry 2160p), so nothing
+     * here may read one. DV is excluded because mpv has no DV path at all — the
+     * passthrough, the relabel and the P5→8.1 conversion live in ExoPlayer's
+     * extractors and NativePlayerActivity.
+     */
+    fun routesFilmCadenceToMpv(
+        fps: Double?,
+        height: Int?,
+        isDolbyVision: Boolean
+    ): Boolean = filmCadenceRefusal(fps, height, isDolbyVision) == null
+
+    /**
+     * Why [routesFilmCadenceToMpv] refused, or null when it did not.
+     *
+     * One rule, two readers: the predicate above and the diagnostic line below, so
+     * a field log can never name a different reason from the one the launch
+     * acted on.
+     */
+    fun filmCadenceRefusal(
+        fps: Double?,
+        height: Int?,
+        isDolbyVision: Boolean
+    ): String? = when {
+        isDolbyVision -> "Dolby Vision"
+        fps == null -> "no rate"
+        !isFilmCadence(fps) -> "${formatRate(fps)} fps"
+        height == null -> "no height"
+        height > MPV_FILM_CADENCE_MAX_HEIGHT -> "${height}p"
+        else -> null
+    }
+
+    /** A rate as the log line writes it: three decimals, always a dot. */
+    private fun formatRate(fps: Double): String = String.format(Locale.US, "%.3f", fps)
 
     /**
      * True when a launch should open the MPV player instead of ExoPlayer.
@@ -179,20 +252,109 @@ object PlayerEngine {
     suspend fun prefersMpvForLaunch(
         context: Context,
         parentId: String?,
-        parentType: String?
+        parentType: String?,
+        streamUrl: String? = null,
+        streamHeaders: Map<String, String> = emptyMap()
     ): Boolean {
         // Already MPV by the stored choice: no verdict needed and nothing to
         // wait for.
         if (prefersMpv(context, isAnime = false)) {
             return true
         }
-        if (!mpvForAnimeEnabled(context)) {
+        val animeEnabled = mpvForAnimeEnabled(context)
+        val filmCadenceEnabled = mpvFor24Fps1080Enabled(context)
+        if (!animeEnabled && !filmCadenceEnabled) {
             return false
         }
-        val titleId = launchTitleIdOf(parentId, parentType) ?: return false
-        val isAnime = cachedLaunchAnime(titleId)
-            ?: resolveLaunchAnime(context, titleId, parentType.orEmpty().trim())
-        return prefersMpv(context, isAnime = isAnime)
+
+        // The title's own arm comes first, because it is the one that is usually
+        // already answered from this session's cache.
+        if (animeEnabled) {
+            val titleId = launchTitleIdOf(parentId, parentType)
+            if (titleId != null) {
+                val isAnime = cachedLaunchAnime(titleId)
+                    ?: resolveLaunchAnime(context, titleId, parentType.orEmpty().trim())
+                if (prefersMpv(context, isAnime = isAnime)) {
+                    return true
+                }
+            }
+        }
+        if (!filmCadenceEnabled) {
+            return false
+        }
+        return prefersMpvForFilmCadence(context, parentType, streamUrl, streamHeaders)
+    }
+
+    /**
+     * The 24 fps arm of a launch: read the file's own head, then let
+     * [routesFilmCadenceToMpv] decide.
+     *
+     * The probe runs here and nowhere earlier. The players already probe for
+     * their own AFR matches, but both do it after the engine is chosen, so that
+     * reading cannot drive this rule; this one WARMS the probe cache, so the
+     * player's later AFR probe for the same URL logs a cache hit instead of
+     * fetching the head again.
+     *
+     * Bounded by [LAUNCH_ANIME_BUDGET_MS] for the same reason the anime verdict
+     * is: this wait sits between the tap and the first frame. The probe's own
+     * 6 s default is deliberately not used here. A timeout, an unreadable head,
+     * or a manifest this probe refuses all fail closed to the stored engine, and
+     * the decision line says which.
+     *
+     * Two exclusions are the caller's: a DRM stream never reaches this function
+     * (MainActivity guards the whole MPV branch), and an External engine is
+     * refused below before anything is fetched.
+     *
+     * Kids profiles are deliberately NOT excluded. MPV is in-app and both
+     * players run the time guards; only the External engine is kids-locked
+     * (audit C8). Do not "fix" this by adding a profile check.
+     */
+    private suspend fun prefersMpvForFilmCadence(
+        context: Context,
+        parentType: String?,
+        streamUrl: String?,
+        streamHeaders: Map<String, String>
+    ): Boolean {
+        // An external choice is never redirected (the same rule the anime arm
+        // obeys through [launchPrefersMpv]) - and there is no point paying for a
+        // head fetch to learn that.
+        if (AppPreferences.getPlayerEngine(context) == AppPreferences.PLAYER_ENGINE_EXTERNAL) {
+            Log.i(TAG, "24fps rule: fps=? h=? dv=false -> Exo (external engine)")
+            return false
+        }
+        // A live channel has no file to probe; the anime arm excludes it the same
+        // way (see [launchTitleIdOf]).
+        if (parentType?.trim().equals("channel", ignoreCase = true)) {
+            Log.i(TAG, "24fps rule: fps=? h=? dv=false -> Exo (live channel)")
+            return false
+        }
+        val url = streamUrl?.trim().orEmpty()
+        if (url.isEmpty() || !FrameRateProbe.isProbeable(url)) {
+            Log.i(TAG, "24fps rule: fps=? h=? dv=false -> Exo (probe: no reading)")
+            return false
+        }
+        val reading = FrameRateProbe.read(
+            url = url,
+            headers = streamHeaders,
+            // The head is written to a temp file, and the app's cache directory
+            // is the one this process is guaranteed to be able to write.
+            cacheDir = context.cacheDir,
+            budgetMs = LAUNCH_ANIME_BUDGET_MS
+        )
+        val fps = reading?.fps
+        val height = reading?.height
+        val isDolbyVision = reading?.isDolbyVision == true
+        val refusal = if (fps == null) "probe: no reading" else filmCadenceRefusal(
+            fps = fps,
+            height = height,
+            isDolbyVision = isDolbyVision
+        )
+        Log.i(
+            TAG,
+            "24fps rule: fps=${fps?.let { formatRate(it) } ?: "?"} " +
+                "h=${height ?: "?"} dv=$isDolbyVision -> ${if (refusal == null) "MPV" else "Exo ($refusal)"}"
+        )
+        return refusal == null
     }
 
     /** [prefersMpv] with the anime verdict supplied by the caller. */
@@ -211,6 +373,14 @@ object PlayerEngine {
      */
     fun mpvForAnimeEnabled(context: Context): Boolean =
         isMpvAvailable() && AppPreferences.getMpvForAnime(context)
+
+    /**
+     * Whether the "Play 24 fps titles in MPV" setting can have any effect here -
+     * false on a device without libmpv, so a launch does not spend its head
+     * fetch on an engine this box cannot run.
+     */
+    fun mpvFor24Fps1080Enabled(context: Context): Boolean =
+        isMpvAvailable() && AppPreferences.getMpvFor24Fps1080(context)
 
     private const val TAG = "PlayerEngine"
 

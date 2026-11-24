@@ -705,6 +705,9 @@ fun SettingsScreen(
     var mpvForAnime by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getMpvForAnime(context))
     }
+    var mpvFor24Fps1080 by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getMpvFor24Fps1080(context))
+    }
     var mpvVoMode by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getMpvVoMode(context))
     }
@@ -2812,6 +2815,29 @@ fun SettingsScreen(
                         onToggle = {
                             mpvForAnime = it
                             AppPreferences.setMpvForAnime(context, it)
+                        }
+                    )
+
+                    // Directly under the anime row, and for the same engine
+                    // choice: a 24 fps file on a panel with no 24 Hz mode shows
+                    // 3:2 pulldown judder on ExoPlayer, while MPV's own
+                    // presentation timing paces it cleanly (field 2026-11-23,
+                    // the TCL). Read from the file's head at launch, never from
+                    // a release name - see PlayerEngine.routesFilmCadenceToMpv.
+                    Spacer(modifier = Modifier.height(8.dp))
+                    ToggleRow(
+                        label = "Play 24 fps titles in MPV",
+                        description = "Opens 24 fps titles at 1080p and below in the MPV " +
+                            "engine even when the picker above says ExoPlayer (including " +
+                            "\"ExoPlayer only\"). On a panel with no 24 Hz mode, ExoPlayer shows " +
+                            "24 fps with 3:2 pulldown judder while MPV paces it smoothly. 4K, " +
+                            "Dolby Vision, live TV, DRM, and HLS sources stay on ExoPlayer. The " +
+                            "file's rate and height are read from its own head before play; a " +
+                            "source that cannot be read stays on ExoPlayer.",
+                        checked = mpvFor24Fps1080,
+                        onToggle = {
+                            mpvFor24Fps1080 = it
+                            AppPreferences.setMpvFor24Fps1080(context, it)
                         }
                     )
 

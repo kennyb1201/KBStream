@@ -348,6 +348,13 @@ internal object SettingsSearchIndex {
             "Play Anime in MPV",
             "anime mpv engine player"
         ),
+        SettingSearchEntry(
+            "playback.24fps-mpv",
+            SettingsPane.PLAYBACK,
+            "Play 24 fps titles in MPV",
+            "24fps 24 fps film cadence mpv engine player judder pulldown stutter " +
+                "1080p hz panel"
+        ),
         // Dolby Vision's Profile 5 rewrite: drawn in the Playback pane's
         // "Dolby Vision & HDR" cluster, next to Strip HDR10+. The label keeps
         // the row's own spelling, arrow written as an escape, so it stays

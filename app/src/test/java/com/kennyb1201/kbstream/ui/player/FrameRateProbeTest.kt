@@ -33,12 +33,12 @@ class FrameRateProbeTest {
     private var body = ByteArray(0)
     private var stallMs = 0L
     private var capturedUserAgent: String? = null
-    private var originalReader: ((File) -> Double?)? = null
+    private var originalReader: ((File) -> FrameRateProbe.Reading?)? = null
     private var originalBudget = 0L
 
     @Before
     fun setUp() {
-        originalReader = FrameRateProbe.fpsReader
+        originalReader = FrameRateProbe.trackReader
         originalBudget = FrameRateProbe.budgetMs
         requests.clear()
         body = ByteArray(0)
@@ -53,7 +53,7 @@ class FrameRateProbeTest {
     @After
     fun tearDown() {
         server.stop(0)
-        originalReader?.let { FrameRateProbe.fpsReader = it }
+        originalReader?.let { FrameRateProbe.trackReader = it }
         FrameRateProbe.budgetMs = originalBudget
         headDir.deleteRecursively()
     }
@@ -76,7 +76,7 @@ class FrameRateProbeTest {
 
     @Test
     fun `the reader's rate comes back for a probeable file URL`() = runBlocking {
-        FrameRateProbe.fpsReader = { 23.976 }
+        FrameRateProbe.trackReader = { FrameRateProbe.Reading(23.976, null, false) }
         body = ByteArray(64) { it.toByte() }
 
         val fps = FrameRateProbe.probe(
@@ -91,7 +91,7 @@ class FrameRateProbeTest {
 
     @Test
     fun `a one-byte warm-up precedes the ranged head`() = runBlocking {
-        FrameRateProbe.fpsReader = { 24.0 }
+        FrameRateProbe.trackReader = { FrameRateProbe.Reading(24.0, null, false) }
         body = ByteArray(32)
 
         FrameRateProbe.probe(url("ranged.mkv"), emptyMap(), headDir)
@@ -114,9 +114,9 @@ class FrameRateProbeTest {
         // does. This is the timestamp-fallback shape: the cadence needs samples
         // the first slice did not hold.
         var reads = 0
-        FrameRateProbe.fpsReader = {
+        FrameRateProbe.trackReader = {
             reads += 1
-            if (reads == 1) null else 23.976
+            FrameRateProbe.Reading(if (reads == 1) null else 23.976, null, false)
         }
         body = ByteArray(64)
 
@@ -138,7 +138,7 @@ class FrameRateProbeTest {
 
     @Test
     fun `the same URL probed twice downloads once`() = runBlocking {
-        FrameRateProbe.fpsReader = { 23.976 }
+        FrameRateProbe.trackReader = { FrameRateProbe.Reading(23.976, null, false) }
         body = ByteArray(16)
         val target = url("cached.mkv")
 
@@ -152,8 +152,46 @@ class FrameRateProbeTest {
     }
 
     @Test
+    fun `a reading carries the height and Dolby Vision flag from the same head`() = runBlocking {
+        FrameRateProbe.trackReader = { FrameRateProbe.Reading(23.976, 1_080, false) }
+        body = ByteArray(32)
+
+        val reading = FrameRateProbe.read(url("film.mkv"), emptyMap(), headDir)
+
+        assertEquals(23.976, reading?.fps ?: 0.0, 0.0)
+        assertEquals(
+            "the launch's 1080p rule may not read a height the file did not declare",
+            1_080,
+            reading?.height
+        )
+        assertFalse(
+            "an SDR head is not Dolby Vision",
+            reading?.isDolbyVision ?: true
+        )
+    }
+
+    @Test
+    fun `the cache hands a launch's full reading to the player's later probe`() = runBlocking {
+        FrameRateProbe.trackReader = { FrameRateProbe.Reading(23.976, 2_160, true) }
+        body = ByteArray(16)
+        val target = url("dv4k.mkv")
+
+        val launch = FrameRateProbe.read(target, emptyMap(), headDir)
+        val afterLaunch = synchronized(requests) { requests.size }
+        // The player asks for the same URL seconds later, for its AFR match.
+        // That second ask must be served from the launch's head - one fetch per
+        // title, not two - and must hand back the facts that head carried.
+        val player = FrameRateProbe.read(target, emptyMap(), headDir)
+
+        assertEquals("one head fetch per title", afterLaunch, synchronized(requests) { requests.size })
+        assertEquals(launch, player)
+        assertEquals(2_160, player?.height)
+        assertTrue("the DV flag has to survive the cache too", player?.isDolbyVision ?: false)
+    }
+
+    @Test
     fun `an unreadable head yields null and is retried next time`() = runBlocking {
-        FrameRateProbe.fpsReader = { null }
+        FrameRateProbe.trackReader = { FrameRateProbe.Reading(null, null, false) }
         body = ByteArray(16)
         val target = url("junk.mkv")
 
@@ -167,7 +205,7 @@ class FrameRateProbeTest {
 
     @Test
     fun `a non-http URL is never probed`() = runBlocking {
-        FrameRateProbe.fpsReader = { 23.976 }
+        FrameRateProbe.trackReader = { FrameRateProbe.Reading(23.976, null, false) }
 
         assertNull(FrameRateProbe.probe("rtmp://host/live", emptyMap(), headDir))
         assertNull(FrameRateProbe.probe("file:///sdcard/x.mkv", emptyMap(), headDir))
@@ -177,7 +215,7 @@ class FrameRateProbeTest {
 
     @Test
     fun `a stalled server resolves to null inside the budget`() = runBlocking {
-        FrameRateProbe.fpsReader = { 23.976 }
+        FrameRateProbe.trackReader = { FrameRateProbe.Reading(23.976, null, false) }
         FrameRateProbe.budgetMs = 400
         stallMs = 3_000
         body = ByteArray(16)
@@ -238,7 +276,7 @@ class FrameRateProbeTest {
     fun `an unreadable head is unusable, and never arms the retry`() = runBlocking {
         // The head downloaded fine and declared no rate: a second download of
         // the same head returns the same nothing, so it must not be paid for.
-        FrameRateProbe.fpsReader = { null }
+        FrameRateProbe.trackReader = { FrameRateProbe.Reading(null, null, false) }
         body = ByteArray(16)
         val target = url("silent.mkv")
 
@@ -256,7 +294,7 @@ class FrameRateProbeTest {
 
     @Test
     fun `a success, a cache hit and a skipped probe all leave nothing armed`() = runBlocking {
-        FrameRateProbe.fpsReader = { 23.976 }
+        FrameRateProbe.trackReader = { FrameRateProbe.Reading(23.976, null, false) }
         body = ByteArray(16)
         val target = url("clean.mkv")
 
@@ -286,7 +324,7 @@ class FrameRateProbeTest {
         // slow host, so the parameter has to reach the HTTP requests themselves:
         // a larger coroutine deadline wrapped around the same 6 s socket
         // timeouts would change nothing at all.
-        FrameRateProbe.fpsReader = { 23.976 }
+        FrameRateProbe.trackReader = { FrameRateProbe.Reading(23.976, null, false) }
         FrameRateProbe.budgetMs = 100
         stallMs = 400
         body = ByteArray(16)

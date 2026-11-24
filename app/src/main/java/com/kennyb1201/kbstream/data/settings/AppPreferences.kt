@@ -96,6 +96,7 @@ object AppPreferences {
     private const val KEY_ENABLE_PIP = "enable_pip"
     private const val KEY_PLAYER_ENGINE = "player_engine" // see PLAYER_ENGINE_* / PlayerEngine
     private const val KEY_MPV_FOR_ANIME = "mpv_for_anime" // see getMpvForAnime / AnimeDetect
+    private const val KEY_MPV_FOR_24FPS_1080 = "mpv_for_24fps_1080" // see getMpvFor24Fps1080 / PlayerEngine
     private const val KEY_MPV_VO = "mpv_vo" // see getMpvVoMode / MpvVideoOutput
     // Which installed app plays a title when the engine above is EXTERNAL, and
     // whether to ask each time instead of going straight to it. Both are
@@ -1076,6 +1077,30 @@ object AppPreferences {
 
     fun setMpvForAnime(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_MPV_FOR_ANIME, enabled).apply()
+    }
+
+    /**
+     * Open 24 fps titles at 1080p and below in MPV even when the engine above is
+     * ExoPlayer.
+     *
+     * The case this exists for is the panel, not the codec: a TCL (field,
+     * 2026-11-23) exposes only 60 Hz and 30 Hz modes, so a 24 fps file sits on
+     * 60 Hz with 3:2 pulldown judder while the decoder is keeping up perfectly -
+     * and the same file is smooth in MPV, whose own presentation timing paces it
+     * cleanly. 4K, Dolby Vision, live TV, DRM and HLS sources stay on ExoPlayer;
+     * the file's rate and height are read from its own head before play (see
+     * PlayerEngine.prefersMpvForLaunch), never from a release name.
+     *
+     * Off by default. Deliberately NOT part of syncDisplayPrefsBlob, for the same
+     * reason the anime row is not: what a box can decode is a property of that
+     * box, so turning this on for the TCL must not flip the phone or a Fire TV
+     * Stick onto MPV.
+     */
+    fun getMpvFor24Fps1080(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_MPV_FOR_24FPS_1080, false)
+
+    fun setMpvFor24Fps1080(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_MPV_FOR_24FPS_1080, enabled).apply()
     }
 
     /**

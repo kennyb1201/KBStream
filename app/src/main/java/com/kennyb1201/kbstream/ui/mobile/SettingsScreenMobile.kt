@@ -1759,6 +1759,9 @@ private fun PlaybackPaneMobile() {
     var mpvForAnime by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getMpvForAnime(context))
     }
+    var mpvFor24Fps1080 by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getMpvFor24Fps1080(context))
+    }
     var mpvVoMode by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getMpvVoMode(context))
     }
@@ -1921,6 +1924,23 @@ private fun PlaybackPaneMobile() {
             onChange = {
                 mpvForAnime = it
                 AppPreferences.setMpvForAnime(context, it)
+            }
+        )
+        // Directly under the anime row on purpose: both describe which engine
+        // opens a title on THIS box. Unlike the TV page this row is not inside
+        // the isMpvAvailable() gate, because the anime row above it is not
+        // either - the engine choice is written wherever the pane is drawn, and
+        // PlayerEngine ignores it on a device without libmpv.
+        SettingsToggleMobile(
+            label = "Open 24 fps titles in MPV",
+            description = "Use MPV for 24 fps titles at 1080p and below even when the " +
+                "engine above is ExoPlayer. 4K, Dolby Vision, live TV, DRM, and HLS stay " +
+                "on ExoPlayer.",
+            searchKey = "playback.24fps-mpv",
+            checked = mpvFor24Fps1080,
+            onChange = {
+                mpvFor24Fps1080 = it
+                AppPreferences.setMpvFor24Fps1080(context, it)
             }
         )
         // Only meaningful where libmpv exists; on an older device the TV page's

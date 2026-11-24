@@ -49,6 +49,24 @@ import okhttp3.Request
  */
 internal object FrameRateProbe {
 
+    /**
+     * One head's reading: the rate its own video track declares (or its sample
+     * timestamps imply), plus two facts about that same track read in the same
+     * pass — its declared height and whether it is Dolby Vision.
+     *
+     * The height and the DV flag exist for the launch-time routing rule in
+     * `PlayerEngine` (a 24 fps title at 1080p and below may open in MPV). They
+     * come from the track format the rate came from, never from the release
+     * name: a release tag is not a fact about the file (see StreamRanker).
+     * Both are null/false when the track does not declare them, which the rule
+     * treats as "cannot say" and fails closed.
+     */
+    internal data class Reading(
+        val fps: Double?,
+        val height: Int?,
+        val isDolbyVision: Boolean
+    )
+
     private const val TAG = "PLAYER_AFR"
 
     /**
@@ -102,14 +120,20 @@ internal object FrameRateProbe {
     private val cacheLock = Any()
 
     /**
-     * URL → fps, most-recently-used last, bounded by [MAX_TRACKED_URLS].
+     * URL → [Reading], most-recently-used last, bounded by [MAX_TRACKED_URLS].
      *
      * An LRU rather than the plain map it was: a hit is still a hit, but the
      * oldest entry is dropped once the cap is reached, so a long-lived process
      * cannot grow this without limit.
+     *
+     * It holds the WHOLE reading, not just the rate, for one field reason: the
+     * launch probe reads a title's head to decide the engine, and the player's
+     * own AFR probe asks for the same URL seconds later. Storing the rate alone
+     * would answer that second caller but lose the height/DV facts the launch
+     * had already paid for.
      */
-    private val cache = object : LinkedHashMap<String, Double>(16, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Double>?): Boolean =
+    private val cache = object : LinkedHashMap<String, Reading>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Reading>?): Boolean =
             size > MAX_TRACKED_URLS
     }
 
@@ -127,11 +151,12 @@ internal object FrameRateProbe {
         ): Boolean = size > MAX_TRACKED_URLS
     }
 
-    /** Reads the cached rate for [url], or null. */
-    private fun cachedFps(url: String): Double? = synchronized(cacheLock) { cache[url] }
+    /** Reads the cached reading for [url], or null. */
+    private fun cachedReading(url: String): Reading? = synchronized(cacheLock) { cache[url] }
 
-    /** Replaces the cached rate for [url]. */
-    private fun cacheFps(url: String, fps: Double) = synchronized(cacheLock) { cache[url] = fps }
+    /** Replaces the cached reading for [url]. */
+    private fun cacheReading(url: String, reading: Reading) =
+        synchronized(cacheLock) { cache[url] = reading }
 
     private fun recordFailure(url: String, kind: ProbeFailure) =
         synchronized(cacheLock) { failures[url] = kind }
@@ -153,12 +178,12 @@ internal object FrameRateProbe {
     internal var budgetMs: Long = 6_000L
 
     /**
-     * Reads the frame rate out of a downloaded head. Extracted as a seam because
+     * Reads one head into a [Reading]. Extracted as a seam because
      * [MediaExtractor] is an Android native API a JVM unit test cannot drive;
      * production never overrides it.
      */
     @Volatile
-    internal var fpsReader: (File) -> Double? = { extractFps(it) }
+    internal var trackReader: (File) -> Reading? = { extractTrack(it) }
 
     private val client by lazy {
         BaseHttpClient.derived {
@@ -211,7 +236,22 @@ internal object FrameRateProbe {
         headers: Map<String, String>,
         cacheDir: File?,
         budgetMs: Long = FrameRateProbe.budgetMs
-    ): Double? {
+    ): Double? = read(url, headers, cacheDir, budgetMs)?.fps
+
+    /**
+     * The full reading for [url], or null when the probe cannot say — the same
+     * call [probe] makes, keeping the height and DV facts it used to discard.
+     *
+     * Every refusal below is a null, exactly as [probe] documents: a caller that
+     * needs fps alone keeps using [probe], and the launch-time engine rule reads
+     * this so one head fetch answers both questions.
+     */
+    suspend fun read(
+        url: String,
+        headers: Map<String, String>,
+        cacheDir: File? = null,
+        budgetMs: Long = FrameRateProbe.budgetMs
+    ): Reading? {
         // Every null return names itself. The probe says nothing on at least
         // five different paths, so without these the field log cannot tell
         // "the probe never ran" from "it ran and found nothing" - which is
@@ -224,9 +264,9 @@ internal object FrameRateProbe {
         // showed a rate offered to the panel with no `probed ...` line before
         // it and read as if the probe had never run. Host only: the URL may be
         // a signed debrid link.
-        cachedFps(url)?.let {
-            Log.i(TAG, "probe cache hit: $it fps (host=${hostOf(url)})")
-            return it
+        cachedReading(url)?.let { cached ->
+            Log.i(TAG, "probe cache hit: ${cached.fps} fps (host=${hostOf(url)})")
+            return cached
         }
         val reading = withTimeoutOrNull(budgetMs) {
             runCatchingCancellable { downloadAndRead(url, headers, cacheDir, budgetMs) }
@@ -263,9 +303,10 @@ internal object FrameRateProbe {
             return null
         }
         clearFailure(url)
-        cacheFps(url, fps)
+        val complete = reading.copy(fps = fps)
+        cacheReading(url, complete)
         Log.i(TAG, "probed $fps fps from the stream head")
-        return fps
+        return complete
     }
 
     /**
@@ -299,20 +340,12 @@ internal object FrameRateProbe {
     private fun hostOf(url: String): String =
         runCatching { Request.Builder().url(url).build().url.host }.getOrNull() ?: "?"
 
-    /**
-     * One downloaded head: the rate its own bytes declare, or null when the head
-     * carries none this probe can read. The wrapper is what keeps that apart
-     * from an absent reading altogether, i.e. bytes that never arrived — the
-     * distinction between the retry's two failure kinds.
-     */
-    private data class HeadReading(val fps: Double?)
-
     private suspend fun downloadAndRead(
         url: String,
         headers: Map<String, String>,
         cacheDir: File?,
         budgetMs: Long
-    ): HeadReading? = withContext(Dispatchers.IO) {
+    ): Reading? = withContext(Dispatchers.IO) {
         val dir = cacheDir?.takeIf { it.isDirectory }
             ?: File(System.getProperty("java.io.tmpdir") ?: ".")
         // Warm the origin with a single byte first: some CDNs need the warmed
@@ -339,18 +372,20 @@ internal object FrameRateProbe {
                 Log.w(TAG, "probe head: empty body")
                 return@withContext null
             }
-            fpsReader(temp)?.let { fps ->
+            trackReader(temp)?.takeIf { it.fps != null }?.let { firstReading ->
                 Log.i(TAG, "probe: rate read from the first ${FIRST_STAGE_BYTES / 1024} KB")
-                return@withContext HeadReading(fps)
+                return@withContext firstReading
             }
             // No rate in the slice. Either those bytes are all there is (the
             // origin ignored the range), or this head needs the rest of the
             // timestamp samples - fetched as the remaining range, not again.
             if (first == HeadSlice.FULL_BODY || HEAD_BYTES <= FIRST_STAGE_BYTES) {
-                return@withContext HeadReading(null)
+                return@withContext Reading(fps = null, height = null, isDolbyVision = false)
             }
             val remainingMs = TimeUnit.NANOSECONDS.toMillis(deadlineAt - System.nanoTime())
-            if (remainingMs <= 0L) return@withContext HeadReading(null)
+            if (remainingMs <= 0L) {
+                return@withContext Reading(fps = null, height = null, isDolbyVision = false)
+            }
             fetchHead(
                 url = url,
                 headers = headers,
@@ -360,7 +395,10 @@ internal object FrameRateProbe {
                 budgetMs = remainingMs,
                 append = true
             ) ?: return@withContext null
-            HeadReading(fpsReader(temp))
+            // The bytes arrived; a head this reader cannot parse is an UNUSABLE
+            // reading, not a download that never completed. Keeping the two
+            // apart is what stops this from arming the retry.
+            trackReader(temp) ?: Reading(fps = null, height = null, isDolbyVision = false)
         } finally {
             runCatching { temp.delete() }
         }
@@ -427,11 +465,15 @@ internal object FrameRateProbe {
     }
 
     /**
-     * The declared video rate on the downloaded head, or null when the head has
-     * no parsable video track. The extractor is released on every path, and the
-     * whole read is wrapped so a malformed head is a "cannot say", not a crash.
+     * The video track's reading on the downloaded head, or null when the head
+     * has no parsable video track. The extractor is released on every path, and
+     * the whole read is wrapped so a malformed head is a "cannot say", not a
+     * crash.
+     *
+     * The height and the Dolby Vision flag are taken from the same [MediaFormat]
+     * the rate is read from, so a launch that needs all three pays for one pass.
      */
-    private fun extractFps(file: File): Double? = runCatching {
+    private fun extractTrack(file: File): Reading? = runCatching {
         val extractor = MediaExtractor()
         try {
             extractor.setDataSource(file.absolutePath)
@@ -439,7 +481,11 @@ internal object FrameRateProbe {
                 val format = extractor.getTrackFormat(i)
                 val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
                 if (!mime.startsWith("video/")) continue
-                readFrameRate(format)?.let { return@runCatching it }
+                val height = readHeight(format)
+                val isDolbyVision = mime.equals(DOLBY_VISION_MIME, ignoreCase = true)
+                readFrameRate(format)?.let {
+                    return@runCatching Reading(it, height, isDolbyVision)
+                }
                 // The video track is here and simply has no declared rate - the
                 // case a Matroska WEB-DL produces. A different failure from "no
                 // video track at all", and no longer a dead end: the head's own
@@ -448,7 +494,11 @@ internal object FrameRateProbe {
                     TAG,
                     "probe: video track has no frame-rate key (mime=$mime); estimating from timestamps"
                 )
-                return@runCatching estimateFps(extractor, i, mime)
+                return@runCatching Reading(
+                    fps = estimateFps(extractor, i, mime),
+                    height = height,
+                    isDolbyVision = isDolbyVision
+                )
             }
             Log.i(TAG, "probe: head has no video track")
             null
@@ -456,6 +506,21 @@ internal object FrameRateProbe {
             runCatching { extractor.release() }
         }
     }.getOrNull()
+
+    /**
+     * The video track's declared height, or null when it declares none (or
+     * declares something that is not a picture size).
+     *
+     * Deliberately not defaulted to 0 or "unknown": the 24 fps rule compares it
+     * against 1080, and an absent height must fail the rule rather than read as
+     * a tiny one.
+     */
+    private fun readHeight(format: MediaFormat): Int? {
+        if (!format.containsKey(MediaFormat.KEY_HEIGHT)) return null
+        return runCatching { format.getInteger(MediaFormat.KEY_HEIGHT) }
+            .getOrNull()
+            ?.takeIf { it > 0 }
+    }
 
     /**
      * The cadence of a track whose header declares no rate, from the timestamps
@@ -484,7 +549,7 @@ internal object FrameRateProbe {
      * Bounded on purpose: this walks the head the probe already downloaded, so
      * the sample budget is what keeps a truncated or mis-timed file from turning
      * a cheap read into an open-ended one. It stops at the first absent sample
-     * and at end-of-stream; a throw is caught by the [extractFps] wrapper, which
+     * and at end-of-stream; a throw is caught by the [extractTrack] wrapper, which
      * is why nothing here needs its own guard.
      */
     private fun sampleVideoTimestamps(extractor: MediaExtractor, trackIndex: Int): List<Long> {
@@ -498,6 +563,13 @@ internal object FrameRateProbe {
         }
         return stamps
     }
+
+    /**
+     * The mime a Dolby Vision layer declares. mpv has no DV path and the app's
+     * DV passthrough lives in ExoPlayer's extractors, which is why a DV title is
+     * never routed anywhere by picture size alone.
+     */
+    private const val DOLBY_VISION_MIME = "video/dolby-vision"
 
     /**
      * `KEY_FRAME_RATE` is documented as an integer, but some extractors hand it
