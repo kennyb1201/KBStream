@@ -170,7 +170,14 @@ class HomeRailCatalogOrderTest {
         val src = squash(source(HOME_VM))
         assertTrue(
             "the catalog order must be built from the loads Home is about to make",
-            src.contains("val catalogOrder = catalogOrderByKey(pendingCatalogs)")
+            // The assignment is wrapped in a perf trace since the CW-load spec
+            // (2026-11-24, F1); what is pinned is that the order still comes
+            // from the loads this pass is about to make, not from whatever
+            // arrived.
+            src.contains(
+                "val catalogOrder = PerfTrace.timed(\"home.catalogOrder\") { " +
+                    "catalogOrderByKey(pendingCatalogs) }"
+            )
         )
         assertTrue(
             "the fresh rails must be ordered by it - `pinned + collected` " +

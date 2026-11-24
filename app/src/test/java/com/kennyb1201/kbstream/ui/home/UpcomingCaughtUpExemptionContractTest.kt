@@ -83,7 +83,12 @@ class UpcomingCaughtUpExemptionContractTest {
         assertTrue(
             "the rail publish does NOT pass it: a tracker card for a finished episode " +
                 "must still leave Continue Watching (S2)",
-            home.contains("_upNext.value = applyContinueWatchingDismissals(")
+            // The seed filters into a local and publishes that since the CW-load
+            // spec (2026-11-24, F2), so the gate and the assignment are two
+            // statements now. The count above still holds it to two flagged
+            // calls, so this one is the unflagged third.
+            home.contains("val seeded = applyContinueWatchingDismissals(") &&
+                home.contains("_upNext.value = seeded")
         )
         assertTrue(
             "and neither does the merge's dismiss hook",

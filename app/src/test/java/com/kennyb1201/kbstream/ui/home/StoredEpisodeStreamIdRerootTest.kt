@@ -214,7 +214,9 @@ class StoredEpisodeStreamIdRerootTest {
         val snapshot =
             section(
                 home,
-                "private fun seedUpNextFromHistory(",
+                // Suspend since it calls the same history rules the instant
+                // read does, and both of its callers are already in a coroutine.
+                "private suspend fun seedUpNextFromHistory(",
                 "private fun previousSimklUpNextItems()"
             )
         assertTrue(
