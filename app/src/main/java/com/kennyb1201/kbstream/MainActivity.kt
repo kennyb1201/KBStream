@@ -126,6 +126,7 @@ import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.home.CatalogGridScreen
 import com.kennyb1201.kbstream.ui.mobile.CatalogGridScreenMobile
 import com.kennyb1201.kbstream.ui.mobile.MobileBottomNav
+import com.kennyb1201.kbstream.ui.navigation.NavSeam
 import com.kennyb1201.kbstream.ui.mobile.MobileHomeTopRequest
 import com.kennyb1201.kbstream.ui.mobile.MobileNavDestination
 import com.kennyb1201.kbstream.ui.mobile.mobileNavSelection
@@ -1423,9 +1424,19 @@ fun AppRoot(
     val entrySaver = remember(profilesExist, coldLaunch, showProfilePicker) {
         launchScreenSaver(profilesExist, coldLaunch, showProfilePicker)
     }
-    var screen by rememberSaveable(stateSaver = entrySaver) {
+    val screenState = rememberSaveable(stateSaver = entrySaver) {
         mutableStateOf<Screen>(launchScreen(profilesExist, showProfilePicker))
     }
+    // The navigation seam (spec: navcompose, F0). Every `screen = …` below and
+    // in every lambda handed to a child screen now passes through
+    // [NavSeam.navigateTo] instead of writing the state directly, which is the
+    // one place a later phase asks whether a destination's kind renders through
+    // the NavHost. The set is empty here, so nothing renders through Nav yet and
+    // every assignment is the state write it always was. Reads are unchanged -
+    // `screen` is still the same value from the same saved state, so the
+    // restoration codec, smart-casts and the cold-launch gate are untouched.
+    val navSeam = remember(screenState) { NavSeam(screenState) }
+    var screen by navSeam
 
     // Which profile this run of the app may attribute a BACKGROUND write to
     // (see ProfileSession). The picker means "not chosen yet" - a cold launch
@@ -2615,7 +2626,12 @@ fun AppRoot(
             (profilePicker != null && profilePicker.returnTo == null)) &&
             pendingAutoPlay == null
 
-    BackHandler {
+    // Enabled only while the current destination is NOT one a NavHost owns: a
+    // migrated destination's Back belongs to the NavController plus that
+    // destination's own local handler, and this one firing too would pop twice
+    // (spec: navcompose, the seam). Nothing is migrated yet, so this is enabled
+    // exactly as before.
+    BackHandler(enabled = !navSeam.isMigrated(screen)) {
         if (interceptBack) {
             confirmExit = true
             return@BackHandler
