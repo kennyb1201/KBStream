@@ -115,6 +115,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.tv.material3.Border
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
@@ -5065,7 +5067,10 @@ private fun SettingsNavRail(
             if (pane.group != drawnGroup) {
                 drawnGroup = pane.group
                 Text(
-                    text = pane.group.label.uppercase(),
+                    // Title case, not tracked capitals: a group heading is a
+                    // quiet caption over its rows, and shouting it was half of
+                    // what made this screen read as not-a-real-settings screen.
+                    text = pane.group.label,
                     color = KBTextLo,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.padding(start = 14.dp, top = 12.dp, bottom = 2.dp)
@@ -5196,8 +5201,12 @@ private fun SettingsContentHost(
         // what keeps "SETTINGS > About" reading in the right order. Library,
         // Add-ons and Live TV have no parent name on screen, so the same
         // argument does not apply to them.
+        //
+        // Title case, like the group headings under it: the size argument above
+        // is what keeps the hierarchy, and tracked capitals are what made the
+        // screen read as a caption rather than as a settings page.
         Text(
-            text = title.uppercase(),
+            text = title,
             color = KBAccent,
             style = MaterialTheme.typography.headlineSmall,
             modifier = Modifier.padding(bottom = 2.dp)
@@ -5240,7 +5249,7 @@ private fun SettingsSearchResults(
         if (entry.pane != drawnPane) {
             drawnPane = entry.pane
             Text(
-                text = entry.pane.label.uppercase(),
+                text = entry.pane.label,
                 color = KBTextLo,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(start = 14.dp, top = 10.dp, bottom = 2.dp)
@@ -5346,15 +5355,17 @@ private fun RailDot(color: Color = KBAccent) {
  *
  * Presentational only. It carries no preference, is not focusable, and is not
  * in [SettingsSearchIndex] - a heading can never be a search result, a jump
- * target, or something the viewer can change by mistake. Uppercase at
- * [KBAccent] and small, so it reads as a caption over the rows rather than as
- * one of them. [first] drops the top gap for a pane's opening heading, where
- * the pane title and blurb above already supply it.
+ * target, or something the viewer can change by mistake. Small and quiet at
+ * [KBAccent], so it reads as a caption over the rows rather than as one of
+ * them, and in the label's own case rather than tracked capitals - the platform
+ * settings screens this one is measured against do not shout their headings.
+ * [first] drops the top gap for a pane's opening heading, where the pane title
+ * and blurb above already supply it.
  */
 @Composable
 private fun ColumnScope.SettingsSectionHeader(text: String, first: Boolean = false) {
     Text(
-        text = text.uppercase(),
+        text = text,
         color = KBAccent,
         style = MaterialTheme.typography.labelSmall,
         modifier = Modifier.padding(
@@ -7266,17 +7277,29 @@ private fun ToggleRow(
                     style = MaterialTheme.typography.labelSmall
                 )
             }
-            Text(
-                text = if (displayChecked) "ON" else "OFF",
-                color = if (displayChecked) KBVoid else KBTextHi,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier
-                    .background(
-                        if (displayChecked) KBAccent else KBSurface,
-                        KBShapeSmall
-                    )
-                    .alpha(if (enabled) 1f else 0.35f)
-                    .padding(horizontal = 14.dp, vertical = 8.dp)
+            // A real switch, the same one the phone's settings draw, instead
+            // of a text pill reading ON/OFF. The pill was the single most
+            // amateurish thing on this screen: it said the state in words
+            // where every other settings screen on the platform shows it with
+            // a control.
+            //
+            // `onCheckedChange = null` on purpose: this row is ONE focus stop,
+            // and the card above already handles OK. A switch with its own
+            // callback is its own focusable, which would put a second stop at
+            // the end of every row and make the D-pad visit the same setting
+            // twice. Null keeps it a picture of the state - and a gated row
+            // dims it with the rest of the row rather than disabling it into a
+            // different grey.
+            Switch(
+                checked = displayChecked,
+                onCheckedChange = null,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = KBVoid,
+                    checkedTrackColor = KBAccent,
+                    uncheckedThumbColor = KBTextLo,
+                    uncheckedTrackColor = KBTextHi.copy(alpha = 0.18f)
+                ),
+                modifier = Modifier.alpha(if (enabled) 1f else 0.35f)
             )
         }
     }

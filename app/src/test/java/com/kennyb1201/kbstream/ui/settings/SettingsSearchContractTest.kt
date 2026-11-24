@@ -335,7 +335,11 @@ class SettingsSearchContractTest {
             "private fun ColumnScope.SettingsSectionHeader(",
             "private fun ToggleRow("
         )
-        assertTrue("headings are uppercase", heading.contains("text.uppercase()"))
+        // Re-pinned by the settings-look spec (2026-11-24, F1): tracked capitals
+        // on every heading was half of what the field called amateurish, so the
+        // heading now keeps its label's own case. What this still pins is that
+        // the heading draws the caller's text and nothing else.
+        assertTrue("headings are written, not shouted", heading.contains("text = text,"))
         assertTrue("headings are accent-coloured", heading.contains("color = KBAccent"))
         assertTrue("headings are small", heading.contains("MaterialTheme.typography.labelSmall"))
         assertTrue(

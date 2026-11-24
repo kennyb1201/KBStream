@@ -479,7 +479,8 @@ private fun SettingsHomeMobile(
             SettingsGroup.entries.forEach { group ->
                 item(key = "group_${group.name}") {
                     Text(
-                        text = group.label.uppercase(),
+                        // Title case, matching the TV screen's quiet headings.
+                        text = group.label,
                         color = KBTextLo,
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
