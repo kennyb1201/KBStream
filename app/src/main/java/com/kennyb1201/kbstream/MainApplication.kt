@@ -458,7 +458,11 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                 runCatchingCancellable {
                     PerfTrace.timedSuspend("startup.homeRailReconcile") {
                         com.kennyb1201.kbstream.data.library.LibraryHomeRailReconcile
-                            .runOnce(this@MainApplication)
+                            .runOnce(
+                                this@MainApplication,
+                                traktRepository,
+                                bingecatRepository
+                            )
                     }
                 }.onFailure { error ->
                     CrashReporter.recordNonFatal(
@@ -478,7 +482,10 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                 runCatchingCancellable {
                     PerfTrace.timedSuspend("startup.historyRootMigration") {
                         com.kennyb1201.kbstream.data.history.HistoryRootMigration
-                            .runOnce(this@MainApplication)
+                            .runOnce(
+                                this@MainApplication,
+                                tmdbRepository
+                            )
                     }
                 }.onFailure { error ->
                     CrashReporter.recordNonFatal(

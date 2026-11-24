@@ -693,8 +693,24 @@ class LibraryListSyncContractTest {
         val app = source("com/kennyb1201/kbstream/MainApplication.kt")
         assertContains(
             app,
-            "com.kennyb1201.kbstream.data.library.LibraryHomeRailReconcile .runOnce(this@MainApplication)",
+            "com.kennyb1201.kbstream.data.library.LibraryHomeRailReconcile\n" +
+                "                            .runOnce(\n" +
+                "                                this@MainApplication,\n" +
+                "                                traktRepository,\n" +
+                "                                bingecatRepository\n" +
+                "                            )",
             "app start reconciles too, so a dead rail does not wait for the Library"
+        )
+        // And it is handed the instances its caller already holds, instead of
+        // reaching for the accessors (spec 2026-11-22, item 3).
+        assertContains(
+            launch,
+            "traktRepository: TraktRepository,\n        bingecatRepository: BingeCatRepository",
+            "the pass takes the two services rather than fetching them"
+        )
+        assertFalse(
+            "and it no longer calls a legacy accessor",
+            launch.contains("getInstance(")
         )
         assertContains(
             app,
@@ -709,7 +725,7 @@ class LibraryListSyncContractTest {
         // A profile with nothing remote pinned costs a prefs read and no wait:
         // the early return must sit BEFORE the delay.
         val runOnce = launch
-            .substringAfter("suspend fun runOnce(context: Context): Boolean {")
+            .substringAfter("suspend fun runOnce(\n        context: Context,")
             .substringBefore("private fun remoteSourcesPinned(")
         assertContains(runOnce, "if (remoteSourcesPinned(appContext).isEmpty()) return false", "the gate")
         assertTrue(

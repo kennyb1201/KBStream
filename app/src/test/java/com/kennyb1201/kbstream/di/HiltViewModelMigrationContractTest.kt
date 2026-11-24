@@ -377,6 +377,35 @@ class HiltViewModelMigrationContractTest {
         }
     }
 
+    /**
+     * Launch housekeeping that reads two services is the same move as a screen's:
+     * the object stays an `object`, but the instances arrive from the one place
+     * that already holds them - the Application, which is an entry point. Pinned
+     * because the pass is `runCatching`-wrapped at the call site, so a second
+     * instance built here would fail silently and only show as a reconcile that
+     * never prunes.
+     */
+    @Test
+    fun `the launch reconcile pass is handed the services it reads`() {
+        val reconcile = source("com/kennyb1201/kbstream/data/library/LibraryHomeRailReconcile.kt")
+        assertFalse(
+            "the pass still reaches for an accessor",
+            reconcile.contains("getInstance(")
+        )
+        assertTrue(
+            "it takes both services as parameters",
+            reconcile.contains("traktRepository: TraktRepository") &&
+                reconcile.contains("bingecatRepository: BingeCatRepository")
+        )
+        val app = source("com/kennyb1201/kbstream/MainApplication.kt")
+        assertTrue(
+            "and the Application passes the fields it injects",
+            app.contains("@Inject lateinit var traktRepository: TraktRepository") &&
+                app.contains("@Inject lateinit var bingecatRepository: BingeCatRepository") &&
+                app.contains("traktRepository,\n                                bingecatRepository")
+        )
+    }
+
     private fun source(path: String): String {
         val file = File(findSourceRoot(), path)
         assertTrue("source missing: $file", file.isFile)

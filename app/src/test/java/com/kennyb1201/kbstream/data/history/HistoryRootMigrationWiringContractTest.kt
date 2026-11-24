@@ -65,7 +65,8 @@ class HistoryRootMigrationWiringContractTest {
         assertTrue(
             "MainApplication must start the pass, or no device that already has history rows " +
                 "ever gets them re-rooted",
-            app.contains("HistoryRootMigration") && app.contains(".runOnce(this@MainApplication)")
+            app.contains("HistoryRootMigration") &&
+                app.contains(".runOnce(\n                                this@MainApplication,\n                                tmdbRepository\n                            )")
         )
         assertTrue(
             "and it must be isolated like every other launch step, so a broken migration cannot " +
@@ -77,7 +78,10 @@ class HistoryRootMigrationWiringContractTest {
     @Test
     fun `every profile is repaired through its own by-name handle`() {
         val src = read(MIGRATION)
-        val body = functionBody(src, "    suspend fun runOnce(context: Context): Boolean")
+        val body = functionBody(
+            src,
+            "    suspend fun runOnce(\n        context: Context,\n        tmdbRepository: TmdbRepository\n    ): Boolean"
+        )
         assertTrue(
             "the pass must cover the app's profile list",
             src.contains("ProfileManager.profileIds(")

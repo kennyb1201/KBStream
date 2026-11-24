@@ -94,14 +94,27 @@ object LibraryHomeRailReconcile {
      * common answer ("nothing pinned but a local list") must cost no wait at
      * all, and once after it, because a profile switch or a new pin in those
      * few seconds is what should be reconciled, not the older snapshot.
+     *
+     * The two services this pass reads arrive as parameters rather than being
+     * fetched from their `getInstance` accessors (spec 2026-11-22, item 3). The
+     * only caller is the Application, which is an injection point: handing the
+     * instances in keeps the one-instance invariant while taking this object off
+     * the accessor list. A test that wants a specific answer passes its own.
      */
-    suspend fun runOnce(context: Context): Boolean {
+    suspend fun runOnce(
+        context: Context,
+        traktRepository: TraktRepository,
+        bingecatRepository: BingeCatRepository
+    ): Boolean {
         val appContext = context.applicationContext
         if (remoteSourcesPinned(appContext).isEmpty()) return false
         delay(STARTUP_DELAY_MS)
         val wanted = remoteSourcesPinned(appContext)
         if (wanted.isEmpty()) return false
-        return LibraryHomeRails.reconcilePins(appContext, liveListIds(appContext, wanted))
+        return LibraryHomeRails.reconcilePins(
+            appContext,
+            liveListIds(appContext, wanted, traktRepository, bingecatRepository)
+        )
     }
 
     /**
@@ -155,13 +168,15 @@ object LibraryHomeRailReconcile {
      */
     private suspend fun liveListIds(
         context: Context,
-        wanted: Set<String>
+        wanted: Set<String>,
+        traktRepository: TraktRepository,
+        bingecatRepository: BingeCatRepository
     ): Map<String, List<LibraryHomeRailLiveList>> {
         val live = mutableMapOf<String, List<LibraryHomeRailLiveList>>()
 
         if (LibrarySource.TRAKT_LIST.name in wanted) {
             yieldToWalk()
-            val trakt = TraktRepository.getInstance(context)
+            val trakt = traktRepository
             if (trakt.isConfigured() && trakt.hasToken()) {
                 val own = runCatchingCancellable { trakt.userLists() }.getOrNull()
                 // Only a Loaded answer is a statement about which lists exist:
@@ -215,7 +230,7 @@ object LibraryHomeRailReconcile {
 
         if (LibrarySource.BINGECAT_LIST.name in wanted) {
             yieldToWalk()
-            val bingecat = BingeCatRepository.getInstance(context)
+            val bingecat = bingecatRepository
             if (bingecat.isReady()) {
                 // Stale-while-revalidate, and it keeps its cache after a FAILED
                 // revalidation: only a snapshot this pass actually fetched may

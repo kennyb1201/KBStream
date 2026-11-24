@@ -209,8 +209,16 @@ object HistoryRootMigration {
      * call on every launch: the gate is one prefs read once it is done.
      *
      * @return true when the pass ran and retired itself.
+     *
+     * TMDB arrives as a parameter rather than from its `getInstance` accessor
+     * (spec 2026-11-22, item 3): the only caller is the Application, which is an
+     * injection point, so the pass can take the one instance the app already
+     * holds instead of asking for a second opinion.
      */
-    suspend fun runOnce(context: Context): Boolean = withContext(Dispatchers.IO) {
+    suspend fun runOnce(
+        context: Context,
+        tmdbRepository: TmdbRepository
+    ): Boolean = withContext(Dispatchers.IO) {
         val appContext = context.applicationContext
         if (isDone(appContext)) return@withContext false
 
@@ -220,7 +228,7 @@ object HistoryRootMigration {
         // the pass on it - the next launch asks again.
         if (profileIds.isEmpty()) return@withContext false
 
-        val repository = TmdbRepository.getInstance(appContext)
+        val repository = tmdbRepository
         val tmdbIds = HashMap<String, Int?>()
         val roots = HashMap<String, String?>()
 
