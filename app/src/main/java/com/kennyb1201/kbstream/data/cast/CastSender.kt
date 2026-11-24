@@ -102,6 +102,13 @@ internal object CastSender {
                 override fun onSessionStarted(session: CastSession, sessionId: String) =
                     noteSession(session)
 
+                // cast-framework 21.5.0 made resuming a session its own
+                // callback and left it abstract, so the SDK's own resume path
+                // would not compile without it. A resuming session is a
+                // session, exactly like a resumed one.
+                override fun onSessionResuming(session: CastSession, sessionId: String) =
+                    noteSession(session)
+
                 override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) =
                     noteSession(session)
 
