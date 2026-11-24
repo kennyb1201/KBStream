@@ -2,8 +2,10 @@ package com.kennyb1201.kbstream.ui.theme
 
 import android.content.Context
 import android.os.Build
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MaterialExpressiveTheme
+import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -17,6 +19,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.tv.material3.MaterialTheme as TvMaterialTheme
 
 /**
@@ -100,10 +106,28 @@ fun MobileTheme(content: @Composable () -> Unit) {
     SideEffect {
         kbDynamicAccentState.value = if (dynamic) scheme.primary else null
     }
-    MaterialTheme(
+    // Expressive pass (spec 2026-11-22, F2): the phone is the only place in the
+    // app that composes an expressive theme, and it is composed HERE rather than
+    // at the shell root on purpose - see the hard rule below.
+    //
+    // Everything above this line is untouched: the same `scheme` object, the same
+    // dynamic/AMOLED decision, the same wallpaper revision and the same
+    // SideEffect. The wrapper only adds what 1.5.0 made public - the increased
+    // shape slots, the emphasized type styles and the expressive motion scheme -
+    // so accent, AMOLED, pure-black and dynamic colour repaint exactly as they
+    // did, because they feed the same values into it.
+    //
+    // The hard rule this pass carries: MobileTheme is the ONLY M3 theme provider
+    // in the app. A TV composes inside KBStreamTheme (tv-material3) with no M3
+    // provider above it, which is why a shared component that reads M3 typography
+    // - KBQrCode is the one - keeps reading M3's defaults there and picks up the
+    // expressive scale here. Adding a provider at the shell root to "share" it
+    // would move the TV's type and break the identity this pass is measured by.
+    MaterialExpressiveTheme(
         colorScheme = scheme,
         typography = rememberBrandTypography(),
         shapes = KBStreamMobileShapes,
+        motionScheme = MotionScheme.expressive(),
         content = content
     )
 }
@@ -205,9 +229,56 @@ private fun rememberBrandTypography(): Typography {
             bodySmall = tv.bodySmall,
             labelLarge = tv.labelLarge,
             labelMedium = tv.labelMedium,
-            labelSmall = tv.labelSmall
+            labelSmall = tv.labelSmall,
+            // The expressive cut (spec 2026-11-22, F2). All fifteen slots are
+            // filled, not just the three families the phone headlines with: a
+            // slot left at its M3 default would drop the brand face on the one
+            // screen that asks for the emphasized style, which is the drift this
+            // file exists to prevent. Only display/headline/title are actually
+            // emphasized - the body and label cuts are the TV styles verbatim,
+            // because metadata at ten inches and at arm's length want the same
+            // weight, and M3's own emphasized body is heavier than the plate
+            // under it was designed for.
+            displayLargeEmphasized = tv.displayLarge.emphasized(),
+            displayMediumEmphasized = tv.displayMedium.emphasized(),
+            displaySmallEmphasized = tv.displaySmall.emphasized(),
+            headlineLargeEmphasized = tv.headlineLarge.emphasized(),
+            headlineMediumEmphasized = tv.headlineMedium.emphasized(),
+            headlineSmallEmphasized = tv.headlineSmall.emphasized(),
+            titleLargeEmphasized = tv.titleLarge.emphasized(),
+            titleMediumEmphasized = tv.titleMedium.emphasized(),
+            titleSmallEmphasized = tv.titleSmall.emphasized(),
+            bodyLargeEmphasized = tv.bodyLarge,
+            bodyMediumEmphasized = tv.bodyMedium,
+            bodySmallEmphasized = tv.bodySmall,
+            labelLargeEmphasized = tv.labelLarge,
+            labelMediumEmphasized = tv.labelMedium,
+            labelSmallEmphasized = tv.labelSmall
         )
     }
+}
+
+/**
+ * M3's expressive "emphasized" cut of a type slot: one weight step heavier and
+ * slightly tighter tracking, at the same size, line height and family.
+ *
+ * Derived from the TV slot rather than restated with literal sizes, for the same
+ * reason the base scale is mapped rather than re-declared: a size change to
+ * [KBStreamTypography] must move the phone's emphasized styles with it. The
+ * weight step is taken from whatever the slot already is, so a style the TV
+ * scale already sets heavy becomes heavier instead of being pulled back to a
+ * literal SemiBold.
+ */
+private fun TextStyle.emphasized(): TextStyle {
+    val base = fontWeight ?: FontWeight.Normal
+    // Tracking is tightened only where it is measured in sp: an em-based
+    // tracking is already relative to the size, and scaling it twice would
+    // shrink it away. Everything the brand scale actually declares is sp.
+    val tracking = if (letterSpacing.isSp) (letterSpacing.value * 0.92f).sp else letterSpacing
+    return copy(
+        fontWeight = FontWeight((base.weight + 100).coerceAtMost(FontWeight.Black.weight)),
+        letterSpacing = tracking
+    )
 }
 
 /**
@@ -257,5 +328,15 @@ private val KBStreamMobileShapes = Shapes(
     small = KBShapeCard,
     medium = KBShapeCard,
     large = KBShapePanel,
-    extraLarge = KBShapePanel
+    extraLarge = KBShapePanel,
+    // The expressive increased slots (spec 2026-11-22, F2). Phone-only values,
+    // declared here rather than in Theme.kt: the TV's corner scale is a KB token
+    // both form factors share and must not move, while these three exist only
+    // for the phone's expressive components. They step up from the app's own
+    // panel radius (18dp) in the same proportion M3 steps its own scale, and the
+    // existing five slots above keep their exact radii so nothing that asks the
+    // theme today changes corner.
+    largeIncreased = RoundedCornerShape(24.dp),
+    extraLargeIncreased = RoundedCornerShape(28.dp),
+    extraExtraLarge = RoundedCornerShape(32.dp)
 )
