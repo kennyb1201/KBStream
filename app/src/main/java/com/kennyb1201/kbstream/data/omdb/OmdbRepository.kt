@@ -10,6 +10,7 @@ import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import java.util.concurrent.ConcurrentHashMap
+import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -46,7 +47,7 @@ class OmdbRepository internal constructor(
      * main thread — the same reason [com.kennyb1201.kbstream.data.tmdb.TmdbRepository]
      * keeps its Retrofit stack lazy.
      */
-    constructor(app: Application) : this(
+    @Inject constructor(app: Application) : this(
         apiProvider = { sharedApi },
         cacheProvider = { WatchHistoryDatabase.getInstance(app).tmdbJsonCacheDao() },
         apiKey = { runCatching { AppPreferences.getOmdbApiKey(app) }.getOrDefault("") },

@@ -10,6 +10,8 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.trakt.TraktListEntry
 import com.kennyb1201.kbstream.data.trakt.TraktListRefParser
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
+import javax.inject.Inject
+import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -40,12 +42,13 @@ private val YEAR_REGEX = Regex("\\b(?:19|20)\\d{2}\\b")
  * caller's `onRail` the moment it is ready (see [loadFolderRails]), in the
  * folder's source order rather than the order the sources happen to finish.
  */
-class KBContentLoader(context: android.content.Context) {
-
-    private val appContext = context.applicationContext
-    private val tmdbRepository = TmdbRepository.getInstance(appContext)
-    private val addonRepository = AddonRepository.getInstance()
-    private val traktRepository = TraktRepository.getInstance(appContext)
+@Singleton
+class KBContentLoader @Inject constructor(
+    private val tmdbRepository: TmdbRepository,
+    private val addonRepository: AddonRepository,
+    private val traktRepository: TraktRepository,
+    private val addonManager: AddonManager
+) {
 
     companion object {
         private const val TMDB_POSTER_BASE = "https://image.tmdb.org/t/p/w500"
@@ -158,7 +161,7 @@ class KBContentLoader(context: android.content.Context) {
         val catalogId = source.catalogId ?: return source.providerLabel()
         val type = normalizeAddonType(source.type)
 
-        val addon = AddonManager.getInstance(appContext)
+        val addon = addonManager
             .getInstalledAddons()
             .firstOrNull { it.id == addonId }
             ?: return source.providerLabel()
@@ -433,7 +436,7 @@ class KBContentLoader(context: android.content.Context) {
         val type = normalizeAddonType(source.type)
             ?: return emptyList()
 
-        val addon = AddonManager.getInstance(appContext).getInstalledAddons()
+        val addon = addonManager.getInstalledAddons()
             .firstOrNull { it.id == addonId && it.enabled }
             ?: return emptyList()
 

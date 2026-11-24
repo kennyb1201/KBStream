@@ -10,6 +10,8 @@ import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import dagger.hilt.android.qualifiers.ApplicationContext
+import javax.inject.Inject
 import com.kennyb1201.kbstream.data.BackgroundWork
 import com.kennyb1201.kbstream.data.memory.evictOldest
 import kotlinx.coroutines.CompletableDeferred
@@ -33,8 +35,8 @@ import okhttp3.Request
  * the foreground hero that a just-opened screen is waiting on. Duplicate
  * concurrent resolves of the same title share one request.
  */
-class TmdbHeroArtworkRepository(
-    context: Context? = null
+class TmdbHeroArtworkRepository @Inject constructor(
+    @ApplicationContext context: Context
 ) {
     // Heavyweight and deliberately lazy: this repository is constructed during
     // the first composition (HomeViewModel), so building Moshi inline put its
@@ -63,11 +65,7 @@ class TmdbHeroArtworkRepository(
     }
 
     private val tmdbJsonCacheDao: TmdbJsonCacheDao? by lazy {
-        context
-            ?.applicationContext
-            ?.let {
-                WatchHistoryDatabase.getInstance(it).tmdbJsonCacheDao()
-            }
+        WatchHistoryDatabase.getInstance(context.applicationContext).tmdbJsonCacheDao()
     }
 
     init {

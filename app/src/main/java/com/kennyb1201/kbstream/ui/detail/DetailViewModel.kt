@@ -272,7 +272,11 @@ class DetailViewModel @Inject constructor(
     // never writes back to history, watch state or the metadata caches.
     private val airDateRepository: TvmazeAirDateRepository,
     // The watched union's writer: push/remove season and episode marks.
-    private val bingecatRepository: BingeCatRepository
+    private val bingecatRepository: BingeCatRepository,
+    // Awards text from OMDB (see [OmdbRepository]), built by the graph now.
+    // Display-only, and fetched concurrently with the rest of the load rather
+    // than as a dependency of anything the screen paints with.
+    internal val omdbRepository: OmdbRepository
 ) : AndroidViewModel(app) {
 
     // ── The season's episode stills, warmed ahead of the row's scroll ────
@@ -343,11 +347,6 @@ class DetailViewModel @Inject constructor(
     private val historyDao: WatchHistoryDao
         get() = WatchHistoryDatabase.getInstanceScoped(app).watchHistoryDao()
     private val watchedStatusRepository = WatchedStatusRepository(app)
-    // Awards text from OMDB (see [OmdbRepository]). Display-only, and fetched
-    // concurrently with the rest of the load rather than as a dependency of
-    // anything the screen paints with.
-    internal val omdbRepository = OmdbRepository(app)
-
     private val _meta = MutableStateFlow<Meta?>(null)
     val meta: StateFlow<Meta?> = _meta.asStateFlow()
 

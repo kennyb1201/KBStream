@@ -149,6 +149,8 @@ class HomeViewModel @Inject constructor(
     // MDBList's below; nothing here writes to it.
     private val traktRepository: TraktRepository,
     private val tmdbRepository: TmdbRepository,
+    // The hero's clearlogo/backdrop resolver, built by the graph now.
+    private val tmdbHeroArtworkRepository: TmdbHeroArtworkRepository,
     // The artwork gap-filler (spec 2026-11-13): only ever asked AFTER TMDB
     // answered nothing, cached per title, and silent in a build with no key.
     // The last singleton to join the graph: it was `internal`, so Home held the
@@ -177,9 +179,6 @@ class HomeViewModel @Inject constructor(
         get() = WatchHistoryDatabase
             .getInstanceScoped(getApplication())
             .watchHistoryDao()
-
-    private val tmdbHeroArtworkRepository =
-        TmdbHeroArtworkRepository(application)
 
     private val watchedStatusRepository =
         WatchedStatusRepository(application)

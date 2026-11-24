@@ -65,11 +65,13 @@ data class KBRailPagingState(
 class KBFolderViewModel @Inject constructor(
     application: Application,
     private val tmdbRepository: TmdbRepository,
-    private val repository: KBRepository
+    private val repository: KBRepository,
+    private val heroArtworkRepository: TmdbHeroArtworkRepository,
+    // Constructed by the graph now (spec 2026-11-22, item 3): it used to build
+    // its own TMDB/addon/Trakt accessors from the Application it was handed.
+    private val contentLoader: KBContentLoader
 ) : AndroidViewModel(application) {
 
-    private val contentLoader = KBContentLoader(application)
-    private val heroArtworkRepository = TmdbHeroArtworkRepository(application)
     private val watchedStatusRepository = WatchedStatusRepository(application)
 
     init {

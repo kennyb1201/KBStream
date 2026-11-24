@@ -191,6 +191,66 @@ class HiltViewModelMigrationContractTest {
     }
 
     /**
+     * The first collaborator that is not a legacy singleton to move: it was a
+     * plain class that built its own TMDB/addon/Trakt accessors from the
+     * Application handed to it. Now the graph builds it, and its one caller
+     * takes it as a parameter - the shape every remaining helper needs.
+     */
+    @Test
+    fun `KBContentLoader is constructed by the graph`() {
+        val loader = source("com/kennyb1201/kbstream/data/kb/KBContentLoader.kt")
+        assertTrue(
+            "the loader takes its repositories instead of reaching for them",
+            loader.contains("@Singleton\nclass KBContentLoader @Inject constructor(") &&
+                loader.contains("private val tmdbRepository: TmdbRepository,") &&
+                loader.contains("private val addonManager: AddonManager") &&
+                !loader.contains("getInstance(")
+        )
+        val folder = source("$UI/kb/KBFolderViewModel.kt")
+        assertTrue(
+            "and its caller is handed it",
+            folder.contains("private val contentLoader: KBContentLoader") &&
+                !folder.contains("KBContentLoader(application)")
+        )
+    }
+
+    /**
+     * The same move for the two collaborators that were never legacy singletons:
+     * the hero-artwork resolver and the awards repository were built by their
+     * view models, from an Application, with no companion in sight. The graph
+     * builds them now, and their construction sites are gone - which is the half
+     * of "construction moves class-by-class" the accessor list cannot see.
+     */
+    @Test
+    fun `the per-screen collaborators are graph-built too`() {
+        listOf(
+            "com/kennyb1201/kbstream/data/tmdb/TmdbHeroArtworkRepository.kt",
+            "com/kennyb1201/kbstream/data/omdb/OmdbRepository.kt"
+        ).forEach { path ->
+            assertTrue(
+                "$path has an @Inject constructor",
+                source(path).contains("@Inject constructor(")
+            )
+        }
+        listOf("$UI/home/HomeViewModel.kt", "$UI/kb/KBFolderViewModel.kt")
+            .forEach { path ->
+                val vm = source(path)
+                val handed = vm.contains("tmdbHeroArtworkRepository: TmdbHeroArtworkRepository") ||
+                    vm.contains("heroArtworkRepository: TmdbHeroArtworkRepository")
+                assertTrue(
+                    "$path is handed the hero resolver",
+                    handed && !vm.contains("TmdbHeroArtworkRepository(application)")
+                )
+            }
+        val detail = source("$UI/detail/DetailViewModel.kt")
+        assertTrue(
+            "Detail is handed OMDB instead of building it",
+            detail.contains("internal val omdbRepository: OmdbRepository") &&
+                !detail.contains("OmdbRepository(app)")
+        )
+    }
+
+    /**
      * The engines have no view model to hoist their collaborators into, so each
      * activity is an injection point of its own. Pinned because the alternative
      * - a `getInstance` per tracker - is invisible in a diff and would quietly
