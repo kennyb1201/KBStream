@@ -1288,7 +1288,7 @@ fun SettingsScreen(
                         } else {
                             "Trakt"
                         },
-                        description = "Connect your Trakt account to scrobble playback and sync watched state",
+                        description = "Connect your Trakt account to sync what you watch.",
                         onClick = onOpenTrakt
                     )
 
@@ -1398,9 +1398,7 @@ fun SettingsScreen(
                 // which is how it reaches Home, by pinning that row.
                 NavigationRow(
                     label = "Trakt public lists",
-                    description = "Browse Trakt's popular and trending community " +
-                        "lists, search them by name, and save one to your Library by " +
-                        "liking it. Owner is named on every card.",
+                    description = "Browse popular Trakt community lists and save one to your Library.",
                     onClick = { onOpenPublicLists("trakt") }
                 )
 
@@ -1462,8 +1460,7 @@ fun SettingsScreen(
 
                 NavigationRow(
                     label = "MyAnimeList public lists",
-                    description = "Read a MyAnimeList profile's anime list by username and " +
-                        "copy it into your Library. Needs your MAL connection first.",
+                    description = "Copy a MyAnimeList profile's anime list into your Library.",
                     onClick = { onOpenPublicLists("mal") }
                 )
 
@@ -2272,9 +2269,7 @@ fun SettingsScreen(
                 }
                 ToggleRow(
                     label = "Add TorBox Cloud to Library",
-                    description = "With a TorBox key above, add the torrents in your " +
-                        "TorBox library to My List. Each is matched to a title on TMDB; " +
-                        "anything that can't be matched confidently is left out.",
+                    description = "Add your TorBox library to My List, matched to titles on TMDB.",
                     checked = torboxLibrarySync,
                     onToggle = { enabled ->
                         val synced = if (enabled) 0 else {
@@ -2470,12 +2465,8 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(12.dp))
                 ToggleRow(
                     label = "Add cached torrents to TorBox on play",
-                    description = "TorBox Instant only plays torrents its cache already holds. " +
-                        "With this on, pressing such a source registers it in your TorBox " +
-                        "account first - it will appear in your library, and TorBox may count " +
-                        "it against your download quota - then plays it. Off, only torrents " +
-                        "already in your account play. " +
-                        "Nothing that is not already cached is ever added.",
+                    description = "Add a cached torrent to your TorBox account so it plays at once " +
+                            "(TorBox may count it as a download).",
                     checked = torboxResolveCreate,
                     onToggle = {
                         torboxResolveCreate = it
@@ -2492,12 +2483,7 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(12.dp))
                 ToggleRow(
                     label = "Cached sources only",
-                    description = "Hide sources your TorBox account does not already hold, so " +
-                        "the picker lists what will start at once. Sources with a direct " +
-                        "link are always shown, and nothing else changes: uncached sources " +
-                        "were already refused on play and skipped by auto-play, and this does " +
-                        "not add or download anything. Needs a TorBox key; without one the " +
-                        "list is unchanged.",
+                    description = "Only show sources TorBox already has, so everything listed starts at once.",
                     checked = torboxCachedOnly,
                     onToggle = {
                         torboxCachedOnly = it
@@ -2514,11 +2500,7 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(12.dp))
                 ToggleRow(
                     label = "TorBox cloud files in stream picker",
-                    description = "Offer the files already in your TorBox cloud on the " +
-                        "episode or film they belong to, including one you downloaded there " +
-                        "that no add-on lists. Off, the picker stays as it is unless a cloud " +
-                        "file matches what you are watching - then one row offers it. Needs a " +
-                        "TorBox key; a file still downloading is never offered.",
+                    description = "Show files already in your TorBox cloud in the stream picker.",
                     checked = torboxCloudRows,
                     onToggle = {
                         torboxCloudRows = it
@@ -2625,8 +2607,7 @@ fun SettingsScreen(
 
                 NavigationRow(
                     label = "Viewing stats",
-                    description = "Finished episodes, movies, runtime and your streak, " +
-                        "counted from this profile's history",
+                    description = "Finished episodes, movies, runtime and your streak.",
                     onClick = onOpenStats
                 )
 
@@ -2635,8 +2616,7 @@ fun SettingsScreen(
                 // must not depend on the calendar.
                 NavigationRow(
                     label = "Year in review",
-                    description = "This year, or any past year, counted from this " +
-                        "profile's history - with a card to share",
+                    description = "This year, or any past year, with a card to share.",
                     onClick = { onOpenYearReview(null) }
                 )
 
@@ -2829,13 +2809,8 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     ToggleRow(
                         label = "Play 24 fps titles in MPV",
-                        description = "Opens 24 fps titles at 1080p and below in the MPV " +
-                            "engine even when the picker above says ExoPlayer (including " +
-                            "\"ExoPlayer only\"). On a panel with no 24 Hz mode, ExoPlayer shows " +
-                            "24 fps with 3:2 pulldown judder while MPV paces it smoothly. 4K, " +
-                            "Dolby Vision, live TV, DRM, and HLS sources stay on ExoPlayer. The " +
-                            "file's rate and height are read from its own head before play; a " +
-                            "source that cannot be read stays on ExoPlayer.",
+                        description = "Play 24 fps titles in MPV for smooth motion on panels without " +
+                            "a 24 Hz mode.",
                         checked = mpvFor24Fps1080,
                         onToggle = {
                             mpvFor24Fps1080 = it
@@ -3036,15 +3011,7 @@ fun SettingsScreen(
                         label = "Treat coming back as the end",
                         // Same gate, same reason (§4.1.4, O1c).
                         enabled = shownEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL,
-                        description = "Your player usually cannot say where you stopped, so " +
-                            "KBStream measures the playhead against the clock while it is in " +
-                            "front. Pause or scrub once and a title you watched through comes " +
-                            "back short of the finish line - no Up Next / because-you-watched " +
-                            "card, and not marked watched. With this on, returning from the " +
-                            "player counts as finishing the title. A playhead your player does " +
-                            "report is still believed first, but anything you back out of early " +
-                            "counts too, so leave it off unless you watch external titles " +
-                            "through to the end.",
+                        description = "Count leaving the player as finishing the title.",
                         checked = externalTrustReturn,
                         onToggle = {
                             externalTrustReturn = it
@@ -3195,9 +3162,7 @@ fun SettingsScreen(
                 // side wins instead of implying the ranker is strictly better.
                 ToggleRow(
                     label = "Stream Ranker",
-                    description = "Reorder sources by availability, resolution and release type. " +
-                        "Off keeps the exact order the add-on returned — the better choice when the " +
-                        "add-on already sorts its own results, like AIOStreams with a SEL config",
+                    description = "Reorder sources by availability, resolution and release type.",
                     checked = useStreamRanker,
                     onToggle = {
                         useStreamRanker = it
@@ -3322,7 +3287,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Next Episode Popup",
-                    description = "Show the Up Next card as an episode's credits roll: the next episode, its still, and the countdown to it. Off ends the episode with no card \u2014 and, because that card is where Auto-play Next counts down and where the still-there prompt asks, with no auto-advance either.",
+                    description = "Show the next episode with a countdown as the credits roll.",
                     checked = nextEpisodePopup,
                     onToggle = {
                         nextEpisodePopup = it
@@ -3348,7 +3313,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Because You Watched",
-                    description = "When there is no next episode \u2014 a movie, or a finished finale \u2014 recommend what to watch instead as the credits roll, with PLAY and DETAILS on each pick.",
+                    description = "Recommend what to watch next as a movie's credits roll.",
                     checked = becauseYouWatched,
                     onToggle = {
                         becauseYouWatched = it
@@ -3374,7 +3339,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Prefer Binge Group",
-                    description = "Auto-next picks the stream tagged with the same Stremio binge group as the episode you just finished — same link continues seamlessly.",
+                    description = "Continue on the same link as the episode you just finished.",
                     checked = bingeGroupPrefer,
                     onToggle = {
                         bingeGroupPrefer = it
@@ -3403,7 +3368,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Binge Fallback",
-                    description = "When no group or addon match exists, still auto-play the top-ranked stream. Off stops autoplay and shows the source picker instead.",
+                    description = "Auto-play the top-ranked source when no matching one is found.",
                     checked = bingeGroupFallback,
                     // Same master, same reason (§4.3.11, O1b).
                     enabled = bingeGroupPrefer,
@@ -3459,7 +3424,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Auto-skip Intros",
-                    description = "Skip intros and recaps the moment they start, using IntroDB timestamps. Off keeps the SKIP INTRO button, so the choice stays yours. In the External player engine, which has nowhere to draw that button, the segment is skipped before the hand-off instead.",
+                    description = "Skip intros and recaps as they start.",
                     checked = autoSkipIntro,
                     onToggle = {
                         autoSkipIntro = it
@@ -3471,7 +3436,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Auto-skip Credits",
-                    description = "Jump past end credits and stop on the post-credits scene when the title has one. A low-confidence timestamp is never skipped on its own. In the External player engine the credits are skipped before the hand-off instead of during playback.",
+                    description = "Skip end credits and stop on any post-credits scene.",
                     checked = autoSkipCredits,
                     onToggle = {
                         autoSkipCredits = it
@@ -3483,7 +3448,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Match Content Frame Rate",
-                    description = "Ask the TV to switch its refresh rate to match the title \u2014 24 Hz for film, 50 Hz for 25 fps \u2014 which is what removes the stutter from slow pans. The app tells the TV the rate of what it is playing and the TV picks the mode; a switch that blanks the screen for a moment also needs the TV's own display setting to allow it. The panel is put back when playback ends. A TV that reports only the mode it is already in has nothing to switch to. Set per device, so it does not follow your profile to another TV.",
+                    description = "Match the TV's refresh rate to the title for smooth motion.",
                     checked = matchFrameRate,
                     onToggle = {
                         matchFrameRate = it
@@ -3495,7 +3460,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Prefer 24 Hz Over 23.976 Hz",
-                    description = "Only for a TV that offers both, and only while matching is on. 23.976 fps film is an exact multiple of either rate, so the app otherwise asks for the closer one, 23.976 Hz. Some panels present that mode badly and the film still judders; this asks for 24.000 Hz instead (and 30.000 over 29.970 for 29.97 fps content). If film judders with matching on, try this one, then compare the two. Set per device.",
+                    description = "Ask for 24 Hz instead of 23.976 Hz when your TV offers both.",
                     checked = preferWholeFrameRate,
                     onToggle = {
                         preferWholeFrameRate = it
@@ -3669,8 +3634,7 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(8.dp))
                 ToggleRow(
                     label = "Badges above the file name",
-                    description = "Show a source's badge chips over its name instead of under " +
-                        "it, in the player's source picker and on the streams screen.",
+                    description = "Show badge chips above a source's name.",
                     checked = badgesAboveFile,
                     onToggle = {
                         badgesAboveFile = it
@@ -3766,7 +3730,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "AMOLED Black",
-                    description = "True-black backgrounds for OLED/AMOLED screens — pixels turn fully off, saving power and boosting contrast. Applies instantly.",
+                    description = "Use true black backgrounds on OLED screens.",
                     checked = amoledBlack,
                     onToggle = {
                         amoledBlack = it
@@ -3778,7 +3742,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Pure Black Surface",
-                    description = "Also make cards, panels and containers pure black. Pixels turn fully off, saving power and boosting contrast. Applies instantly. Requires AMOLED Black.",
+                    description = "Also paint cards and panels true black (needs AMOLED Black).",
                     checked = pureBlackSurface && amoledBlack,
                     checkedOverride = if (amoledBlack) null else false,
                     onToggle = {
@@ -3814,7 +3778,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Hero Trailer Autoplay",
-                    description = "Auto-play trailers on the Home hero after a short pause. Turn off to keep the static backdrop.",
+                    description = "Auto-play the Home hero trailer after a short pause.",
                     checked = heroTrailerAutoplay,
                     onToggle = {
                         heroTrailerAutoplay = it
@@ -3838,7 +3802,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Mute Hero Trailers",
-                    description = "Play hero trailers silently (no background audio). Applies the next time a hero trailer starts.",
+                    description = "Play hero trailers without sound.",
                     checked = heroTrailerMuted,
                     onToggle = {
                         heroTrailerMuted = it
@@ -3859,11 +3823,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "TV Screensaver",
-                    description = "When Home, a title's page or Settings is left idle, fill " +
-                        "the screen with the artwork of its titles (backdrop, logo and genre), " +
-                        "moving gently from one to the next. Any button brings the screen back " +
-                        "exactly where it was. On by default, and this switch turns it off; a " +
-                        "title without both a backdrop and a logo is skipped.",
+                    description = "Show title artwork when Settings or Home is left idle.",
                     checked = screensaverEnabled,
                     onToggle = { enabled ->
                         screensaverEnabled = enabled
@@ -3889,7 +3849,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Show Catalog Type on Home Rails",
-                    description = "Append Movies / Series / All after the rail name (e.g. \"Trending · Series\"). Applies when you return to Home.",
+                    description = "Add Movies / Series / All after each rail name.",
                     checked = railShowType,
                     onToggle = {
                         railShowType = it
@@ -3901,7 +3861,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Show Addon Name on Home Rails",
-                    description = "Prefix the rail title with its addon (e.g. \"AIOMetadata · Trending\"). Applies when you return to Home.",
+                    description = "Start each rail title with its add-on's name.",
                     checked = railShowAddon,
                     onToggle = {
                         railShowAddon = it
@@ -3946,7 +3906,7 @@ fun SettingsScreen(
                 // exactly the one whose next episode someone came home for.
                 ToggleRow(
                     label = "Hide Watched Titles on Home Rails",
-                    description = "Removes titles you have finished from the Home catalog rails. Continue Watching, Up Next and Upcoming keep them.",
+                    description = "Hide finished titles from the Home catalog rails.",
                     checked = railHideWatched,
                     onToggle = {
                         railHideWatched = it
@@ -3962,7 +3922,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Show Catalog Type on Search Rails",
-                    description = "Append Movies / Series / All after add-on search rail names (e.g. \"AIOMetadata · AI Search · Movie\"). Add-on search only.",
+                    description = "Add Movies / Series / All after add-on search rail names.",
                     checked = searchRailShowType,
                     onToggle = {
                         searchRailShowType = it
@@ -3974,7 +3934,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Show Addon Name on Search Rails",
-                    description = "Prefix add-on search rail titles with their addon (e.g. \"AIOMetadata · Movies\"). Add-on search only.",
+                    description = "Start add-on search rail titles with the add-on's name.",
                     checked = searchRailShowAddon,
                     onToggle = {
                         searchRailShowAddon = it
@@ -4019,7 +3979,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Poster Titles",
-                    description = "Show the title under posters. Collection folders: Rows and Grid only — Follow Home keeps its hero clean.",
+                    description = "Show the title under posters.",
                     checked = captionTitle,
                     onToggle = {
                         captionTitle = it
@@ -4031,7 +3991,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Poster Years",
-                    description = "Show the release year under posters. Collection folders: Rows and Grid only.",
+                    description = "Show the release year under posters.",
                     checked = captionYear,
                     onToggle = {
                         captionYear = it
@@ -4043,7 +4003,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Poster Star Ratings",
-                    description = "Show the star rating under posters. Collection folders: Rows and Grid only.",
+                    description = "Show the star rating under posters.",
                     checked = captionRating,
                     onToggle = {
                         captionRating = it
@@ -4212,7 +4172,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Landscape Cards on Home Rails",
-                    description = "Show 16:9 backdrop cards with a small clearlogo instead of posters. Also applies to collection folder items in Rows and Follow Home (Grid keeps posters).",
+                    description = "Show landscape cards with a small logo instead of posters on Home.",
                     checked = landscapeCards,
                     onToggle = {
                         landscapeCards = it
@@ -4224,7 +4184,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Landscape Posters Everywhere",
-                    description = "Use 16:9 backdrop cards with a small clearlogo on every poster surface — search, library, collections, browse grids and recommendation rows — not just the Home rails.",
+                    description = "Use landscape cards with a small logo on every poster surface.",
                     checked = landscapePosters,
                     onToggle = {
                         landscapePosters = it
@@ -4236,7 +4196,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Eye Badge for In-Progress Shows",
-                    description = "Show an eye marker on posters for series you've started but not finished. The completed checkmark always wins when a show is fully watched.",
+                    description = "Mark posters for shows you have started but not finished.",
                     checked = partialWatchBadge,
                     onToggle = {
                         partialWatchBadge = it
@@ -4252,10 +4212,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Spoiler-free Episodes",
-                    description = "In a series' episode list, hide the title, still and " +
-                        "synopsis of episodes you have not started yet, so browsing a " +
-                        "season cannot give away a plot you have not reached. Watched " +
-                        "episodes and the one you are part-way through are unaffected.",
+                    description = "Hide titles and stills of episodes you have not reached.",
                     checked = spoilerFree,
                     onToggle = {
                         spoilerFree = it
@@ -4267,7 +4224,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "English-Only Browse & Discover",
-                    description = "Limits the Search browse chips (genres, keywords, services, networks, studios, decades) to English-language catalogs. Turn off for anime, Spanish-language networks, and other non-English catalogs.",
+                    description = "Limit browse chips to English-language catalogs.",
                     checked = browseEnglishOnly,
                     onToggle = {
                         browseEnglishOnly = it
@@ -4399,9 +4356,7 @@ fun SettingsScreen(
                 // choice stays theirs, and the decode it forces is stated.
                 ToggleRow(
                     label = "Night Mode",
-                    description = "Compresses loud and quiet passages toward each other, so " +
-                        "dialogue stays audible without loud peaks. Night Mode decodes audio — " +
-                        "passthrough is off while it's on.",
+                    description = "Even out loud and quiet scenes so dialogue stays audible.",
                     checked = audioNightMode,
                     onToggle = {
                         audioNightMode = it
@@ -4413,8 +4368,7 @@ fun SettingsScreen(
 
                 AudioTuningRow(
                     label = "Volume Boost",
-                    description = "Extra gain for mixes that are simply too quiet, with a limiter that " +
-                        "catches peaks so loud scenes do not distort.",
+                    description = "Raise the volume of quiet mixes without distortion.",
                     options = PlayerAudioTuning.VOLUME_OPTIONS,
                     selected = audioVolumeBoostDb,
                     onSelect = {
@@ -4513,16 +4467,19 @@ fun SettingsScreen(
                                 style = MaterialTheme.typography.labelSmall
                             )
                         }
-                        Text(
-                            text = if (enableTunneling) "ON" else "OFF",
-                            color = if (enableTunneling) KBVoid else KBTextHi,
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier
-                                .background(
-                                    if (enableTunneling) KBAccent else KBSurface,
-                                    KBShapeSmall
-                                )
-                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                        // The same switch every other row carries (spec:
+                        // settings rows, F1): a text pill reading ON/OFF was
+                        // the last one left on this screen, and it is the one
+                        // place two rows still disagreed with the rest.
+                        Switch(
+                            checked = enableTunneling,
+                            onCheckedChange = null,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = KBVoid,
+                                checkedTrackColor = KBAccent,
+                                uncheckedThumbColor = KBTextLo,
+                                uncheckedTrackColor = KBTextHi.copy(alpha = 0.18f)
+                            )
                         )
                     }
                 }
@@ -4566,16 +4523,15 @@ fun SettingsScreen(
                                     style = MaterialTheme.typography.labelSmall
                                 )
                             }
-                            Text(
-                                text = if (enablePip) "ON" else "OFF",
-                                color = if (enablePip) KBVoid else KBTextHi,
-                                style = MaterialTheme.typography.labelSmall,
-                                modifier = Modifier
-                                    .background(
-                                        if (enablePip) KBAccent else KBSurface,
-                                        KBShapeSmall
-                                    )
-                                    .padding(horizontal = 14.dp, vertical = 8.dp)
+                            Switch(
+                                checked = enablePip,
+                                onCheckedChange = null,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = KBVoid,
+                                    checkedTrackColor = KBAccent,
+                                    uncheckedThumbColor = KBTextLo,
+                                    uncheckedTrackColor = KBTextHi.copy(alpha = 0.18f)
+                                )
                             )
                         }
                     }
@@ -4666,10 +4622,7 @@ fun SettingsScreen(
                     // Citation fixed with the move (settings reorg §7.3): it named
                     // a "Player settings" pane that does not exist, and the language
                     // it depends on is now the row directly above.
-                    description = "When a stream carries no subtitle track, search " +
-                        "OpenSubtitles for your preferred subtitle language and attach " +
-                        "the best match automatically. Needs an OpenSubtitles key in " +
-                        "Integrations and a preferred subtitle language above.",
+                    description = "Attach a matching subtitle when a stream has none.",
                     checked = autoFetchSubtitles,
                     onToggle = {
                         autoFetchSubtitles = it

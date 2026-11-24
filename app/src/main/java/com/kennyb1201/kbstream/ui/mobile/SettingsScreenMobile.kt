@@ -984,7 +984,7 @@ private fun IntegrationsPaneMobile(
             } else {
                 "Trakt"
             },
-            description = "Connect your Trakt account to scrobble playback and sync watched state",
+            description = "Connect your Trakt account to sync what you watch.",
             onClick = onOpenTrakt
         )
         // Resume Source closes the trackers' section (settings reorg §3.2): it is
@@ -1051,8 +1051,7 @@ private fun IntegrationsPaneMobile(
         SettingsSectionMobile("Public lists")
         SettingsNavRowMobile(
             label = "Trakt public lists",
-            description = "Browse Trakt's popular and trending community lists, search " +
-                "them by name, and save one to your Library by liking it.",
+            description = "Browse popular Trakt community lists and save one to your Library.",
             onClick = { onOpenPublicLists("trakt") }
         )
         // Moved out of API Keys with its description verbatim; the key card
@@ -1088,8 +1087,7 @@ private fun IntegrationsPaneMobile(
         )
         SettingsNavRowMobile(
             label = "MyAnimeList public lists",
-            description = "Read a MyAnimeList profile's anime list by username and copy " +
-                "it into your Library. Needs your MAL connection first.",
+            description = "Copy a MyAnimeList profile's anime list into your Library.",
             onClick = { onOpenPublicLists("mal") }
         )
 
@@ -1128,8 +1126,7 @@ private fun IntegrationsPaneMobile(
         // above; the key CARD stays with the other key surfaces.
         KeyCardMobile(
             title = "OMDb API Key",
-            description = "Free key from omdbapi.com — adds an AWARDS fact to detail " +
-                "pages. The free tier allows 1,000 lookups a day.",
+            description = "Add the AWARDS fact to detail pages (free key from omdbapi.com).",
             placeholder = "Paste key",
             loadedValue = AppPreferences.getOmdbApiKey(context),
             onSave = { key -> AppPreferences.setOmdbApiKey(context, key) },
@@ -1139,10 +1136,7 @@ private fun IntegrationsPaneMobile(
         // optional; blank just means the Anime Skip leg never runs.
         KeyCardMobile(
             title = "Anime Skip Client ID",
-            description = "Optional. Register a free client ID at " +
-                "anime-skip.com/account/api-clients to add anime-skip.com timestamps " +
-                "as a fifth intro/credits source for anime episodes. Those skips are " +
-                "button-only and never auto-skip. Syncs to your other devices.",
+            description = "Add anime-skip.com timestamps as an extra intro and credits source.",
             placeholder = "Paste client ID",
             loadedValue = AppPreferences.getAnimeSkipClientId(context),
             onSave = { id -> AppPreferences.setAnimeSkipClientId(context, id) },
@@ -1154,10 +1148,7 @@ private fun IntegrationsPaneMobile(
         // working Hub. A paid key buys the viewer their own rate limit.
         KeyCardMobile(
             title = "TheSportsDB Key",
-            description = "Optional. The Hub reads TheSportsDB with its public free key; " +
-                "paste your own paid key for your own rate limit and fuller league " +
-                "tables. Fixtures and tables only — live scores stay ESPN's. Syncs to " +
-                "your other devices.",
+            description = "Paste your own TheSportsDB key for a higher rate limit.",
             placeholder = "Paste key",
             loadedValue = AppPreferences.getTheSportsDbKey(context),
             onSave = { key -> AppPreferences.setTheSportsDbKey(context, key) },
@@ -1168,8 +1159,7 @@ private fun IntegrationsPaneMobile(
         // artwork delay (2 days instead of 7). Synced like the keys around it.
         KeyCardMobile(
             title = "fanart.tv Personal Key",
-            description = "Your own fanart.tv key — new artwork appears in 2 days " +
-                "instead of 7. Optional; the app key covers everything otherwise.",
+            description = "Use your own fanart.tv key for new artwork sooner.",
             placeholder = "Paste key",
             loadedValue = AppPreferences.getFanartClientKey(context),
             onSave = { key -> AppPreferences.setFanartClientKey(context, key) },
@@ -1185,8 +1175,7 @@ private fun IntegrationsPaneMobile(
         )
         KeyCardMobile(
             title = "TorBox API Key",
-            description = "From torbox.app → Account → API. Badges the sources your " +
-                "account already holds, and feeds the TorBox library sync below.",
+            description = "Your TorBox API key, from torbox.app under Account.",
             placeholder = "Paste key",
             loadedValue = AppPreferences.getTorboxApiKey(context),
             onSave = { key ->
@@ -1237,9 +1226,7 @@ private fun IntegrationsPaneMobile(
         var torboxDisableProceed by remember { mutableStateOf<(() -> Unit)?>(null) }
         SyncedToggleMobile(
             label = "TorBox library sync",
-            description = "Add the torrents in your TorBox cloud to My List. Needs the " +
-                "TorBox key above; each is matched to a title on TMDB, and anything " +
-                "that can't be matched confidently is left out.",
+            description = "Add your TorBox library to My List, matched to titles on TMDB.",
             get = AppPreferences::getTorboxLibrarySync,
             set = AppPreferences::setTorboxLibrarySync,
             // The TV pane has always armed the round from its switch; this one
@@ -1417,11 +1404,7 @@ private fun IntegrationsPaneMobile(
         // list rather than an empty one.
         SyncedToggleMobile(
             label = "Cached sources only",
-            description = "Hide sources your TorBox account does not already hold, so the " +
-                "picker lists what will start at once. Sources with a direct link are always " +
-                "shown. Nothing else changes: uncached sources were already refused on play " +
-                "and skipped by auto-play. Needs a TorBox key; without one the list is " +
-                "unchanged.",
+            description = "Only show sources TorBox already has, so everything listed starts at once.",
             get = AppPreferences::getTorboxCachedOnly,
             set = AppPreferences::setTorboxCachedOnly
         )
@@ -1431,11 +1414,7 @@ private fun IntegrationsPaneMobile(
         // row; with no match the picker is untouched.
         SyncedToggleMobile(
             label = "TorBox cloud files in stream picker",
-            description = "Offer the files already in your TorBox cloud on the episode or " +
-                "film they belong to, including one you downloaded there that no add-on " +
-                "lists. Off, the picker stays as it is unless a cloud file matches what" +
-                " you are watching - then one row offers it. Needs a TorBox key; a file " +
-                "still downloading is never offered.",
+            description = "Show files already in your TorBox cloud in the stream picker.",
             get = AppPreferences::getTorboxCloudRows,
             set = AppPreferences::setTorboxCloudRows
         )
@@ -1460,11 +1439,8 @@ private fun IntegrationsPaneMobile(
         }
         SyncedToggleMobile(
             label = "Add cached torrents to TorBox on play",
-            description = "TorBox Instant only plays torrents its cache already holds. With " +
-                "this on, pressing such a source registers it in your TorBox account first - " +
-                "it will appear in your library, and TorBox may count it against your " +
-                "download quota - then plays it. Off, only torrents already in your account " +
-                "play. Nothing that is not already cached is ever added.",
+            description = "Add a cached torrent to your TorBox account so it plays at once " +
+                "(TorBox may count it as a download).",
             get = AppPreferences::getTorboxResolveCreate,
             set = AppPreferences::setTorboxResolveCreate
         )
@@ -1914,9 +1890,7 @@ private fun PlaybackPaneMobile() {
                     showExternalPlayerPicker = true
                 }
             },
-            description = "ExoPlayer uses the device's own decoders; MPV brings " +
-                "libass typesetting and software decoders; External hands the title " +
-                "to any video app installed here."
+            description = "Choose what plays your titles: ExoPlayer, MPV or an external app."
         )
         // Cast (spec: cast-sender v1): a ROUTE, not an engine - see
         // CastSectionMobile. A kids profile is not offered it for the same
@@ -1945,9 +1919,8 @@ private fun PlaybackPaneMobile() {
         // PlayerEngine ignores it on a device without libmpv.
         SettingsToggleMobile(
             label = "Open 24 fps titles in MPV",
-            description = "Use MPV for 24 fps titles at 1080p and below even when the " +
-                "engine above is ExoPlayer. 4K, Dolby Vision, live TV, DRM, and HLS stay " +
-                "on ExoPlayer.",
+            description = "Play 24 fps titles in MPV for smooth motion on panels without " +
+                "a 24 Hz mode.",
             searchKey = "playback.24fps-mpv",
             checked = mpvFor24Fps1080,
             onChange = {
@@ -1971,9 +1944,7 @@ private fun PlaybackPaneMobile() {
                     mpvVoMode = value
                     AppPreferences.setMpvVoMode(context, value)
                 },
-                description = "Which video output mpv opens with. Auto picks by " +
-                    "device; if MPV plays sound over a black picture, try MediaCodec " +
-                    "or Vulkan. Applies the next time a title opens in MPV."
+                description = "Pick MPV's video output; try MediaCodec if the picture stays black."
             )
         }
 
@@ -2068,9 +2039,7 @@ private fun PlaybackPaneMobile() {
             )
             SettingsToggleMobile(
                 label = "Treat coming back as the end",
-                description = "Your player usually cannot say where you stopped, so " +
-                    "KBStream measures the playhead while it is in front. With this " +
-                    "on, returning from the player counts as finishing the title.",
+                description = "Count leaving the player as finishing the title.",
                 checked = externalTrustReturn,
                 enabled = shownEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL,
                 onChange = {
@@ -2260,8 +2229,7 @@ private fun PlaybackPaneMobile() {
         )
         SettingsToggleMobile(
             label = "Cellular data saver",
-            description = "On a metered connection, auto-play stays at 1080p or lower and " +
-                "app updates wait. Downloads over cellular keep their own setting.",
+            description = "On mobile data, auto-play stays at 1080p or lower.",
             checked = dataSaver,
             onChange = {
                 dataSaver = it
@@ -2508,8 +2476,7 @@ private fun PlaybackPaneMobile() {
         }
         SyncedToggleMobile(
             label = "Badges above the file name",
-            description = "Show a source's badge chips over its name instead of under it, " +
-                "in the player's source picker and on the streams screen.",
+            description = "Show badge chips above a source's name.",
             get = AppPreferences::getBadgesAboveFile,
             set = AppPreferences::setBadgesAboveFile
         )
@@ -2705,9 +2672,7 @@ private fun VideoPaneMobile() {
         )
         SettingsToggleMobile(
             label = "Night Mode",
-            description = "Compresses loud and quiet passages toward each other, so " +
-                "dialogue stays audible without loud peaks. Night Mode decodes audio — " +
-                "passthrough is off while it's on.",
+            description = "Even out loud and quiet scenes so dialogue stays audible.",
             checked = audioNightMode,
             onChange = {
                 audioNightMode = it
@@ -2723,9 +2688,7 @@ private fun VideoPaneMobile() {
                 audioVolumeBoost = value
                 AppPreferences.setAudioVolumeBoostDb(context, value)
             },
-            description = "Extra gain for quiet mixes, with a limiter so loud scenes " +
-                "do not distort. Applies to the app's PCM path; a title can override " +
-                "it from the player's panel."
+            description = "Raise the volume of quiet mixes without distortion."
         )
         // No tunneling footnote here: this screen has no tunneled-playback row to
         // point at (that toggle is TV-only), so the audio-tuning note stays on
@@ -2850,9 +2813,7 @@ private fun SubtitlesPaneMobile() {
         // directly above it.
         SyncedToggleMobile(
             label = "Auto-fetch subtitles",
-            description = "Look for a matching subtitle when a title starts without one. " +
-                "Needs an OpenSubtitles key in Integrations and a preferred subtitle " +
-                "language above.",
+            description = "Attach a matching subtitle when a stream has none.",
             get = AppPreferences::getAutoFetchSubtitles,
             set = AppPreferences::setAutoFetchSubtitles
         )
@@ -2869,16 +2830,13 @@ private fun SubtitlesPaneMobile() {
             // "above", not "below": the language row now opens the pane
             // (settings reorg §7.3), so it was on the wrong side both before
             // and after the move.
-            description = "Off never shows subtitles on its own; Forced only shows " +
-                "foreign dialogue and signs when the file marks them; On follows the " +
-                "preferred subtitle language above."
+            description = "Choose when subtitles appear: never, foreign dialogue only, or on."
         )
         // Clean SDH is a content filter, not an appearance choice (settings reorg
         // §7.2, M9): it belongs with Mode, not with size and position.
         SettingsToggleMobile(
             label = "Clean SDH",
-            description = "Keep dialogue and drop [sound effects], ♪ lyrics ♪ and " +
-                "SPEAKER: names from captions for the deaf and hard of hearing.",
+            description = "Keep dialogue and drop sound effects and speaker names from captions.",
             checked = cleanSdh,
             onChange = {
                 cleanSdh = it
@@ -3102,8 +3060,7 @@ private fun InterfacePaneMobile() {
         )
         SettingsToggleMobile(
             label = "Pure black surfaces",
-            description = "Paint card plates black as well as the background. " +
-                "Requires AMOLED Black.",
+            description = "Also paint card plates black (needs AMOLED Black).",
             // Gated exactly as on the TV page: the theme needs BOTH switches
             // (`pureBlackActive`), so with AMOLED off this one is shown OFF and
             // cannot be moved. The stored value is untouched - a chosen ON is
@@ -3194,8 +3151,7 @@ private fun InterfacePaneMobile() {
         )
         SettingsToggleMobile(
             label = "Hide Watched Titles on Home Rails",
-            description = "Removes titles you have finished from the Home catalog rails. " +
-                "Continue Watching, Up Next and Upcoming keep them.",
+            description = "Hide finished titles from the Home catalog rails.",
             checked = hideWatchedOnRails,
             onChange = {
                 hideWatchedOnRails = it
@@ -3477,12 +3433,12 @@ private fun DataPaneMobile(
         SettingsSectionMobile("Viewing Stats")
         SettingsNavRowMobile(
             label = "Viewing stats",
-            description = "Finished episodes, movies, runtime and your streak",
+            description = "Finished episodes, movies, runtime and your streak.",
             onClick = onOpenStats
         )
         SettingsNavRowMobile(
             label = "Year in review",
-            description = "This year, or any past year, with a card to share",
+            description = "This year, or any past year, with a card to share.",
             onClick = { onOpenYearReview(null) }
         )
 
