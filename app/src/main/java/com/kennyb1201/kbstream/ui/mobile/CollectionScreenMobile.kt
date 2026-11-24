@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -45,6 +46,7 @@ import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
 import com.kennyb1201.kbstream.ui.browse.collectionBrowseScreenKey
 import com.kennyb1201.kbstream.ui.collection.CollectionViewModel
 import com.kennyb1201.kbstream.ui.components.ART_TYPE_COLLECTION
+import com.kennyb1201.kbstream.ui.components.BrandMarkImage
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
@@ -53,6 +55,7 @@ import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
 import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
 import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscape
+import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscapeArt
 import com.kennyb1201.kbstream.ui.components.imageOverridePosterUrl
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
@@ -402,7 +405,8 @@ fun CollectionScreenMobile(
     }
 }
 
-/** The franchise header: still behind the poster, name, count and overview. */
+/** The franchise header: still behind the poster, name (or the collection's
+ * wordmark), count and overview. */
 @Composable
 private fun CollectionHeaderMobile(
     name: String,
@@ -412,6 +416,18 @@ private fun CollectionHeaderMobile(
     backdropUrl: String?,
     partCount: Int?
 ) {
+    // The same split the TV header makes (spec 2026-11-23, F2): ONE resolution,
+    // its still on the thumbnail and its clearlogo as the title, so the phone
+    // header never draws a logo twice and never fetches twice. Always on, for
+    // the reason the TV header gives - a title treatment is not a card shape.
+    val art = rememberGlobalLandscapeArt(
+        enabled = true,
+        addonId = collectionId.toString(),
+        addonType = ART_TYPE_COLLECTION
+    )
+    val titleLogoUrl = art.second
+    var logoUnusable by remember(titleLogoUrl) { mutableStateOf(false) }
+    val drawLogo = !titleLogoUrl.isNullOrBlank() && !logoUnusable
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -446,10 +462,10 @@ private fun CollectionHeaderMobile(
             verticalAlignment = Alignment.CenterVertically
         ) {
             // The same tile the TV header draws (spec 2026-11-23): a
-            // collection header is a collection tile, so it resolves the
-            // collection's ranked text-free backdrop and its fanart clearlogo,
-            // and it draws no name over the art. Portrait keeps the poster and
-            // the exact size it had.
+            // collection header is a collection tile, so the art is the one
+            // ranked text-free backdrop resolved above, the id/type keep the
+            // collection's own rules, and it draws no name over the art.
+            // Portrait keeps the poster and the exact size it had.
             GlobalPosterCard(
                 posterUrl = posterUrl,
                 contentDescription = name,
@@ -460,18 +476,40 @@ private fun CollectionHeaderMobile(
                 posterWidth = 92.dp,
                 posterHeight = 138.dp,
                 artId = collectionId.toString(),
-                artType = ART_TYPE_COLLECTION
+                artType = ART_TYPE_COLLECTION,
+                // The pair resolved above, logo half cleared: the wordmark is
+                // the title, not the thumbnail's corner.
+                resolvedArt = art.first to null
             )
 
             Column(modifier = Modifier.padding(start = 14.dp).weight(1f)) {
-                Text(
-                    text = name,
-                    color = KBTextHi,
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+                if (drawLogo && titleLogoUrl != null) {
+                    // The clearlogo as the title, at the phone Detail header's
+                    // own title-logo size (200x38dp there; the column here is
+                    // narrower than 200 on a small phone, so it fits the width
+                    // it has). BrandMarkImage, the component that header draws
+                    // its title with: it whitens a black wordmark the dark
+                    // panel would swallow, trims the file's transparent
+                    // padding, and reports a mark it cannot draw so the name
+                    // text comes back below instead of a blank title.
+                    BrandMarkImage(
+                        url = titleLogoUrl,
+                        contentDescription = name,
+                        onUnusable = { logoUnusable = true },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(38.dp)
+                    )
+                } else {
+                    Text(
+                        text = name,
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 partCount?.let { count ->
                     Text(
                         text = if (count == 1) "1 movie" else "$count movies",

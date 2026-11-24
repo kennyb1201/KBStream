@@ -201,15 +201,28 @@ class CollectionTileArtworkContractTest {
 
     @Test
     fun `both collection headers are resolved as collections`() {
+        // Since the header title became the wordmark (spec 2026-11-23), the
+        // resolution moved UP into the header and the card is handed its
+        // answer: one request, two draws. The card still names the collection,
+        // because the id space is what keeps a collection's art and the corner
+        // title rule intact - see CollectionHeaderTitleLogoContractTest for the
+        // split itself.
         listOf(COLLECTION_SCREEN, COLLECTION_MOBILE).forEach { screen ->
+            val header = source(screen)
+
             assertTrue(
-                "$screen's header card must carry the collection id, or the " +
-                    "header keeps cropping the flat poster with the name over it",
-                source(screen).contains("artId = collectionId.toString(),")
+                "$screen's header must resolve the collection itself, or the " +
+                    "title has no wordmark to draw",
+                header.contains("addonType = ART_TYPE_COLLECTION")
+            )
+            assertTrue(
+                "$screen's header card must still carry the collection id, or " +
+                    "the header keeps cropping the flat poster with the name over it",
+                header.contains("artId = collectionId.toString(),")
             )
             assertTrue(
                 "$screen's header card must say it is a collection",
-                source(screen).contains("artType = ART_TYPE_COLLECTION")
+                header.contains("artType = ART_TYPE_COLLECTION")
             )
         }
     }

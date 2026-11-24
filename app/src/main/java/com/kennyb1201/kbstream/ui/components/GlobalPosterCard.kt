@@ -63,6 +63,24 @@ fun GlobalPosterCard(
      */
     artId: String? = null,
     artType: String? = null,
+    /**
+     * Art the CALLER already resolved for this tile, which this card then draws
+     * instead of resolving its own.
+     *
+     * A surface that draws the item twice - the collection header draws the
+     * still on its thumbnail and the clearlogo as its title - must resolve once
+     * (spec 2026-11-23, "no second fanart call"):
+     * the pair is resolved there and handed down, and this card makes no
+     * request of its own. The pair is used exactly as a resolution would be, so
+     * passing `first to null` draws clean art with no corner wordmark - the
+     * caller that draws the wordmark itself clears this half rather than the
+     * card having a second switch for it.
+     *
+     * [artId]/[artType] still describe the item (a collection keeps its corner
+     * title suppressed and its id out of the title image-override space), so a
+     * caller passing this keeps passing both.
+     */
+    resolvedArt: Pair<String?, String?>? = null,
     isPartiallyWatched: Boolean = false,
     onLongClick: (() -> Unit)? = null,
     onPosterError: ((Throwable?) -> Unit)? = null,
@@ -86,13 +104,16 @@ fun GlobalPosterCard(
         AppPreferences.landscapePostersActive(context)
     }
     // Landscape mode resolves the item's own backdrop + clearlogo when the
-    // caller's data carries none; portrait never looks anything up.
-    val art = rememberGlobalLandscapeArt(
-        enabled = useLandscape,
+    // caller's data carries none; portrait never looks anything up. A caller
+    // that already resolved it disables this path outright - `resolvedArt` IS
+    // the answer, so nothing here may ask again.
+    val ownArt = rememberGlobalLandscapeArt(
+        enabled = useLandscape && resolvedArt == null,
         addonId = artId,
         addonType = artType,
         addonBackdrop = backdropUrl
     )
+    val art = resolvedArt ?: ownArt
     // The artwork the viewer chose for this title (see ImageOverrides). This is
     // the ONE place every poster surface in the app converges on - Home's rails
     // aside, which draw the two cards directly - so applying the choice here is

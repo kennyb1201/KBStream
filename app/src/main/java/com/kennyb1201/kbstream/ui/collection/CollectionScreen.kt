@@ -51,6 +51,8 @@ import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
 import com.kennyb1201.kbstream.ui.components.imageOverridePosterUrl
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
+import com.kennyb1201.kbstream.ui.components.logoRequest
+import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscapeArt
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.data.library.HiddenTitles
@@ -624,8 +626,16 @@ fun CollectionScreen(
 }
 
 /**
- * Fixed screen header: poster, name, accent count line, and the collection
- * overview. No type pill — the screen itself says what it is.
+ * Fixed screen header: poster, name (or the collection's wordmark), accent
+ * count line, and the collection overview. No type pill — the screen itself
+ * says what it is.
+ *
+ * The wordmark is the header's TITLE, not a corner mark (spec 2026-11-23): a
+ * title's Detail header draws its clearlogo in place of the name, and a
+ * collection only ever had the name as plain text because its logo was being
+ * spent on the thumbnail beside it. The two now split the one resolution the
+ * thumbnail already ran - the still goes to the thumbnail, the logo to the
+ * title - so the header never draws both and never fetches twice.
  */
 @Composable
 private fun CollectionHeader(
@@ -636,6 +646,25 @@ private fun CollectionHeader(
     backdropUrl: String?,
     partCount: Int?
 ) {
+    val context = LocalContext.current
+    // ONE resolution per collection open, shared by the two draws below.
+    //
+    // It is deliberately always on, not gated on "Landscape Posters": the
+    // clearlogo here is a TITLE treatment (the same one Detail gives a title),
+    // so a viewer with portrait cards must still get the wordmark as the
+    // headline - the thumbnail's own SHAPE still follows that setting, because
+    // that is what the card reads for itself. The request is the one the
+    // thumbnail used to make on its own (same id, same collection id space,
+    // same empty addon backdrop), so nothing new is asked of TMDB or fanart.
+    val art = rememberGlobalLandscapeArt(
+        enabled = true,
+        addonId = collectionId.toString(),
+        addonType = ART_TYPE_COLLECTION
+    )
+    // The wordmark, once fanart answers one; null keeps the name text, so a
+    // collection without a logo is never a blank header.
+    val titleLogoUrl = art.second
+    val drawLogo = !titleLogoUrl.isNullOrBlank()
     // The panel, with the collection's still behind its content when there is
     // one: a franchise header that carried only a poster left the rest of the
     // row as flat surface, and a chosen still had nowhere to be drawn. The
@@ -683,14 +712,18 @@ private fun CollectionHeader(
                 onClick = {},
                 posterWidth = 110.dp,
                 posterHeight = 165.dp,
-                // The header thumbnail is a collection tile like any other: it
-                // resolves through the collection images endpoint for the
-                // ranked text-free backdrop, and the corner wordmark comes from
-                // fanart (spec 2026-11-23). Without the id/type this tile drew
-                // the raw collection poster with the name written over it, and
-                // the name is already the headline beside it.
+                // The header thumbnail is a collection tile like any other: the
+                // id/type keep the collection's own rules (its images endpoint,
+                // no title written over the art, its id out of the title
+                // image-override space).
                 artId = collectionId.toString(),
                 artType = ART_TYPE_COLLECTION,
+                // The SAME resolution the title above reads, with its logo half
+                // cleared: the wordmark is drawn once, as the title. Without
+                // the cleared half the card would draw a second one in the
+                // corner - Kenny's "i dont want double logos" - and without the
+                // pair it would resolve a second time for art it already has.
+                resolvedArt = art.first to null,
                 // The header's own poster is decoration, and it always was -
                 // its click was a no-op. It stayed focusable, so it was the
                 // first thing the D-pad highlighted on open, OK did nothing on
@@ -705,17 +738,33 @@ private fun CollectionHeader(
                     .padding(start = 18.dp)
                     .weight(1f)
             ) {
-                Text(
-                    text = name,
-                    // A collection hero is a screen title, not a section label:
-                    // it was headlineSmall (22sp), so a saga's name read smaller
-                    // than the page title of the screen that opened it.
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = KBTextHi,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+                if (drawLogo && titleLogoUrl != null) {
+                    // The clearlogo AS the title, at the bounds - and through
+                    // the request - the Detail header gives one: 68dp, fit to
+                    // the column's width, transparent art decoded 8888 (see
+                    // logoRequest), so the ten-foot logo stays sharp.
+                    AsyncImage(
+                        model = logoRequest(context, titleLogoUrl, crossfadeMs = 100),
+                        contentDescription = name,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(68.dp)
+                    )
+                } else {
+                    Text(
+                        text = name,
+                        // A collection hero is a screen title, not a section
+                        // label: it was headlineSmall (22sp), so a saga's name
+                        // read smaller than the page title of the screen that
+                        // opened it.
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = KBTextHi,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
 
                 partCount?.let { count ->
                     Text(
