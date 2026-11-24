@@ -733,7 +733,10 @@ dependencies {
     // owned, so its version moves with material3. Nothing outside ui/mobile/
     // reads it - the TV never composes those files, and MobileWindowSize.kt
     // answers Compact before the platform is asked at all.
-    implementation(libs.androidx.compose.material3.window.size.class)
+    // Accessed by the catalog's own alias: `class` is a Kotlin keyword, so an
+    // accessor ending in it does not compile (see libs.versions.toml, which
+    // names this module androidx-compose-window-size for exactly that reason).
+    implementation(libs.androidx.compose.window.size)
     implementation(libs.androidx.compose.material.icons.extended)
     // Retrofit 3 is the line that pairs with OkHttp 5 (Retrofit 2.11 pins
     // OkHttp 4), and both stay in the retrofit2/okhttp3 packages, so this is
