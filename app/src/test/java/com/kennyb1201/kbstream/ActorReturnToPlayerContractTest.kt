@@ -202,12 +202,18 @@ class ActorReturnToPlayerContractTest {
             native.contains("val restorePlayWhenReady = restoredIntent ?: !fromActorReturn") &&
                 native.contains("playWhenReady = restorePlayWhenReady")
         )
+        // The block grew a labelled stop (round 5 F1: the census has to be able
+        // to tell this intentional one from the field's), so this asserts the
+        // behaviour rather than the old one-line literal.
+        val actorReturnPause = native
+            .substringAfter("if (fromActorReturn && !actorReturnOverlayShown) {")
+            .substringBefore("Player.STATE_ENDED ->")
         assertTrue(
             "and raises the controls overlay once, the way a manual pause does",
-            native.contains(
-                "if (fromActorReturn && !actorReturnOverlayShown) { actorReturnOverlayShown = true " +
-                    "exoPlayer?.playWhenReady = false showControls() }"
-            )
+            actorReturnPause.contains("actorReturnOverlayShown = true") &&
+                actorReturnPause.contains("exoPlayer?.playWhenReady = false") &&
+                actorReturnPause.contains("notePlayWhenReadyFalse(\"actor-return\")") &&
+                actorReturnPause.contains("showControls()")
         )
     }
 
