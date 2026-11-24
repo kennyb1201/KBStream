@@ -155,11 +155,10 @@ androidx-compose-material3 = { module = "androidx.compose.material3:material3", 
 # adaptive layouts). BOM-owned like material3 itself, and only the phone files
 # read it - a TV never composes them, and MobileWindowSize.kt answers Compact
 # before it ever asks the platform (see its guard).
-# NOT `androidx-compose-material3-window-size-class`: an alias containing
-# `class` is a reserved name in Gradle, and the catalog refuses to generate
-# accessors for it - the whole build stops at configuration, before a single
-# source file is compiled.
-androidx-compose-window-size-class = { module = "androidx.compose.material3:material3-window-size-class" }
+# The alias cannot contain `class` at all - Gradle reserves it and refuses to
+# generate accessors, which stops the build at configuration - so the module's
+# own name (material3-window-size-class) is not usable here.
+androidx-compose-window-size = { module = "androidx.compose.material3:material3-window-size-class" }
 androidx-compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended" }
 
 # --- Room / Work ---
