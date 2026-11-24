@@ -34,8 +34,15 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
  * empty map leaves the UI exactly as it is today. A user with no network, a
  * show TVmaze has never heard of, or a TVmaze outage can never make the Detail
  * screen worse than TMDB alone.
+ *
+ * Constructed by the graph, not fetched from a static accessor: this was one of
+ * the first two legacy singletons whose `getInstance` companion could be
+ * deleted, because Detail, Home and the calendar all took the repository as a
+ * constructor parameter already. The `@Singleton` provider keeps the one-instance
+ * guarantee the companion used to make (one memory map, one disk cache, one
+ * failure backoff).
  */
-class TvmazeAirDateRepository private constructor(context: Context) {
+class TvmazeAirDateRepository(context: Context) {
 
     private val moshi by lazy {
         Moshi.Builder()
@@ -234,14 +241,5 @@ class TvmazeAirDateRepository private constructor(context: Context) {
 
         /** Bound so a long browsing session cannot grow the map without end. */
         private const val MAX_MEMORY_ENTRIES = 512
-
-        @Volatile
-        private var instance: TvmazeAirDateRepository? = null
-
-        fun getInstance(context: Context): TvmazeAirDateRepository =
-            instance ?: synchronized(this) {
-                instance ?: TvmazeAirDateRepository(context.applicationContext)
-                    .also { instance = it }
-            }
     }
 }

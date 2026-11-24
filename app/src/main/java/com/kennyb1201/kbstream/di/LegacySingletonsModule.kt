@@ -34,6 +34,15 @@ import javax.inject.Singleton
  * The companion objects are deleted LAST, once nothing calls them: until then
  * they remain the single owner, and these providers are a view of them.
  *
+ * ## The first two companions are gone
+ *
+ * [KBRepository] and [TvmazeAirDateRepository] reached the point where the only
+ * caller of their accessor was this module - every screen had already moved to a
+ * constructor parameter - so their `getInstance` companions are deleted and the
+ * providers construct them directly. Their `@Singleton` scope carries the
+ * one-instance guarantee the companion used to: one HTTP cache, one memory map,
+ * one failure backoff. Every other provider below still delegates.
+ *
  * ## The two exceptions, and why they are not `@Singleton`
  *
  * [WatchHistoryDatabase] and [IptvDatabase] are profile-scoped in a way a
@@ -91,12 +100,12 @@ object LegacySingletonsModule {
     @Provides
     @Singleton
     fun kbRepository(@ApplicationContext context: Context): KBRepository =
-        KBRepository.getInstance(context)
+        KBRepository(context)
 
     @Provides
     @Singleton
     fun tvmazeAirDateRepository(@ApplicationContext context: Context): TvmazeAirDateRepository =
-        TvmazeAirDateRepository.getInstance(context)
+        TvmazeAirDateRepository(context)
 
     @Provides
     @Singleton

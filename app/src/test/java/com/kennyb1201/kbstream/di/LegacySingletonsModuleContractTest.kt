@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.di
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -29,8 +30,8 @@ class LegacySingletonsModuleContractTest {
 
         assertEquals("one provider per legacy singleton", 12, providers)
         assertEquals(
-            "every provider must hand out the accessor's instance, not a new one",
-            providers,
+            "ten providers still hand out their accessor's instance, not a new one",
+            10,
             delegations
         )
     }
@@ -61,8 +62,6 @@ class LegacySingletonsModuleContractTest {
             "BingeCatRepository.getInstance(",
             "AddonManager.getInstance(",
             "AddonRepository.getInstance(",
-            "KBRepository.getInstance(",
-            "TvmazeAirDateRepository.getInstance(",
             "KBStreamDownloader.getInstance(",
             "FanartArtRepository.getInstance(",
             "WatchHistoryDatabase.getInstance(",
@@ -92,6 +91,31 @@ class LegacySingletonsModuleContractTest {
         assertTrue(
             "public, because the graph names it and Home takes it as a parameter",
             companion.contains("class FanartArtRepository private constructor(context: Context)")
+        )
+    }
+
+    /**
+     * The endgame, exercised on the two classes it reached first. Once nothing
+     * outside the graph called `KBRepository.getInstance` or
+     * `TvmazeAirDateRepository.getInstance`, the companions were deleted rather
+     * than kept as a second owner - the module constructs them instead, scoped
+     * `@Singleton`. Pinned so a convenience accessor cannot grow back and give a
+     * screen a second HTTP cache or a second air-date cache.
+     */
+    @Test
+    fun `the first two accessors are deleted, and the graph constructs them`() {
+        listOf(
+            "com/kennyb1201/kbstream/data/kb/KBRepository.kt",
+            "com/kennyb1201/kbstream/data/airdates/TvmazeAirDateRepository.kt"
+        ).forEach { path ->
+            val source = source(path)
+            assertFalse("$path still exposes a legacy accessor", source.contains("fun getInstance("))
+            assertFalse("$path still holds the accessor's instance field", source.contains("private var instance"))
+        }
+        assertTrue(
+            "the graph constructs the two directly, or nothing does",
+            module.contains("KBRepository(context)") &&
+                module.contains("TvmazeAirDateRepository(context)")
         )
     }
 
