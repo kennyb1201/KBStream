@@ -312,6 +312,40 @@ class HiltViewModelMigrationContractTest {
         )
     }
 
+    /**
+     * Add-on subtitles are resolved and downloaded before any view model exists,
+     * so the controller takes the graph's instances from the activity that
+     * builds it. Pinned because the object that does the fetching is
+     * process-wide and could quietly regrow an accessor that a second copy of
+     * the transport would answer from.
+     */
+    @Test
+    fun `the subtitle pipeline is handed its collaborators`() {
+        val subtitles = source("com/kennyb1201/kbstream/ui/player/AddonSubtitles.kt")
+        listOf("AddonManager", "AddonRepository", "TmdbRepository").forEach { type ->
+            assertFalse(
+                "AddonSubtitles still reaches for $type's legacy accessor",
+                Regex("$type\\.getInstance\\(").containsMatchIn(subtitles)
+            )
+        }
+        assertTrue(
+            "the controller is handed the add-on list, transport and TMDB instance",
+            subtitles.contains("private val addonManager: AddonManager") &&
+                subtitles.contains("private val addonRepository: AddonRepository") &&
+                subtitles.contains("private val tmdbRepository: TmdbRepository")
+        )
+        listOf(
+            "ui/player/NativePlayerActivity.kt",
+            "ui/player/MpvPlayerActivity.kt"
+        ).forEach { path ->
+            val activity = source("com/kennyb1201/kbstream/$path")
+            assertTrue(
+                "$path hands the transport in instead of letting the object fetch it",
+                activity.contains("@Inject lateinit var addonRepository: AddonRepository")
+            )
+        }
+    }
+
     private fun source(path: String): String {
         val file = File(findSourceRoot(), path)
         assertTrue("source missing: $file", file.isFile)

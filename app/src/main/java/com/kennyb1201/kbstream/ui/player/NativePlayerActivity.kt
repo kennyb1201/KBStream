@@ -76,6 +76,7 @@ import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.StreamBehaviorHints
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.addon.AddonManager
+import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.download.DownloadsManager
 import com.kennyb1201.kbstream.data.iptv.ChannelRecall
@@ -481,6 +482,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     @Inject lateinit var simklRepository: SimklRepository
     @Inject lateinit var bingecatRepository: BingeCatRepository
     @Inject lateinit var addonManager: AddonManager
+    @Inject lateinit var addonRepository: AddonRepository
     @Inject lateinit var fanartArtRepository: FanartArtRepository
 
     /**
@@ -4051,6 +4053,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
         addonSubtitleController = AddonSubtitleController(
             context = this,
+            addonManager = addonManager,
+            addonRepository = addonRepository,
+            tmdbRepository = tmdbRepository,
             isSeparateAudioSession = {
                 // Separate-audio sessions cannot be rebuilt via setMediaItem
                 // without losing the merged audio track, so addon subtitle

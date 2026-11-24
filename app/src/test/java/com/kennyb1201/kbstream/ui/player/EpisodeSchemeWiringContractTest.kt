@@ -294,7 +294,8 @@ class EpisodeSchemeWiringContractTest {
         assertTrue(
             "MpvPlayerActivity must resolve that same root, or the two engines ask about " +
                 "different shows after a deep link",
-            read(MPV).contains("addonSubtitleRootId(this@MpvPlayerActivity")
+            read(MPV).contains("addonSubtitleRootId(") &&
+                read(MPV).contains("context = this@MpvPlayerActivity")
         )
     }
 

@@ -49,6 +49,7 @@ import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.SubtitleEntry
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.addon.AddonManager
+import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.cache.DiskSweep
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
@@ -150,6 +151,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     @Inject lateinit var simklRepository: SimklRepository
     @Inject lateinit var bingecatRepository: BingeCatRepository
     @Inject lateinit var addonManager: AddonManager
+    @Inject lateinit var addonRepository: AddonRepository
     @Inject lateinit var fanartArtRepository: FanartArtRepository
 
     /**
@@ -4067,7 +4069,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             // session carrying its own id is the video, and a film answers by
             // its own id.
             val rootId = if (parentType == "series" && episodeStreamId?.trim().isNullOrEmpty()) {
-                addonSubtitleRootId(this@MpvPlayerActivity, parentId, parentType, tmdbId())
+                addonSubtitleRootId(
+                    context = this@MpvPlayerActivity,
+                    parentId = parentId,
+                    parentType = parentType,
+                    tmdbId = tmdbId(),
+                    repository = tmdbRepository
+                )
             } else {
                 null
             }
@@ -4081,7 +4089,12 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 rootId = rootId
             ) ?: return@launch
             val offers = withContext(Dispatchers.IO) {
-                AddonSubtitleSource.discover(this@MpvPlayerActivity, videoId, contentType)
+                AddonSubtitleSource.discover(
+                    videoId = videoId,
+                    contentType = contentType,
+                    addonManager = addonManager,
+                    repository = addonRepository
+                )
             }
             addonSubtitleOffers = offers
             // Offers that land while the picker is open repaint its rows.

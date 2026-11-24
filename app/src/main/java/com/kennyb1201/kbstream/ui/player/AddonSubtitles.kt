@@ -101,6 +101,16 @@ class KBPlayerView @JvmOverloads constructor(
 class AddonSubtitleController(
     context: Context,
     /**
+     * The graph's add-on list, transport and TMDB instance, handed in by the
+     * activity that builds this controller (spec 2026-11-22, item 3). This runs
+     * before any view model exists, so the activity's injected instances are the
+     * only ones there are - an accessor here would resolve and download tracks
+     * through a second copy of each.
+     */
+    private val addonManager: AddonManager,
+    private val addonRepository: AddonRepository,
+    private val tmdbRepository: TmdbRepository,
+    /**
      * True when the live session merges a separate audio source. Such
      * sessions cannot be rebuilt via setMediaItem without losing the
      * merged audio, so addon tracks are skipped for them (embedded and
@@ -216,7 +226,12 @@ class AddonSubtitleController(
         // session carrying its own id, and a film, answer with no lookup at all.
         if (parentType == "series" && episodeStreamId?.trim().isNullOrEmpty()) {
             activeScope().launch {
-                val root = addonSubtitleRootId(appContext, parentId, parentType)
+                val root = addonSubtitleRootId(
+                    context = appContext,
+                    parentId = parentId,
+                    parentType = parentType,
+                    repository = tmdbRepository
+                )
                 addonSubtitleVideoId(
                     context = appContext,
                     parentId = parentId,
@@ -274,7 +289,13 @@ class AddonSubtitleController(
 
         val contentType = if (parentType == "series") "series" else "movie"
         fetchJob = activeScope().launch(Dispatchers.IO) {
-            val merged = AddonSubtitleSource.discover(appContext, videoId, contentType)
+            val merged =
+                AddonSubtitleSource.discover(
+                    videoId = videoId,
+                    contentType = contentType,
+                    addonManager = addonManager,
+                    repository = addonRepository
+                )
             withContext(Dispatchers.Main) {
                 offers = merged
                 pendingAttachTo?.let { player ->
@@ -583,8 +604,6 @@ internal object AddonSubtitleSource {
         }
     }
 
-    private val repository = AddonRepository.getInstance()
-
     /**
      * Derived from the process-wide base client. A private builder per session
      * meant a fresh connection pool, dispatcher and thread pool for every
@@ -613,11 +632,13 @@ internal object AddonSubtitleSource {
      * than sinking the rest. Empty when no addon offers them.
      */
     suspend fun discover(
-        context: Context,
         videoId: String,
-        contentType: String
+        contentType: String,
+        /** The caller's add-on list and transport, never a second copy of each. */
+        addonManager: AddonManager,
+        repository: AddonRepository
     ): List<SubtitleEntry> {
-        val addons = AddonManager.getInstance(context.applicationContext)
+        val addons = addonManager
             .getEnabledAddons()
             .filter { it.resources.contains("subtitles") }
         if (addons.isEmpty()) {
@@ -907,13 +928,14 @@ internal suspend fun addonSubtitleRootId(
     context: Context,
     parentId: String,
     parentType: String,
-    tmdbId: Int? = null
+    tmdbId: Int? = null,
+    /** The caller's TMDB instance, never a second copy of it. */
+    repository: TmdbRepository
 ): String? {
     if (parentType != "series" || parentId.isBlank()) return null
     return withTimeoutOrNull(2_500L) {
         withContext(Dispatchers.IO) {
             runCatchingCancellable {
-                val repository = TmdbRepository.getInstance(context)
                 val tmdb = tmdbId?.takeIf { it > 0 }
                     ?: PlaybackHistoryIds.resolveTmdbId(context, parentId, parentType)
                 repository.streamRootIdFor(parentId, tmdb, "series")
