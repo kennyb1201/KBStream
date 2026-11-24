@@ -28,6 +28,42 @@ package com.kennyb1201.kbstream.ui.search
 internal const val BROWSE_FILTER_MIN_ENTRIES = 12
 
 /**
+ * The height the browse submenu's grid should take, snapped to a WHOLE number
+ * of rows inside a budget.
+ *
+ * The grid is a lazy scroll container nested in the screen's LazyColumn, so its
+ * height has to be definite - but a definite height that is not a row multiple
+ * cuts the last row it can show. That was the field report (a submenu whose
+ * bottom row sat against the surface's edge with a fifth of a chip showing
+ * above it), and it was arithmetic, not a scroll bug: the cap was a round 360dp
+ * while a row is `rowHeight + gap`, so 360 - the two edge paddings never
+ * divided by that.
+ *
+ * [rowHeightDp] is the height of a CELL, measured from the laid-out chip (see
+ * the grid: a curated chip that wraps to two lines is taller than a short one,
+ * which is why it is passed in rather than assumed). [edgePadDp] is the grid's
+ * top and bottom content padding, repeated on the way out so the sum is the
+ * height the viewport should take. The row count is the largest that fits in
+ * [budgetDp] - the cap that keeps this a submenu rather than the whole page -
+ * and at least one, because a viewport shorter than a single row would slice
+ * every row it ever showed.
+ */
+internal fun submenuGridHeightDp(
+    rowHeightDp: Float,
+    gapDp: Float,
+    budgetDp: Float,
+    edgePadDp: Float
+): Float {
+    if (rowHeightDp <= 0f || budgetDp <= 0f) return budgetDp
+    var rows = 0
+    while (2f * edgePadDp + (rows + 1) * rowHeightDp + rows * gapDp <= budgetDp) {
+        rows++
+    }
+    val shown = rows.coerceAtLeast(1)
+    return 2f * edgePadDp + shown * rowHeightDp + (shown - 1) * gapDp
+}
+
+/**
  * The entries a filter query keeps: every chip whose name contains the query,
  * case-insensitively, in the order the category was curated.
  *

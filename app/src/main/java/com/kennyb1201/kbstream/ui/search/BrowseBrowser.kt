@@ -53,6 +53,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -152,11 +153,39 @@ internal fun submenuCellCueRoomDp(cellWidthDp: Float): Float {
         .coerceAtLeast(KBFocusGlowSmall.value)
 }
 
+/**
+ * The room one submenu cell leaves ABOVE and BELOW its chip for the focus cue.
+ *
+ * The same overhang [submenuCellCueRoomDp] reserves on the other axis, but
+ * measured from the chip's own height instead of the cell's width. The
+ * horizontal form can solve for the room because the chip is padded inwards
+ * from the cell, so the room eats into the chip; the vertical room sits outside
+ * the chip, so it is simply the overhang:
+ *
+ *     room >= s * chipHeight + glow
+ *
+ * A focused chip scales uniformly, so its glow grows downward as well as
+ * sideways - and the grid reserved no vertical room at all, only the 16dp row
+ * gap. A focused chip in the last row therefore grew through that gap and the
+ * grid's viewport sliced its glow flat, which is the field's "clipped on the
+ * bottom": visible before any scroll, and again at the end of one.
+ */
+internal fun submenuChipCueRoomDp(chipHeightDp: Float): Float {
+    val s = (KBFocusChip - 1f) / 2f
+    return s * chipHeightDp + KBFocusGlowSmall.value
+}
+
 // The grid is a lazy scroll container sitting inside the screen's LazyColumn,
 // so its height must be definite: an unbounded (infinite) height would make
 // Compose refuse to measure it. Tall enough to read as the submenu's own
 // scroll surface, short enough to leave the page above it in view.
-private val SUBMENU_CHIP_MAX_HEIGHT = 360.dp
+//
+// This is the BUDGET the height is chosen inside, not the height itself. A cap
+// that is not a whole multiple of a row slices the last row it shows, which is
+// what the field saw at the bottom of this grid - before any scroll, and again
+// at the end of it. The height is derived from the row the grid measured and
+// rounded DOWN to whole rows, inside this budget (see [submenuGridHeightDp]).
+private val SUBMENU_CHIP_HEIGHT_BUDGET = 360.dp
 
 /**
  * Frames to keep asking for focus when a closed menu hands it back to a
@@ -818,6 +847,44 @@ private fun SubmenuChipGrid(
     // the reveal below and the row measurement are in raw pixels. Read here
     // because a suspend reveal function has no composition to read it from.
     val chipCueRoomPx = with(LocalDensity.current) { KBFocusChipInset.roundToPx() }
+
+    // The tallest chip the grid has measured, in pixels, reported by the cells
+    // as they are laid out. Every number the viewport needs about a row is
+    // derived from it rather than from a constant, so a chip whose text metrics
+    // change cannot silently re-open the clip this grid was reported for.
+    var chipHeightPx by remember(categoryKey) { mutableStateOf(0) }
+    val density = LocalDensity.current
+
+    // Before the first measurement there is no row to derive anything from, so
+    // the cells reserve the glow's own room and the grid keeps the full budget:
+    // the cells' first layout reports the real height and the next frame lands
+    // on the row boundary, inside the same frame the submenu paints.
+    val measuredChipHeightDp = with(density) { chipHeightPx.toDp().value }
+    // The room a focused chip's scale + glow needs on the VERTICAL axis, from
+    // the chip's own height (see [submenuChipCueRoomDp]). The cell reserves it
+    // above and below the chip, so a focused chip - first row or last - draws
+    // its border and glow inside its own cell instead of into the grid's clip.
+    val chipVerticalCueRoomDp = submenuChipCueRoomDp(measuredChipHeightDp)
+    // Every cell is at least this tall, so every row is the SAME height even
+    // though a wrapped chip is taller than a short one. Without that, a cap
+    // snapped to whole rows would only be whole for one mix of labels.
+    val cellMinHeightDp = if (measuredChipHeightDp > 0f) {
+        measuredChipHeightDp + 2f * chipVerticalCueRoomDp
+    } else {
+        0f
+    }
+    val gridMaxHeight = remember(cellMinHeightDp) {
+        if (cellMinHeightDp <= 0f) {
+            SUBMENU_CHIP_HEIGHT_BUDGET
+        } else {
+            submenuGridHeightDp(
+                rowHeightDp = cellMinHeightDp,
+                gapDp = SUBMENU_CHIP_GAP.value,
+                budgetDp = SUBMENU_CHIP_HEIGHT_BUDGET.value,
+                edgePadDp = SUBMENU_CHIP_GAP.value
+            ).dp
+        }
+    }
     val armedIndex = armedChipName
         ?.takeIf { !returnChipConsumed }
         ?.let { name ->
@@ -868,7 +935,7 @@ private fun SubmenuChipGrid(
         verticalArrangement = Arrangement.spacedBy(SUBMENU_CHIP_GAP),
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(max = SUBMENU_CHIP_MAX_HEIGHT)
+            .heightIn(max = gridMaxHeight)
     ) {
         itemsIndexed(
             items = entries,
@@ -881,7 +948,13 @@ private fun SubmenuChipGrid(
             // BoxWithConstraints, not a fixed inset: the room a focused chip's
             // scale + glow needs is a percentage of the chip, so it can only be
             // worked out from the cell the grid actually laid out.
-            BoxWithConstraints {
+            BoxWithConstraints(
+                contentAlignment = Alignment.Center,
+                // Uniform row height: see [cellMinHeightDp]. The chip keeps its
+                // own height and is centred in the cell, so this reserves the
+                // row's space rather than stretching the pill.
+                modifier = Modifier.heightIn(min = cellMinHeightDp.dp)
+            ) {
                 // The cell's own cue room, measured from the cell rather than
                 // guessed from a constant: see [submenuCellCueRoomDp]. The chip
                 // is padded by it on both sides, which is what makes "the chip
@@ -923,7 +996,21 @@ private fun SubmenuChipGrid(
                     // this observer is the reveal: a nearest-edge scroll that
                     // moves only this grid.
                     modifier = Modifier
-                        .padding(horizontal = cellCueRoom)
+                        // Room for the focus cue on BOTH axes: the vertical
+                        // half is what the last row never had, so a focused
+                        // chip in it grew past the grid's bottom padding and
+                        // the viewport sliced its glow off.
+                        .padding(
+                            horizontal = cellCueRoom,
+                            vertical = chipVerticalCueRoomDp.dp
+                        )
+                        // The chip's own height, reported upward so the row and
+                        // the cap can be derived from what was actually laid
+                        // out. Placed inside the padding, so it measures the
+                        // chip and not the room around it.
+                        .onSizeChanged { size ->
+                            if (size.height > chipHeightPx) chipHeightPx = size.height
+                        }
                         .onFocusChanged { state ->
                             if (state.isFocused) {
                                 revealScope.launch {
