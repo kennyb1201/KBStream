@@ -291,7 +291,7 @@ class FrameRateOpenItemsContractTest {
     fun `a tunnelled session is not used while frame-rate matching is on`() {
         val text = player()
         val tunnel = text.substringAfter("val audioTuningActive =")
-            .substringBefore("playWhenReady = !fromActorReturn")
+            .substringBefore("playWhenReady = restorePlayWhenReady")
 
         assertTrue(
             "the tunnel gate must consult the matching setting: $tunnel",

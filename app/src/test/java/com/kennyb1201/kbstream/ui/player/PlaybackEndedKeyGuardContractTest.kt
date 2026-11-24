@@ -130,7 +130,11 @@ class PlaybackEndedKeyGuardContractTest {
                     "noteSpuriousPauseSwallowed(\"session-set-play-when-ready\")\n" +
                     "return\n}\n" +
                     "if (playWhenReady && playbackEndedHandled) return\n" +
-                    "if (!playWhenReady) {\n" +
+                    // Round 5, F2: the same branch also records the session's
+                    // intent, which a rebuild then restores.
+                    "if (playWhenReady) {\n" +
+                    "sessionPlayIntent = true\n" +
+                    "} else {\n" +
                     "notePauseLanded(\"session-set-play-when-ready\")\n}" +
                     "\nsuper.setPlayWhenReady(playWhenReady)\n}"
             )

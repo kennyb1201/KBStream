@@ -196,7 +196,11 @@ class ActorReturnToPlayerContractTest {
         )
         assertTrue(
             "starts paused at the resume position instead of auto-playing",
-            native.contains("playWhenReady = !fromActorReturn")
+            // Round 5 F2 made this the DEFAULT a rebuild may override with the
+            // session's own intent, so the actor-return half is the default's
+            // expression rather than the builder's literal.
+            native.contains("val restorePlayWhenReady = restoredIntent ?: !fromActorReturn") &&
+                native.contains("playWhenReady = restorePlayWhenReady")
         )
         assertTrue(
             "and raises the controls overlay once, the way a manual pause does",

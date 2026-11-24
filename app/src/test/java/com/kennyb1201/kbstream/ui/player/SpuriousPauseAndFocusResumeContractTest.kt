@@ -171,6 +171,111 @@ class SpuriousPauseAndFocusResumeContractTest {
         )
     }
 
+    // ── Round 5 (2026-11-24): the pauser the tripwire caught ──────────────
+
+    /**
+     * Round 4's tripwire proved the stop came from outside every traced path on
+     * TCL too, so every transition now names its caller - and an unnameable one
+     * says so. `unknown` is a finding, not a failure: it scopes the next spec to
+     * the OS / MediaSession layer instead of another guard.
+     */
+    @Test
+    fun `every playWhenReady transition names its caller`() {
+        assertTrue(
+            "the line is the transition's own name",
+            block(native, "private fun notePlayWhenReadyFalse(caller: String) {")
+                .contains("PlaybackSessionTrace.note(\"playWhenReady false: \$caller\")")
+        )
+        assertTrue(
+            "a pause that lands names its path",
+            block(native, "private fun notePauseLanded(path: String) {")
+                .contains("notePlayWhenReadyFalse(path)")
+        )
+        assertTrue(
+            "an actor return is labelled rather than silenced",
+            native.contains("notePlayWhenReadyFalse(\"actor-return\")")
+        )
+        assertTrue(
+            "a rebuild that restores a pause names itself",
+            native.contains("if (!restorePlayWhenReady) notePlayWhenReadyFalse(\"rebuild\")")
+        )
+        assertTrue(
+            "and the tripwires land in the bucket that scopes the next fix",
+            block(native, "private fun noteStoppedWithoutPause(point: String) {")
+                .contains("notePlayWhenReadyFalse(\"unknown\")")
+        )
+    }
+
+    /**
+     * Round 5, F2: a rebuild used to build its player with a default. The
+     * session's intent lives on the instance being released, so it is captured
+     * BEFORE that release and restored on the new one - and the four fields that
+     * make that observable are pinned here.
+     */
+    @Test
+    fun `a rebuild restores the session's play intent`() {
+        val recreate = block(native, "private fun recreatePlayer(settleMs: Long = 0L) {")
+        val capture = recreate.indexOf("rebuildPlayIntent = exoPlayer?.playWhenReady ?: sessionPlayIntent")
+        val release = recreate.indexOf("exoPlayer?.release()")
+        assertTrue("the intent is captured", capture >= 0)
+        assertTrue("before the instance carrying it is released", capture in 0 until release)
+
+        val create = block(native, "private fun createPlayer() {")
+        assertTrue(
+            "and the new player is handed it instead of a default",
+            create.contains("val restorePlayWhenReady = restoredIntent ?: !fromActorReturn") &&
+                create.contains("rebuildPlayIntent = null")
+        )
+        assertTrue(
+            "both builder branches take it",
+            Regex(Regex.escape("playWhenReady = restorePlayWhenReady"))
+                .findAll(create)
+                .count() == 2
+        )
+        assertTrue(
+            "with a line at creation...",
+            native.contains("\"rebuild: playWhenReady=\$restorePlayWhenReady restored\"")
+        )
+        assertTrue(
+            "...and one at the new instance's first READY",
+            native.contains("\"rebuild: playWhenReady=\${exoPlayer?.playWhenReady} at READY\"")
+        )
+        assertTrue(
+            "the intent is also tracked by every path that decides it",
+            native.contains("sessionPlayIntent = false") &&
+                native.contains("sessionPlayIntent = true")
+        )
+    }
+
+    /**
+     * Round 5, F3: the invariant enforced. A first frame with a stopped player
+     * and no pause the app made IS the field symptom, so the session resumes
+     * itself - except for the two pauses a human owns.
+     */
+    @Test
+    fun `a first frame with an unowned stop resumes the session`() {
+        val callback = block(native, "override fun onRenderedFirstFrame() {")
+        val gate = callback.indexOf("playWhenReady false at first frame, no pause traced")
+        assertTrue("the line names the symptom", gate >= 0)
+        assertTrue(
+            "the resume follows it in the same block",
+            callback.indexOf("exoPlayer?.play()") > gate &&
+                callback.indexOf("auto-resumed at first frame") > gate
+        )
+        assertTrue(
+            "an actor return is exempt - it is opened paused on purpose",
+            callback.contains("!fromActorReturn")
+        )
+        assertTrue(
+            "and so is a pause that was traced for this load: the viewer's own",
+            callback.contains("!pauseTracedForLoad")
+        )
+        assertTrue(
+            "it runs once per load, ahead of the latch",
+            callback.contains("if (!firstFrameRendered")
+        )
+    }
+
     /**
      * F4 asks one question and changes nothing: does `onRenderedFirstFrame`
      * reach the activity on a Stick? Answered "fired" or "missing after 10s".

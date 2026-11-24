@@ -3116,10 +3116,52 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      */
     private var pauseTracedForLoad = false
 
+    /**
+     * What this session WANTS to be doing, as opposed to what the player is
+     * doing right now (spec 2026-11-24 round 5, F2).
+     *
+     * `playWhenReady` lives on a player instance and dies with it, which is the
+     * gap: a rebuild released the instance carrying the intent and the next one
+     * was built with a default. This is the intent itself - true to play, false
+     * to stay paused - set by every path that decides it (a load, a toggle, a
+     * media key, a pause that lands, a scrub resume) and read by the rebuild
+     * that needs to restore it.
+     */
+    private var sessionPlayIntent = true
+
+    /**
+     * The intent captured by [recreatePlayer] just before it released the player
+     * that held it, or null when the next [createPlayer] is a first load.
+     */
+    private var rebuildPlayIntent: Boolean? = null
+
+    /**
+     * The intent a rebuild restored, or null when this player is a first load.
+     * Read at its first READY, so a rebuilt session that opens stopped leaves a
+     * line behind whichever of the two moments saw it (round 5, F2).
+     */
+    private var restoredRebuildIntent: Boolean? = null
+
     /** The one way a pause is recorded, so the tripwire cannot miss one. */
     private fun notePauseLanded(path: String) {
         pauseTracedForLoad = true
+        sessionPlayIntent = false
         PlaybackSessionTrace.note("pause landed: $path")
+        notePlayWhenReadyFalse(path)
+    }
+
+    /**
+     * Names the transition itself, not only the path that made it (round 5, F1).
+     *
+     * Round 4's `pause landed: <path>` lines say a pause the APP made, which is
+     * exactly what the 2026-11-24 TCL paste lacked: the tripwire fired at an AFR
+     * confirm with no pause line at all. One line per transition, with the
+     * caller named, makes every load answerable: a named caller is the next fix,
+     * and `unknown` is the proof the pauser sits outside this app's code (the OS
+     * or the MediaSession layer), which is where the next spec would go.
+     */
+    private fun notePlayWhenReadyFalse(caller: String) {
+        PlaybackSessionTrace.note("playWhenReady false: $caller")
     }
 
     /**
@@ -3135,6 +3177,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private fun noteStoppedWithoutPause(point: String) {
         if (pauseTracedForLoad) return
         PlaybackSessionTrace.note("playWhenReady false at $point, no pause traced")
+        // The census line F1 exists for: nothing this app can pause did, so
+        // this is the OS / MediaSession-layer bucket.
+        notePlayWhenReadyFalse("unknown")
     }
 
     /**
@@ -5982,7 +6027,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     // Same guard as togglePlayPause(): a stray PLAY after the end
                     // must not restart the episode from the top.
                     if (playbackEndedHandled) true else {
-                        exoPlayer?.play(); hideControls(); true
+                        exoPlayer?.play()
+                        hideControls()
+                        sessionPlayIntent = true
+                        true
                     }
                 }
                 KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
@@ -6161,7 +6209,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 // Same guard as togglePlayPause(): a stray PLAY after the end
                 // must not restart the episode from the top.
                 if (playbackEndedHandled) return true
-                exoPlayer?.play(); hideControls(); return true
+                exoPlayer?.play()
+                hideControls()
+                sessionPlayIntent = true
+                return true
             }
             KeyEvent.KEYCODE_MEDIA_PAUSE -> {
                 // Same guard as the surface listener's arm: a spurious
@@ -6676,6 +6727,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             kind = launchSourceKind()
         )
         firstReadyAtMs = 0L
+        // What this player is created with (round 5, F2). A first load plays
+        // unless it is an actor return; a REBUILD restores the intent the
+        // released instance held ([rebuildPlayIntent], captured by
+        // [recreatePlayer]), because a rebuilt session that opened stopped is
+        // the reported symptom and a default is not an intent.
+        val restoredIntent = rebuildPlayIntent
+        val isRebuild = restoredIntent != null
+        val restorePlayWhenReady = restoredIntent ?: !fromActorReturn
+        rebuildPlayIntent = null
+        sessionPlayIntent = restorePlayWhenReady
+        restoredRebuildIntent = restoredIntent
         // Per-attempt, with the rest of the load's state (F2/F4): a pause traced
         // during the previous attempt says nothing about this one, and neither
         // does its first-frame line.
@@ -7349,7 +7411,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 // Returning from the actor screen lands back on the player
                 // with the saved position: resume PAUSED with the controls
                 // overlay up instead of auto-playing the video.
-                playWhenReady = !fromActorReturn
+                //
+                // A rebuild restores the session's own intent instead (round 5,
+                // F2): the instance that held it was just released.
+                playWhenReady = restorePlayWhenReady
                 // Tunneled playback is skipped on live channels: HLS live
                 // manifests (discontinuities, rolling window) are the classic
                 // tunnel black-video-with-audio case on Fire TV/Android TV.
@@ -7411,7 +7476,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                             " volume=+" + PlayerAudioTuning.volumeBoostDb + "dB)"
                     )
                 }
-                playWhenReady = !fromActorReturn
+                playWhenReady = restorePlayWhenReady
             }
 
             // Every player this activity builds has media3's own surface vote
@@ -7536,6 +7601,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 runCatching { stale.release() }
             }
             exoPlayer = player
+            // Round 5, F2: one line per rebuild at creation, so a rebuilt
+            // session that opens stopped names the intent it came with (or
+            // proves it was created playing and lost it afterwards).
+            if (isRebuild) {
+                PlaybackSessionTrace.note(
+                    "rebuild: playWhenReady=$restorePlayWhenReady restored" +
+                        if (restorePlayWhenReady) "" else " (intent was paused)"
+                )
+                if (!restorePlayWhenReady) notePlayWhenReadyFalse("rebuild")
+            }
             if (p5GlesActive) {
                 // The GL view draws decoder buffers directly — Media3's
                 // surface-based onRenderedFirstFrame never fires on this
@@ -7678,7 +7753,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         return
                     }
                     if (playWhenReady && playbackEndedHandled) return
-                    if (!playWhenReady) {
+                    if (playWhenReady) {
+                        sessionPlayIntent = true
+                    } else {
                         notePauseLanded("session-set-play-when-ready")
                     }
                     super.setPlayWhenReady(playWhenReady)
@@ -7716,6 +7793,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // read-ahead buffer, so "it stalled just after starting" is a rebuild
         // as often as it is a slow source, and the two want opposite fixes.
         com.kennyb1201.kbstream.data.reporting.PerfTrace.record("playback.rebuild", 0L)
+        // The session's play intent, taken from the instance that carries it
+        // BEFORE that instance is released (round 5, F2). `playWhenReady` is the
+        // intent flag, not the playing one: it stays true across a buffer/stall,
+        // which is exactly the state a rebuild happens in.
+        rebuildPlayIntent = exoPlayer?.playWhenReady ?: sessionPlayIntent
         // Disarm any outstanding stall/black-video timers tied to the old
         // player instance; fresh ones are armed when the new session is ready.
         stallWatchdogToken++
@@ -7839,6 +7921,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         if (!fromActorReturn && exoPlayer?.playWhenReady == false) {
                             noteStoppedWithoutPause("READY")
                         }
+                        // Round 5, F2's second moment: a rebuilt player that
+                        // reaches READY stopped names it here too.
+                        if (restoredRebuildIntent != null) {
+                            PlaybackSessionTrace.note(
+                                "rebuild: playWhenReady=${exoPlayer?.playWhenReady} at READY"
+                            )
+                        }
                         // F4: one line per load, at whichever comes first - the
                         // first-frame callback firing, or this. It is a
                         // question, not a fix: the callback is left alone. The
@@ -7894,6 +7983,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     if (fromActorReturn && !actorReturnOverlayShown) {
                         actorReturnOverlayShown = true
                         exoPlayer?.playWhenReady = false
+                        // Intentional, and labelled rather than silenced
+                        // (round 5, F1): a walk of the census must be able to
+                        // tell this stop from the one that keeps happening.
+                        sessionPlayIntent = false
+                        notePlayWhenReadyFalse("actor-return")
                         showControls()
                     }
                 }
@@ -7999,6 +8093,23 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             if (!firstFrameCallbackNoted) {
                 firstFrameCallbackNoted = true
                 PlaybackSessionTrace.note("first-frame callback: fired")
+            }
+            // Round 5, F3: a first frame with a stopped player and no pause
+            // this app made is the reported symptom itself. Round 3's invariant
+            // is that no external pause lands before the first frame; this is
+            // that invariant enforced rather than only traced.
+            //
+            // Both exemptions are deliberate: an actor return is OPENED paused
+            // with the overlay up, and a pause that was traced for this load is
+            // the viewer's own - auto-resuming either would be the app overriding
+            // a human.
+            if (!firstFrameRendered && !fromActorReturn && !pauseTracedForLoad &&
+                exoPlayer?.playWhenReady == false
+            ) {
+                PlaybackSessionTrace.note("playWhenReady false at first frame, no pause traced")
+                exoPlayer?.play()
+                sessionPlayIntent = true
+                PlaybackSessionTrace.note("auto-resumed at first frame")
             }
             markFirstFrameRendered()
         }
@@ -12654,6 +12765,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // gain must never undo a pause this press made (Player M3).
             pausedByFocusLoss = false
             it.playWhenReady = !wasPlaying
+            sessionPlayIntent = !wasPlaying
             if (wasPlaying) {
                 // A pause that got past the guard, named like every other one
                 // (round-3 F4's rule, extended here): from now on no pause in a
@@ -17570,6 +17682,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         player.setMediaItem(newMediaItemBuilder(mimeType).build(), 0L)
         player.prepare()
         player.playWhenReady = true
+        sessionPlayIntent = true
     }
 
     /**
