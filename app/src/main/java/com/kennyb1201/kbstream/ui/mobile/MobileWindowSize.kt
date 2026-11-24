@@ -184,11 +184,19 @@ internal fun rememberMobileWindowWidthClass(): MobileWidthClass {
     if (FormFactor.isTv) return MobileWidthClass.Compact
     val activity = LocalActivity.current
     val windowWidthDp = LocalConfiguration.current.screenWidthDp
-    return remember(activity, windowWidthDp) {
-        val platform = activity
-            ?.let { host -> runCatching { calculateWindowSizeClass(host).widthSizeClass }.getOrNull() }
-            ?.let(::mobileWidthClassOf)
-        platform ?: MobileAdaptiveRules.widthClassFor(windowWidthDp)
+    // `calculateWindowSizeClass` is itself a composition read, so it cannot sit
+    // inside a runCatching block or a remember lambda - the compiler rejects a
+    // composable call in either. Asked here, unconditionally, only when a host
+    // activity exists (the condition is fixed for the life of this screen, so
+    // the slot is stable), and everything else stays in the remembered block.
+    val platformWidth = if (activity != null) {
+        calculateWindowSizeClass(activity).widthSizeClass
+    } else {
+        null
+    }
+    return remember(platformWidth, windowWidthDp) {
+        platformWidth?.let(::mobileWidthClassOf)
+            ?: MobileAdaptiveRules.widthClassFor(windowWidthDp)
     }
 }
 

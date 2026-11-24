@@ -33,6 +33,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.SliderState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -615,7 +616,6 @@ private fun searchEntryFor(label: String, searchKey: String?): SettingSearchEntr
     (searchKey?.let { SettingsSearchIndex.entryFor(it) })
         ?: SettingsSearchIndex.entryForLabel(label)
 
-@Composable
 /**
  * One attribution line on the phone: the licensor's mark, then the credit that
  * belongs with it.
@@ -653,6 +653,7 @@ private fun AttributionRowMobile(
     }
 }
 
+@Composable
 private fun SettingsCaptionMobile(text: String) {
     Text(
         text = text,
@@ -3829,11 +3830,19 @@ private fun AccentSliderMobile(
         // The belt to the track slot's braces: the slider's own 48dp box cannot
         // reach the label row, whatever a launcher's font scale does to it.
         Spacer(modifier = Modifier.height(6.dp))
+        // The custom `track` slot lives on the STATE-based overload; the
+        // value-based one takes no track, and calling it with one is what did
+        // not compile. The state is remembered and follows the outside value,
+        // so a pref changed elsewhere still moves the thumb, while a drag stays
+        // one write at the end (see [onFinished]).
+        val sliderState = remember { SliderState(value = value, valueRange = valueRange) }
+        LaunchedEffect(value) {
+            if (sliderState.value != value) sliderState.value = value
+        }
         Slider(
-            value = value,
+            state = sliderState,
             onValueChange = onValueChange,
             onValueChangeFinished = onFinished,
-            valueRange = valueRange,
             // Material's own tracks are transparent: the gradient below IS the
             // track. The thumb stays opaque so it reads against every hue.
             colors = SliderDefaults.colors(
