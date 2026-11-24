@@ -436,8 +436,10 @@ class PlayerDeepDiveContractTest {
     fun `the session trace keeps a binge and records what happened in it`() {
         val trace = read(SESSION_TRACE)
         assertTrue(
-            "the ring is shared with per-session event notes, so 12 evicted the chain it exists to show",
-            trace.contains("private const val MAX_LINES = 24")
+            "the ring is shared with per-session event notes, so 12 evicted the chain it " +
+                "exists to show; 24 left no room for the clearlogo ladder's four LOGO lines " +
+                "ahead of the events they explain, so it is 40",
+            trace.contains("private const val MAX_LINES = 40")
         )
         listOf("the native player" to native, "the mpv player" to mpv).forEach { (who, src) ->
             assertTrue("$who must record a source switch", src.contains("\"source switch: s="))

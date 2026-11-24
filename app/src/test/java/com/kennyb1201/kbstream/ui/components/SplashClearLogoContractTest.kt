@@ -141,24 +141,38 @@ class SplashClearLogoContractTest {
         // is shared, so pinning it here would be a duplicate; the identity of
         // the delegate is what this test owns.
         val shared = source(CLEAR_LOGO_RESOLVE)
+        // The order is the ladder's to decide now that the chain has its own
+        // file (spec 2026-11-23): this file wires the two steps and nothing
+        // else. Pinned at the ladder, because pinning the order here broke the
+        // moment the order moved one file down.
+        val ladder = source(CLEAR_LOGO_CHAIN)
+            .substringAfter("internal suspend fun resolveClearLogoChain(")
+            .substringAfter("): String? {")
         assertTrue(
             "only the two tmdb parent types are looked up",
             shared.contains("if (normalized != \"movie\" && normalized != \"series\") return null")
         )
         assertTrue(
-            "the cached enriched lookup the ExoPlayer splash uses",
-            shared.contains(".fetchEnrichedMetaCached(parentId, normalized)") &&
+            "the cached enriched lookup the ExoPlayer splash uses, called with " +
+                "the id the ladder hands it",
+            shared.contains("fetchEnrichedMetaCached(id, normalized)") &&
                 shared.contains("bestLogoPath()")
         )
         assertTrue(
-            "and the resolved path becomes an absolute TMDB logo URL",
-            shared.contains("TmdbRepository.LOGO_BASE + path")
+            "and the resolved path becomes an absolute TMDB logo URL: the base is " +
+                "handed to the ladder, which does the concatenation",
+            shared.contains("logoBase = TmdbRepository.LOGO_BASE") &&
+                ladder.contains("val url = logoBase + path")
         )
-        val body = shared.substringAfter("internal suspend fun resolveClearLogoUrl(")
         assertTrue(
-            "TMDB's wordmark is tried FIRST, so a title that has one never " +
+            "the ladder asks TMDB first, so a title that has a wordmark never " +
                 "reaches fanart",
-            body.indexOf("bestLogoPath()") in 0 until body.indexOf("FanartArtRepository")
+            ladder.indexOf("fetchDetail(parentId)") in 0 until ladder.indexOf("fanartLogo(")
+        )
+        assertTrue(
+            "and the wiring file hands the ladder both steps, so it decides no order",
+            shared.contains("fetchDetail = { id ->") &&
+                shared.contains("fanartLogo = { isMovie, fanartId ->")
         )
         assertTrue(
             "and fanart is the step below it: movies by TMDB id, series by TVDB id",
@@ -307,6 +321,8 @@ class SplashClearLogoContractTest {
         const val MPV_PLAYER =
             "com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt"
         const val MPV_LAYOUT = "layout/activity_mpv_player.xml"
+        const val CLEAR_LOGO_CHAIN =
+            "com/kennyb1201/kbstream/ui/player/ClearLogoChain.kt"
         const val CLEAR_LOGO_RESOLVE =
             "com/kennyb1201/kbstream/ui/player/ClearLogoResolve.kt"
 
