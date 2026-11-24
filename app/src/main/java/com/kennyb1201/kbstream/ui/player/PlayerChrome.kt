@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.player
 
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
@@ -13,6 +14,7 @@ import coil3.load
 import com.kennyb1201.kbstream.ui.components.tracedLogoRequest
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.badges.StreamBadge
+import com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 
@@ -162,6 +164,67 @@ interface PlayerChromeHost {
 }
 
 /**
+ * Why a title slot is being repainted (spec 2026-11-24, F2/F4).
+ *
+ * The repaint is only allowed to re-issue a request that has NOT landed, and
+ * only in the situations where a re-issue is a repair rather than a duplicate:
+ *
+ *  - [SETUP] is the setup paint, which runs twice back to back on both engines.
+ *    It never re-issues a URL it already requested - that second cancel was the
+ *    bug round 2 fixed.
+ *  - [SWITCH] is a source switch. The splash goes back up and the title block
+ *    is painted from the new source's facts, so an unlanded logo is re-fetched
+ *    unconditionally: the second splash is exactly where the 2026-11-24 report
+ *    saw no logo.
+ *  - [FIRST_FRAME] means the callback arrived, so a load issued before it has
+ *    had its chance.
+ *
+ * Both retrying repaints are also what bounds an unlanded request's life: see
+ * [PlayerChrome.MAX_LOGO_ATTEMPTS].
+ */
+enum class LogoRepaint {
+    SETUP,
+    SWITCH,
+    FIRST_FRAME
+}
+
+/**
+ * When an unlanded logo request may be issued again (spec 2026-11-24, F2).
+ *
+ * Pure, so the matrix is pinned by a test rather than by reading three call
+ * sites: the setup paint never retries (it runs back to back, and re-issuing
+ * there is the cancel round 2 fixed), a source switch always does (the splash
+ * is back up and the wordmark must be re-fetched), and anything else waits until
+ * the first frame has arrived or the grace has passed since the request - the
+ * two moments that say the in-flight load has had its chance.
+ *
+ * [MAX_ATTEMPTS] is the stop: three issues of one URL, then the trace says the
+ * retries gave up. Silent death is what made the field report unreadable, not a
+ * missing retry, so the cap is part of the answer, not a limitation of it.
+ */
+internal object LogoRetryPolicy {
+
+    /** How long an unanswered request is given before a plain repaint may retry. */
+    const val GRACE_MS = 10_000L
+
+    /** Issues of one URL per surface, the first included. */
+    const val MAX_ATTEMPTS = 3
+
+    fun shouldRetry(
+        repaint: LogoRepaint,
+        attempts: Int,
+        requestedAtMs: Long,
+        nowMs: Long,
+        firstFrameSeen: Boolean
+    ): Boolean {
+        if (repaint == LogoRepaint.SETUP) return false
+        if (attempts >= MAX_ATTEMPTS) return false
+        if (repaint == LogoRepaint.SWITCH) return true
+        return firstFrameSeen || nowMs - requestedAtMs >= GRACE_MS
+    }
+}
+
+/**
  * The player overlay, once, for every engine.
  *
  * Both activities used to inflate their own copy of this chrome and wire it
@@ -206,6 +269,20 @@ class PlayerChrome(
      */
     private var loadedLogoUrl: String? = null
     private var requestedLogoUrl: String? = null
+
+    /**
+     * When [requestedLogoUrl] was issued, and how many times this session has
+     * tried it (spec 2026-11-24, F1/F2).
+     *
+     * The 2026-11-24 paste is a load that was issued and never called back: no
+     * `loaded`, no `load-failed`, no `cancelled`. The dedup above made that one
+     * silent death permanent for the whole session, because it skipped on
+     * REQUESTED rather than on LANDED. The attempt count is what bounds the
+     * retries instead of looping them.
+     */
+    private var requestedAtMs = 0L
+    private var logoAttempts = 0
+    private var retryExhaustedNoted = false
     private val episodeLabel: TextView? = root.findViewById(R.id.chrome_episode_label)
     private val episodeTitle: TextView? = root.findViewById(R.id.chrome_episode_title)
     private val overview: TextView? = root.findViewById(R.id.chrome_overview)
@@ -446,7 +523,11 @@ class PlayerChrome(
      * instead of leaving an empty slot over a hidden title (spec 2026-11-23,
      * F3).
      */
-    internal fun showTitleLogo(url: String?, onFailure: (() -> Unit)? = null) {
+    internal fun showTitleLogo(
+        url: String?,
+        repaint: LogoRepaint = LogoRepaint.SETUP,
+        onFailure: (() -> Unit)? = null
+    ) {
         val logo = clearLogo
         if (logo == null || url.isNullOrBlank()) {
             // No art is the slot's reset: forget the URL so the same logo
@@ -454,27 +535,82 @@ class PlayerChrome(
             // painted" into a slot this branch just emptied.
             loadedLogoUrl = null
             requestedLogoUrl = null
+            requestedAtMs = 0L
+            logoAttempts = 0
+            retryExhaustedNoted = false
             logo?.setImageDrawable(null)
             logo?.visibility = View.GONE
             itemName?.visibility = View.VISIBLE
             return
         }
-        if (url != loadedLogoUrl && url != requestedLogoUrl) {
-            requestedLogoUrl = url
-            runCatching {
-                logo.load(
-                    tracedLogoRequest(
-                        logo.context,
-                        url,
-                        surface = "chrome",
-                        onLoaded = { loadedLogoUrl = url },
-                        onFailure = onFailure
+        if (url != loadedLogoUrl) {
+            if (url != requestedLogoUrl) {
+                issue(logo, url, onFailure)
+            } else if (repaint != LogoRepaint.SETUP) {
+                // Requested but not landed: the request may be silent (the
+                // 2026-11-24 paste) or may still be on its way. Re-issuing
+                // cancels it, and that cancellation is traced, so a retry can
+                // never be invisible either. Capped so a load that never
+                // answers cannot fetch forever.
+                if (
+                    LogoRetryPolicy.shouldRetry(
+                        repaint = repaint,
+                        attempts = logoAttempts,
+                        requestedAtMs = requestedAtMs,
+                        nowMs = SystemClock.elapsedRealtime(),
+                        firstFrameSeen = repaint == LogoRepaint.FIRST_FRAME
                     )
-                )
+                ) {
+                    issue(logo, url, onFailure)
+                } else if (logoAttempts >= LogoRetryPolicy.MAX_ATTEMPTS && !retryExhaustedNoted) {
+                    retryExhaustedNoted = true
+                    PlaybackSessionTrace.note("LOGO: retry-exhausted chrome")
+                }
             }
         }
         logo.visibility = View.VISIBLE
         itemName?.visibility = View.GONE
+    }
+
+    /**
+     * The one load call, traced at the instant it runs (F1).
+     *
+     * `LOGO: start` proves the launch carried a URL; it says nothing about
+     * whether a request was ever made. With `issued` beside it, the next paste
+     * separates "never issued" (a call-site failure) from "issued and silent"
+     * (Coil never calling back) - the one question this round has to answer.
+     *
+     * The issue is no longer wrapped in a swallowed `runCatching` (F3): a throw
+     * is traced by name and clears the request, so a throwing load cannot leave
+     * the dedup poisoned for the rest of the session.
+     */
+    private fun issue(logo: android.widget.ImageView, url: String, onFailure: (() -> Unit)?) {
+        requestedLogoUrl = url
+        requestedAtMs = SystemClock.elapsedRealtime()
+        logoAttempts++
+        PlaybackSessionTrace.note("LOGO: issued chrome")
+        try {
+            logo.load(
+                tracedLogoRequest(
+                    logo.context,
+                    url,
+                    surface = "chrome",
+                    onLoaded = { loadedLogoUrl = url },
+                    onFailure = {
+                        requestedLogoUrl = null
+                        onFailure?.invoke()
+                    }
+                )
+            )
+        } catch (error: Exception) {
+            // Not swallowed: named, and the dedup is cleared so the next
+            // repaint is a fresh attempt instead of a permanent skip.
+            requestedLogoUrl = null
+            logoAttempts = 0
+            PlaybackSessionTrace.note(
+                "LOGO: issue-threw chrome ${error.javaClass.simpleName.ifBlank { "unknown" }}"
+            )
+        }
     }
 
     /**
@@ -485,10 +621,10 @@ class PlayerChrome(
      * is what makes the first-frame, source-switch and overlay-raise repaints
      * safe instead of each one cancelling the previous load.
      */
-    fun refreshTitle() {
+    fun refreshTitle(repaint: LogoRepaint = LogoRepaint.SETUP) {
         val info = host.chromeTitleInfo()
 
-        showTitleLogo(info.clearLogoUrl) {
+        showTitleLogo(info.clearLogoUrl, repaint = repaint) {
             // A failed load restores the text: the same fallback the no-logo
             // case gets, so the header still names the title.
             clearLogo?.setImageDrawable(null)
@@ -1002,6 +1138,8 @@ class PlayerChrome(
 
         /** The bar's own resolution; the existing bars used the same 1000. */
         private const val SEEKBAR_MAX = 1000
+
+
     }
 }
 

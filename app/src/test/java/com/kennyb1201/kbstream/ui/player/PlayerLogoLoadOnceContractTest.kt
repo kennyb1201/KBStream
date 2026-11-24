@@ -33,19 +33,22 @@ class PlayerLogoLoadOnceContractTest {
     @Test
     fun `setup issues one chrome load and one splash load for a carried URL`() {
         val slot = chrome.substringAfter("internal fun showTitleLogo(")
-            .substringBefore("fun refreshTitle()")
+            .substringBefore("fun refreshTitle(")
+        val issue = chrome.substringAfter("private fun issue(logo")
+            .substringBefore("fun refreshTitle(")
         assertEquals(
             "the chrome slot has exactly one load call, so no pass can add a second " +
                 "into the same ImageView:\n$slot",
             1,
-            Regex("logo\\.load\\(").findAll(slot).count()
+            Regex("logo\\.load\\(").findAll(issue).count()
         )
         assertTrue(
-            "and it is skipped for a URL already painted or already on its way - " +
-                "which is what makes the second setup pass free",
-            slot.contains("if (url != loadedLogoUrl && url != requestedLogoUrl) {") &&
-                slot.contains("requestedLogoUrl = url") &&
-                slot.contains("onLoaded = { loadedLogoUrl = url }")
+            "and the load is issued only for a URL that has not landed - the second " +
+                "setup pass is free (spec 2026-11-24 round 3, F2: the dedup keys on " +
+                "LANDING, not on asking)",
+            slot.contains("if (url != loadedLogoUrl) {") &&
+                slot.contains("issue(logo, url, onFailure)") &&
+                issue.contains("onLoaded = { loadedLogoUrl = url }")
         )
 
         val header = native.substringAfter("private fun updateHeaderInfo()")
@@ -53,13 +56,15 @@ class PlayerLogoLoadOnceContractTest {
         assertEquals(
             "the splash slot has exactly one load call:\n$header",
             1,
-            Regex("splashClearLogo\\.load\\(").findAll(header).count()
+            Regex("splashClearLogo\\.load\\(").findAll(
+                native.substringAfter("private fun issueSplashLogo(")
+                    .substringBefore("\n    private fun ")
+            ).count()
         )
         assertTrue(
             "and the second of the two setup passes does not re-issue it, because " +
                 "a second load would cancel the first fetch",
-            header.contains("if (resolvedLogoUrl != splashLogoUrlIssued) {") &&
-                header.contains("splashLogoUrlIssued = resolvedLogoUrl")
+            header.contains("loadSplashLogo(resolvedLogoUrl, LogoRepaint.SETUP)")
         )
         assertTrue(
             "the chrome slot is painted through the chrome, never loaded directly",
@@ -85,15 +90,10 @@ class PlayerLogoLoadOnceContractTest {
             "the chrome slot still loads through the chrome",
             apply.contains("chrome?.showTitleLogo(url)")
         )
-        assertEquals(
-            "the splash slot has one load call, behind the same URL guard",
-            1,
-            Regex("splashClearLogo\\.load\\(").findAll(apply).count()
-        )
         assertTrue(
-            "and the guard is the shared field, not a local latch",
-            apply.contains("if (url != splashLogoUrlIssued) {") &&
-                apply.contains("splashLogoUrlIssued = url")
+            "the splash slot loads through the guarded helper, never directly",
+            apply.contains("loadSplashLogo(url, LogoRepaint.SETUP)") &&
+                !apply.contains("splashClearLogo.load(")
         )
         assertFalse(
             "the chrome's view is never loaded directly over the chrome's back",
@@ -103,11 +103,11 @@ class PlayerLogoLoadOnceContractTest {
 
     @Test
     fun `a repaint of facts already painted issues no load`() {
-        val repaint = chrome.substringAfter("fun refreshTitle()")
+        val repaint = chrome.substringAfter("fun refreshTitle(repaint: LogoRepaint")
             .substringBefore("fun setSkipIntro(")
         assertTrue(
             "the repaint paints through the one method that owns the slot",
-            repaint.contains("showTitleLogo(info.clearLogoUrl)")
+            repaint.contains("showTitleLogo(info.clearLogoUrl, repaint = repaint)")
         )
         assertFalse(
             "and owns no load of its own: a first-frame or source-switch repaint " +

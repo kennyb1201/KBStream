@@ -43,10 +43,19 @@ class PlayerChromeTitleRepaintContractTest {
         assertEquals(
             "the first frame and a source switch repaint it - setup must not, " +
                 "because updateHeaderInfo() has just painted the same facts and a " +
-                "second load would cancel the one it started (spec 2026-11-24, F1):\n" +
-                callSites(native, "chrome?.refreshTitle()"),
+                "second load would cancel the one it started (spec 2026-11-24, F1). " +
+                "Each names its repaint since round 3 (F2/F4):\n" +
+                callSites(native, "chrome?.refreshTitle("),
             2,
-            count(native, "chrome?.refreshTitle()")
+            count(native, "chrome?.refreshTitle(")
+        )
+        assertTrue(
+            "the switch says it is a switch, so an unlanded logo is re-fetched there",
+            native.contains("chrome?.refreshTitle(LogoRepaint.SWITCH)")
+        )
+        assertTrue(
+            "and the first frame says so too",
+            native.contains("chrome?.refreshTitle(LogoRepaint.FIRST_FRAME)")
         )
         assertTrue(
             "and the setup paint is updateHeaderInfo()'s alone",
@@ -62,13 +71,13 @@ class PlayerChromeTitleRepaintContractTest {
                 "that landed under the splash becomes visible",
             native.substringAfter("private fun markFirstFrameRendered()")
                 .substringBefore("private fun ")
-                .contains("chrome?.refreshTitle()")
+                .contains("chrome?.refreshTitle(")
         )
         assertTrue(
             "and on the source-switch path, because a new source is new title facts",
             native.substringAfter("fun switchToSource(")
                 .substringBefore("private fun lightSwitchLiveChannel()")
-                .contains("chrome?.refreshTitle()")
+                .contains("chrome?.refreshTitle(")
         )
     }
 
@@ -103,29 +112,35 @@ class PlayerChromeTitleRepaintContractTest {
                 .substringBefore("\n    private fun ")
             assertTrue(
                 "$painter paints the chrome slot through the shared chrome and the " +
-                    "splash slot through the traced request",
+                    "splash slot through the traced, guarded helper",
                 body.contains("chrome?.showTitleLogo(") &&
-                    body.contains("tracedLogoRequest(") &&
-                    body.contains("surface = \"splash\"") &&
+                    body.contains("loadSplashLogo(") &&
                     !Regex("(?<![A-Za-z])clearLogo\\.load\\s*\\(").containsMatchIn(body)
             )
         }
-        val slot = chrome.substringAfter("internal fun showTitleLogo(")
-            .substringBefore("fun refreshTitle()")
+        val splashLoad = native.substringAfter("private fun issueSplashLogo(")
+            .substringBefore("\n    private fun ")
+        assertTrue(
+            "and the helper loads through the traced request, so the splash cannot " +
+                "load untraced either",
+            splashLoad.contains("tracedLogoRequest(") &&
+                splashLoad.contains("surface = \"splash\"")
+        )
+        val issue = chrome.substringAfter("private fun issue(logo")
+            .substringBefore("fun refreshTitle(")
         assertTrue(
             "and the repaint's own load is traced too - it is the one that runs " +
                 "after setup, through the one method that owns the chrome slot",
-            slot.contains("tracedLogoRequest(") &&
-                slot.contains("surface = \"chrome\"")
+            issue.contains("tracedLogoRequest(") &&
+                issue.contains("surface = \"chrome\"")
         )
+        val repaintBody = chrome.substringAfter("fun refreshTitle(repaint: LogoRepaint")
+            .substringBefore("fun setSkipIntro(")
         assertTrue(
-            "refreshTitle paints through it rather than loading the slot itself",
-            chrome.substringAfter("fun refreshTitle()")
-                .substringBefore("fun setSkipIntro(")
-                .contains("showTitleLogo(info.clearLogoUrl)") &&
-                !chrome.substringAfter("fun refreshTitle()")
-                    .substringBefore("fun setSkipIntro(")
-                    .contains("logo.load(")
+            "refreshTitle paints through it, passing which repaint this is, rather " +
+                "than loading the slot itself",
+            repaintBody.contains("showTitleLogo(info.clearLogoUrl, repaint = repaint)") &&
+                !repaintBody.contains("logo.load(")
         )
     }
 

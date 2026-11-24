@@ -992,15 +992,23 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     /** See noteLogoLaunchOnce: the `LOGO: start` line is written once per launch. */
     private var logoLaunchTraced = false
     /**
-     * The splash's wordmark URL already asked for.
+     * The splash's wordmark: what has LANDED, what was last requested, and the
+     * attempt bookkeeping that lets a requested-but-silent load be retried
+     * (spec 2026-11-24, F2).
      *
      * Both setup passes call updateHeaderInfo(), and a second `load` into the
      * same ImageView cancels the request the first one started - which is how a
      * carried logo could vanish while the paste carried no `LOGO:` failure line
-     * at all (spec 2026-11-24, F1). The chrome's slot keeps the same bookkeeping
-     * itself (PlayerChrome.showTitleLogo).
+     * at all (round 2, F1). That is why the dedup exists, and why it has to key
+     * on LANDING rather than on asking: the 2026-11-24 paste is a load that was
+     * issued and never called back, and an issue-time dedup made that one silent
+     * death permanent for the whole session.
      */
-    private var splashLogoUrlIssued: String? = null
+    private var splashLogoLoadedUrl: String? = null
+    private var splashLogoRequestedUrl: String? = null
+    private var splashLogoRequestedAtMs = 0L
+    private var splashLogoAttempts = 0
+    private var splashLogoRetryExhaustedNoted = false
     private lateinit var clearLogo: ImageView
     private lateinit var itemNameView: TextView
     private lateinit var episodeLabel: TextView
@@ -1883,6 +1891,18 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     // opening READY - a per-zap latency that could not be read off the report.
     private var startupTraceStartMs = 0L
     private var firstReadyAtMs = 0L
+
+    /**
+     * The READY instant of the load being measured, for the first-frame sample
+     * (spec 2026-11-24, F5).
+     *
+     * Unlike [firstReadyAtMs] this is not cleared by a source switch: it is only
+     * ever overwritten by the next READY, so the load that painted the first
+     * frame is still the one the sample is measured from. The 2026-11-24 paste
+     * lost that anchor to a switch and reported `ready→firstFrame=—` for a load
+     * whose callback had fired.
+     */
+    private var currentLoadReadyAtMs = 0L
 
     // Live-zap trace: set when a channel change starts (see [tuneToChannel]) and
     // consumed on the next STATE_READY, so the user-perceived zap - banner to
@@ -3823,19 +3843,70 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // The chrome slot loads through the shared chrome, which knows which URL
         // it already painted or is fetching (spec 2026-11-24, F1/F3).
         chrome?.showTitleLogo(url) { restoreChromeTitleText() }
-        if (url != splashLogoUrlIssued) {
-            splashLogoUrlIssued = url
-            splashClearLogo.load(
-                tracedLogoRequest(
-                    splashClearLogo.context,
-                    url,
-                    surface = "splash"
-                )
-            )
-        }
+        loadSplashLogo(url, LogoRepaint.SETUP)
         splashClearLogo.visibility = View.VISIBLE
         itemNameView.visibility = View.GONE
         splashItemName?.visibility = View.GONE
+    }
+
+    /**
+     * Loads the splash wordmark, retrying a request that was issued and never
+     * landed (spec 2026-11-24, F2/F4).
+     *
+     * The 2026-11-24 paste is the case this exists for: the load was issued, the
+     * trace showed no `loaded`, no `load-failed` and no `cancelled`, and the
+     * issue-time dedup then skipped every later repaint for the whole session -
+     * including the second splash a source switch brings back.
+     */
+    private fun loadSplashLogo(url: String, repaint: LogoRepaint) {
+        if (url == splashLogoLoadedUrl) return
+        if (url != splashLogoRequestedUrl) {
+            issueSplashLogo(url)
+            return
+        }
+        val mayRetry = LogoRetryPolicy.shouldRetry(
+            repaint = repaint,
+            attempts = splashLogoAttempts,
+            requestedAtMs = splashLogoRequestedAtMs,
+            nowMs = SystemClock.elapsedRealtime(),
+            firstFrameSeen = repaint == LogoRepaint.FIRST_FRAME
+        )
+        if (mayRetry) {
+            issueSplashLogo(url)
+        } else if (
+            repaint != LogoRepaint.SETUP &&
+            splashLogoAttempts >= LogoRetryPolicy.MAX_ATTEMPTS &&
+            !splashLogoRetryExhaustedNoted
+        ) {
+            splashLogoRetryExhaustedNoted = true
+            PlaybackSessionTrace.note("LOGO: retry-exhausted splash")
+        }
+    }
+
+    /**
+     * The one splash load call, traced at the instant it runs (F1).
+     *
+     * No `runCatching` on purpose: the chrome's swallowed issue was one of the
+     * silent deaths the 2026-11-24 paste could not name, and a throw here must
+     * stay visible (F3).
+     */
+    private fun issueSplashLogo(url: String) {
+        splashLogoRequestedUrl = url
+        splashLogoRequestedAtMs = SystemClock.elapsedRealtime()
+        splashLogoAttempts++
+        PlaybackSessionTrace.note("LOGO: issued splash")
+        splashClearLogo.load(
+            tracedLogoRequest(
+                splashClearLogo.context,
+                url,
+                surface = "splash",
+                onLoaded = { splashLogoLoadedUrl = url },
+                // A failed load is not a landed one: clearing the request means
+                // the next repaint treats it as a fresh issue rather than a
+                // duplicate.
+                onFailure = { splashLogoRequestedUrl = null }
+            )
+        )
     }
 
     /**
@@ -7746,6 +7817,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     // "source loaded" from "decoder painted".
                     if (firstReadyAtMs == 0L) {
                         firstReadyAtMs = System.currentTimeMillis()
+                        currentLoadReadyAtMs = firstReadyAtMs
                         if (startupTraceStartMs > 0L) {
                             com.kennyb1201.kbstream.data.reporting.PerfTrace.record(
                                 "playback.source_ready",
@@ -9009,11 +9081,19 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // One actionable startup line. The right-hand gap is the decoder/GPU,
         // the left-hand one is the network + extractor (the DV strip rewrites
         // every sample on the way through) + buffer fill.
-        if (startupTraceStartMs > 0L && firstReadyAtMs > 0L) {
+        //
+        // F5: measured from the LOAD's own READY, not from [firstReadyAtMs],
+        // which a source switch resets to zero - a switch before the first frame
+        // is how the 2026-11-24 paste reported `ready→firstFrame=—` while the
+        // callback had in fact fired. [currentLoadReadyAtMs] is only ever
+        // overwritten by the next READY, so the load that produced this frame is
+        // still the one being measured.
+        val loadReadyAtMs = currentLoadReadyAtMs
+        if (startupTraceStartMs > 0L && loadReadyAtMs >= startupTraceStartMs) {
             Log.w(
                 "PLAYER_PERF",
-                "Startup source→ready=${firstReadyAtMs - startupTraceStartMs}ms " +
-                    "ready→firstFrame=${firstFrameRenderedAtMs - firstReadyAtMs}ms " +
+                "Startup source→ready=${loadReadyAtMs - startupTraceStartMs}ms " +
+                    "ready→firstFrame=${firstFrameRenderedAtMs - loadReadyAtMs}ms " +
                     "total=${firstFrameRenderedAtMs - startupTraceStartMs}ms " +
                     "codec=${streamCodec ?: "?"} ${streamWidth}x$streamHeight " +
                     "bitrate=${streamBitrate} mime=${streamMimeType ?: "?"}"
@@ -9023,7 +9103,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // the only one of the two a viewer can read off the TV.
             com.kennyb1201.kbstream.data.reporting.PerfTrace.record(
                 "playback.first_frame",
-                firstFrameRenderedAtMs - firstReadyAtMs
+                firstFrameRenderedAtMs - loadReadyAtMs
             )
         }
         reconnectingContainer.visibility = View.GONE
@@ -9050,7 +9130,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // The second of MPV's three repaints: the first frame is when the splash
         // stops covering the chrome, and the logo load may only have landed
         // while it was up (spec 2026-11-23, F1).
-        chrome?.refreshTitle()
+        chrome?.refreshTitle(LogoRepaint.FIRST_FRAME)
         // The "player has started" latch also belongs to the first frame:
         // setting it on isPlaying turned any post-audio buffering into the
         // small-spinner branch instead of the full splash.
@@ -9723,9 +9803,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
     }
 
-    private fun updateHeaderInfo() {
-        // Resolve clear logo URL from multiple sources
-        val resolvedLogoUrl = clearLogoUrl?.takeIf { it.isNotBlank() }?.let { rawUrl ->
+    /**
+     * The title block's wordmark URL: the clear logo, else the poster.
+     *
+     * One resolver, because a source switch repaints the splash from the same
+     * facts the setup paint used (spec 2026-11-24, F4).
+     */
+    private fun resolvedHeaderLogoUrl(): String? =
+        clearLogoUrl?.takeIf { it.isNotBlank() }?.let { rawUrl ->
             if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) rawUrl
             else "https://image.tmdb.org/t/p/w780${if (rawUrl.startsWith("/")) rawUrl else "/$rawUrl"}"
         } ?: itemPoster?.takeIf { it.isNotBlank() }?.let { rawPoster ->
@@ -9733,6 +9818,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             else if (rawPoster.startsWith("/")) "https://image.tmdb.org/t/p/w500$rawPoster"
             else null
         }
+
+    private fun updateHeaderInfo() {
+        val resolvedLogoUrl = resolvedHeaderLogoUrl()
 
         if (resolvedLogoUrl != null) {
             // The chrome's slot is the shared chrome's to load: it remembers the
@@ -9743,18 +9831,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             chrome?.showTitleLogo(resolvedLogoUrl) { restoreChromeTitleText() }
             itemNameView.visibility = View.GONE
             // The splash keeps its own fallback (showSplashTitleFallback), so
-            // the trace line is the whole ask - and one load per URL, because
-            // this pass runs twice at setup.
-            if (resolvedLogoUrl != splashLogoUrlIssued) {
-                splashLogoUrlIssued = resolvedLogoUrl
-                splashClearLogo.load(
-                    tracedLogoRequest(
-                        splashClearLogo.context,
-                        resolvedLogoUrl,
-                        surface = "splash"
-                    )
-                )
-            }
+            // the trace line is the whole ask - and it is deduped on LANDING,
+            // because this pass runs twice at setup (see [loadSplashLogo]).
+            loadSplashLogo(resolvedLogoUrl, LogoRepaint.SETUP)
         } else if (itemName.isNotBlank()) {
             clearLogo.visibility = View.GONE
             itemNameView.text = itemName
@@ -17415,7 +17494,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // source, and the title block has to be told so from the live facts
         // rather than trusting whatever the setup-time load left behind.
         // Posted, because the error ladder can switch from a player callback.
-        runOnUiThread { chrome?.refreshTitle() }
+        runOnUiThread {
+            chrome?.refreshTitle(LogoRepaint.SWITCH)
+            // The second splash is the reported symptom, and it is the splash's
+            // own slot: a switch repaints the chrome through refreshTitle and
+            // the splash through here, because setup is the only other caller of
+            // updateHeaderInfo (spec 2026-11-24, F4).
+            resolvedHeaderLogoUrl()?.let { loadSplashLogo(it, LogoRepaint.SWITCH) }
+        }
     }
 
     /**
