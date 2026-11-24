@@ -180,7 +180,7 @@ class PlayerEpisodePickerContractTest {
     fun `one loader serves both engines`() {
         assertTrue(
             "F3: the shared loader exists",
-            loader.contains("internal object PlayerEpisodes")
+            loader.contains("class PlayerEpisodes @Inject constructor(")
         )
         assertTrue(
             "F3: it reads the season list the same way Detail does - the repository's " +
@@ -198,15 +198,15 @@ class PlayerEpisodePickerContractTest {
                 .substringBefore("private fun selectEpisodeSeason")
             assertTrue(
                 "F3: $engine's season load asks the loader, not a repository of its own",
-                load.contains("PlayerEpisodes.season(") &&
-                    load.contains("PlayerEpisodes.watchedEpisodes(")
+                load.contains("playerEpisodes.season(") &&
+                    load.contains("playerEpisodes.watchedEpisodes(")
             )
         }
         listOf(exo to "Exo", mpv to "MPV").forEach { (source, engine) ->
             assertTrue(
                 "F3: $engine asks the one loader",
-                source.contains("PlayerEpisodes.seasons(") &&
-                    source.contains("PlayerEpisodes.season(")
+                source.contains("playerEpisodes.seasons(") &&
+                    source.contains("playerEpisodes.season(")
             )
         }
     }
@@ -222,7 +222,7 @@ class PlayerEpisodePickerContractTest {
                 "F3: $engine marks the fetch in flight while the old rows stay bound",
                 loadBody.contains("episodePickerLoading = true") &&
                     loadBody.indexOf("bindEpisodePicker()") <
-                    loadBody.indexOf("PlayerEpisodes.season(")
+                    loadBody.indexOf("playerEpisodes.season(")
             )
             assertTrue(
                 "F3: and a superseded fetch cannot paint over the newer season",

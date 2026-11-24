@@ -173,7 +173,7 @@ class PickerWatchedUnionContractTest {
             assertTrue("$path's season load must exist", load.isNotEmpty())
             assertTrue(
                 "$path asks the loader for the season's union",
-                load.contains("PlayerEpisodes.watchedEpisodes(") &&
+                load.contains("playerEpisodes.watchedEpisodes(") &&
                     load.contains("parentType")
             )
             assertTrue(
@@ -182,7 +182,7 @@ class PickerWatchedUnionContractTest {
             )
             assertTrue(
                 "$path's whole-series label reads the same union",
-                load.contains("PlayerEpisodes.watchedEpisodePairs(")
+                load.contains("playerEpisodes.watchedEpisodePairs(")
             )
         }
     }
@@ -247,13 +247,13 @@ class PickerWatchedUnionContractTest {
         assertTrue(
             "the menu records its clears",
             marks.contains(
-                "PlayerEpisodes.notePickerRemoval(target.parentId, season, numbers)"
+                "episodes.notePickerRemoval(target.parentId, season, numbers)"
             )
         )
         assertTrue(
             "and lifts the fence when the same episode is marked again",
             marks.contains(
-                "PlayerEpisodes.notePickerMark(target.parentId, season, numbers)"
+                "episodes.notePickerMark(target.parentId, season, numbers)"
             )
         )
         val loader = flat(source(PLAYER_EPISODES))

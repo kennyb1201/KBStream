@@ -23,6 +23,7 @@ internal object PickerEpisodeMarks {
 
     suspend fun apply(
         context: Context,
+        episodes: PlayerEpisodes,
         row: PickerEpisodeMenuRow,
         target: PickerEpisodeMenuTarget
     ) {
@@ -45,9 +46,9 @@ internal object PickerEpisodeMarks {
         // before the write, so a concurrent load cannot slip between them.
         pairs.forEach { (season, numbers) ->
             if (row.marksWatched) {
-                PlayerEpisodes.notePickerMark(target.parentId, season, numbers)
+                episodes.notePickerMark(target.parentId, season, numbers)
             } else {
-                PlayerEpisodes.notePickerRemoval(target.parentId, season, numbers)
+                episodes.notePickerRemoval(target.parentId, season, numbers)
             }
         }
 

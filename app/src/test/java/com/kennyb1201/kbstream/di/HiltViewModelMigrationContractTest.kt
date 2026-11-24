@@ -216,6 +216,37 @@ class HiltViewModelMigrationContractTest {
     }
 
     /**
+     * The player picker's loader: an `object` that reached for TMDB, Simkl and
+     * Trakt on every season load. It is graph-built now, and the two engines
+     * are handed it - the player's half of "construction moves class-by-class",
+     * where the destination has no view model to hoist into.
+     */
+    @Test
+    fun `the player picker's loader is constructed by the graph`() {
+        val loader = source("com/kennyb1201/kbstream/ui/player/PlayerEpisodes.kt")
+        assertTrue(
+            "the loader takes its three readers instead of reaching for them",
+            loader.contains("@Singleton\nclass PlayerEpisodes @Inject constructor(") &&
+                loader.contains("private val tmdbRepository: TmdbRepository,") &&
+                loader.contains("private val traktRepository: TraktRepository,") &&
+                loader.contains("private val simklRepository: SimklRepository") &&
+                !loader.contains("TmdbRepository.getInstance(") &&
+                !loader.contains("TraktRepository.getInstance(") &&
+                !loader.contains("SimklRepository.getInstance(")
+        )
+        listOf("ui/player/NativePlayerActivity.kt", "ui/player/MpvPlayerActivity.kt")
+            .forEach { path ->
+                val activity = source("com/kennyb1201/kbstream/$path")
+                assertTrue(
+                    "$path is handed the loader, so a season load cannot build a second one",
+                    activity.contains("@Inject lateinit var playerEpisodes: PlayerEpisodes") &&
+                        activity.contains("playerEpisodes.season(") &&
+                        !activity.contains("PlayerEpisodes.season(")
+                )
+            }
+    }
+
+    /**
      * The same move for the two collaborators that were never legacy singletons:
      * the hero-artwork resolver and the awards repository were built by their
      * view models, from an Application, with no companion in sight. The graph

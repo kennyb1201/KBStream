@@ -484,6 +484,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     @Inject lateinit var addonManager: AddonManager
     @Inject lateinit var addonRepository: AddonRepository
     @Inject lateinit var fanartArtRepository: FanartArtRepository
+    @Inject lateinit var playerEpisodes: PlayerEpisodes
 
     /**
      * The MPV handoff's launch intent: this session replayed at the BACKUP
@@ -13060,7 +13061,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
         val request = ++episodePickerRequest
         lifecycleScope.launch {
-            val seasons = PlayerEpisodes.seasons(this@NativePlayerActivity, parentId, parentType, season)
+            val seasons = playerEpisodes.seasons(this@NativePlayerActivity, parentId, parentType, season)
             if (request != episodePickerRequest || !isPickerShowing) return@launch
             if (seasons.isEmpty()) {
                 episodePickerLoading = false
@@ -13098,11 +13099,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             bindEpisodeSeasonPoster()
         }
         lifecycleScope.launch {
-            val episodes = PlayerEpisodes.season(this@NativePlayerActivity, parentId, parentType, wanted)
+            val episodes = playerEpisodes.season(this@NativePlayerActivity, parentId, parentType, wanted)
             // The picker's watched union (spec 2026-11-13): local rows plus
             // the tracker legs, read once per show and reused - never fetched
             // on a press.
-            val watched = PlayerEpisodes.watchedEpisodes(
+            val watched = playerEpisodes.watchedEpisodes(
                 this@NativePlayerActivity,
                 parentId,
                 parentType,
@@ -13112,14 +13113,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // both come from data this pass already touched: the season
             // summaries are cached, and the watched pairs are the same union
             // the season's checkmarks came from.
-            val seriesNumbers = PlayerEpisodes.seriesEpisodeNumbers(
+            val seriesNumbers = playerEpisodes.seriesEpisodeNumbers(
                 this@NativePlayerActivity,
                 parentId,
                 parentType,
                 wanted,
                 episodes
             )
-            val watchedPairs = PlayerEpisodes.watchedEpisodePairs(
+            val watchedPairs = playerEpisodes.watchedEpisodePairs(
                 this@NativePlayerActivity,
                 parentId,
                 parentType
@@ -13143,14 +13144,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // behind its timeout. Painted in place when they land; a cold show
             // therefore ticks its tracker-only episodes a beat after the rows,
             // never on a second season switch.
-            val unionWatched = PlayerEpisodes.watchedEpisodes(
+            val unionWatched = playerEpisodes.watchedEpisodes(
                 this@NativePlayerActivity,
                 parentId,
                 parentType,
                 wanted,
                 waitForTrackerLegs = true
             )
-            val unionPairs = PlayerEpisodes.watchedEpisodePairs(
+            val unionPairs = playerEpisodes.watchedEpisodePairs(
                 this@NativePlayerActivity,
                 parentId,
                 parentType,
@@ -13433,6 +13434,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             val tmdbId = resolveParentTmdbId()
             PickerEpisodeMarks.apply(
                 this@NativePlayerActivity,
+                playerEpisodes,
                 row,
                 target.copy(tmdbId = tmdbId)
             )
@@ -13449,13 +13451,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         val listed = episodePickerListedSeason ?: return
         val request = ++episodePickerRequest
         lifecycleScope.launch {
-            val watched = PlayerEpisodes.watchedEpisodes(
+            val watched = playerEpisodes.watchedEpisodes(
                 this@NativePlayerActivity,
                 parentId,
                 parentType,
                 listed
             )
-            val pairs = PlayerEpisodes.watchedEpisodePairs(
+            val pairs = playerEpisodes.watchedEpisodePairs(
                 this@NativePlayerActivity,
                 parentId,
                 parentType

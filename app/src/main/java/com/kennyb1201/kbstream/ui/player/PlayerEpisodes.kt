@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream.ui.player
 
 import android.content.Context
+import javax.inject.Inject
+import javax.inject.Singleton
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
@@ -41,8 +43,21 @@ import kotlinx.coroutines.withContext
  * the Detail cards take them from, which is what the spec means by "the
  * description and thumbnail are already in the episode data": nothing here
  * adds a data source, an endpoint, or a field.
+ *
+ * It used to be an `object` that reached for TMDB, Simkl and Trakt through
+ * `getInstance` on every load. The graph builds it now, and the three readers
+ * arrive through the constructor: the same singletons the activities already
+ * hold, so this is one instance of each cache, which is what the legacy
+ * accessors guaranteed and a per-call construction would not. The legs cache
+ * below is process-wide for the same reason it always was - a season switch
+ * must not re-read three trackers - and a @Singleton class keeps that.
  */
-internal object PlayerEpisodes {
+@Singleton
+class PlayerEpisodes @Inject constructor(
+    private val tmdbRepository: TmdbRepository,
+    private val traktRepository: TraktRepository,
+    private val simklRepository: SimklRepository
+) {
 
     /**
      * The show's seasons, ascending, specials (season 0) dropped.
@@ -61,7 +76,7 @@ internal object PlayerEpisodes {
     ): List<Int> = withContext(Dispatchers.IO) {
         if (parentId.isBlank()) return@withContext emptyList()
         val listed = runCatchingCancellable {
-            TmdbRepository.getInstance(context.applicationContext)
+            tmdbRepository
                 .fetchEnrichedMetaCached(parentId, parentType)
         }.getOrNull()
             ?.seasons
@@ -88,7 +103,7 @@ internal object PlayerEpisodes {
         season: Int
     ): List<ResolvedEpisode> = withContext(Dispatchers.IO) {
         if (parentId.isBlank() || season < 0) return@withContext emptyList()
-        val repository = TmdbRepository.getInstance(context.applicationContext)
+        val repository = tmdbRepository
         val tmdbId = runCatchingCancellable {
             PlaybackHistoryIds.resolveTmdbId(context.applicationContext, parentId, parentType)
         }.getOrNull() ?: return@withContext emptyList()
@@ -220,7 +235,7 @@ internal object PlayerEpisodes {
         tmdbId: Int?
     ): WatchedLegs {
         val simkl = runCatchingCancellable {
-            val repository = SimklRepository.getInstance(context)
+            val repository = simklRepository
             if (!repository.isConfigured() || !repository.hasToken()) {
                 emptySet<Pair<Int, Int>>()
             } else {
@@ -244,7 +259,7 @@ internal object PlayerEpisodes {
             }
         }.getOrNull().orEmpty()
         val trakt = runCatchingCancellable {
-            val repository = TraktRepository.getInstance(context)
+            val repository = traktRepository
             if (!repository.isConfigured() || !repository.hasToken()) {
                 emptySet<Pair<Int, Int>>()
             } else {
@@ -407,7 +422,7 @@ internal object PlayerEpisodes {
     ): List<Pair<Int, List<Int>>> = withContext(Dispatchers.IO) {
         if (parentId.isBlank()) return@withContext emptyList()
         val detail = runCatchingCancellable {
-            TmdbRepository.getInstance(context.applicationContext)
+            tmdbRepository
                 .fetchEnrichedMetaCached(parentId, parentType)
         }.getOrNull() ?: return@withContext emptyList()
         val stale = DetailSeasonEpisodes.staleSeasons(detail)
