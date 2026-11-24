@@ -679,6 +679,13 @@ dependencies {
     // brings paging-common (Pager/PagingConfig/PagingSource); paging-runtime is
     // the LiveData/RxJava half and is not needed here.
     implementation(libs.androidx.paging.compose)
+    // Navigation Compose (spec 2026-11-22, item 5, phase F0). The migration is a
+    // strangler: MainActivity keeps rendering through its `AnimatedContent`
+    // until a destination is migrated, and `navigateTo` decides which system
+    // owns the next screen. Nothing routes through this yet - the dependency,
+    // the route table (`ui/navigation/NavRoutes.kt`) and that seam are phase F0,
+    // and its acceptance is a byte-identical walk.
+    implementation(libs.androidx.navigation.compose)
     // Play In-App Updates: the updater for the Play-distributed build, and the
     // reason that build has no GitHub-release offer at all. `-PplayBuild`
     // strips REQUEST_INSTALL_PACKAGES from the merged manifest, so a Play

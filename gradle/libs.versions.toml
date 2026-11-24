@@ -78,6 +78,13 @@ okio = "3.9.1"
 # store through this library's flexible flow - see PlayUpdater. The sideloaded
 # release never calls it and R8 strips it (PLAY_BUILD is false there).
 play-app-update = "2.1.0"
+# Navigation Compose (spec 2026-11-22, item 5, phase F0): the strangler target
+# for MainActivity's `Screen` state machine. The 2.9.x line is the one that
+# pairs with Compose BOM 2026.09.00, and its type-safe routes ride
+# kotlinx.serialization, which is already applied - so no new plugin, only the
+# artifact. Nothing navigates through it until a destination is migrated: F0
+# lands the dependency, the route table and the seam with `migratedKinds` empty.
+navigation-compose = "2.9.0"
 # Chromecast sender (spec: cast-sender v1). The app plays on the default
 # receiver (CC1AD845), so this is the sender half only: media is loaded onto the
 # remote player and the phone keeps driving it. It brings mediarouter, which is
@@ -167,6 +174,7 @@ androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref =
 androidx-room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
 androidx-room-testing = { module = "androidx.room:room-testing", version.ref = "room" }
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
+androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigation-compose" }
 androidx-datastore-tink = { module = "androidx.datastore:datastore-tink", version.ref = "datastore" }
 tink-android = { module = "com.google.crypto.tink:tink-android", version.ref = "tink" }
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
