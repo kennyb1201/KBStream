@@ -127,6 +127,7 @@ import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tvdb.shownEpisode
 import com.kennyb1201.kbstream.data.tvdb.shownSeason
+import com.kennyb1201.kbstream.data.fanart.FanartArtRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -480,6 +481,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     @Inject lateinit var simklRepository: SimklRepository
     @Inject lateinit var bingecatRepository: BingeCatRepository
     @Inject lateinit var addonManager: AddonManager
+    @Inject lateinit var fanartArtRepository: FanartArtRepository
 
     /**
      * The MPV handoff's launch intent: this session replayed at the BACKUP
@@ -3700,7 +3702,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // wordmark is fanart's with no logo here at all, though the Detail
             // header had one.
             val url = runCatchingCancellable {
-                resolveClearLogoUrl(this@NativePlayerActivity, parentId, type)
+                resolveClearLogoUrl(
+                    tmdbRepository,
+                    fanartArtRepository,
+                    parentId,
+                    type
+                )
             }.getOrNull() ?: return@launch
             // Recorded first: the policy pass early-returns once a logo exists,
             // so the loads below are what put it on screen.

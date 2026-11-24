@@ -59,6 +59,7 @@ import com.kennyb1201.kbstream.data.player.bundledEpisodeCount
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.PlayedLinkCache
+import com.kennyb1201.kbstream.data.fanart.FanartArtRepository
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
 import com.kennyb1201.kbstream.data.player.PlayerTrackMemory
@@ -149,6 +150,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     @Inject lateinit var simklRepository: SimklRepository
     @Inject lateinit var bingecatRepository: BingeCatRepository
     @Inject lateinit var addonManager: AddonManager
+    @Inject lateinit var fanartArtRepository: FanartArtRepository
 
     /**
      * The switch-back's launch intent: this session replayed at the MAIN engine.
@@ -7391,7 +7393,12 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             // The same shared chain the ExoPlayer session uses: TMDB's wordmark
             // first, fanart's behind it (spec 2026-11-22, F4).
             val url = runCatchingCancellable {
-                resolveClearLogoUrl(this@MpvPlayerActivity, parentId, type)
+                resolveClearLogoUrl(
+                    tmdbRepository,
+                    fanartArtRepository,
+                    parentId,
+                    type
+                )
             }.getOrNull() ?: return@launch
             // Recorded first: the guard above reads it.
             clearLogoUrl = url

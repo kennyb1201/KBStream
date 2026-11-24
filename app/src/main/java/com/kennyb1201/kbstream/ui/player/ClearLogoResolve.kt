@@ -1,6 +1,5 @@
 package com.kennyb1201.kbstream.ui.player
 
-import android.content.Context
 import com.kennyb1201.kbstream.data.fanart.FanartArtRepository
 import com.kennyb1201.kbstream.data.fanart.FanartKind
 import com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace
@@ -31,17 +30,19 @@ import kotlinx.coroutines.withContext
  * anything. It also notes one `LOGO:` line per step into the playback session
  * trace; see [resolveClearLogoChain], which is the ladder itself and the only
  * place a step is decided.
+ *
+ * Both repositories arrive as parameters: the two engines that call this read
+ * the same instances from the graph they already inject their trackers from, so
+ * the chain cannot hand a playback session a second TMDB cache.
  */
 internal suspend fun resolveClearLogoUrl(
-    context: Context,
+    repository: TmdbRepository,
+    fanart: FanartArtRepository,
     parentId: String,
     type: String
 ): String? {
     val normalized = type.lowercase()
     if (normalized != "movie" && normalized != "series") return null
-
-    val repository = TmdbRepository.getInstance(context)
-    val fanart = FanartArtRepository.getInstance(context)
 
     return resolveClearLogoChain(
         parentId = parentId,

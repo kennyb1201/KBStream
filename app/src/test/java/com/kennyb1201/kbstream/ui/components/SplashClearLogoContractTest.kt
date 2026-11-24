@@ -134,7 +134,9 @@ class SplashClearLogoContractTest {
         assertTrue(
             "both engines share ONE chain (spec 2026-11-22, F4), so the engine " +
                 "delegates instead of growing a second copy of it",
-            resolve.contains("resolveClearLogoUrl(this@MpvPlayerActivity, parentId, type)")
+            resolve.contains("resolveClearLogoUrl(") &&
+                resolve.contains("tmdbRepository,") &&
+                resolve.contains("fanartArtRepository,")
         )
 
         // ...and the chain itself carries the rules the engine used to hold. It
@@ -148,6 +150,10 @@ class SplashClearLogoContractTest {
         val ladder = source(CLEAR_LOGO_CHAIN)
             .substringAfter("internal suspend fun resolveClearLogoChain(")
             .substringAfter("): String? {")
+        assertTrue(
+            "the wiring reaches for no accessor: both repositories arrive from the graph",
+            !shared.contains("Repository.getInstance(")
+        )
         assertTrue(
             "only the two tmdb parent types are looked up",
             shared.contains("if (normalized != \"movie\" && normalized != \"series\") return null")
@@ -192,8 +198,15 @@ class SplashClearLogoContractTest {
             resolve.contains("if (!clearLogoUrl.isNullOrBlank() || clearLogoLookupStarted) return")
         )
         assertTrue(
-            "the same delegate MPV calls - two copies is the divergence F4 forbids",
-            resolve.contains("resolveClearLogoUrl(this@NativePlayerActivity, parentId, type)")
+            "the same delegate MPV calls, handed the same two instances - two copies " +
+                "is the divergence F4 forbids",
+            resolve.contains("resolveClearLogoUrl(") &&
+                resolve.contains("tmdbRepository,") &&
+                resolve.contains("fanartArtRepository,")
+        )
+        assertTrue(
+            "and neither engine reaches for an accessor to find them",
+            !resolve.contains("Repository.getInstance(")
         )
     }
 

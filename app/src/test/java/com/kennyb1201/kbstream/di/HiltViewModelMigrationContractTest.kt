@@ -272,6 +272,15 @@ class HiltViewModelMigrationContractTest {
                     activity.contains("@Inject lateinit var simklRepository: SimklRepository") &&
                     activity.contains("@Inject lateinit var bingecatRepository: BingeCatRepository")
             )
+            if (path != "ui/player/ExternalPlayerActivity.kt") {
+                assertTrue(
+                    "$path is handed fanart too, so the clearlogo chain it calls " +
+                        "never builds a second instance of it",
+                    activity.contains(
+                        "@Inject lateinit var fanartArtRepository: FanartArtRepository"
+                    )
+                )
+            }
             assertTrue(
                 "$path constructs none of them any more",
                 !Regex("\\w+Repository\\.getInstance\\(").containsMatchIn(activity)
