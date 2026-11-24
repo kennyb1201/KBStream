@@ -41,7 +41,11 @@ import javax.inject.Singleton
  * constructor parameter - so their `getInstance` companions are deleted and the
  * providers construct them directly. Their `@Singleton` scope carries the
  * one-instance guarantee the companion used to: one HTTP cache, one memory map,
- * one failure backoff. Every other provider below still delegates.
+ * one failure backoff. [KBStreamDownloader] followed the same way, except that
+ * its one real caller ([com.kennyb1201.kbstream.data.youtube.NewPipeManager]) is
+ * an object the extractor calls statically: it receives the instance through
+ * `install()` from the application, not through its own accessor. Every other
+ * provider below still delegates.
  *
  * ## The two exceptions, and why they are not `@Singleton`
  *
@@ -109,7 +113,7 @@ object LegacySingletonsModule {
 
     @Provides
     @Singleton
-    fun kbStreamDownloader(): KBStreamDownloader = KBStreamDownloader.getInstance()
+    fun kbStreamDownloader(): KBStreamDownloader = KBStreamDownloader()
 
     @Provides
     @Singleton

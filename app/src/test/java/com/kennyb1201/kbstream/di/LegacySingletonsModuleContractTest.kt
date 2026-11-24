@@ -10,11 +10,12 @@ import org.junit.Test
  * The graph delegates to the legacy accessors, and only the singles are scoped.
  *
  * Spec 2026-11-22, item 3. Two things have to stay true for the migration to be
- * safe to do class-by-class: every provider returns the instance the
- * `getInstance` accessor owns (otherwise a screen and its repository can hold
- * two copies of the same cache), and nothing that follows the active profile is
- * pinned to `@Singleton` (otherwise a profile switch hands the next profile the
- * previous one's database).
+ * safe to do class-by-class: every provider hands out the one instance the
+ * process uses - the `getInstance` accessor's while it still exists, and its own
+ * `@Singleton` construction once the accessor has been retired (otherwise a
+ * screen and its repository can hold two copies of the same cache) - and nothing
+ * that follows the active profile is pinned to `@Singleton` (otherwise a profile
+ * switch hands the next profile the previous one's database).
  *
  * Pinned at the source because instantiating the graph needs an Application and
  * a running Hilt component; the shape is the contract.
@@ -30,8 +31,8 @@ class LegacySingletonsModuleContractTest {
 
         assertEquals("one provider per legacy singleton", 12, providers)
         assertEquals(
-            "ten providers still hand out their accessor's instance, not a new one",
-            10,
+            "nine providers still hand out their accessor's instance, not a new one",
+            9,
             delegations
         )
     }
@@ -62,7 +63,6 @@ class LegacySingletonsModuleContractTest {
             "BingeCatRepository.getInstance(",
             "AddonManager.getInstance(",
             "AddonRepository.getInstance(",
-            "KBStreamDownloader.getInstance(",
             "FanartArtRepository.getInstance(",
             "WatchHistoryDatabase.getInstance(",
             "IptvDatabase.getInstance("
@@ -95,27 +95,55 @@ class LegacySingletonsModuleContractTest {
     }
 
     /**
-     * The endgame, exercised on the two classes it reached first. Once nothing
-     * outside the graph called `KBRepository.getInstance` or
-     * `TvmazeAirDateRepository.getInstance`, the companions were deleted rather
-     * than kept as a second owner - the module constructs them instead, scoped
-     * `@Singleton`. Pinned so a convenience accessor cannot grow back and give a
-     * screen a second HTTP cache or a second air-date cache.
+     * The endgame, exercised on the classes it has reached so far. Once nothing
+     * outside the graph called their accessor, the companion was deleted rather
+     * than kept as a second owner - the module constructs the instance instead,
+     * scoped `@Singleton`. Pinned so a convenience accessor cannot grow back and
+     * give a screen a second HTTP cache, a second air-date cache, or a second
+     * extractor transport.
      */
     @Test
-    fun `the first two accessors are deleted, and the graph constructs them`() {
+    fun `the retired accessors are deleted, and the graph constructs them`() {
         listOf(
-            "com/kennyb1201/kbstream/data/kb/KBRepository.kt",
-            "com/kennyb1201/kbstream/data/airdates/TvmazeAirDateRepository.kt"
-        ).forEach { path ->
+            "com/kennyb1201/kbstream/data/kb/KBRepository.kt" to "KBRepository(context)",
+            "com/kennyb1201/kbstream/data/airdates/TvmazeAirDateRepository.kt" to
+                "TvmazeAirDateRepository(context)",
+            "com/kennyb1201/kbstream/data/youtube/KBStreamDownloader.kt" to
+                "KBStreamDownloader()"
+        ).forEach { (path, construction) ->
             val source = source(path)
             assertFalse("$path still exposes a legacy accessor", source.contains("fun getInstance("))
             assertFalse("$path still holds the accessor's instance field", source.contains("private var instance"))
+            assertTrue(
+                "the graph constructs $construction, or nothing does",
+                module.contains(construction)
+            )
         }
+    }
+
+    /**
+     * The downloader's real caller is an `object`, so it cannot take the
+     * transport as a constructor parameter. It is installed instead, from the
+     * application's injected instance - and the class that used to build its own
+     * must not be able to: a second OkHttp stack is the exact duplicate the
+     * delegation phase existed to prevent.
+     */
+    @Test
+    fun `the extractor is handed the graph's transport, not one of its own`() {
+        val extractor = source("com/kennyb1201/kbstream/data/youtube/NewPipeManager.kt")
+        assertFalse(
+            "NewPipeManager must not reach for the downloader's accessor any more",
+            extractor.contains("KBStreamDownloader.getInstance(")
+        )
         assertTrue(
-            "the graph constructs the two directly, or nothing does",
-            module.contains("KBRepository(context)") &&
-                module.contains("TvmazeAirDateRepository(context)")
+            "and it installs the instance it is handed",
+            extractor.contains("fun install(downloader: KBStreamDownloader)")
+        )
+        val application = source("com/kennyb1201/kbstream/MainApplication.kt")
+        assertTrue(
+            "the application is where the graph's instance arrives",
+            application.contains("@Inject lateinit var kbStreamDownloader: KBStreamDownloader") &&
+                application.contains("NewPipeManager.install(kbStreamDownloader)")
         )
     }
 

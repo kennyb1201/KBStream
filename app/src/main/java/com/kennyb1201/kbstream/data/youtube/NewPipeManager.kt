@@ -85,13 +85,42 @@ object NewPipeManager {
     "https://pipedapi.owo.si"
 )
 
+    /**
+     * The transport the extractor runs on, handed in by [install].
+     *
+     * Spec 2026-11-22, item 3: this used to be a `getInstance()` call, which
+     * meant the extractor built its own OkHttp stack the first time a trailer
+     * resolved. The app now installs the graph's instance at startup, so the
+     * extractor and the PO-token path share one transport.
+     */
+    @Volatile
+    private var downloader: KBStreamDownloader? = null
+
+    /**
+     * Installs NewPipe's process-wide transport. Called once from
+     * `MainApplication`, before any trailer can resolve.
+     */
+    @Synchronized
+    fun install(downloader: KBStreamDownloader) {
+        this.downloader = downloader
+        if (initialized) return
+        NewPipe.init(downloader)
+        initialized = true
+    }
+
     @Synchronized
     private fun ensureInitialized() {
         if (initialized) return
 
-        NewPipe.init(
-            KBStreamDownloader.getInstance()
+        // No fallback construction on purpose: a second transport is exactly
+        // what the migration removed. Anything resolving a trailer before the
+        // application's install has a startup-order bug, and saying so beats
+        // silently building one more OkHttp stack.
+        val installed = downloader ?: error(
+            "NewPipeManager.install() has not run - MainApplication must install " +
+                "the graph's downloader before a trailer resolves"
         )
+        NewPipe.init(installed)
 
         initialized = true
     }

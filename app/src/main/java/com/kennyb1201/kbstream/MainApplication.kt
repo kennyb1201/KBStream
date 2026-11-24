@@ -30,6 +30,8 @@ import com.kennyb1201.kbstream.data.reporting.PlaybackDeathMarker
 import com.kennyb1201.kbstream.data.reporting.ProcessExitRecord
 import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.youtube.KBStreamDownloader
+import com.kennyb1201.kbstream.data.youtube.NewPipeManager
 import com.kennyb1201.kbstream.work.AddonManifestRefreshWorker
 import com.kennyb1201.kbstream.work.CacheMaintenanceWorker
 import com.kennyb1201.kbstream.work.NewEpisodeWorker
@@ -58,6 +60,7 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
     // before onCreate's body runs.
     @Inject lateinit var addonManager: AddonManager
     @Inject lateinit var bingecatRepository: BingeCatRepository
+    @Inject lateinit var kbStreamDownloader: KBStreamDownloader
 
     override fun onCreate() {
         super.onCreate()
@@ -99,6 +102,16 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             java.lang.ref.WeakReference(applicationContext)
         // Crash reporting FIRST so every step below is observable.
         runCatching { initCrashReporting() }
+        // NewPipe's transport, installed with the graph's downloader instead of
+        // one the extractor builds for itself on the first trailer resolve
+        // (spec 2026-11-22, item 3). NewPipe.init only assigns a static, so this
+        // is a couple of field writes, not work.
+        runCatching { NewPipeManager.install(kbStreamDownloader) }.onFailure {
+            // Warning: a trailer resolve would then throw where it used to
+            // silently build a second OkHttp stack, and a field capture has to
+            // be able to name that before it becomes a mystery crash.
+            Log.w("APP_START", "NewPipe transport not installed", it)
+        }
         // YouTube PO-token minting for trailers, installed once with the app
         // context. Nothing is created here: the WebView is built only when a
         // trailer resolve asks for a token, and the youtube_po_token_enabled
