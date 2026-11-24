@@ -200,6 +200,55 @@ class FormFactorScaffoldContractTest {
     }
 
     @Test
+    fun `window size classes live only under the mobile package`() {
+        // Spec 2026-11-22 (adaptive layouts), F1: the phone and tablet layouts
+        // are the only thing allowed to ask a window how wide it is. A TV never
+        // composes ui/mobile, so this is the static half of that promise; the
+        // guard below is the other half.
+        val mobileRoot = File(sourceRoot, "com/kennyb1201/kbstream/ui/mobile")
+        assertTrue("ui/mobile must exist", mobileRoot.isDirectory)
+        val offenders = sourceRoot.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .filter { !it.path.startsWith(mobileRoot.path) }
+            .filter { file ->
+                val text = file.readText()
+                text.contains("calculateWindowSizeClass") ||
+                    text.contains("WindowWidthSizeClass") ||
+                    text.contains("WindowSizeClass")
+            }
+            .map { it.relativeTo(sourceRoot).path }
+            .toList()
+        assertTrue(
+            "window size classes outside ui/mobile: $offenders",
+            offenders.isEmpty()
+        )
+    }
+
+    @Test
+    fun `the mobile width class answers compact before it asks the platform`() {
+        // F1's guard, mirror of "the helpers never touch a tv window": a
+        // television reports an Expanded window, so a future mis-dispatch would
+        // otherwise hand a TV the tablet layout. The guard has to be the first
+        // thing the helper does.
+        val helper = source("com/kennyb1201/kbstream/ui/mobile/MobileWindowSize.kt")
+        val body = helper
+            .substringAfter("internal fun rememberMobileWindowWidthClass(): MobileWidthClass {")
+            .substringBefore("\n}")
+        val guard = body.indexOf("if (FormFactor.isTv) return MobileWidthClass.Compact")
+        val platform = body.indexOf("calculateWindowSizeClass(")
+        assertTrue("the helper must consult FormFactor", guard >= 0)
+        assertTrue("the helper must ask the platform", platform >= 0)
+        assertTrue(
+            "the TV guard must come BEFORE the platform call",
+            guard in 0 until platform
+        )
+        assertTrue(
+            "and the guard must be the first statement, not one branch among many",
+            body.trimStart().startsWith("if (FormFactor.isTv) return MobileWidthClass.Compact")
+        )
+    }
+
+    @Test
     fun `the television theme is still the tv-material one`() {
         // The mobile port adds a second theme; it must never replace this one.
         val theme = source("com/kennyb1201/kbstream/ui/theme/Theme.kt")

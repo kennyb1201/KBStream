@@ -140,6 +140,11 @@ androidx-compose-runtime = { module = "androidx.compose.runtime:runtime" }
 androidx-compose-ui-base = { module = "androidx.compose.ui:ui" }
 androidx-compose-ui-tooling-debug = { module = "androidx.compose.ui:ui-tooling" }
 androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
+# Window size classes for the phone/tablet adaptive layouts (spec 2026-11-22,
+# adaptive layouts). BOM-owned like material3 itself, and only the phone files
+# read it - a TV never composes them, and MobileWindowSize.kt answers Compact
+# before it ever asks the platform (see its guard).
+androidx-compose-material3-window-size-class = { module = "androidx.compose.material3:material3-window-size-class" }
 androidx-compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended" }
 
 # --- Room / Work ---

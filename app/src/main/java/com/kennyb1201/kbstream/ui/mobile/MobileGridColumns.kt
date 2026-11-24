@@ -35,12 +35,19 @@ internal fun mobileGridColumns(
     availableWidth: Dp,
     preferredTileWidth: Dp,
     spacing: Dp,
-    landscape: Boolean
+    landscape: Boolean,
+    /**
+     * The most columns this window may show (see
+     * [MobileAdaptiveRules.gridColumnCap]). The default is a phone's, so a
+     * caller that has not been taught about window classes keeps today's
+     * behaviour exactly.
+     */
+    columnCap: Int = MAX_COLUMNS
 ): Int {
     val minColumns = if (landscape) 2 else 3
     if (availableWidth <= 0.dp || preferredTileWidth <= 0.dp) return minColumns
     val fit = ((availableWidth + spacing) / (preferredTileWidth + spacing)).toInt()
-    return fit.coerceIn(minColumns, MAX_COLUMNS)
+    return fit.coerceIn(minColumns, columnCap.coerceAtLeast(minColumns))
 }
 
 /**
@@ -60,12 +67,17 @@ internal fun rememberMobileGridColumns(
     gutter: Dp = 16.dp
 ): Int {
     val windowWidthDp = LocalConfiguration.current.screenWidthDp
-    return remember(windowWidthDp, preferredTileWidth, landscape, spacing, gutter) {
+    // The cap follows the window class, not the raw width: Compact is a phone's 8
+    // (unreachable at that width), and a tablet gets 10 or 12 so its extra width
+    // becomes more posters rather than a stretched version of the same three.
+    val columnCap = MobileAdaptiveRules.gridColumnCap(rememberMobileWindowWidthClass())
+    return remember(windowWidthDp, preferredTileWidth, landscape, spacing, gutter, columnCap) {
         mobileGridColumns(
             availableWidth = windowWidthDp.dp - gutter * 2,
             preferredTileWidth = preferredTileWidth,
             spacing = spacing,
-            landscape = landscape
+            landscape = landscape,
+            columnCap = columnCap
         )
     }
 }

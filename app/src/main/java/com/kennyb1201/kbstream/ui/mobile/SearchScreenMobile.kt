@@ -37,7 +37,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -301,7 +300,12 @@ fun SearchScreenMobile(
         // more once the phone is turned and the width is there for them. The
         // number follows the window (see [mobileGridColumns]' reasoning), and
         // the chips keep their own size rather than stretching.
-        val browseChipColumns = if (LocalConfiguration.current.screenWidthDp >= 600) 5 else 3
+        // Compact 3 / Medium 5 / Expanded 7 (spec 2026-11-22, adaptive
+        // layouts, F5). The 600dp step that used to live here is now the Medium
+        // boundary itself, so the phone and tablet-portrait numbers are the same
+        // as before and only a new class gained a step.
+        val browseChipColumns =
+            MobileAdaptiveRules.searchChipColumns(rememberMobileWindowWidthClass())
         val chipRows = remember(visibleEntries, browseChipColumns) {
             visibleEntries.chunked(browseChipColumns)
         }

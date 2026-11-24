@@ -728,6 +728,12 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui.base)
     implementation(libs.androidx.compose.material3)
+    // Window size classes (spec 2026-11-22, adaptive layouts): the one place a
+    // phone/tablet layout decides between Compact, Medium and Expanded. BOM-
+    // owned, so its version moves with material3. Nothing outside ui/mobile/
+    // reads it - the TV never composes those files, and MobileWindowSize.kt
+    // answers Compact before the platform is asked at all.
+    implementation(libs.androidx.compose.material3.window.size.class)
     implementation(libs.androidx.compose.material.icons.extended)
     // Retrofit 3 is the line that pairs with OkHttp 5 (Retrofit 2.11 pins
     // OkHttp 4), and both stay in the retrofit2/okhttp3 packages, so this is
