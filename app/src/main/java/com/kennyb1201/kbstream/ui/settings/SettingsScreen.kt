@@ -132,6 +132,7 @@ import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.data.simkl.SIMKL_DATA_CREDIT
+import com.kennyb1201.kbstream.data.trakt.TRAKT_ATTRIBUTION_NOTICE
 import com.kennyb1201.kbstream.data.tmdb.TMDB_ATTRIBUTION_NOTICE
 import com.kennyb1201.kbstream.R
 import androidx.compose.animation.core.Animatable
@@ -5565,6 +5566,13 @@ private fun AboutSection(
                     markHeight = 20.dp,
                     text = SIMKL_DATA_CREDIT
                 )
+                Spacer(modifier = Modifier.height(10.dp))
+                AttributionNotice(
+                    // Text only: Trakt's requirement is the sentence, not a
+                    // mark, and inventing a logo here would be a brand asset
+                    // the app has no licence to draw.
+                    text = TRAKT_ATTRIBUTION_NOTICE
+                )
             }
         }
         // The credit the pane ends on. Centred because it is the one line here
@@ -5611,6 +5619,23 @@ private fun AboutSection(
             )
         }
     }
+}
+
+/**
+ * One attribution NOTICE with no mark: the whole line is the credit.
+ *
+ * Trakt's checklist asks for the sentence and nothing else, so the row keeps
+ * the rhythm of the two marked rows above it without pretending to a brand mark
+ * the app could not legally draw.
+ */
+@Composable
+private fun AttributionNotice(text: String) {
+    Text(
+        text = text,
+        color = KBTextHi,
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier.fillMaxWidth()
+    )
 }
 
 /**

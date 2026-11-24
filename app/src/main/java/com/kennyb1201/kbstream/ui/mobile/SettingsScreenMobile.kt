@@ -68,6 +68,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.BuildConfig
+import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.backup.BackupManager
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.data.debrid.CloudMatch
@@ -615,6 +616,43 @@ private fun searchEntryFor(label: String, searchKey: String?): SettingSearchEntr
         ?: SettingsSearchIndex.entryForLabel(label)
 
 @Composable
+/**
+ * One attribution line on the phone: the licensor's mark, then the credit that
+ * belongs with it.
+ *
+ * The same fixed-box rule as the TV's AttributionRow - both dimensions always
+ * given, so a 7.7:1 wordmark and a square mark each keep their own proportions
+ * - because these are the same two drawables and the terms do not change with
+ * the form factor.
+ */
+@Composable
+private fun AttributionRowMobile(
+    mark: Int,
+    markWidth: androidx.compose.ui.unit.Dp,
+    markHeight: androidx.compose.ui.unit.Dp,
+    text: String
+) {
+    Row(
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        Image(
+            painter = painterResource(mark),
+            contentDescription = null,
+            modifier = Modifier.size(width = markWidth, height = markHeight)
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = text,
+            color = KBTextHi,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
 private fun SettingsCaptionMobile(text: String) {
     Text(
         text = text,
@@ -4637,10 +4675,31 @@ private fun AboutPaneMobile() {
         }
 
         SettingsSectionMobile("Data sources")
-        SettingsCaptionMobile(
-            "This product uses the TMDB API but is not endorsed or certified by TMDB."
+        // The same two marks the TV's About plate draws, from the shared res
+        // tree: TMDB's terms require its logo beside the notice, and the phone
+        // pane carried the sentences alone until the credits audit
+        // (2026-11-24) - which is also why both lines now read the TV's
+        // constants instead of their own literals. The phone's Simkl line had
+        // already grown a trailing full stop the TV's did not.
+        AttributionRowMobile(
+            mark = R.drawable.ic_tmdb_attribution,
+            // The drawable's own declared size, to the dp, exactly as the TV
+            // pane draws it: TMDB's terms forbid changing the mark's aspect
+            // ratio, so nothing here scales it.
+            markWidth = 154.dp,
+            markHeight = 20.dp,
+            text = com.kennyb1201.kbstream.data.tmdb.TMDB_ATTRIBUTION_NOTICE
         )
-        SettingsCaptionMobile("Movie, TV and anime data from Simkl.")
+        AttributionRowMobile(
+            mark = R.drawable.ic_simkl_mark,
+            markWidth = 20.dp,
+            markHeight = 20.dp,
+            text = com.kennyb1201.kbstream.data.simkl.SIMKL_DATA_CREDIT
+        )
+        // Trakt's notice is a sentence, not a mark - see the constant.
+        SettingsCaptionMobile(
+            com.kennyb1201.kbstream.data.trakt.TRAKT_ATTRIBUTION_NOTICE
+        )
 
         // The credit the pane ends on, exactly as the TV About pane does:
         // centred because it is about the app's author rather than the install,

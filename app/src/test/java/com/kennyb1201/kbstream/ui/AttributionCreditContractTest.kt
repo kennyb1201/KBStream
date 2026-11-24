@@ -3,8 +3,10 @@ package com.kennyb1201.kbstream.ui
 import com.kennyb1201.kbstream.data.simkl.SIMKL_DATA_CREDIT
 import com.kennyb1201.kbstream.data.simkl.SIMKL_HOME_URL
 import com.kennyb1201.kbstream.data.tmdb.TMDB_ATTRIBUTION_NOTICE
+import com.kennyb1201.kbstream.data.trakt.TRAKT_ATTRIBUTION_NOTICE
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -26,11 +28,86 @@ class AttributionCreditContractTest {
 
     @Test
     fun `the TMDB notice is the required sentence, word for word`() {
+        // The API Terms of Use (rev. 2023-10-20), paragraph 3 - which the credits
+        // audit of 2026-11-24 checked against the developer FAQ and found to
+        // disagree with it. The terms are the binding text, so they win:
+        //
+        //   "This [website, program, service, application, product] uses TMDB and
+        //    the TMDB APIs but is not endorsed, certified, or otherwise approved
+        //    by TMDB."
+        //
+        // ...with the bracket filled in for an app. The FAQ's shorter "TMDB API"
+        // sentence is what this constant used to carry, and it is NOT the current
+        // terms' wording.
         assertEquals(
-            "TMDB's FAQ requires this exact wording in an About/Credits section",
-            "This product uses the TMDB API but is not endorsed or certified by TMDB.",
+            "TMDB's terms require this exact wording in an About/Credits section",
+            "This application uses TMDB and the TMDB APIs but is not endorsed, " +
+                "certified, or otherwise approved by TMDB.",
             TMDB_ATTRIBUTION_NOTICE
         )
+    }
+
+    @Test
+    fun `the Trakt notice is the required sentence, word for word`() {
+        // Trakt's production-access checklist: "[application] uses Trakt but is
+        // not endorsed or certified by Trakt", with at least one link showing it.
+        assertEquals(
+            "Trakt's checklist requires this exact wording",
+            "KBStream uses Trakt but is not endorsed or certified by Trakt.",
+            TRAKT_ATTRIBUTION_NOTICE
+        )
+    }
+
+    @Test
+    fun `both surfaces and the README carry the Trakt notice`() {
+        assertTrue(
+            "the TV's About credits plate no longer renders the Trakt notice",
+            readMainSource(SETTINGS).contains("TRAKT_ATTRIBUTION_NOTICE")
+        )
+        assertTrue(
+            "the phone's About no longer renders the Trakt notice",
+            readMainSource(MOBILE_SETTINGS).contains("TRAKT_ATTRIBUTION_NOTICE")
+        )
+        assertTrue(
+            "the README is the link Trakt's checklist asks for, and it must carry " +
+                "the sentence itself",
+            readRepoFile("README.md").contains(TRAKT_ATTRIBUTION_NOTICE)
+        )
+    }
+
+    @Test
+    fun `the phone's About draws both marks from the TV's constants, not copies`() {
+        val mobile = readMainSource(MOBILE_SETTINGS)
+        // The audit found the phone's two lines as literals: one the FAQ's old
+        // wording, the other with a full stop the constant never had. Both now
+        // read the constants, so the surfaces cannot disagree again.
+        assertTrue(
+            "the phone's TMDB line must read the shared constant",
+            mobile.contains("TMDB_ATTRIBUTION_NOTICE")
+        )
+        assertTrue(
+            "the phone's Simkl line must read the shared constant",
+            mobile.contains("SIMKL_DATA_CREDIT")
+        )
+        assertTrue(
+            "the phone's About must draw the TMDB wordmark beside its notice, " +
+                "which TMDB's terms require",
+            mobile.contains("R.drawable.ic_tmdb_attribution")
+        )
+        assertTrue(
+            "the phone's About must draw the Simkl mark beside its line",
+            mobile.contains("R.drawable.ic_simkl_mark")
+        )
+        listOf(
+            "This product uses the TMDB API",
+            "Movie, TV and anime data from Simkl."
+        ).forEach { literal ->
+            assertFalse(
+                "the phone's About still carries \"$literal\" as a literal: that is " +
+                    "exactly the copy that drifted from the TV's",
+                mobile.contains(literal)
+            )
+        }
     }
 
     @Test
@@ -113,6 +190,13 @@ class AttributionCreditContractTest {
         return file.readText()
     }
 
+    /** A file at the repository root - the README is a Trakt-mandated placement. */
+    private fun readRepoFile(name: String): String {
+        val file = File(findMainRoot().parentFile.parentFile, name)
+        assertTrue("repo file missing: $file", file.isFile)
+        return file.readText()
+    }
+
     /** The directory holding `src/main/` for this module. */
     private fun findMainRoot(): File {
         var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
@@ -130,6 +214,7 @@ class AttributionCreditContractTest {
 
     private companion object {
         const val SETTINGS = "java/com/kennyb1201/kbstream/ui/settings/SettingsScreen.kt"
+        const val MOBILE_SETTINGS = "java/com/kennyb1201/kbstream/ui/mobile/SettingsScreenMobile.kt"
         const val LIBRARY = "java/com/kennyb1201/kbstream/ui/library/LibraryScreen.kt"
         const val DETAIL = "java/com/kennyb1201/kbstream/ui/detail/DetailScreen.kt"
         const val DETAIL_VM = "java/com/kennyb1201/kbstream/ui/detail/DetailViewModel.kt"

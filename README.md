@@ -73,6 +73,10 @@ EPG).
   scrobbling; MDBList also takes ratings), OMDb awards, IPTV (M3U + XMLTV
   EPG), YouTube trailers, TorBox (debrid resolution with a cached-only
   filter).
+
+  KBStream uses Trakt but is not endorsed or certified by Trakt. Movie, TV and
+  anime data from Simkl. This application uses TMDB and the TMDB APIs but is
+  not endorsed, certified, or otherwise approved by TMDB.
 - **BingeCat** — the Stremio addon (dynamic catalogs, Because-you-watched
   rails, lists, search) and the Public API integration: Library lists and
   watchlist, watch-history tracking, save/unsave titles, thumbs-up adding

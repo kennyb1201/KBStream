@@ -36,8 +36,9 @@ used under its permissive FTL option rather than its GPL-2.0-only alternative.
 
 ## Permissive components
 
-The remaining dependencies are permissively licensed (Apache-2.0 or MIT) and,
-apart from attribution, impose no distribution obligations:
+The remaining dependencies are permissively licensed (Apache-2.0 or MIT) - with
+the Play services row below as the one proprietary exception - and, apart from
+attribution, impose no distribution obligations:
 
 - AndroidX (Media3, Room, WorkManager, RecyclerView, Compose, and friends) — Apache-2.0
 - Kotlin, kotlinx.coroutines — Apache-2.0
@@ -51,6 +52,23 @@ apart from attribution, impose no distribution obligations:
 - desugar_jdk_libs (`com.android.tools:desugar_jdk_libs_nio`) — Apache-2.0
 - NanoHTTPD (`org.nanohttpd:nanohttpd-websocket`, the TV's local server for the
   phone-as-a-remote channel; nothing about it is cloud-side) — BSD-3-Clause
+- Retrofit 2 and its Moshi converter (`com.squareup.retrofit2`) — Apache-2.0
+- ZXing core (`com.google.zxing:core`, the phone's QR scanning) — Apache-2.0
+- Dagger and Hilt (`com.google.dagger`, runtime and annotation processors, plus
+  the `hilt-navigation-compose` bridge) — Apache-2.0
+- Tink and `androidx.datastore:datastore-tink` (the secure store's serializer
+  and crypto backend) — Apache-2.0
+- kotlinx.serialization (`org.jetbrains.kotlinx:kotlinx-serialization-*`) — Apache-2.0
+- `androidx.security:security-crypto` — Apache-2.0
+- AndroidX ProfileInstaller (`androidx.profileinstaller`) — Apache-2.0
+- AndroidX ConstraintLayout (`androidx.constraintlayout`) — Apache-2.0
+- AndroidX Paging, including `paging-compose` — Apache-2.0
+- Google Play services: In-App Updates (`play-services-appupdate`, the Play
+  build's update flow), Chromecast sender (`play-services-cast-framework`) and
+  `mediarouter` (the phone's device chooser) — Android Software Development Kit
+  License (Google's Play services terms). These are the only proprietary
+  components in the list: they are distributed as Play services, not as open
+  source, and the notice above records that rather than calling them Apache-2.0.
 
 ## Trademarks and data sources
 
