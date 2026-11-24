@@ -935,6 +935,21 @@ class PlayerChrome(
             }
             row.addView(itemView)
         }
+        // The tiles are inflated HERE, long after the activity has themed its own
+        // tree, so each one comes up on @drawable/picker_item_bg as the XML
+        // resolved it: #141A24 / #1D2530 with the brass focus ring. The MPV
+        // player runs its chrome pass in onCreate, before this chrome even
+        // exists, and nothing re-walked the band afterwards - so a pure-black
+        // theme left the actor chips navy (field, 2026-11-24). Re-walk the band
+        // as it is built, which is the call pattern the walk's own docstring
+        // prescribes for late-inflated content; a source switch or a Next Up
+        // repaint rebuilds the band through here and stays themed with it.
+        //
+        // Scoped to the row (a handful of tiles) rather than the whole overlay,
+        // and a no-op on the default palette, where nothing has moved to re-tint.
+        // The Exo engine's chrome pass happens after its first bind, so its
+        // result is unchanged; this is the same themed tile, reached here.
+        retintPlayerChrome(row, row.context)
     }
 
     private fun LinearLayout.inflateCastTile(): View =
