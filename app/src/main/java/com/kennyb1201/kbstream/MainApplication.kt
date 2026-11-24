@@ -35,6 +35,7 @@ import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.youtube.KBStreamDownloader
 import com.kennyb1201.kbstream.data.youtube.NewPipeManager
+import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.work.AddonManifestRefreshWorker
 import com.kennyb1201.kbstream.work.CacheMaintenanceWorker
 import com.kennyb1201.kbstream.work.NewEpisodeWorker
