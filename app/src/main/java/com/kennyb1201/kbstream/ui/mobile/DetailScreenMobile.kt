@@ -1812,54 +1812,12 @@ fun DetailScreenMobile(
                     chromeAlpha = { heroChrome }
                 )
             }
-            Row(
-                modifier = Modifier.fillMaxSize(),
-                // The capped single column is centred by the row itself, which
-                // is also how the two-pane row lays its children out - one
-                // arrangement, no per-branch alignment.
-                horizontalArrangement = Arrangement.Center
-            ) {
-            if (twoPane) {
-                LazyColumn(
-                    modifier = Modifier
-                        .width(MobileAdaptiveRules.DETAIL_LEFT_PANE_WIDTH_DP.dp)
-                        .fillMaxHeight(),
-                    state = rememberIdleLazyListState(),
-                    contentPadding = PaddingValues(bottom = 28.dp),
-                    verticalArrangement = Arrangement.spacedBy(18.dp)
-                ) {
-                    item(key = "header") { detailHeader() }
-                }
-            }
-            LazyColumn(
-                modifier = if (twoPane) {
-                    Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                } else {
-                    Modifier
-                        .fillMaxHeight()
-                        .then(
-                            if (detailColumnCapDp > 0) {
-                                Modifier.widthIn(max = detailColumnCapDp.dp)
-                            } else {
-                                Modifier
-                            }
-                        )
-                        .fillMaxWidth()
-                },
-                // The page is the longest list on the phone and had no state at
-                // all, so scrolling into its lower half paid every section's
-                // first composition on the landing frame (spec 2026-11-18, F4).
-                state = rememberIdleLazyListState(),
-                contentPadding = PaddingValues(bottom = 28.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp)
-            ) {
-                if (!twoPane) {
-                    item(key = "header") { detailHeader() }
-                }
-
-                item(key = "cta") {
+            // The calls to action, in a lambda for the same reason the header is:
+            // one body, shown by whichever list is on screen. They read the same
+            // hoisted state (heroChrome, the taste signals, the library mark), so
+            // the two layouts cannot disagree about what is saved or how far the
+            // chrome has faded.
+            val detailCta: @Composable () -> Unit = {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -2130,6 +2088,82 @@ fun DetailScreenMobile(
                             DownloadedBadge()
                         }
                     }
+            }
+            val detailFacts: @Composable () -> Unit = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    MobileSectionTitle(detailFactsTitle(normalizedType == "movie"))
+                    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                        facts.forEachIndexed { index, fact ->
+                            DetailFactRow(fact)
+                            if (index != facts.lastIndex) DetailFactDivider()
+                        }
+                    }
+                }
+            }
+            // One list state per pane, hoisted ABOVE the branch: crossing 840dp
+            // must not throw away where the viewer was reading. The section list
+            // keeps its index across the change, and the header has left it, so
+            // the same index lands one section below where it was - the spec asks
+            // for an approximate position, not a jump back to the top.
+            val leftPaneState = rememberIdleLazyListState()
+            val sectionListState = rememberIdleLazyListState()
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                // The capped single column is centred by the row itself, which
+                // is also how the two-pane row lays its children out - one
+                // arrangement, no per-branch alignment.
+                horizontalArrangement = Arrangement.Center
+            ) {
+            if (twoPane) {
+                LazyColumn(
+                    modifier = Modifier
+                        .width(MobileAdaptiveRules.DETAIL_LEFT_PANE_WIDTH_DP.dp)
+                        .fillMaxHeight(),
+                    state = leftPaneState,
+                    contentPadding = PaddingValues(bottom = 28.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp)
+                ) {
+                    item(key = "header") { detailHeader() }
+                    item(key = "cta") { detailCta() }
+                    // Same condition as the single-column list: with no facts
+                    // the section is absent, not an empty title.
+                    if (facts.isNotEmpty()) {
+                        item(key = "facts") { detailFacts() }
+                    }
+                }
+            }
+            LazyColumn(
+                modifier = if (twoPane) {
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                } else {
+                    Modifier
+                        .fillMaxHeight()
+                        .then(
+                            if (detailColumnCapDp > 0) {
+                                Modifier.widthIn(max = detailColumnCapDp.dp)
+                            } else {
+                                Modifier
+                            }
+                        )
+                        .fillMaxWidth()
+                },
+                // The page is the longest list on the phone and had no state at
+                // all, so scrolling into its lower half paid every section's
+                // first composition on the landing frame (spec 2026-11-18, F4).
+                // Hoisted above the two-pane branch, so unfolding does not read
+                // as a jump back to the top of the page.
+                state = sectionListState,
+                contentPadding = PaddingValues(bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp)
+            ) {
+                if (!twoPane) {
+                    item(key = "header") { detailHeader() }
+                }
+
+                if (!twoPane) {
+                    item(key = "cta") { detailCta() }
                 }
 
                 // The title's tags, directly under the calls to action where
@@ -2567,16 +2601,8 @@ fun DetailScreenMobile(
                 // The facts block, after the companies: Status (series only),
                 // Release Info, Runtime, Certification, Origin Country.
                 if (facts.isNotEmpty()) {
-                    item(key = "facts") {
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            MobileSectionTitle(detailFactsTitle(normalizedType == "movie"))
-                            Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-                                facts.forEachIndexed { index, fact ->
-                                    DetailFactRow(fact)
-                                    if (index != facts.lastIndex) DetailFactDivider()
-                                }
-                            }
-                        }
+                    if (!twoPane) {
+                        item(key = "facts") { detailFacts() }
                     }
                 }
 

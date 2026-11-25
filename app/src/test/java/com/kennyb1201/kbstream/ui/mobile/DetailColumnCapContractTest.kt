@@ -82,6 +82,48 @@ class DetailColumnCapContractTest {
     }
 
     @Test
+    fun `the left pane carries the header, the calls to action and the facts`() {
+        val leftPane = detail.substringAfter("if (twoPane) {").substringBefore("}\n            LazyColumn(")
+        listOf("header", "cta", "facts").forEach { key ->
+            assertTrue(
+                "the left pane must render the $key item - the spec's split is " +
+                    "header art, title block, CTA row and facts on the left",
+                leftPane.contains("item(key = \"$key\")")
+            )
+            assertTrue(
+                "the single-column list must skip the $key item when the panes " +
+                    "are showing, or every one of them is drawn twice",
+                Regex("if \\(!twoPane\\) \\{\\s*\\n\\s*item\\(key = \"$key\"\\)").containsMatchIn(detail)
+            )
+        }
+        assertEquals(
+            "the calls to action must exist once, like the header",
+            1,
+            Regex("val detailCta: @Composable \\(\\) -> Unit = \\{").findAll(detail).count()
+        )
+        assertEquals(
+            "and the facts with them",
+            1,
+            Regex("val detailFacts: @Composable \\(\\) -> Unit = \\{").findAll(detail).count()
+        )
+    }
+
+    @Test
+    fun `crossing the breakpoint keeps both lists where they were`() {
+        val hoisted = detail.indexOf("val sectionListState = rememberIdleLazyListState()")
+        val row = detail.indexOf("Row(\n                modifier = Modifier.fillMaxSize(),")
+        assertTrue("the panes' list states must be hoisted above the branch", row > hoisted && hoisted > 0)
+        assertTrue(
+            "the section list reads the hoisted state in both layouts",
+            detail.contains("state = sectionListState,")
+        )
+        assertTrue(
+            "and so does the left pane",
+            detail.contains("state = leftPaneState,")
+        )
+    }
+
+    @Test
     fun `the panes are layout only`() {
         assertEquals(
             "the hero chrome fade must stay a single piece of state above both " +
