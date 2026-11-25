@@ -131,7 +131,19 @@ class MobileBillboardContractTest {
             home.contains("billboardEnabled && billboardPages.any { page -> page.settled }")
         )
         assertTrue(home.contains("item(key = \"billboard\", contentType = \"hero\")"))
-        assertTrue(home.contains("MobileBillboard( pages = billboardPages,"))
+        // F3 of the adaptive-layout spec put the window rule's cap in front of
+        // the pages, so the call is no longer one line: the billboard is still
+        // handed its pages, and the height is the rule's answer (null on a
+        // compact window, which is the 16:10 frame it always drew).
+        val call = home.substring(
+            home.indexOf("MobileBillboard("),
+            home.indexOf("onPlay = { page ->", home.indexOf("MobileBillboard("))
+        )
+        assertTrue(call.contains("pages = billboardPages,"))
+        assertTrue(
+            "the hero's height must come from the window rule, not a literal",
+            call.contains("heroHeight = billboardHeightDp.takeIf { it > 0 }?.dp")
+        )
         assertTrue(home.contains("onPlay = { page ->"))
         assertTrue(home.contains("onDetails = { page -> onItemClick(page.preview) }"))
     }

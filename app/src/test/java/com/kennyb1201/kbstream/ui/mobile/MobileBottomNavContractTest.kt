@@ -254,7 +254,7 @@ class MobileBottomNavContractTest {
                 "with the screen that owns it",
             switch >= 0 && bar > switch
         )
-        val screenBox = main.indexOf("Box(modifier = Modifier.weight(1f).fillMaxWidth()")
+        val screenBox = main.indexOf("Box(modifier = Modifier.weight(1f).fillMaxHeight()")
         assertTrue(
             "the switch must be given the space above the bar, so no screen's last " +
                 "row can end up underneath it",
@@ -299,14 +299,18 @@ class MobileBottomNavContractTest {
             rawActivity(),
             listOf(
                 "Column(modifier = Modifier.fillMaxSize())",
-                "Box(modifier = Modifier.weight(1f).fillMaxWidth()",
+                // F2 of the adaptive-layout spec: the rail and the screen share
+                // this row, which takes the height the bar does not use.
+                "Row(modifier = Modifier.weight(1f).fillMaxWidth())",
+                "Box(modifier = Modifier.weight(1f).fillMaxHeight()",
                 "LaunchSplash()",
                 host,
                 "MobileBottomNav("
             )
         )
         val column = depths.getValue("Column(modifier = Modifier.fillMaxSize())")
-        val screenBox = depths.getValue("Box(modifier = Modifier.weight(1f).fillMaxWidth()")
+        val row = depths.getValue("Row(modifier = Modifier.weight(1f).fillMaxWidth())")
+        val screenBox = depths.getValue("Box(modifier = Modifier.weight(1f).fillMaxHeight()")
         val splash = depths.getValue("LaunchSplash()")
         val barHost = depths.getValue(host)
         val bar = depths.getValue("MobileBottomNav(")
@@ -314,9 +318,17 @@ class MobileBottomNavContractTest {
         // A column's children are one level deeper than the line that opens it
         // (the extra levels are wrapping lambdas, a Box child, etc.).
         assertEquals(
-            "the screen switch's Box must be the column's own child, so weight(1f) " +
+            "the weighted row must be the column's own child, so weight(1f) " +
                 "hands the bar the space it does not use",
             column + 1,
+            row
+        )
+        assertEquals(
+            "and the screen Box sits one level inside that row, where weight(1f) " +
+                "gives it the width the navigation rail does not use - measured at " +
+                "the column's own level instead, the screen and the bar would be " +
+                "siblings and the bar would take a slot above the screen",
+            row + 1,
             screenBox
         )
         // Deeper than the Box itself: the splash is inside the Box (and inside

@@ -98,13 +98,19 @@ class SpotlightFixContractTest {
     @Test
     fun `the phone's billboard is untouched by the cap`() {
         val mobile = source(MOBILE)
-        val call = mobile.substring(
-            mobile.indexOf("MobileBillboard(\n                            pages = billboardPages,"),
-            mobile.indexOf("onPlay = { page ->", mobile.indexOf("MobileBillboard(\n                            pages = billboardPages,"))
-        )
-        assertFalse(
-            "the phone passes no height",
-            call.contains("heroHeight")
+        // F3 of the adaptive-layout spec gives the phone a cap as well, but the
+        // cap this test is about is the TELEVISION's fixed hero height. The
+        // phone's is the window rule's answer, and that answer is null on a
+        // compact window - which is the 16:10 frame the phone always drew, so
+        // nothing about the phone's billboard moves at 599dp or below.
+        val start = mobile.indexOf("MobileBillboard(")
+        assertTrue("the phone must still draw the billboard", start >= 0)
+        val call = mobile.substring(start, mobile.indexOf("onPlay = { page ->", start))
+        assertTrue(
+            "the phone's height must be the rule's answer and nothing else: " +
+                "null below 600dp is the 16:10 frame this test protects, and a " +
+                "literal in its place would be the television's cap leaking in",
+            call.contains("heroHeight = billboardHeightDp.takeIf { it > 0 }?.dp")
         )
         assertFalse(
             "and no focus anchor: touch has no D-pad to park",

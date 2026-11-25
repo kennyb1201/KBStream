@@ -23,6 +23,59 @@ class PlayerTouchWiringContractTest {
 
     private fun mainSource(name: String): String = File(sourceRoot(), name).readText()
 
+    /**
+     * [text] with its comments removed.
+     *
+     * For the scan that says the gesture layer never touches playback: the
+     * wide-stage rule documents itself in prose ("no playback, position or
+     * `playWhenReady` state is touched"), and a doc line is not a call. String
+     * and char literals are copied through, so a `//` inside a URL does not
+     * swallow the rest of its line.
+     */
+    private fun code(text: String): String {
+        val out = StringBuilder(text.length)
+        var i = 0
+        var inLineComment = false
+        var inBlockComment = false
+        var inString = false
+        var inChar = false
+        while (i < text.length) {
+            val c = text[i]
+            val next = text.getOrNull(i + 1)
+            when {
+                inLineComment -> if (c == '\n') {
+                    inLineComment = false
+                    out.append(c)
+                }
+                inBlockComment -> if (c == '*' && next == '/') {
+                    inBlockComment = false
+                    i++
+                }
+                inString -> {
+                    out.append(c)
+                    if (c == '\\') i++ else if (c == '"') inString = false
+                }
+                inChar -> {
+                    out.append(c)
+                    if (c == '\\') i++ else if (c == '\'') inChar = false
+                }
+                c == '/' && next == '/' -> inLineComment = true
+                c == '/' && next == '*' -> inBlockComment = true
+                c == '"' -> {
+                    inString = true
+                    out.append(c)
+                }
+                c == '\'' -> {
+                    inChar = true
+                    out.append(c)
+                }
+                else -> out.append(c)
+            }
+            i++
+        }
+        return out.toString()
+    }
+
     private fun sourceRoot(): File {
         val prefixes = listOf("", "app/")
         var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
@@ -89,7 +142,7 @@ class PlayerTouchWiringContractTest {
 
     @Test
     fun `the gesture layer itself never touches playback`() {
-        val src = mainSource(player + "PlayerTouchGestures.kt")
+        val src = code(mainSource(player + "PlayerTouchGestures.kt"))
 
         assertFalse(
             "a gesture is not a transport command",

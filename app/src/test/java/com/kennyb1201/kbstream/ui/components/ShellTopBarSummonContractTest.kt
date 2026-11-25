@@ -44,8 +44,11 @@ class ShellTopBarSummonContractTest {
         File(sourceRoot, "com/kennyb1201/kbstream/MainActivity.kt").readText()
 
     /** The shell's key handler, from the guard to its end. */
+    // The shell's screen Box fills the height of the row the navigation rail
+    // shares with it (adaptive-layout spec, F2), so the slice starts at the
+    // Box's own modifier rather than the width one it carried before the rail.
     private fun handler(): String =
-        activity().substringAfter("Box(modifier = Modifier.weight(1f).fillMaxWidth()")
+        activity().substringAfter("Box(modifier = Modifier.weight(1f).fillMaxHeight()")
             .substringBefore("AnimatedContent(")
 
     @Test
