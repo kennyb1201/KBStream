@@ -1435,22 +1435,29 @@ fun AppRoot(
     // every assignment is the state write it always was. Reads are unchanged -
     // `screen` is still the same value from the same saved state, so the
     // restoration codec, smart-casts and the cold-launch gate are untouched.
-    val navSeam = remember(screenState) { NavSeam(screenState) }
+    val navSeam = remember(screenState) {
+        NavSeam(screenState, migratedKinds = setOf("remote"))
+    }
     var screen by navSeam
 
-    // The host a migrated destination renders through (spec: navcompose, F0),
-    // beside the AnimatedContent it replaces. `screen` stays the single source
-    // of truth and the host FOLLOWS it, so Back, the restoration codec, the
-    // cold-launch gate and the exit-confirm dialog keep working untouched while
-    // destinations move across one at a time. Nothing is migrated yet, so this
-    // effect navigates nothing and the graph never composes.
+    // The host a migrated destination renders through (spec: navcompose, F1),
+    // composed INSIDE the renderer's content lambda rather than beside it. One
+    // destination deep, so crossing into a migrated kind is still the shell's
+    // own slide and the hero registry, the splash above it and every focus path
+    // are the ones they always were - a renderer swap at the top of the Box
+    // would have cut the transition in half, and two NavHosts cannot be
+    // composed at once (a NavController attaches to exactly one host), which is
+    // exactly what a transition between two migrated kinds would ask for.
+    //
+    // That last point is why only ONE kind is migrated here. While the set has a
+    // single member, the graph's start destination IS that kind's route, so
+    // entering it navigates nothing: the host opens on it, and no transition is
+    // replayed on the entry `launchSingleTop` settles. The phase that adds a
+    // second destination must give the host a wrapper that owns its graph;
+    // NavHostHostingContractTest fails until it does.
     val navController = androidx.navigation.compose.rememberNavController()
     LaunchedEffect(screen) {
-        if (navSeam.isMigrated(screen)) {
-            com.kennyb1201.kbstream.ui.navigation.NavRoutes.of(screen)?.let { route ->
-                navController.navigate(route) { launchSingleTop = true }
-            }
-        } else if (navController.currentBackStackEntry != null) {
+        if (!navSeam.isMigrated(screen) && navController.currentBackStackEntry != null) {
             // Leaving the migrated kinds: the host goes back to nothing, so a
             // later entry starts from its start destination rather than
             // resuming a stack the shell no longer describes.
@@ -3017,14 +3024,6 @@ fun AppRoot(
                 true
             }
     ) {
-    if (navSeam.isMigrated(screen)) {
-        com.kennyb1201.kbstream.ui.navigation.NavHostGraph(
-            navController = navController,
-            transitionMs = transitionMs,
-            onNavigate = { navSeam.navigateTo(it) },
-            modifier = Modifier.fillMaxSize()
-        )
-    } else
     AnimatedContent(
         targetState = screen,
         contentKey = { it.typeName() },
@@ -3076,6 +3075,17 @@ fun AppRoot(
     // Modifier.heroSourceElement(type, id), the Detail hero with
     // Modifier.heroSharedElement(type, id); no screen has to grow a parameter
     // to join the flight.
+    // The one migrated destination renders through the NavHost here, inside the
+    // shell's own transition slot; everything else is the `when` it has always
+    // been. The splash picker further down stays outside both, above either.
+    if (navSeam.isMigrated(current)) {
+        com.kennyb1201.kbstream.ui.navigation.NavHostGraph(
+            navController = navController,
+            transitionMs = transitionMs,
+            onNavigate = { navSeam.navigateTo(it) },
+            modifier = Modifier.fillMaxSize()
+        )
+    } else
     CompositionLocalProvider(
         // Null under reduced motion: HeroTransitionHost skipped the registry
         // above, so there is nothing for a call site to join.

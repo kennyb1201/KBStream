@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.navigation
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -15,10 +16,12 @@ import org.junit.Test
  * the cold-launch gate and the exit-confirm dialog all start depending on a
  * stack that is not the one the shell encodes.
  *
- * Nothing is migrated in F0, so this change is behaviourally empty on purpose:
- * the tests below check the guard is there (the host is only reached for a
- * migrated kind), that the fall-through is still the AnimatedContent, and that
- * the seam is still constructed without a migrated set.
+ * F1 moves the first destination across, so the tests below pin the shape that
+ * makes that move survivable: the host lives INSIDE the renderer's content
+ * lambda (one destination deep, where the shell's transition, the hero registry
+ * and the splash above it all still apply), the fall-through is still the
+ * AnimatedContent, and exactly one kind is migrated - because a transition
+ * between two migrated kinds would ask for two NavHosts over one controller.
  */
 class NavHostHostingContractTest {
 
@@ -30,7 +33,7 @@ class NavHostHostingContractTest {
         assertTrue(
             "the NavHost must be guarded by the seam's migrated check, or it " +
                 "replaces the renderer for every destination at once",
-            shell.contains("if (navSeam.isMigrated(screen)) {")
+            shell.contains("if (navSeam.isMigrated(current)) {")
         )
         assertTrue(
             "the host is not composed at all",
@@ -39,21 +42,34 @@ class NavHostHostingContractTest {
         assertTrue(
             "the fall-through must still be the AnimatedContent the shell has " +
                 "always rendered, keyed on the screen kind",
-            shell.contains("} else\n    AnimatedContent(\n        targetState = screen,")
+            shell.contains("\n    AnimatedContent(\n        targetState = screen,")
+        )
+        assertFalse(
+            "the host must not be hosted beside the renderer: a NavController " +
+                "attaches to exactly one NavHost, and the two compositions a " +
+                "transition keeps alive would be two",
+            shell.contains("} else\n    AnimatedContent(")
         )
     }
 
     @Test
     fun `the host follows the screen value rather than the other way round`() {
         assertTrue(
-            "nothing navigates the host when the shell enters a migrated kind",
-            shell.contains("LaunchedEffect(screen) {") &&
-                shell.contains("navController.navigate(route) { launchSingleTop = true }")
+            "nothing follows the shell's screen changes",
+            shell.contains("LaunchedEffect(screen) {")
         )
         assertTrue(
-            "and nothing clears it when the shell leaves them, so the next entry " +
-                "would resume a stack the shell no longer describes",
+            "and nothing clears the stack when the shell leaves the migrated " +
+                "kinds, so the next entry would resume a stack the shell no " +
+                "longer describes",
             shell.contains("navController.popBackStack(navController.graph.id, inclusive = false)")
+        )
+        assertFalse(
+            "entering a migrated kind must not navigate: while one kind is " +
+                "migrated the graph's start destination IS its route, so the " +
+                "host opens on it, and navigating to it would replace that " +
+                "entry and replay its enter transition",
+            shell.contains("navController.navigate(")
         )
         assertFalse(
             "the screen state must not be read back out of the back stack: the " +
@@ -64,10 +80,25 @@ class NavHostHostingContractTest {
     }
 
     @Test
-    fun `F0 migrates nothing and the seam is built without a migrated set`() {
+    fun `exactly one kind is migrated and the graph opens on it`() {
+        val migrated = Regex("migratedKinds = setOf\\(([^)]*)\\)")
+            .find(shell)?.groupValues?.get(1)
+            ?: error("the seam is constructed without a migrated set")
+        assertFalse(
+            "a second migrated kind needs the host owned by a wrapper rather than " +
+                "the renderer's own slot: a transition between two migrated kinds " +
+                "would compose two NavHosts over one controller",
+            migrated.contains(",")
+        )
+        assertEquals(
+            "the first destination to move across is the remote control",
+            "\"remote\"",
+            migrated
+        )
         assertTrue(
-            "the seam must be constructed from the saved state alone in F0",
-            shell.contains("val navSeam = remember(screenState) { NavSeam(screenState) }")
+            "and the graph's start destination is that same route, which is what " +
+                "makes entering it navigate nothing",
+            graph.contains("startDestination = RemoteRoute,")
         )
         val seam = stripComments(source(SEAM))
         assertTrue(

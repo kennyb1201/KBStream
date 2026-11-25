@@ -40,9 +40,12 @@ class NavSeamContractTest {
                 )
         )
         assertTrue(
-            "and the shell's `screen` IS that state, delegated through the seam",
-            shell.contains("val navSeam = remember(screenState) { NavSeam(screenState) }") &&
-                shell.contains("var screen by navSeam")
+            "and the shell's `screen` IS that state, delegated through the seam - " +
+                "with the one migrated kind named at the seam, not inherited",
+            shell.contains(
+                "val navSeam = remember(screenState) { NavSeam(screenState, " +
+                    "migratedKinds = setOf(\"remote\")) }"
+            ) && shell.contains("var screen by navSeam")
         )
         assertFalse(
             "no second copy of the navigation state: the old direct delegate is gone",
@@ -51,7 +54,7 @@ class NavSeamContractTest {
     }
 
     @Test
-    fun `every write goes through one entry point and nothing is migrated yet`() {
+    fun `every write goes through one entry point and the set is named explicitly`() {
         assertTrue(
             "one seam function, named with the spec's own vocabulary",
             seam.contains("fun navigateTo(value: Screen) {") &&
@@ -65,8 +68,8 @@ class NavSeamContractTest {
                 seam.contains("operator fun getValue(thisRef: Any?, property: KProperty<*>): Screen = state.value")
         )
         assertTrue(
-            "F0 ships with an EMPTY migrated set: no destination renders through a " +
-                "NavHost, which is what makes this build's walk byte-identical",
+            "the set defaults to EMPTY, so a phase names its destinations at the " +
+                "seam instead of inheriting a renderer for all of them",
             seam.contains("private val migratedKinds: Set<String> = emptySet()")
         )
         assertTrue(
