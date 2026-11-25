@@ -1438,6 +1438,26 @@ fun AppRoot(
     val navSeam = remember(screenState) { NavSeam(screenState) }
     var screen by navSeam
 
+    // The host a migrated destination renders through (spec: navcompose, F0),
+    // beside the AnimatedContent it replaces. `screen` stays the single source
+    // of truth and the host FOLLOWS it, so Back, the restoration codec, the
+    // cold-launch gate and the exit-confirm dialog keep working untouched while
+    // destinations move across one at a time. Nothing is migrated yet, so this
+    // effect navigates nothing and the graph never composes.
+    val navController = androidx.navigation.compose.rememberNavController()
+    LaunchedEffect(screen) {
+        if (navSeam.isMigrated(screen)) {
+            com.kennyb1201.kbstream.ui.navigation.NavRoutes.of(screen)?.let { route ->
+                navController.navigate(route) { launchSingleTop = true }
+            }
+        } else if (navController.currentBackStackEntry != null) {
+            // Leaving the migrated kinds: the host goes back to nothing, so a
+            // later entry starts from its start destination rather than
+            // resuming a stack the shell no longer describes.
+            navController.popBackStack(navController.graph.id, inclusive = false)
+        }
+    }
+
     // Which profile this run of the app may attribute a BACKGROUND write to
     // (see ProfileSession). The picker means "not chosen yet" - a cold launch
     // left sitting there has no session - while a launch that skips it means
@@ -2997,6 +3017,14 @@ fun AppRoot(
                 true
             }
     ) {
+    if (navSeam.isMigrated(screen)) {
+        com.kennyb1201.kbstream.ui.navigation.NavHostGraph(
+            navController = navController,
+            transitionMs = transitionMs,
+            onNavigate = { navSeam.navigateTo(it) },
+            modifier = Modifier.fillMaxSize()
+        )
+    } else
     AnimatedContent(
         targetState = screen,
         contentKey = { it.typeName() },
