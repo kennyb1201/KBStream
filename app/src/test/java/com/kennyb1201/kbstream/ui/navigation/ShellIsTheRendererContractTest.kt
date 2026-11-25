@@ -101,6 +101,36 @@ class ShellIsTheRendererContractTest {
         assertTrue(main.contains("launchSingleTop = true"))
     }
 
+    /**
+     * The black-window regression (field report 2026-11-25: a black screen right
+     * after the profile picker, with only the exit prompt still drawing).
+     *
+     * Popping the host back to the graph root empties the back stack - the
+     * controller drops an entry left sitting on a NavGraph - and an empty host
+     * composes nothing at all: no screen, no BackHandler, and, because the mirror
+     * returned early on the missing entry, no way back to one. Both halves are
+     * pinned here so a future "tidy the stack" cannot restore it.
+     */
+    @Test
+    fun `the shell never empties the host, and an empty host takes the navigation`() {
+        assertFalse(
+            "the shell must never pop the host back to the graph root: with every " +
+                "kind on the host that pop runs on every screen change, leaves the " +
+                "stack empty, and an empty host draws nothing at all",
+            main.contains("popBackStack(navController.graph.id")
+        )
+        assertFalse(
+            "a missing entry must take the navigation below, not an early return - " +
+                "that return is what left the black window up for ever",
+            main.contains("currentBackStackEntry ?: return@LaunchedEffect")
+        )
+        assertTrue(
+            "the compare-and-skip stays, so a destination's own reflection cannot " +
+                "send the stack back the way it came",
+            main.contains("screenOfEntry(entry) == screen")
+        )
+    }
+
     @Test
     fun `the player is still an overlay and not a destination`() {
         assertFalse(

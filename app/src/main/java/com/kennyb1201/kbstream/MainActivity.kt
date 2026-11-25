@@ -1465,14 +1465,20 @@ fun AppRoot(
     val graphStart = remember {
         com.kennyb1201.kbstream.ui.navigation.NavRoutes.of(screen)!!
     }
-    LaunchedEffect(screen) {
-        if (!navSeam.isMigrated(screen) && navController.currentBackStackEntry != null) {
-            // Leaving the migrated kinds: the host goes back to nothing, so a
-            // later entry starts from its start destination rather than
-            // resuming a stack the shell no longer describes.
-            navController.popBackStack(navController.graph.id, inclusive = false)
-        }
-    }
+    // The shell NEVER pops its host back to the graph root.
+    //
+    // It used to, as the seam's "leaving the migrated kinds" step, and with the
+    // migrated set empty - which is the end state of the flip - that condition
+    // is true on every single screen. So every navigation emptied the stack,
+    // and an emptied stack draws NOTHING: the controller drops an entry that is
+    // left sitting on a NavGraph, `currentBackStackEntry` becomes null, and the
+    // NavHost has no destination to compose. That is the black window reported
+    // on 2026-11-25 right after the profile picker - no screen, no BackHandler,
+    // only the exit prompt's dialog (which owns its own window) still drawing.
+    //
+    // There is nothing left for it to clean up either: the mirror below keeps
+    // the stack at one entry (`popUpTo` the graph id on every navigate), and the
+    // host owns every kind, so the shell never leaves it.
 
     // Which profile this run of the app may attribute a BACKGROUND write to
     // (see ProfileSession). The picker means "not chosen yet" - a cold launch
@@ -5300,11 +5306,18 @@ fun AppRoot(
     // The shell is the source of truth for now, so the stack follows it. One
     // direction only: a compare-and-skip keeps a destination's own reflection
     // from sending the effect back the way it came.
+    //
+    // A host holding NO entry is not "already showing this screen": it draws
+    // nothing at all, which is a black window. That is why the null case takes
+    // the navigation instead of an early return - it is the one step that can
+    // put a destination back if the stack is ever lost.
     LaunchedEffect(screen) {
         val target = com.kennyb1201.kbstream.ui.navigation.NavRoutes.of(screen)
             ?: return@LaunchedEffect
-        val entry = navController.currentBackStackEntry ?: return@LaunchedEffect
-        if (com.kennyb1201.kbstream.ui.navigation.NavRoutes.screenOfEntry(entry) == screen) {
+        val entry = navController.currentBackStackEntry
+        if (entry != null &&
+            com.kennyb1201.kbstream.ui.navigation.NavRoutes.screenOfEntry(entry) == screen
+        ) {
             return@LaunchedEffect
         }
         navController.navigate(target) {
