@@ -1,9 +1,12 @@
 package com.kennyb1201.kbstream.ui.navigation
 
 import com.kennyb1201.kbstream.Screen
+import com.kennyb1201.kbstream.decodeScreen
 import com.kennyb1201.kbstream.encodeScreen
+import com.kennyb1201.kbstream.stableBackDestination
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import org.json.JSONObject
 
 /**
  * The Navigation Compose route table: one route type per [Screen] destination.
@@ -395,4 +398,20 @@ internal object NavRoutes {
      * can decode it and run `stableBackDestination` over it.
      */
     private fun returnOf(screen: Screen): String = encodeScreen(screen).toString()
+
+    /**
+     * The landing a route's [returnRoute] argument names, for a destination's
+     * Back: decoded with that same codec (an unreadable or older argument lands
+     * on Home, never a crash) and run through [stableBackDestination], so the
+     * autoplay strip and the depth cap hold on a migrated destination exactly as
+     * they do on the arm it replaced.
+     */
+    fun landingOf(returnRoute: String?): Screen =
+        stableBackDestination(
+            if (returnRoute == null) {
+                Screen.Home
+            } else {
+                runCatching { decodeScreen(JSONObject(returnRoute)) }.getOrDefault(Screen.Home)
+            }
+        )
 }

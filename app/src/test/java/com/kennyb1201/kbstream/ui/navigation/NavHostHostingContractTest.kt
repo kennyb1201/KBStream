@@ -105,6 +105,33 @@ class NavHostHostingContractTest {
     }
 
     @Test
+    fun `the F1 destinations land Back where the arms did`() {
+        assertTrue(
+            "stats is hardwired to Settings in the shell and must stay so",
+            graph.contains("composable<StatsRoute> {") &&
+                graph.contains("StatsScreen(onBack = { onNavigate(Screen.Settings) })")
+        )
+        assertTrue(
+            "the catalog builder must land on its route's return argument, not on " +
+                "whatever is underneath",
+            graph.contains("composable<CatalogBuilderRoute> { entry ->") &&
+                graph.contains("onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) }")
+        )
+        val table = stripComments(source(NAV_ROUTES))
+        assertTrue(
+            "a return argument is decoded with the codec that survives process " +
+                "death, then sanitized, so the depth cap and the autoplay strip hold",
+            table.contains("decodeScreen(JSONObject(returnRoute))") &&
+                table.contains("stableBackDestination(")
+        )
+        assertTrue(
+            "an unreadable argument lands on Home rather than crashing",
+            table.contains("if (returnRoute == null) {") &&
+                table.contains("getOrDefault(Screen.Home)")
+        )
+    }
+
+    @Test
     fun `every destination in the graph is a route the table declared`() {
         val routes = Regex("composable<(\\w+)>").findAll(graph)
             .map { it.groupValues[1] }

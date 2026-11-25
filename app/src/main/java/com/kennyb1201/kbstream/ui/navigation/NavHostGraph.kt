@@ -10,8 +10,11 @@ import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.toRoute
 import com.kennyb1201.kbstream.Screen
+import com.kennyb1201.kbstream.ui.addons.CatalogBuilderScreen
 import com.kennyb1201.kbstream.ui.remote.RemoteScreen
+import com.kennyb1201.kbstream.ui.settings.StatsScreen
 
 // ---------------------------------------------------------------------------
 // The NavHost a migrated destination renders through (spec: navcompose, F0).
@@ -64,6 +67,22 @@ internal fun NavHostGraph(
         // point (Settings), one argument, and Back is the screen it came from.
         composable<RemoteRoute> {
             RemoteScreen(onBack = { onNavigate(Screen.Settings) })
+        }
+
+        // Viewing stats, reached only from Settings and hardwired back to it,
+        // exactly like the arm it stands in for.
+        composable<StatsRoute> {
+            StatsScreen(onBack = { onNavigate(Screen.Settings) })
+        }
+
+        // The catalog builder carries the pane that opened it, so its Back is
+        // the route's own return argument - decoded and sanitized, never the
+        // screen that happens to be underneath.
+        composable<CatalogBuilderRoute> { entry ->
+            val route = entry.toRoute<CatalogBuilderRoute>()
+            CatalogBuilderScreen(
+                onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) }
+            )
         }
     }
 }
