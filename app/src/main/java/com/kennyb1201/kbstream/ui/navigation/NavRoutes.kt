@@ -384,7 +384,11 @@ internal object NavRoutes {
             parentId = screen.parentId,
             parentType = screen.parentType,
             returnRoute = returnOf(screen.returnTo),
-            payloadJson = null
+            // The picker's whole transient bundle - the target, the parent id,
+            // the strings and the cast - and the RESTORE codec already carries
+            // all of it for this screen, so a restored Streams is restored with
+            // its target exactly as it is today.
+            payloadJson = encodeScreen(screen).toString()
         )
 
         // Not a destination: it launches a player Activity and lives as an
@@ -429,4 +433,123 @@ internal object NavRoutes {
         returnRoute?.let { encoded ->
             runCatching { decodeScreen(JSONObject(encoded)) }.getOrNull()
         }
+
+    /**
+     * The [Screen] a route stands for: the inverse of [of].
+     *
+     * Every destination renders from ITS OWN entry with this, never from a
+     * shell-level "current screen" - that is what lets one host own every
+     * destination and the shell stop holding navigation state at all. It is
+     * also what makes the graph testable: `screenOf(of(x))` is `x` for every
+     * destination, so a route that loses a field is a wrong screen rather than a
+     * subtle one.
+     *
+     * `returnTo` decodes through [decoded], not [landingOf]: a screen's own
+     * `returnTo` is DATA that a child screen is handed verbatim, and sanitizing
+     * it here would strip a Detail's one-shot before the page that carries it
+     * has even been built.
+     */
+    fun screenOf(route: Any): Screen = when (route) {
+        is HomeRoute -> Screen.Home
+        is SearchRoute -> Screen.Search
+        is GuideRoute -> Screen.Guide
+        is LibraryRoute -> Screen.Library
+        is SettingsRoute -> Screen.Settings
+        is RemoteRoute -> Screen.Remote
+        is StatsRoute -> Screen.Stats
+        is SportsRoute -> Screen.Sports(
+            detailGameId = route.detailGameId,
+            detailTournamentId = route.detailTournamentId
+        )
+        is AddonsRoute -> Screen.Addons(returnTo = decoded(route.returnRoute) ?: Screen.Home)
+        is CatalogBuilderRoute ->
+            Screen.CatalogBuilder(returnTo = decoded(route.returnRoute) ?: Screen.Home)
+        is SimklRoute -> Screen.Simkl(returnTo = decoded(route.returnRoute) ?: Screen.Home)
+        is TraktRoute -> Screen.Trakt(returnTo = decoded(route.returnRoute) ?: Screen.Home)
+        is BingeCatRoute -> Screen.BingeCat(returnTo = decoded(route.returnRoute) ?: Screen.Home)
+        is PublicListsRoute -> Screen.PublicLists(
+            vendor = route.vendor,
+            returnTo = decoded(route.returnRoute) ?: Screen.Settings
+        )
+        is YearReviewRoute -> Screen.YearReview(
+            year = route.year,
+            returnTo = decoded(route.returnRoute) ?: Screen.Home
+        )
+        is DetailRoute -> Screen.Detail(
+            type = route.type,
+            id = route.id,
+            autoPlay = route.autoPlay,
+            itemPoster = route.itemPoster,
+            itemBackdrop = route.itemBackdrop,
+            itemClearLogo = route.itemClearLogo,
+            itemOverview = route.itemOverview,
+            returnTo = decoded(route.returnRoute) ?: Screen.Home
+        )
+        is ActorRoute -> Screen.Actor(
+            personId = route.personId,
+            returnTo = decoded(route.returnRoute) ?: Screen.Home
+        )
+        is StudioRoute -> Screen.Studio(
+            id = route.id,
+            name = route.name,
+            isNetwork = route.isNetwork,
+            providerId = route.providerId,
+            networkOrCompanyId = route.networkOrCompanyId,
+            networkIsCompany = route.networkIsCompany,
+            originalsCompanyId = route.originalsCompanyId,
+            returnTo = decoded(route.returnRoute) ?: Screen.Home
+        )
+        is DecadeRoute -> Screen.Decade(
+            decadeStart = route.decadeStart,
+            name = route.name,
+            returnTo = decoded(route.returnRoute) ?: Screen.Home
+        )
+        is TagRoute -> Screen.Tag(
+            id = route.id,
+            name = route.name,
+            isKeyword = route.isKeyword,
+            mediaType = route.mediaType,
+            returnTo = decoded(route.returnRoute) ?: Screen.Home
+        )
+        is CollectionRoute -> Screen.Collection(
+            id = route.id,
+            name = route.name,
+            returnTo = decoded(route.returnRoute) ?: Screen.Home
+        )
+        is CatalogGridRoute -> Screen.CatalogGrid(
+            title = route.title,
+            addonName = route.addonName,
+            catalogId = route.catalogId,
+            type = route.type,
+            returnTo = decoded(route.returnRoute) ?: Screen.Home
+        )
+        is KBFolderRoute -> Screen.KBFolder(
+            folderId = route.folderId,
+            returnTo = decoded(route.returnRoute) ?: Screen.Home
+        )
+        is ProfilePickerRoute -> Screen.ProfilePicker(returnTo = decoded(route.returnRoute))
+        is ProfileEditRoute -> Screen.ProfileEdit(
+            editingProfileId = route.editingProfileId,
+            returnTo = decoded(route.returnRoute)
+        )
+        is StreamsRoute -> {
+            val carried = route.payloadJson
+                ?.let { runCatching { decodeScreen(JSONObject(it)) }.getOrNull() }
+                as? Screen.Streams
+            // No payload means an entry nothing can open (the picker is only
+            // ever reached with a target), so it lands Home rather than building
+            // a picker with no stream to pick.
+            if (carried == null) {
+                Screen.Home
+            } else {
+                carried.copy(
+                    parentId = route.parentId,
+                    parentType = route.parentType,
+                    returnTo = decoded(route.returnRoute) ?: Screen.Home
+                )
+            }
+        }
+        // Not a destination, and no route names it: the overlay's launch spec.
+        else -> Screen.Home
+    }
 }
