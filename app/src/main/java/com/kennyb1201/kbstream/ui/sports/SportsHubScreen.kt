@@ -136,6 +136,7 @@ import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.KB_EASE
+import com.kennyb1201.kbstream.ui.components.logoArt
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.components.WarmGridAhead
 import com.kennyb1201.kbstream.ui.mobile.SportsHubScreenMobile
@@ -2861,6 +2862,9 @@ private fun TeamMark(team: SportsTeam, modifier: Modifier = Modifier, size: Dp =
             SubcomposeAsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
                     .data(mark)
+                    // A crest is a brand mark, so its transparency has to survive
+                    // the decode: as 565 the alpha becomes opaque ink.
+                    .logoArt()
                     .crossfade(false)
                     .build(),
                 contentDescription = team.displayName,
@@ -4041,6 +4045,9 @@ private fun StandingMark(entry: StandingEntry) {
             SubcomposeAsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
                     .data(mark)
+                    // A crest is a brand mark, so its transparency has to survive
+                    // the decode: as 565 the alpha becomes opaque ink.
+                    .logoArt()
                     .crossfade(false)
                     .build(),
                 contentDescription = entry.displayName,

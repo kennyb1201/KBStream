@@ -310,6 +310,55 @@ class LogoAlphaContractTest {
     }
 
     @Test
+    fun `a variable assigned from a logo never decodes as 565`() {
+        // The rule has to survive a rename. The sports crests drew
+        // `model = ImageRequest.Builder(...).data(mark)`, where `mark` is
+        // `val mark = entry.logoUrl` a few lines up: the model says nothing, the
+        // function is called `StandingMark`/`TeamCrest`, and a draw of a
+        // transparent badge decoded as 565 is the same white block the
+        // 2026-11-21 report is about. So follow the one assignment hop that the
+        // nominal cases use - a local that is born from a logo-named expression.
+        val assignment = Regex(
+            "(?:val|var)\\s+([A-Za-z0-9_]+)\\s*(?::[^=\\n]+)?=\\s*([^\\n]+)"
+        )
+        val violations = mutableListOf<String>()
+        sources().forEach { file ->
+            val text = code(read(file))
+            val spans = functionSpans(text)
+            imageCalls(text).forEach { call ->
+                if (isOptedOut(call)) return@forEach
+                val model = modelExpression(call) ?: return@forEach
+                val at = text.indexOf(call)
+                val body = spans.filter { at in it.second..it.third }
+                    .minByOrNull { it.third - it.second }
+                    ?.let { text.substring(it.second, it.third) }
+                    ?: return@forEach
+                // Every identifier the model feeds to `.data(...)`, plus a bare
+                // `model = name`.
+                val fed = Regex("\\.data\\(\\s*([A-Za-z0-9_]+)\\s*\\)")
+                    .findAll(model).map { it.groupValues[1] }.toList() +
+                    listOfNotNull(Regex("^[A-Za-z0-9_]+$").find(model)?.value)
+                val fromLogo = fed.any { name ->
+                    assignment.findAll(body).any { m ->
+                        m.groupValues[1] == name &&
+                            m.groupValues[2].contains("logo", ignoreCase = true)
+                    }
+                }
+                if (fromLogo) {
+                    val name = enclosingFunction(spans, at) ?: "?"
+                    violations += "${relative(file)}: $name draws $model"
+                }
+            }
+        }
+        assertTrue(
+            "a local born from a logo URL carries the artwork, whatever it is " +
+                "called: opt the draw out with logoArt()\n" +
+                violations.joinToString("\n"),
+            violations.isEmpty()
+        )
+    }
+
+    @Test
     fun `a logo handed to a view never decodes as 565`() {
         // The player chrome and the byw panel load logos into ImageViews, where
         // there is no `model =` to inspect - the receiver names the art.
@@ -370,6 +419,8 @@ class LogoAlphaContractTest {
             "com/kennyb1201/kbstream/ui/mobile/AddonsScreenMobile.kt",
             "com/kennyb1201/kbstream/ui/mobile/KBFolderScreenMobile.kt",
             "com/kennyb1201/kbstream/ui/mobile/SearchScreenMobile.kt",
+            "com/kennyb1201/kbstream/ui/sports/SportsHubScreen.kt",
+            "com/kennyb1201/kbstream/ui/mobile/SportsHubScreenMobile.kt",
             "com/kennyb1201/kbstream/ui/kb/KBFolderLayouts.kt",
             "com/kennyb1201/kbstream/ui/addons/AddonsComponents.kt",
             "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",

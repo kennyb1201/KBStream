@@ -94,6 +94,8 @@ import com.kennyb1201.kbstream.data.sports.standingsTeam
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBCard
+import com.kennyb1201.kbstream.ui.components.logoArt
+import com.kennyb1201.kbstream.ui.components.logoRequest
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
 import com.kennyb1201.kbstream.ui.components.touch.MobileStatus
@@ -1443,6 +1445,8 @@ private fun TeamMarkMobile(team: SportsTeam, size: Dp = 40.dp) {
             SubcomposeAsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
                     .data(mark)
+                    // A crest is a brand mark: 565 would paint its alpha opaque.
+                    .logoArt()
                     .crossfade(false)
                     .build(),
                 contentDescription = team.displayName,
@@ -1992,7 +1996,8 @@ private fun StandingMarkMobile(entry: StandingEntry) {
             )
         } else {
             AsyncImage(
-                model = mark,
+                // A crest is a brand mark: 565 would paint its alpha opaque.
+                model = logoRequest(LocalContext.current, mark),
                 contentDescription = entry.displayName,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.size(20.dp)
