@@ -29,9 +29,9 @@ class MigrationBackParityContractTest {
     private val graph: String by lazy { stripComments(source(GRAPH)) }
 
     /**
-     * kind -> (Screen variant, the landing the arm states, the landing the graph
-     * states). Both are compared by the expression that produces the destination,
-     * because that is what Back actually lands on.
+     * kind -> (Screen variant, the landing the arm states). The landing is the
+     * expression that produces the destination, because that is what Back lands
+     * on; the graph's equivalent is derived from it in the parity test.
      */
     private val parity: List<Triple<String, String, String>> = listOf(
         // To Settings, hardwired on both sides.
@@ -103,6 +103,36 @@ class MigrationBackParityContractTest {
     }
 
     @Test
+    fun `no migrated destination navigates straight to another migrated kind`() {
+        // The host is composed for the destination being ENTERED, and a
+        // transition keeps the outgoing screen composed too - so a move between
+        // two migrated kinds would ask for two NavHosts over one controller,
+        // which is illegal. Until the host is owned by a wrapper, that move must
+        // not exist: this test turns the next one into a failure with a reason
+        // instead of a crash on a device.
+        val migratedVariants = migratedKinds()
+            .mapNotNull { kind -> parity.firstOrNull { it.first == kind }?.second }
+            .toSet()
+        val navToScreen = Regex("""onNavigate\(Screen\.(\w+)""")
+        migratedKinds().forEach { kind ->
+            val (_, variant, _) = parity.first { it.first == kind }
+            val route = variant.removePrefix("Screen.")
+            val destination = graphBody(route) ?: return@forEach
+            navToScreen.findAll(destination)
+                .map { it.groupValues[1] }
+                .forEach { target ->
+                    assertTrue(
+                        "$route navigates straight to Screen.$target, which is " +
+                            "already migrated: crossing between two migrated kinds " +
+                            "composes two NavHosts and no single controller can " +
+                            "attach to both",
+                        "Screen.$target" !in migratedVariants
+                    )
+                }
+        }
+    }
+
+    @Test
     fun `the player stays unanimated and a re-target still replays nothing`() {
         assertTrue(
             "the content key is what suppresses a same-kind re-target: with it the " +
@@ -110,7 +140,8 @@ class MigrationBackParityContractTest {
                 "re-target replays a full-screen transition",
             shell.contains("contentKey = { it.typeName() }")
         )
-        val playerRule = shell.substringAfter("initialState is Screen.Player || targetState is Screen.Player ->")
+        val playerRule = shell
+            .substringAfter("initialState is Screen.Player || targetState is Screen.Player ->")
             .substringBefore("\n\n")
         assertTrue(
             "a transition to or from the player must stay `None`: the player is a " +
