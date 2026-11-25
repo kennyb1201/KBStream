@@ -90,9 +90,13 @@ class SportsReturnToSheetContractTest {
             activity.contains("returnTo = Screen.Guide")
         )
         assertTrue(
-            "the Streams branch reads the same launch: a channel's picker is the same session, and the " +
-                "hub reaches it whenever auto-select is off",
-            activity.contains("is Screen.Streams -> stableBackDestination(current.returnTo)")
+            "the Streams destination reads the same launch: a channel's picker is the " +
+                "same session, and the hub reaches it whenever auto-select is off",
+            source("com/kennyb1201/kbstream/ui/navigation/NavShell.kt")
+                .replace(Regex("\\s+"), " ")
+                .contains(
+                    "onNavigate(NavRoutes.landingOf(entry.toRoute<StreamsRoute>().returnRoute))"
+                )
         )
     }
 
