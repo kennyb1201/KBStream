@@ -104,6 +104,33 @@ class NavHostHostingContractTest {
         )
     }
 
+    @Test
+    fun `every destination in the graph is a route the table declared`() {
+        val routes = Regex("composable<(\\w+)>").findAll(graph)
+            .map { it.groupValues[1] }
+            .toList()
+        assertTrue("the graph composes no destination at all", routes.isNotEmpty())
+        val table = stripComments(source(NAV_ROUTES))
+        routes.forEach { route ->
+            assertTrue(
+                "$route is composed here but NavRoutes.kt does not declare it: a " +
+                    "destination the table cannot translate back is a kind the " +
+                    "seam can never revert",
+                Regex("(data class|data object) $route\\b").containsMatchIn(table)
+            )
+        }
+        assertFalse(
+            "the player is a launch spec, never a route: it must not appear in " +
+                "the graph",
+            graph.contains("PlayerRoute")
+        )
+        assertTrue(
+            "and the same in the table itself",
+            !table.contains("data class PlayerRoute") &&
+                !table.contains("data object PlayerRoute")
+        )
+    }
+
     private fun source(relativePath: String): String =
         File(findMainSourceRoot(), relativePath).readText()
 
@@ -131,5 +158,6 @@ class NavHostHostingContractTest {
         const val MAIN_ACTIVITY = "$PACKAGE" + "MainActivity.kt"
         const val SEAM = "$PACKAGE" + "ui/navigation/NavSeam.kt"
         const val GRAPH = "$PACKAGE" + "ui/navigation/NavHostGraph.kt"
+        const val NAV_ROUTES = "$PACKAGE" + "ui/navigation/NavRoutes.kt"
     }
 }
