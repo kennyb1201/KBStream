@@ -5217,9 +5217,13 @@ fun AppRoot(
     val navEntry by navController.currentBackStackEntryAsState()
     LaunchedEffect(navEntry) {
         navSeam.follow(navEntry)
+        // A delegated property cannot be smart-cast, so the entry is read into a
+        // local once (the same reason `screen` is read into `profilePicker`
+        // below).
+        val entry = navEntry
         if (
-            pickerOnLaunch && navEntry != null &&
-            com.kennyb1201.kbstream.ui.navigation.NavRoutes.screenOfEntry(navEntry)
+            pickerOnLaunch && entry != null &&
+            com.kennyb1201.kbstream.ui.navigation.NavRoutes.screenOfEntry(entry)
                 !is Screen.ProfilePicker
         ) {
             navController.navigate(
