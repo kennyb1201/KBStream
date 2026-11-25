@@ -23,9 +23,12 @@ class RendererOrderContractTest {
 
     private val shell: String by lazy { stripComments(source(MAIN_ACTIVITY)) }
 
-    /** Where the screen tree starts: either renderer satisfies this. */
+    /**
+     * Where the screen tree starts. Since the flip that is the host, which is
+     * `NavShell` - the NavHost itself lives in its own file, emitted through it.
+     */
     private val rendererAt: Int by lazy {
-        listOf("    AnimatedContent(", "    NavHost(")
+        listOf("    com.kennyb1201.kbstream.ui.navigation.NavShell(", "    NavShell(")
             .map { shell.indexOf(it) }
             .filter { it >= 0 }
             .minOrNull() ?: -1

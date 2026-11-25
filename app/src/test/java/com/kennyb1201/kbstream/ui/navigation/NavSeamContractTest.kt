@@ -41,9 +41,11 @@ class NavSeamContractTest {
         )
         assertTrue(
             "and the shell's `screen` IS that state, delegated through the seam - " +
-                "with the migrated kinds named at the seam, not inherited",
+                "with the migrated set named at the seam, not inherited",
             shell.contains("val navSeam = remember(screenState) { NavSeam(") &&
-                shell.contains("migratedKinds = setOf(") &&
+                // Empty since the flip: the host renders from the arm table, so a
+                // named kind would blank the arm the host is about to render.
+                shell.contains("migratedKinds = emptySet()") &&
                 shell.contains("var screen by navSeam")
         )
         assertFalse(

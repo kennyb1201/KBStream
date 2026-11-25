@@ -196,6 +196,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedContentScope
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExperimentalSharedTransitionApi
@@ -1432,39 +1433,17 @@ fun AppRoot(
     }
     // The navigation seam (spec: navcompose, F0). Every `screen = …` below and
     // in every lambda handed to a child screen now passes through
-    // [NavSeam.navigateTo] instead of writing the state directly, which is the
-    // one place a later phase asks whether a destination's kind renders through
-    // the NavHost. The set is empty here, so nothing renders through Nav yet and
-    // every assignment is the state write it always was. Reads are unchanged -
-    // `screen` is still the same value from the same saved state, so the
-    // restoration codec, smart-casts and the cold-launch gate are untouched.
+    // [NavSeam.navigateTo] instead of writing the state directly.
+    //
+    // The migrated set is EMPTY, and that is the end state of the flip, not a
+    // leftover: every kind renders through the one host now, so no arm may be
+    // blanked. The guards stay in the arms as the revert seam - repopulating this
+    // set blanks those arms again and the host takes over - but nothing may ship
+    // with a kind listed, because the host renders FROM the arm table.
     val navSeam = remember(screenState) {
         NavSeam(
             screenState,
-            migratedKinds = setOf(
-                "remote",
-                "stats",
-                "catalogBuilder",
-                "simkl",
-                "trakt",
-                // F1's last three: the leaves whose Back is "returnTo" and whose
-                // pages are reached from more than one place, so the route's
-                // return argument is the only landing that can be right for all
-                // of their entry points.
-                "addons",
-                "bingecat",
-                "publicLists",
-                // F2: the browse drill-downs. Primitive arguments only, and chains
-                // still cross into the unmigrated Detail through the seam.
-                "actor",
-                "studio",
-                "decade",
-                "tag",
-                "collection",
-                "catalogGrid",
-                "kbFolder",
-                "yearReview"
-            )
+            migratedKinds = emptySet()
         )
     }
     var screen by navSeam
@@ -1484,6 +1463,13 @@ fun AppRoot(
     // is rebuilt per entry, which is what makes one shell state - not a stack -
     // still the single source of truth while destinations move across.
     val navController = androidx.navigation.compose.rememberNavController()
+
+    // The graph's root: the screen the shell opened on, captured once. A restore
+    // lands on the same kind the shell restored, so this is what puts it back at
+    // the bottom of the stack.
+    val graphStart = remember {
+        com.kennyb1201.kbstream.ui.navigation.NavRoutes.of(screen)!!
+    }
     LaunchedEffect(screen) {
         if (!navSeam.isMigrated(screen) && navController.currentBackStackEntry != null) {
             // Leaving the migrated kinds: the host goes back to nothing, so a
@@ -3069,50 +3055,18 @@ fun AppRoot(
                 true
             }
     ) {
-    AnimatedContent(
-        targetState = screen,
-        contentKey = { it.typeName() },
-        transitionSpec = {
-            when {
-                // The player is a separate Activity that covers this one the
-                // moment it starts, so there is nothing to animate — and
-                // animating anyway would only keep the outgoing screen
-                // composed for another 220ms. Leave that path byte-identical
-                // to how it behaved before transitions existed.
-                initialState is Screen.Player || targetState is Screen.Player ->
-                    EnterTransition.None togetherWith ExitTransition.None
-
-                // Two top-level tabs on a phone are siblings, not a stack: a
-                // lateral move used to reuse the depth slide, so Home→Search
-                // slid "forward" and Search→Home slid "back" for two screens
-                // that sit next to each other in the bar. A crossfade is the
-                // one motion that says "same level". Television keeps the
-                // depth slide - it has no bar, so those moves arrive from the
-                // rail the viewer was on, which really is a push.
-                !FormFactor.isTv &&
-                    initialState.topLevelTab() != null &&
-                    targetState.topLevelTab() != null &&
-                    initialState.topLevelTab() != targetState.topLevelTab() ->
-                    fadeIn(tween(transitionMs)) togetherWith fadeOut(tween(transitionMs))
-
-                // Forward (deeper): the new screen drifts in from the trailing
-                // edge while the old one fades.
-                targetState.navDepth >= initialState.navDepth ->
-                    (slideInHorizontally { width -> width / 6 } + fadeIn(tween(transitionMs)))
-                        .togetherWith(fadeOut(tween(transitionMs)))
-
-                // Back: only the outgoing screen moves, so the two never look
-                // like they are fighting for the same pixels.
-                else ->
-                    fadeIn(tween(transitionMs))
-                        .togetherWith(
-                            slideOutHorizontally { width -> width / 6 } +
-                                fadeOut(tween(transitionMs))
-                        )
-            }
-        },
-        label = "screen"
-    ) { current ->
+    // ── The renderer ────────────────────────────────────────────────────────
+    //
+    // The host owns the shell (spec: navcompose, F3+F4+F5). `renderScreen` is the
+    // arm table, unchanged and unmoved: a lambda rather than a `when` inside an
+    // AnimatedContent, so that one NavHost can render every destination from its
+    // own back-stack entry.
+    //
+    // Its receiver is AnimatedContentScope on purpose. A NavHost destination
+    // provides one (AnimatedContentScope IS an AnimatedVisibilityScope), and the
+    // hero flight below binds `visibilityScope = this` - the scope of the screen
+    // being drawn, which is exactly what sharedElement expects per destination.
+    val renderScreen: @Composable AnimatedContentScope.(Screen) -> Unit = { current ->
     // See KBHeroTransition: this lambda is the only place where the shared
     // registry and the animated-visibility scope are both in hand — and it is
     // also the per-screen boundary, so the scope is published here as an
@@ -5147,36 +5101,9 @@ fun AppRoot(
     }
     } // closes CompositionLocalProvider( LocalKBHeroTransition provides … )
 
-    // The destination being ENTERED, drawn by the NavHost above the (empty) shell
-    // tree for it, and before the splash picker so the cover still paints over it.
-    if (navSeam.isMigrated(current)) {
-        // AnimatedContent keeps both screens composed during a transition and a
-        // NavController attaches to exactly one NavHost, so only the entering side
-        // mounts one: the outgoing side of a migrated -> migrated move would be a
-        // second host. (Nothing navigates between two migrated kinds yet; the
-        // phase that adds such a move gives the host its navigate, and
-        // MigrationBackParityContractTest fails first.)
-        if (!navSeam.isMigrated(screen) || current === screen) {
-            // Captured once, at the composition that mounts this host: the route
-            // of the screen being entered is the destination it opens on.
-            val start = remember {
-                com.kennyb1201.kbstream.ui.navigation.NavRoutes.of(current)!!
-            }
-            com.kennyb1201.kbstream.ui.navigation.NavHostGraph(
-                navController = navController,
-                startDestination = start,
-                transitionMs = transitionMs,
-                onNavigate = { navSeam.navigateTo(it) },
-                // The activity's own store, so a destination resolves the same
-                // ViewModel instance its arm did. Inside the host the store
-                // owner is the back-stack entry, which this shell pops when it
-                // leaves the kind - a browse page's loaded pages, a browser's
-                // level and Home's rails would all be thrown away with it.
-                viewModelOwner = this@MainActivity,
-                modifier = Modifier.fillMaxSize()
-            )
-        }
-    }
+    // The host that owns the shell is emitted below, once, over the whole window:
+    // a second NavHost on one NavController throws, which is what the old
+    // per-entry host existed to avoid.
 
     // Resolve a clearlogo AND the still for the title on screen when the
     // navigation meta carried neither. DetailScreen reports its own resolved art
@@ -5330,7 +5257,69 @@ fun AppRoot(
             tmdbId = splashTmdbId(playerSplash.parentType, playerSplash.parentId)
         )
     } // closes the splash picker's `when`
-    } // closes AnimatedContent( targetState = screen ) { current -> ... }
+    } // closes renderScreen( current ) - the arm table
+
+    // The one host in the window, above the arms' tree. Every destination renders
+    // through `renderScreen`, so what the viewer sees is still the arm table -
+    // what changed is who owns the stack, the transitions and the landings.
+    com.kennyb1201.kbstream.ui.navigation.NavShell(
+        navController = navController,
+        startDestination = graphStart,
+        transitionMs = transitionMs,
+        renderScreen = renderScreen,
+        onNavigate = { navSeam.navigateTo(it) },
+        viewModelOwner = this@MainActivity,
+        onHomeBack = {
+            // An overlay's autoplay is cancelled first; only then is Home's own
+            // Back the exit prompt (interceptBack already excludes the case).
+            if (pendingAutoPlay != null) {
+                pendingAutoPlay = null
+            } else if (interceptBack) {
+                confirmExit = true
+            }
+        },
+        onSearchBack = {
+            // Leaving Search itself commits the query to recent-search history
+            // and clears the session, so re-entering starts fresh with the query
+            // one chip away. Drill-downs are different entries and skip this.
+            searchViewModel.exitSearch()
+            searchListScope.launch { searchListState.scrollToItem(0) }
+            screen = Screen.Home
+        },
+        onPickerBack = { returnTo ->
+            // The entry picker's Back is the app's exit prompt, never Home; a
+            // picker opened from Settings or the top bar belongs to that screen.
+            if (returnTo == null) {
+                if (interceptBack) confirmExit = true
+            } else {
+                screen = stableBackDestination(returnTo)
+            }
+        },
+        onProfileEditBack = { returnTo ->
+            // The Manage tile opens this page with no returnTo: Back is the picker.
+            screen = if (returnTo != null) stableBackDestination(returnTo) else Screen.ProfilePicker()
+        },
+        modifier = Modifier.fillMaxSize()
+    )
+
+    // The shell is the source of truth for now, so the stack follows it. One
+    // direction only: a compare-and-skip keeps a destination's own reflection
+    // from sending the effect back the way it came.
+    LaunchedEffect(screen) {
+        val target = com.kennyb1201.kbstream.ui.navigation.NavRoutes.of(screen)
+            ?: return@LaunchedEffect
+        val entry = navController.currentBackStackEntry ?: return@LaunchedEffect
+        if (com.kennyb1201.kbstream.ui.navigation.NavRoutes.screenOfEntry(entry) == screen) {
+            return@LaunchedEffect
+        }
+        navController.navigate(target) {
+            // One entry per kind at a time, and never deeper than two: the arms
+            // all keep their state alive above the graph, so the stack is a
+            // record of where Back goes, not where scroll positions live.
+            launchSingleTop = true
+            popUpTo(navController.graph.id) { inclusive = false }
+        }
+    }
 
     val splashExitMs = rememberMotionMs(200)
 
