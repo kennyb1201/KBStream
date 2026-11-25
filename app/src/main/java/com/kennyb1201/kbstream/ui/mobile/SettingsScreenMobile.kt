@@ -47,6 +47,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -250,7 +251,14 @@ fun SettingsScreenMobile(
     //
     // The stored name is left alone when Back returns to the list: it says which
     // pane was last open, not which page the screen should have started on.
-    var pane by remember {
+    // Saveable, not plain remember (spec 2026-11-22, adaptive layouts F8):
+    // MainActivity deliberately does not declare `density|uiMode` in its
+    // configChanges - that is the TV window policy and is shared with the TV
+    // app - so a foldable that changes density on unfold RECREATES this activity.
+    // A plain remember is dropped there, and an unfold dumped the viewer back on
+    // the pane list mid-edit. The stored pane is still the initial value for a
+    // cold entry; this only outlives a recreation.
+    var pane by rememberSaveable {
         mutableStateOf<SettingsPane?>(
             AppPreferences.getLastSettingsPane(context)
                 ?.let { SettingsPane.fromStored(it) }
@@ -261,7 +269,9 @@ fun SettingsScreenMobile(
     // enum is the television's own pane inventory (the rail draws every entry),
     // so adding one would put a Downloads row on a TV's settings page, which
     // this feature must never do (spec §8).
-    var downloadsOpen by remember { mutableStateOf(false) }
+    // Same reload path, same reason (F8): a recreation mid-download must land
+    // back on the Downloads page, not on the pane list.
+    var downloadsOpen by rememberSaveable { mutableStateOf(false) }
 
     // ── Settings search, the jump (settings reorg §15.2.2) ─────────────────
     // The list hands over which row to reveal and which pane it lives in; the
