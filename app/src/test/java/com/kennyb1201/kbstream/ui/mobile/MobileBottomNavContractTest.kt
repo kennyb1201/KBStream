@@ -264,7 +264,8 @@ class MobileBottomNavContractTest {
         )
         assertTrue(
             "the bar is added after the screen switch (and its splash) has closed",
-            main.indexOf("} // closes AnimatedContent(") in 0 until bar
+            // The switch is the arm table now, so its close is that lambda's.
+            main.indexOf("} // closes renderScreen( current ) - the arm table") in 0 until bar
         )
         assertTrue(
             "the shell is the only host: no top-level screen may draw its own bar",
