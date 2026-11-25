@@ -131,6 +131,50 @@ class ShellIsTheRendererContractTest {
         )
     }
 
+    /**
+     * The Back regression (field report 2026-11-25, build 6368: Back out of the
+     * streams picker or an actor page landed on Home instead of the Detail page
+     * that pushed it).
+     *
+     * Back had two owners. The NavController registers its own callback for as
+     * long as its stack can pop, the host is composed after the shell, and the
+     * dispatcher gives the later registration the press - so the host popped and
+     * consumed it, the shell's BackHandler never ran, and what the pop revealed
+     * was the graph's start destination. The fix is one flag: an inclusive pop
+     * leaves a single entry, which leaves the controller unpoppable and hands
+     * Back back to the shell. Pinned because that flag looks like tidying, and
+     * restoring the two-deep stack silently restores the bug.
+     */
+    @Test
+    fun `back belongs to the shell, and the host never pops it`() {
+        assertTrue(
+            "the mirror must replace the whole stack with the single new entry: a " +
+                "host holding one entry cannot pop, and that is what keeps the " +
+                "NavController's own Back callback disabled",
+            main.contains("popUpTo(navController.graph.id) { inclusive = true }")
+        )
+        assertFalse(
+            "a stack two deep is poppable, and the controller's callback is registered " +
+                "after the shell's - it would pop the host, swallow the press, and " +
+                "reveal Home from any drill-down",
+            main.contains("popUpTo(navController.graph.id) { inclusive = false }")
+        )
+        assertTrue(
+            "the shell stays the owner of Back for pushed screens",
+            main.contains("BackHandler(enabled = !navSeam.isMigrated(screen))")
+        )
+        // The two the field report broke on, each through the sanitized return so
+        // Back lands on the page that pushed it and its one-shots stay stripped.
+        listOf("Screen.Streams", "Screen.Actor").forEach { kind ->
+            assertTrue(
+                "$kind must keep its shell Back destination",
+                Regex(
+                    """is ${Regex.escape(kind)} ->\s*\n\s*stableBackDestination\("""
+                ).containsMatchIn(main)
+            )
+        }
+    }
+
     @Test
     fun `the player is still an overlay and not a destination`() {
         assertFalse(

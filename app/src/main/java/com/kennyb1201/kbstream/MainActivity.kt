@@ -5307,6 +5307,10 @@ fun AppRoot(
     // direction only: a compare-and-skip keeps a destination's own reflection
     // from sending the effect back the way it came.
     //
+    // Back is the shell's too, and the navigate below is what keeps it the
+    // shell's: one entry leaves the controller nothing to pop, so its own Back
+    // callback stays disabled. See the comment in the builder.
+    //
     // A host holding NO entry is not "already showing this screen": it draws
     // nothing at all, which is a black window. That is why the null case takes
     // the navigation instead of an early return - it is the one step that can
@@ -5321,11 +5325,22 @@ fun AppRoot(
             return@LaunchedEffect
         }
         navController.navigate(target) {
-            // One entry per kind at a time, and never deeper than two: the arms
-            // all keep their state alive above the graph, so the stack is a
-            // record of where Back goes, not where scroll positions live.
+            // Exactly one entry, always: the navigation replaces the whole stack
+            // with the new destination. That is the point of the inclusive pop,
+            // and it is what keeps the host out of Back - a NavController whose
+            // stack holds a single entry has nothing to pop, so its own
+            // OnBackPressedCallback disables itself and the press reaches the
+            // shell's BackHandler above, which lands on `returnTo`.
+            //
+            // Never restore a two-deep stack (`inclusive = false`): the
+            // controller can then pop, it is composed after the shell and so
+            // wins the dispatcher's last-registered-first order, and the pop
+            // reveals the graph's start destination - Home from any drill-down
+            // (field report 2026-11-25, build 6368). The arms keep their state
+            // alive above the graph, so the stack is not where scroll positions
+            // live; the shell's `screen` is the only record of that.
             launchSingleTop = true
-            popUpTo(navController.graph.id) { inclusive = false }
+            popUpTo(navController.graph.id) { inclusive = true }
         }
     }
 
