@@ -1107,6 +1107,26 @@ jobs:
           path: app/build/outputs/bundle/release/app-release.aab
           if-no-files-found: error
 
+      # The publish steps below read the APK back from its artifact instead of
+      # from `app/build/outputs`. Run 45628257798 built, verified, hashed and
+      # uploaded `app/build/outputs/apk/release/app-release.apk`, and its
+      # publish step's glob over that same directory then matched nothing -
+      # seconds later, on the same runner - so a fully green tagged build went
+      # red on a file it had just uploaded. The artifact is the byte-identical
+      # copy of the APK the baseline-profile and 16 KB gates approved, and
+      # fetching it is what makes the feed independent of a two-hour-old build
+      # tree.
+      - name: Fetch the signed release APK for publishing
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/publish
+          mkdir -p /tmp/publish
+          gh run download "$GITHUB_RUN_ID" --name kbstream-release-signed --dir /tmp/publish
+          ls -l /tmp/publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       # ─── Self-update feed ────────────────────────────────────────────────
       # This is the only way a build reaches installs: the "latest" GitHub
       # release carries the signed APK + metadata.json, which the app's
@@ -1243,14 +1263,16 @@ jobs:
       - name: Prepare metadata
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         run: |
-          # The APK the app will download, excluding any unsigned output.
-          APK=""
-          for f in app/build/outputs/apk/release/*.apk; do
-            [ -e "$f" ] || continue
-            case "$f" in *unsigned*) continue ;; esac
-            APK="$f"
-            break
-          done
+          # The APK the app will download: the fetched artifact, not a glob over
+          # app/build/outputs (see the fetch step above). Its absence is an
+          # error here and not a silent pass - with an empty APK path,
+          # `sha256sum` reads stdin and hashes the empty string, so this step
+          # "succeeded" in run 45628257798 and only the publish step went red.
+          APK=/tmp/publish/app-release.apk
+          if [ ! -e "$APK" ]; then
+            echo "::error::no signed release APK to hash"
+            exit 1
+          fi
           SHA="$(sha256sum "$APK" | awk '{print $1}')"
           # gitSha is for CI, not for the app: AppUpdater reads the fields it
           # names (versionCode / versionName / sha256) and ignores the rest, so
@@ -1279,17 +1301,21 @@ jobs:
           # what the app's updater downloads is whichever asset it asks for by
           # name. Same filter the metadata step uses.
           # No `ls … | grep … | head -n1` here either: same SIGPIPE-under-pipefail
-          # trap as the release notes, and this is the step that publishes. A
-          # loop over the glob cannot break a pipe.
-          APK=""
-          for f in app/build/outputs/apk/release/*.apk; do
-            [ -e "$f" ] || continue
-            case "$f" in *unsigned*) continue ;; esac
-            APK="$f"
-            break
-          done
-          if [ -z "$APK" ]; then
+          # trap as the release notes, and this is the step that publishes. The
+          # path the fetch step wrote is known, so nothing here reads a pipe.
+          APK=/tmp/publish/app-release.apk
+          if [ ! -e "$APK" ]; then
             echo "::error::no signed release APK to publish"
+            exit 1
+          fi
+          # The bytes published are the bytes the gates approved: metadata.json
+          # was hashed from this same file, and the updater verifies that hash
+          # after download, so a mismatch would publish a feed no install can
+          # accept.
+          EXPECTED="$(jq -r '.sha256 // ""' metadata.json)"
+          ACTUAL="$(sha256sum "$APK" | awk '{print $1}')"
+          if [ -n "$EXPECTED" ] && [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::the fetched APK hashes to $ACTUAL but metadata.json says $EXPECTED; refusing to publish a feed the updater would reject."
             exit 1
           fi
           gh release delete latest --yes --cleanup-tag 2>/dev/null || true
