@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -1748,8 +1749,26 @@ fun DetailScreenMobile(
                 )
             )
 
+            // F7a of the adaptive-layout spec: on a Medium window the single
+            // column is capped at 720dp and centred - 720dp is where an overview
+            // paragraph stops being prose and starts being a scan. Compact is
+            // untouched (the rule answers 0 and the column fills the window),
+            // and the header art is capped with it, being 16:9 of the column.
+            val detailColumnCapDp = MobileAdaptiveRules.detailColumnMaxWidthDp(
+                rememberMobileWindowWidthClass()
+            )
             LazyColumn(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .then(
+                        if (detailColumnCapDp > 0) {
+                            Modifier.widthIn(max = detailColumnCapDp.dp)
+                        } else {
+                            Modifier
+                        }
+                    )
+                    .fillMaxWidth()
+                    .align(Alignment.TopCenter),
                 // The page is the longest list on the phone and had no state at
                 // all, so scrolling into its lower half paid every section's
                 // first composition on the landing frame (spec 2026-11-18, F4).
