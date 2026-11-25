@@ -3077,31 +3077,10 @@ fun AppRoot(
     // Modifier.heroSourceElement(type, id), the Detail hero with
     // Modifier.heroSharedElement(type, id); no screen has to grow a parameter
     // to join the flight.
-    // A migrated destination renders through the NavHost here, inside the
-    // shell's own transition slot; everything else is the `when` it has always
-    // been. The splash picker further down stays outside both, above either.
-    if (navSeam.isMigrated(current)) {
-        // The host belongs to the destination being ENTERED. During a transition
-        // AnimatedContent keeps both screens composed and a NavController
-        // attaches to exactly one NavHost, so the OUTGOING side of a migrated ->
-        // migrated move would be a second host: it renders as an empty slot
-        // instead. (Nothing navigates between two migrated kinds yet; the phase
-        // that adds such a move gives the host the navigate it needs.)
-        if (!navSeam.isMigrated(screen) || current === screen) {
-            // Captured once, at the composition that mounts this host: the route
-            // of the screen being entered is the destination it opens on.
-            val start = remember {
-                com.kennyb1201.kbstream.ui.navigation.NavRoutes.of(current)!!
-            }
-            com.kennyb1201.kbstream.ui.navigation.NavHostGraph(
-                navController = navController,
-                startDestination = start,
-                transitionMs = transitionMs,
-                onNavigate = { navSeam.navigateTo(it) },
-                modifier = Modifier.fillMaxSize()
-            )
-        }
-    } else
+    // A migrated destination renders through the NavHost emitted below this
+    // tree, inside the shell's own transition slot; everything else is the
+    // `when` it has always been. The splash picker further down stays outside
+    // both, above either.
     CompositionLocalProvider(
         // Null under reduced motion: HeroTransitionHost skipped the registry
         // above, so there is nothing for a call site to join.
@@ -3113,6 +3092,12 @@ fun AppRoot(
             )
         }
     ) {
+    // A migrated destination's arm renders nothing: the NavHost below IS that
+    // destination, and drawing the arm under it too would compose the screen
+    // twice - two focus claimants and two BackHandlers for one screen. Each
+    // migrated arm keeps its body behind that one guard, so `migratedKinds`
+    // remains the whole revert (and MigrationBackParityContractTest holds every
+    // arm to having it).
     when (current) {
 
         is Screen.ProfilePicker -> {
@@ -3345,9 +3330,12 @@ fun AppRoot(
         }
 
         is Screen.Remote -> {
-            com.kennyb1201.kbstream.ui.remote.RemoteScreen(
-                onBack = { screen = Screen.Settings }
-            )
+            if (navSeam.isMigrated(current)) Unit
+            else {
+                com.kennyb1201.kbstream.ui.remote.RemoteScreen(
+                    onBack = { screen = Screen.Settings }
+                )
+            }
         }
 
         is Screen.Settings -> {
@@ -3520,9 +3508,12 @@ fun AppRoot(
         }
 
         is Screen.Stats -> {
-            com.kennyb1201.kbstream.ui.settings.StatsScreen(
-                onBack = { screen = Screen.Settings }
-            )
+            if (navSeam.isMigrated(current)) Unit
+            else {
+                com.kennyb1201.kbstream.ui.settings.StatsScreen(
+                    onBack = { screen = Screen.Settings }
+                )
+            }
         }
 
         is Screen.YearReview -> {
@@ -3599,12 +3590,14 @@ fun AppRoot(
         }
 
         is Screen.CatalogBuilder -> {
-
-            com.kennyb1201.kbstream.ui.addons.CatalogBuilderScreen(
-                // Opened from Settings' "Collections & Catalogs" pane, whose
-                // returnTo this carries, so Back lands on whatever opened it.
-                onBack = { screen = stableBackDestination(current.returnTo) }
-            )
+            if (navSeam.isMigrated(current)) Unit
+            else {
+                com.kennyb1201.kbstream.ui.addons.CatalogBuilderScreen(
+                    // Opened from Settings' "Collections & Catalogs" pane, whose
+                    // returnTo this carries, so Back lands on whatever opened it.
+                    onBack = { screen = stableBackDestination(current.returnTo) }
+                )
+            }
         }
 
         is Screen.Search -> {
@@ -3693,9 +3686,12 @@ fun AppRoot(
         }
 
         is Screen.Trakt -> {
-            TraktConnectScreen(
-                onBack = { screen = stableBackDestination(current.returnTo) }
-            )
+            if (navSeam.isMigrated(current)) Unit
+            else {
+                TraktConnectScreen(
+                    onBack = { screen = stableBackDestination(current.returnTo) }
+                )
+            }
         }
 
         is Screen.PublicLists -> {
@@ -3759,15 +3755,17 @@ fun AppRoot(
         }
 
         is Screen.Simkl -> {
-
-            SimklConnectScreen(
-                // Same rule as the Add-ons page: the remote's Back already
-                // lands on [Screen.Simkl.returnTo], and the header button now
-                // lands there too instead of always jumping to Settings.
-                onBack = {
-                    screen = stableBackDestination(current.returnTo)
-                }
-            )
+            if (navSeam.isMigrated(current)) Unit
+            else {
+                SimklConnectScreen(
+                    // Same rule as the Add-ons page: the remote's Back already
+                    // lands on [Screen.Simkl.returnTo], and the header button now
+                    // lands there too instead of always jumping to Settings.
+                    onBack = {
+                        screen = stableBackDestination(current.returnTo)
+                    }
+                )
+            }
         }
 
         is Screen.Library -> {
@@ -5072,6 +5070,31 @@ fun AppRoot(
         }
     }
     } // closes CompositionLocalProvider( LocalKBHeroTransition provides … )
+
+    // The destination being ENTERED, drawn by the NavHost above the (empty) shell
+    // tree for it, and before the splash picker so the cover still paints over it.
+    if (navSeam.isMigrated(current)) {
+        // AnimatedContent keeps both screens composed during a transition and a
+        // NavController attaches to exactly one NavHost, so only the entering side
+        // mounts one: the outgoing side of a migrated -> migrated move would be a
+        // second host. (Nothing navigates between two migrated kinds yet; the
+        // phase that adds such a move gives the host its navigate, and
+        // MigrationBackParityContractTest fails first.)
+        if (!navSeam.isMigrated(screen) || current === screen) {
+            // Captured once, at the composition that mounts this host: the route
+            // of the screen being entered is the destination it opens on.
+            val start = remember {
+                com.kennyb1201.kbstream.ui.navigation.NavRoutes.of(current)!!
+            }
+            com.kennyb1201.kbstream.ui.navigation.NavHostGraph(
+                navController = navController,
+                startDestination = start,
+                transitionMs = transitionMs,
+                onNavigate = { navSeam.navigateTo(it) },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    }
 
     // Resolve a clearlogo AND the still for the title on screen when the
     // navigation meta carried neither. DetailScreen reports its own resolved art

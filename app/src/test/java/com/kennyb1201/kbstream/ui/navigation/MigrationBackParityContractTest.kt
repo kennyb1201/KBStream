@@ -71,6 +71,21 @@ class MigrationBackParityContractTest {
     }
 
     @Test
+    fun `a migrated arm draws nothing, so the screen is composed once`() {
+        migratedKinds().forEach { kind ->
+            val (_, variant, _) = parity.first { it.first == kind }
+            val arm = armBody(variant) ?: error("the arm for $variant is gone")
+            assertTrue(
+                "the $variant arm still draws its screen while the kind is migrated. " +
+                    "The NavHost is drawing that destination too, so the screen would " +
+                    "be composed twice - two focus claimants, two BackHandlers, and " +
+                    "the focus walk lands on whichever composed last",
+                arm.contains("if (navSeam.isMigrated(current)) Unit")
+            )
+        }
+    }
+
+    @Test
     fun `the destination lands where the arm does`() {
         migratedKinds().forEach { kind ->
             val (_, variant, armLanding) = parity.first { it.first == kind }
