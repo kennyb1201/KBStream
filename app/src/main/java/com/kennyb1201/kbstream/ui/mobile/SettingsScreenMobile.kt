@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -296,8 +297,19 @@ fun SettingsScreenMobile(
         searchJump = null
     }
 
+    // F6 of the adaptive-layout spec: above Expanded the list stays on screen and
+    // the pane opens beside it, because there is width for both. Compact and
+    // Medium keep the push model exactly as it was.
+    val widthClass = rememberMobileWindowWidthClass()
+    val twoPane = MobileAdaptiveRules.settingsTwoPaneApplies(widthClass)
+
     BackHandler {
         when {
+            // Both panes visible: there is no page to pop, so Back leaves
+            // Settings (the spec's own rule for the expanded layout). Downloads
+            // is the one page still pushed over the right pane, so it closes
+            // first - the pane list is not a page.
+            twoPane -> if (downloadsOpen) downloadsOpen = false else onBack()
             downloadsOpen -> downloadsOpen = false
             pane != null -> pane = null
             else -> onBack()
@@ -311,7 +323,59 @@ fun SettingsScreenMobile(
                 .background(KBVoid)
         ) {
             val open = pane
-            if (downloadsOpen) {
+            if (twoPane) {
+                Row(modifier = Modifier.fillMaxSize()) {
+                    Box(
+                        modifier = Modifier
+                            .width(MobileAdaptiveRules.SETTINGS_LIST_WIDTH_DP.dp)
+                            .fillMaxHeight()
+                    ) {
+                        SettingsHomeMobile(
+                            onOpen = { opened ->
+                                pane = opened
+                                AppPreferences.setLastSettingsPane(
+                                    context,
+                                    opened.name
+                                )
+                            },
+                            onOpenDownloads = { downloadsOpen = true },
+                            onOpenRemote = onOpenRemote,
+                            onSearchJump = { entry ->
+                                searchJump = entry
+                                pane = entry.pane
+                                AppPreferences.setLastSettingsPane(context, entry.pane.name)
+                            }
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                    ) {
+                        if (downloadsOpen) {
+                            DownloadsScreenMobile(onBack = { downloadsOpen = false })
+                        } else if (open != null) {
+                            SettingsPaneContentMobile(
+                                open = open,
+                                flashingEntry = flashingEntry,
+                                onBack = { pane = null },
+                                onOpenAddons = onOpenAddons,
+                                onOpenSimkl = onOpenSimkl,
+                                onOpenTrakt = onOpenTrakt,
+                                onOpenBingeCat = onOpenBingeCat,
+                                onOpenBingeCatPublicLists = onOpenBingeCatPublicLists,
+                                onOpenPublicLists = onOpenPublicLists,
+                                onOpenProfiles = onOpenProfiles,
+                                onOpenTorBoxFile = onOpenTorBoxFile,
+                                onOpenCatalogManager = onOpenCatalogManager,
+                                onOpenCatalogBuilder = onOpenCatalogBuilder,
+                                onOpenStats = onOpenStats,
+                                onOpenYearReview = onOpenYearReview
+                            )
+                        }
+                    }
+                }
+            } else if (downloadsOpen) {
                 // Its own screen, with its own head and its own Back: one page
                 // pushed at a time, which is this screen's whole navigation
                 // model on a phone.
@@ -334,56 +398,103 @@ fun SettingsScreenMobile(
                     }
                 )
             } else {
-                PaneHeaderMobile(pane = open, onBack = { pane = null })
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                ) {
-                    // The flash is a screen-level event, exactly as on TV: the
-                    // row compares this by IDENTITY against its own entry.
-                    CompositionLocalProvider(LocalFlashingSetting provides flashingEntry) {
-                    when (open) {
-                        SettingsPane.INTEGRATIONS -> IntegrationsPaneMobile(
-                            onOpenAddons = onOpenAddons,
-                            onOpenSimkl = onOpenSimkl,
-                            onOpenTrakt = onOpenTrakt,
-                            onOpenBingeCat = onOpenBingeCat,
-                            onOpenBingeCatPublicLists = onOpenBingeCatPublicLists,
-                            onOpenPublicLists = onOpenPublicLists,
-                            onOpenProfiles = onOpenProfiles,
-                            onOpenTorBoxFile = onOpenTorBoxFile
-                        )
+                SettingsPaneContentMobile(
+                    open = open,
+                    flashingEntry = flashingEntry,
+                    onBack = { pane = null },
+                    onOpenAddons = onOpenAddons,
+                    onOpenSimkl = onOpenSimkl,
+                    onOpenTrakt = onOpenTrakt,
+                    onOpenBingeCat = onOpenBingeCat,
+                    onOpenBingeCatPublicLists = onOpenBingeCatPublicLists,
+                    onOpenPublicLists = onOpenPublicLists,
+                    onOpenProfiles = onOpenProfiles,
+                    onOpenTorBoxFile = onOpenTorBoxFile,
+                    onOpenCatalogManager = onOpenCatalogManager,
+                    onOpenCatalogBuilder = onOpenCatalogBuilder,
+                    onOpenStats = onOpenStats,
+                    onOpenYearReview = onOpenYearReview
+                )
+            }
+        }
+    }
+}
 
-                        SettingsPane.COLLECTIONS -> CollectionsPaneMobile(
-                            onOpenCatalogManager = onOpenCatalogManager,
-                            onOpenCatalogBuilder = onOpenCatalogBuilder
-                        )
+/**
+ * One pane's content, rendered the same way whether it was pushed over the list
+ * or opened beside it (spec 2026-11-22, adaptive layouts F6).
+ *
+ * Extracted rather than duplicated: the two-pane layout would otherwise carry a
+ * second copy of the twelve-callback `when`, and the first pane added to one of
+ * them would be missing from the other.
+ */
+@Composable
+private fun SettingsPaneContentMobile(
+    open: SettingsPane,
+    flashingEntry: SettingSearchEntry?,
+    onBack: () -> Unit,
+    onOpenAddons: () -> Unit,
+    onOpenSimkl: () -> Unit,
+    onOpenTrakt: () -> Unit,
+    onOpenBingeCat: () -> Unit,
+    onOpenBingeCatPublicLists: () -> Unit,
+    onOpenPublicLists: () -> Unit,
+    onOpenProfiles: () -> Unit,
+    onOpenTorBoxFile: () -> Unit,
+    onOpenCatalogManager: () -> Unit,
+    onOpenCatalogBuilder: () -> Unit,
+    onOpenStats: () -> Unit,
+    onOpenYearReview: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        PaneHeaderMobile(pane = open, onBack = onBack)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+        ) {
+            // The flash is a screen-level event, exactly as on TV: the row
+            // compares this by IDENTITY against its own entry.
+            CompositionLocalProvider(LocalFlashingSetting provides flashingEntry) {
+                when (open) {
+                    SettingsPane.INTEGRATIONS -> IntegrationsPaneMobile(
+                        onOpenAddons = onOpenAddons,
+                        onOpenSimkl = onOpenSimkl,
+                        onOpenTrakt = onOpenTrakt,
+                        onOpenBingeCat = onOpenBingeCat,
+                        onOpenBingeCatPublicLists = onOpenBingeCatPublicLists,
+                        onOpenPublicLists = onOpenPublicLists,
+                        onOpenProfiles = onOpenProfiles,
+                        onOpenTorBoxFile = onOpenTorBoxFile
+                    )
 
-                        SettingsPane.HIDDEN -> HiddenTitlesPaneMobile()
+                    SettingsPane.COLLECTIONS -> CollectionsPaneMobile(
+                        onOpenCatalogManager = onOpenCatalogManager,
+                        onOpenCatalogBuilder = onOpenCatalogBuilder
+                    )
 
-                        SettingsPane.RATED -> RatedTitlesPaneMobile()
+                    SettingsPane.HIDDEN -> HiddenTitlesPaneMobile()
 
-                        SettingsPane.PLAYBACK -> PlaybackPaneMobile()
+                    SettingsPane.RATED -> RatedTitlesPaneMobile()
 
-                        SettingsPane.VIDEO -> VideoPaneMobile()
+                    SettingsPane.PLAYBACK -> PlaybackPaneMobile()
 
-                        SettingsPane.LANGUAGE -> LanguagePaneMobile()
+                    SettingsPane.VIDEO -> VideoPaneMobile()
 
-                        SettingsPane.SUBTITLES -> SubtitlesPaneMobile()
+                    SettingsPane.LANGUAGE -> LanguagePaneMobile()
 
-                        SettingsPane.INTERFACE -> InterfacePaneMobile()
+                    SettingsPane.SUBTITLES -> SubtitlesPaneMobile()
 
-                        SettingsPane.DATA -> DataPaneMobile(
-                            onOpenStats = onOpenStats,
-                            onOpenYearReview = onOpenYearReview
-                        )
+                    SettingsPane.INTERFACE -> InterfacePaneMobile()
 
-                        SettingsPane.ABOUT -> AboutPaneMobile()
+                    SettingsPane.DATA -> DataPaneMobile(
+                        onOpenStats = onOpenStats,
+                        onOpenYearReview = onOpenYearReview
+                    )
 
-                        SettingsPane.SYNC -> SyncPaneMobile()
-                    }
-                    }
+                    SettingsPane.ABOUT -> AboutPaneMobile()
+
+                    SettingsPane.SYNC -> SyncPaneMobile()
                 }
             }
         }
