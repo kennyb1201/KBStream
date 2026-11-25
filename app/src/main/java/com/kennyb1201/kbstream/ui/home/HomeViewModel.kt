@@ -582,6 +582,28 @@ class HomeViewModel @Inject constructor(
         _rails.asStateFlow()
 
     /**
+     * Landscape-card artwork for the catalog rails: rail key -> [landscapeArtKey]
+     * -> (backdrop, clearlogo) (perf spec 2026-11-22, item 3b).
+     *
+     * The art used to live on `Rail`, so a rail's artwork arriving replaced the
+     * whole rail list and invalidated every `remember(rails)` on the screen - the
+     * hidden-titles pass, the hide-watched pass, the rail column's own
+     * derivations - once per rail of a cold load. Kept beside the list instead
+     * (the same shape as [topPicksArt]), so art landing costs the row it belongs
+     * to: the untouched rails keep their exact map instance, which compares
+     * equal, so their rows skip.
+     *
+     * `Rail.landscapeArt` still carries the art a build inherits from the screen
+     * it replaced (see [previousLandscapeArt]); the row reads this flow first and
+     * falls back to the rail, so both routes show the same picture.
+     */
+    private val _railArt =
+        MutableStateFlow<Map<String, Map<String, Pair<String?, String?>>>>(emptyMap())
+
+    val railArt: StateFlow<Map<String, Map<String, Pair<String?, String?>>>> =
+        _railArt.asStateFlow()
+
+    /**
      * A card's place in the published rails: which rail, and which item in it.
      *
      * Only the focus-path warms read it, and all they need is the pair of
@@ -4113,6 +4135,10 @@ Log.d(
                     // now so Home shows the loading state instead of the
                     // previous profile's content.
                     _rails.value = emptyList()
+                    // And the art filed beside them, or a rail of the same key on
+                    // the profile just entered would paint the outgoing one's
+                    // artwork.
+                    _railArt.value = emptyMap()
                     railInfo.clear()
                     loadingRails.clear()
                     exhaustedRails.clear()
@@ -13047,13 +13073,18 @@ private suspend fun calculateEpisodesRemaining(
         items: List<MetaPreview>,
         buildEpoch: Long
     ) {
+        // Both routes count as known: the art this build already resolved
+        // ([_railArt]) and the art inherited from the screen it replaced
+        // (`Rail.landscapeArt`). Without the second, a rebuild re-resolved every
+        // card the previous screen had already answered.
         val known =
-            _rails.value
-                .firstOrNull { rail ->
-                    railKeyOf(rail) == railKey
-                }
-                ?.landscapeArt
-                .orEmpty()
+            _railArt.value[railKey].orEmpty() +
+                _rails.value
+                    .firstOrNull { rail ->
+                        railKeyOf(rail) == railKey
+                    }
+                    ?.landscapeArt
+                    .orEmpty()
 
         // Only what is genuinely unknown. A rebuild inherits the art its
         // predecessor resolved (see previousLandscapeArt) and a page brings its
@@ -13077,16 +13108,13 @@ private suspend fun calculateEpisodesRemaining(
         // must not land on the new profile's rail of the same key.
         if (buildEpoch != railBuildEpoch) return
 
-        _rails.update { current ->
-            current.map { existing ->
-                if (railKeyOf(existing) == railKey) {
-                    existing.copy(
-                        landscapeArt = existing.landscapeArt + art
-                    )
-                } else {
-                    existing
-                }
-            }
+        // Beside the rails, not inside them (item 3b): the list identity is what
+        // every screen-side derivation is keyed on, and one rail's artwork
+        // arriving must not re-run the hidden-titles and hide-watched passes.
+        _railArt.update { current ->
+            val railArt = current[railKey].orEmpty()
+            if (art.all { (key, value) -> railArt[key] == value }) current
+            else current + (railKey to (railArt + art))
         }
     }
 
@@ -13205,8 +13233,15 @@ private suspend fun calculateEpisodesRemaining(
                 // fails (see snapshotOnlyRails). Captured before the pinned
                 // snapshot paints, so "was the screen empty" stays meaningful.
                 val railsOnScreenAtStart = _rails.value
+                // The art is filed beside the rails now (item 3b), so the
+                // inherited snapshot is the union of both: what the flow holds
+                // for the rails on screen, over the art those rails carry.
+                val artOnScreen = _railArt.value
                 previousLandscapeArt =
-                    railsOnScreenAtStart.associate { rail -> railKeyOf(rail) to rail.landscapeArt }
+                    railsOnScreenAtStart.associate { rail ->
+                        val key = railKeyOf(rail)
+                        key to (rail.landscapeArt + artOnScreen[key].orEmpty())
+                    }
 
                 // Keep the HITS, drop the MISSES (spec 2026-11-24, F4a).
                 //
@@ -13883,6 +13918,16 @@ private suspend fun calculateEpisodesRemaining(
 
                 _rails.value =
                     finalRails.distinctBy { railKeyOf(it) }
+
+                // Drop the art filed for rails this build no longer has, so the
+                // flow cannot grow a key per build for the life of the session.
+                // Every surviving rail carries the art it inherited, so pruning
+                // here cannot blink a row: the screen falls back to the rail.
+                val publishedRailKeys = _rails.value.mapTo(HashSet()) { railKeyOf(it) }
+                _railArt.update { art ->
+                    if (art.keys.all { it in publishedRailKeys }) art
+                    else art.filterKeys { it in publishedRailKeys }
+                }
 
                 // The next cold start's paint-first catalog set, written only
                 // from a COMPLETE fresh set: every catalog answered, none failed

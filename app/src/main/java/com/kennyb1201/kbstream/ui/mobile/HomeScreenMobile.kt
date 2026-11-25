@@ -46,6 +46,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -362,6 +363,10 @@ fun HomeScreenMobile(
         val railLandscapeHeight = landscapeTileHeight(railPosterSize.width)
         val railsBuiltForProfile by viewModel.railsProfileId.collectAsStateWithLifecycle()
         val railsRaw by viewModel.rails.collectAsStateWithLifecycle()
+        // Landscape artwork is filed beside the rails (perf spec 2026-11-22, item
+        // 3b), so art landing no longer replaces the rail list. Handed down
+        // unread; each card's own derived read below decides what it sees.
+        val railArtState = viewModel.railArt.collectAsStateWithLifecycle()
         val hiddenTitleKeys = rememberHiddenTitleKeys()
         // A rail built for the profile we are leaving must not paint for a
         // frame; hidden titles drop as Home reads its own data, so a Hide from
@@ -1301,9 +1306,36 @@ fun HomeScreenMobile(
                                                 // lookup found nothing and every
                                                 // phone card drew without its
                                                 // clearlogo.
-                                                val art = rail.landscapeArt[
-                                                    meta.landscapeArtKey()
-                                                ]
+                                                // Filed art first, then what the
+                                                // rail carries (the art a build
+                                                // inherits). The derived read is
+                                                // keyed on this rail, so an art
+                                                // publish notifies the rows it
+                                                // changed rather than the screen.
+                                                val railArtKey =
+                                                    remember(
+                                                        rail.addonName,
+                                                        rail.catalogId,
+                                                        rail.type
+                                                    ) {
+                                                        catalogRailKey(
+                                                            rail.addonName,
+                                                            rail.catalogId,
+                                                            rail.type
+                                                        )
+                                                    }
+                                                val art =
+                                                    remember(railArtKey, meta.id) {
+                                                        derivedStateOf {
+                                                            railArtState.value[
+                                                                railArtKey
+                                                            ]?.get(
+                                                                meta.landscapeArtKey()
+                                                            )
+                                                        }
+                                                    }.value ?: rail.landscapeArt[
+                                                        meta.landscapeArtKey()
+                                                    ]
                                                 LandscapeCard(
                                                     // The viewer's chosen still wins
                                                     // over the rail's own art - the

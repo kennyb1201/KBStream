@@ -5565,6 +5565,12 @@ fun HomeScreen(
     // paint for a frame before the empty list landed.
     val railsBuiltForProfile by viewModel.railsProfileId.collectAsStateWithLifecycle()
     val railsRaw by viewModel.rails.collectAsStateWithLifecycle()
+    // The rails' landscape artwork is filed BESIDE the list (perf spec 2026-11-22,
+    // item 3b), so a rail's art landing no longer replaces the rail list and
+    // re-runs the hidden-titles and hide-watched passes below. The STATE object
+    // is handed down unread: reading it here would make every art publish
+    // recompose this whole screen.
+    val railArtState = viewModel.railArt.collectAsStateWithLifecycle()
     // The rails the loader actually produced for THIS profile, before any
     // viewer filtering. Kept apart from [rails] because "no catalogs" and
     // "every title on the catalogs is hidden" are different states with
@@ -7920,6 +7926,31 @@ fun HomeScreen(
                                             horizontalArrangement =
                                                 Arrangement.spacedBy(0.dp)
                                         ) {
+                                            // This rail's own art, read from the flow
+                                            // that is filed beside the rails: the
+                                            // derived state recomputes on every art
+                                            // publish but only notifies when THIS
+                                            // rail's map changed, so the other rows
+                                            // (whose maps are the same instances)
+                                            // are not invalidated at all.
+                                            val railArtKey =
+                                                remember(
+                                                    rail.addonName,
+                                                    rail.catalogId,
+                                                    rail.type
+                                                ) {
+                                                    catalogRailKey(
+                                                        rail.addonName,
+                                                        rail.catalogId,
+                                                        rail.type
+                                                    )
+                                                }
+                                            val railArt by
+                                                remember(railArtKey) {
+                                                    derivedStateOf {
+                                                        railArtState.value[railArtKey]
+                                                    }
+                                                }
                                             itemsIndexed(
                                                 items = rail.items,
                                                 key = { _, meta ->
@@ -8116,8 +8147,14 @@ fun HomeScreen(
                                                         ),
                                                     contentAlignment = Alignment.Center
                                                 ) {
+                                                    // Filed art first, then the art
+                                                    // the rail itself carries (what a
+                                                    // rebuild inherits), so both
+                                                    // routes show one picture.
                                                     val art =
-                                                        rail.landscapeArt[
+                                                        railArt?.get(
+                                                            meta.landscapeArtKey()
+                                                        ) ?: rail.landscapeArt[
                                                             meta.landscapeArtKey()
                                                         ]
 
