@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -78,6 +79,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -746,13 +748,42 @@ fun HomeScreenMobile(
             viewModel.refreshUpNext()
         }
 
+        // F3 of the adaptive-layout spec: above Compact the hero stops being a
+        // 16:10 slice of the window's width (a 500dp banner on an 800dp tablet
+        // portrait, leaving the rails nothing) and the content column stops
+        // running edge to edge on an expanded window. Both rules are pure - see
+        // MobileAdaptiveRules - and Compact returns today's constants, so a
+        // phone's layout is untouched.
+        val widthClass = rememberMobileWindowWidthClass()
+        val windowDp = LocalConfiguration.current
+        val billboardHeightDp = MobileAdaptiveRules.homeBillboardHeightDp(
+            widthClass,
+            windowDp.screenWidthDp,
+            windowDp.screenHeightDp
+        )
+        val contentMaxWidthDp = MobileAdaptiveRules.homeContentMaxWidthDp(widthClass)
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(KBVoid)
         ) {
             LazyColumn(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    // Top-center rather than the default: on an expanded window
+                    // the capped column is centred, and on a phone the width is
+                    // the window's either way, so this changes nothing below
+                    // Compact.
+                    .align(Alignment.TopCenter)
+                    .fillMaxHeight()
+                    .then(
+                        if (contentMaxWidthDp > 0) {
+                            Modifier.widthIn(max = contentMaxWidthDp.dp)
+                        } else {
+                            Modifier
+                        }
+                    )
+                    .fillMaxWidth(),
                 state = listState,
                 contentPadding = PaddingValues(bottom = 28.dp),
                 verticalArrangement = Arrangement.spacedBy(22.dp)
@@ -770,6 +801,9 @@ fun HomeScreenMobile(
                 if (billboardVisible) {
                     item(key = "billboard", contentType = "hero") {
                         MobileBillboard(
+                            // Non-null above Compact: the rule's cap, in place
+                            // of the 16:10 aspect the frame falls back to.
+                            heroHeight = billboardHeightDp.takeIf { it > 0 }?.dp,
                             pages = billboardPages,
                             cycleMs = billboardCycleMs,
                             trailerMode = billboardTrailerMode,
