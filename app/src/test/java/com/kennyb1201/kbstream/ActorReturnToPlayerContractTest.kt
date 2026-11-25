@@ -151,8 +151,13 @@ class ActorReturnToPlayerContractTest {
     @Test
     fun `the actor page's back branch asks the rule, and nothing else decides`() {
         assertTrue(
-            "MainActivity's Actor branch is still the shared back rule",
-            main.contains("is Screen.Actor -> stableBackDestination(current.returnTo)")
+            "the Actor destination still lands on the shared back rule, registered " +
+                "where the destination is rather than in the shell's old table",
+            source("com/kennyb1201/kbstream/ui/navigation/NavShell.kt")
+                .replace(Regex("\\s+"), " ")
+                .contains(
+                    "onNavigate(NavRoutes.landingOf(entry.toRoute<ActorRoute>().returnRoute))"
+                )
         )
         assertTrue(
             "and the rule itself is the single place that keeps an actor-return player",

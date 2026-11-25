@@ -76,8 +76,10 @@ class SportsReturnToSheetContractTest {
     @Test
     fun `the player branch no longer hardcodes the guide for channel launches`() {
         assertTrue(
-            "the branch delegates to the launch's own destination",
-            activity.contains("is Screen.Player -> stableBackDestination(current.returnTo)")
+            "the overlay's Back delegates to the launch's own destination",
+            activity.contains(
+                "navSeam.navigateTo(stableBackDestination(playerOverlay.returnTo))"
+            )
         )
         assertFalse(
             "which is exactly what the channel-means-guide hardcode prevented",
@@ -193,8 +195,11 @@ class SportsReturnToSheetContractTest {
                 hub.contains("if (open == null) viewModel.closeDetail() else viewModel.openDetail(open)")
         )
         assertTrue(
-            "and the hub's Back ladder is untouched: Back on the hub is still the guide",
-            activity.contains("is Screen.Sports -> Screen.Guide")
+            "and the hub's Back ladder is untouched: Back on the hub is still the " +
+                "guide, registered by the destination that owns it",
+            source("com/kennyb1201/kbstream/ui/navigation/NavShell.kt")
+                .replace(Regex("\\s+"), " ")
+                .contains("BackHandler { onNavigate(Screen.Guide) }")
         )
     }
 

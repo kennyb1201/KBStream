@@ -107,7 +107,8 @@ class ShellIsTheRendererContractTest {
                 "whatever the graph restored, so no session can start under the " +
                 "previous viewer's identity",
             main.contains("LaunchedEffect(navEntry) {") &&
-                main.contains("pickerOnLaunch && navEntry != null")
+                main.contains("pickerOnLaunch &&") &&
+                main.contains("!is Screen.ProfilePicker")
         )
         assertTrue(
             "a re-target never stacks a second copy of the same destination",
@@ -143,7 +144,8 @@ class ShellIsTheRendererContractTest {
             "a write that arrives before the host attaches its graph (the shell's " +
                 "deep-link and remote-play effects run first) waits for it rather " +
                 "than being thrown away",
-            seam.contains("if (navController.currentBackStackEntry == null) {") &&
+            seam.contains("val current = navController.currentBackStackEntry") &&
+                seam.contains("if (current == null) {") &&
                 seam.contains("queued = value") &&
                 seam.contains("queued = null")
         )

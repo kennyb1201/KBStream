@@ -257,7 +257,7 @@ class LaunchScreenGateTest {
         )
         assertTrue(
             "the gate reads that flag",
-            main.contains("launchScreenSaver(profilesExist, coldLaunch, showProfilePicker)")
+            main.contains("val pickerOnLaunch = profilesExist && coldLaunch && showProfilePicker")
         )
     }
 
@@ -274,9 +274,11 @@ class LaunchScreenGateTest {
             main.contains("launchProfileHasPin ||")
         )
         assertTrue(
-            "and the saver is keyed on the answer, so the switch changes which " +
-                "gate the state starts with",
-            main.contains("remember(profilesExist, coldLaunch, showProfilePicker)")
+            "and the switch changes which gate the STACK starts with: the picker " +
+                "is the graph's own start destination",
+            main.contains(
+                "val launchEntry: Screen = if (pickerOnLaunch) Screen.ProfilePicker() else Screen.Home"
+            )
         )
     }
 
@@ -338,8 +340,8 @@ class LaunchScreenGateTest {
         assertTrue(
             "a cold launch with profiles discards whatever the graph restored, " +
                 "because the picker is the session's door",
-            main.contains("pickerOnLaunch && navEntry != null") &&
-                main.contains("screenOfEntry(navEntry)")
+            main.contains("pickerOnLaunch &&") &&
+                main.contains("!is Screen.ProfilePicker")
         )
         assertFalse(
             "seeding with Home is the flash this replaced",

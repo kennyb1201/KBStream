@@ -93,7 +93,8 @@ class NavSeamContractTest {
             "and a write that arrives before the host attaches its graph (the " +
                 "shell's deep-link and remote-play effects run first) waits for it " +
                 "rather than being thrown away",
-            seam.contains("if (navController.currentBackStackEntry == null) {") &&
+            seam.contains("val current = navController.currentBackStackEntry") &&
+                seam.contains("if (current == null) {") &&
                 seam.contains("queued = value") &&
                 seam.contains("queued = null")
         )
