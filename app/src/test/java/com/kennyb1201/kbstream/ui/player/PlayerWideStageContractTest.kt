@@ -70,6 +70,45 @@ class PlayerWideStageContractTest {
     }
 
     @Test
+    fun `the cap is settled after layout, not against the window the activity left`() {
+        // `onConfigurationChanged` hands over the new configuration before the
+        // tree is measured against it, so `root.width` on the first pass is the
+        // previous window: a tablet rotated into landscape was capped at its
+        // portrait width and kept it until the next rotation. A stage that is
+        // in the build and still looks absent is worse than one that is missing,
+        // so the second, post-layout pass is part of the contract.
+        val stage = stripComments(source(GESTURES))
+            .substringAfter("internal object PlayerWideStage")
+        assertTrue(
+            "without a pass after layout, the cap uses the width of the window " +
+                "the activity just left",
+            stage.contains("root.post { applyNow(activity, root, view) }")
+        )
+        assertFalse(
+            "and the posted pass must not post again, or every resize queues " +
+                "another layout pass for as long as the player is open",
+            stage.substringAfter("private fun applyNow").contains("post {")
+        )
+    }
+
+    @Test
+    fun `the cap is measured against the room the chrome gives the cluster`() {
+        // The cluster's parent is the chrome root with its own 48dp horizontal
+        // padding. A cap of min(960dp, window) is wider than that content box on
+        // any window below ~1056dp, so the seek bar would grow into the padding
+        // and touch the screen edge on exactly the tablets this stage is for.
+        val stage = stripComments(source(GESTURES))
+            .substringAfter("internal object PlayerWideStage")
+        assertTrue(
+            "the cap must be the smaller of the constant and the parent's content " +
+                "width, or a window between 840dp and ~1056dp gets a wider cluster " +
+                "than the XML gave it",
+            stage.contains("parent.width - parent.paddingLeft - parent.paddingRight") &&
+                stage.contains("params.width = minOf(capPx, available.coerceAtLeast(0))")
+        )
+    }
+
+    @Test
     fun `the stage touches layout only`() {
         val stage = stripComments(source(GESTURES))
             .substringAfter("internal object PlayerWideStage")

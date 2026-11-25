@@ -605,25 +605,52 @@ internal object PlayerWideStage {
     fun apply(activity: Activity, root: View, cluster: View?) {
         val view = cluster ?: return
         if (root.width <= 0) return
+        applyNow(activity, root, view)
+        // A config change hands over the new configuration before the view tree
+        // has been measured against it, so `root.width` is still the window the
+        // activity just LEFT. Rotating a tablet into landscape capped the
+        // cluster at the portrait width it had a moment ago - 800dp instead of
+        // 960dp - and nothing corrected it until the next rotation, which is
+        // why the stage could be in the build and still look absent. One pass
+        // after layout settles it against the width actually on screen. The
+        // pass is idempotent: the XML params were saved on the first call and
+        // the rule is asked again, and it moves layout params only.
+        root.post { applyNow(activity, root, view) }
+    }
+
+    private fun applyNow(activity: Activity, root: View, cluster: View) {
+        if (root.width <= 0) return
         val widthDp = activity.resources.configuration.screenWidthDp
         val applies = com.kennyb1201.kbstream.ui.mobile.MobileAdaptiveRules
             .playerWideStageApplies(
                 com.kennyb1201.kbstream.FormFactor.isTv,
                 widthDp
             )
-        val params = view.layoutParams as? LinearLayout.LayoutParams ?: return
-        val saved = originals.getOrPut(view) { intArrayOf(params.width, params.gravity) }
+        val params = cluster.layoutParams as? LinearLayout.LayoutParams ?: return
+        val saved = originals.getOrPut(cluster) { intArrayOf(params.width, params.gravity) }
         if (applies) {
             val density = activity.resources.displayMetrics.density
             val capPx = (com.kennyb1201.kbstream.ui.mobile.MobileAdaptiveRules
                 .PLAYER_CHROME_MAX_WIDTH_DP * density).toInt()
-            params.width = minOf(capPx, root.width)
+            // The cluster sits inside the chrome's own 48dp padding, so the cap
+            // is measured against the room the chrome gives it - not the raw
+            // window. Capping at min(960dp, window) would make the cluster grow
+            // INTO that padding on a 840-1056dp window: a "cap" that puts the
+            // seek bar against the screen edge on the very tablets it was meant
+            // to help. Below the cap this is exactly the width the XML gave it.
+            val parent = cluster.parent as? View
+            val available = if (parent != null && parent.width > 0) {
+                parent.width - parent.paddingLeft - parent.paddingRight
+            } else {
+                root.width
+            }
+            params.width = minOf(capPx, available.coerceAtLeast(0))
             params.gravity = Gravity.CENTER_HORIZONTAL
         } else {
             params.width = saved[0]
             params.gravity = saved[1]
         }
-        view.layoutParams = params
-        if (view is ViewGroup) view.requestLayout()
+        cluster.layoutParams = params
+        if (cluster is ViewGroup) cluster.requestLayout()
     }
 }
