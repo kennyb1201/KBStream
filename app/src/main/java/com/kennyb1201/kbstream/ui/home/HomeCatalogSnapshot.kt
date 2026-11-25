@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.home
 
 import android.content.Context
+import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.settings.prefs.Prefs
 
 /**
@@ -39,13 +40,33 @@ internal object HomeCatalogSnapshot {
     fun scopeOf(profileId: String, kidsCeiling: Boolean): String =
         "$profileId|kids=$kidsCeiling"
 
-    /** The rails last written for [scope], or empty when there is none. */
+    /**
+     * The rails last written for [scope], or empty when there is none.
+     *
+     * The SIZE of what was read is recorded beside the time it took (spec
+     * 2026-11-24, F5). `home.snapshotLoad` already says how long the segment took;
+     * without the volume the paste cannot tell a 60-second decode of a small blob
+     * from a short decode of a large one, and those want opposite fixes (a lazy
+     * load or a cap, versus an I/O problem). Characters, not bytes, because the
+     * blob is one preferences string - the number is exact and costs nothing.
+     */
     fun load(context: Context, scope: String): List<Rail> {
         val blob = runCatching {
             Prefs.file(context, PREFS)
                 .getString("scope:" + scope, null)
-        }.getOrNull() ?: return emptyList()
-        return decode(blob)
+        }.getOrNull()
+        PerfTrace.recordCount("home.snapshotChars", (blob?.length ?: 0).toLong())
+        if (blob == null) {
+            PerfTrace.recordCount("home.snapshotRails", 0L)
+            PerfTrace.recordCount("home.snapshotItems", 0L)
+            return emptyList()
+        }
+        val rails = decode(blob)
+        // What the decode produced, which is what the upcoming filter then walks:
+        // the filter's cost is items, not rails.
+        PerfTrace.recordCount("home.snapshotRails", rails.size.toLong())
+        PerfTrace.recordCount("home.snapshotItems", rails.sumOf { it.items.size }.toLong())
+        return rails
     }
 
     /**
