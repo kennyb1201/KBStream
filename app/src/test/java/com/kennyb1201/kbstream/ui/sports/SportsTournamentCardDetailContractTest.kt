@@ -128,7 +128,10 @@ class SportsTournamentCardDetailContractTest {
             "the league, named from the catalog the hub already knows rather than the raw path",
             sheet.contains("(SportsLeagues.byPath(event.league)?.label ?: event.league)")
         )
-        assertTrue("the status line is the shared one", sheet.contains("SportsDetailRules.statusLine(event)"))
+        assertTrue(
+            "the status line is the shared one, in the viewer's clock",
+            sheet.contains("SportsDetailRules.statusLine(event, rememberUse24HourClock())")
+        )
         assertTrue(
             "the venue/broadcast/context rows come from the pure rules",
             sheet.contains("SportsDetailRules.detailRows(event).forEach")

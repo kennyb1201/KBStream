@@ -57,11 +57,25 @@ object DateFormats {
     /** `2026-09-30 14:05:12` - a full log or diagnostics timestamp. */
     val DATE_TIME_SECONDS: DateTimeFormatter = us("yyyy-MM-dd HH:mm:ss")
 
-    /** `2:05 PM` - a fixed 12-hour clock (guide program times). */
+    /** `2:05 PM` - the 12-hour half of [clock]'s pair (guide program times). */
     val CLOCK_12H: DateTimeFormatter = us("h:mm a")
+
+    /** `14:05` - the 24-hour half of [clock]'s pair. */
+    val CLOCK_24H: DateTimeFormatter = us("HH:mm")
 
     /** `Tue, 2:05 PM` - the guide's clock label. */
     val WEEKDAY_CLOCK_12H: DateTimeFormatter = us("EEE, h:mm a")
+
+    /**
+     * `Tue, Sep 30 · 2:05 PM` - a header clock that names the day and the date.
+     *
+     * The guide and the sports hub sit in front of a viewer for a whole evening,
+     * so their clocks carry the day as well as the minute. The separator is a
+     * middle dot, not a comma: the day and the date are one label and the time is
+     * the other, and a second comma made `Tue, Sep 30, 2:05 PM` read like a
+     * sentence that had lost its verb.
+     */
+    val WEEKDAY_DATE_CLOCK_12H: DateTimeFormatter = us("EEE, MMM d · h:mm a")
 
     /** `Oct 20, 6:30 PM` - when a schedule stopped, in a diagnostics/status line. */
     val MONTH_DAY_CLOCK_12H: DateTimeFormatter = us("MMM d, h:mm a")
@@ -75,6 +89,46 @@ object DateFormats {
 
     fun clock24h(locale: Locale = Locale.getDefault()): DateTimeFormatter =
         DateTimeFormatter.ofPattern("HH:mm", locale)
+
+    /**
+     * `14:05` or `2:05 PM`, whichever the viewer picked in settings.
+     *
+     * Every clock the app shows goes through one of the `*Clock(use24Hour)`
+     * factories below, all taking the same flag: the setting is one answer, and
+     * a surface that formats its own time is how the guide and the sports hub
+     * came to disagree about the same evening. The flag is read once per screen
+     * (see `AppPreferences.getUse24HourClock`) and passed down, so a toggle is a
+     * value the layout already has rather than a global a pure rule has to
+     * reach for.
+     */
+    fun clock(use24Hour: Boolean, locale: Locale = Locale.getDefault()): DateTimeFormatter =
+        if (use24Hour) clock24h(locale) else clock12h(locale)
+
+    /** `Tue, 14:05` / `Tue, 2:05 PM` - a weekday in front of the clock. */
+    fun weekdayClock(use24Hour: Boolean, locale: Locale = Locale.getDefault()): DateTimeFormatter =
+        DateTimeFormatter.ofPattern(if (use24Hour) "EEE, HH:mm" else "EEE, h:mm a", locale)
+
+    /** `Tue, Sep 30 · 14:05` / `Tue, Sep 30 · 2:05 PM`. */
+    fun dayClock(use24Hour: Boolean, locale: Locale = Locale.getDefault()): DateTimeFormatter =
+        if (use24Hour) dayClock24h(locale) else dayClock12h(locale)
+
+    /** `Oct 20, 18:30` / `Oct 20, 6:30 PM` - a month and day in front of the clock. */
+    fun monthDayClock(
+        use24Hour: Boolean,
+        locale: Locale = Locale.getDefault()
+    ): DateTimeFormatter =
+        DateTimeFormatter.ofPattern(if (use24Hour) "MMM d, HH:mm" else "MMM d, h:mm a", locale)
+
+    /**
+     * The viewer's own clock with the day and date in front of it, in either
+     * convention - the sports hub's header reads the app's 12/24-hour toggle, so
+     * it needs both shapes (see [WEEKDAY_DATE_CLOCK_12H] for the fixed one).
+     */
+    fun dayClock12h(locale: Locale = Locale.getDefault()): DateTimeFormatter =
+        DateTimeFormatter.ofPattern("EEE, MMM d · h:mm a", locale)
+
+    fun dayClock24h(locale: Locale = Locale.getDefault()): DateTimeFormatter =
+        DateTimeFormatter.ofPattern("EEE, MMM d · HH:mm", locale)
 
     fun longDate(locale: Locale = Locale.getDefault()): DateTimeFormatter =
         DateTimeFormatter.ofPattern("MMMM d, yyyy", locale)

@@ -274,7 +274,7 @@ class GuideGridRound3ContractTest {
         )
         assertTrue(
             "the meta line is the rules' own (channel, time, category, starts-in)",
-            detail.contains("gridDetailMeta(channelName, cell, nowMs)")
+            detail.contains("gridDetailMeta(channelName, cell, nowMs, use24Hour)")
         )
         assertTrue(
             "a live program gets its elapsed bar",

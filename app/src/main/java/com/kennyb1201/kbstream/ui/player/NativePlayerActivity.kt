@@ -1498,6 +1498,21 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     // thread-safe (unlike the SimpleDateFormat pair this replaced, which needed
     // a main-thread-only cache keyed by pattern), so these are built once per
     // process and reused. The 24-hour toggle picks between them per tick.
+    /**
+     * The overlay's wall clock: the day, the date and the time, in the viewer's
+     * convention.
+     *
+     * A bare `2:05 PM` in the corner of a player says nothing about WHICH
+     * evening you are watching, and a film started before midnight is exactly
+     * when that matters. The estimate beside it stays a bare time - it is an
+     * offset from now, so the date it lands on is already on the clock next to
+     * it unless the title runs past midnight, where `Ends at 12:40 AM` is the
+     * clearer reading anyway.
+     */
+    private val dayClock12Format by lazy { DateFormats.dayClock12h() }
+    private val dayClock24Format by lazy { DateFormats.dayClock24h() }
+
+    /** The bare-time pair, for the "Ends at" estimate. */
     private val clock12Format by lazy { DateFormats.clock12h() }
     private val clock24Format by lazy { DateFormats.clock24h() }
     private val clockRunnable = object : Runnable {
@@ -2320,11 +2335,21 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private val zapEpgCache = HashMap<String, ZapEpgInfo>()
     private var zapEpgCacheLimit = 64
 
-    private val zapTimeFormat by lazy { DateFormats.clock12h() }
+    /**
+     * A zap banner time in the viewer's own clock - the setting the overlay's
+     * clock reads, not a fixed 12-hour shape.
+     *
+     * The formatter is cached per convention rather than built per call: this
+     * runs for every entry in a zap list on each CH press.
+     */
+    private val zapTimeFormat12 by lazy { DateFormats.clock12h() }
+    private val zapTimeFormat24 by lazy { DateFormats.clock24h() }
 
-    /** A zap banner time in the device's own 12-hour clock. */
-    private fun zapTime(millis: Long): String =
-        DateFormats.time(millis, zapTimeFormat)
+    private fun zapTime(millis: Long): String {
+        val fmt =
+            if (AppPreferences.getUse24HourClock(this)) zapTimeFormat24 else zapTimeFormat12
+        return DateFormats.time(millis, fmt)
+    }
 
     /**
      * The lineup entry playing right now, or null when the guide never
@@ -10962,9 +10987,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
     private fun updateClock() {
         // Honor the Settings > Interface 24-hour toggle; falls back to the
-        // locale default when unchecked.
-        val formatter =
-            if (AppPreferences.getUse24HourClock(this)) clock24Format else clock12Format
+        // locale default when unchecked. The wall clock carries the day and the
+        // date; the estimate below it is a bare time (see [dayClock12Format]).
+        val use24Hour = AppPreferences.getUse24HourClock(this)
+        val formatter = if (use24Hour) dayClock24Format else dayClock12Format
+        val endsFormatter = if (use24Hour) clock24Format else clock12Format
         val durationMs = exoPlayer?.duration ?: 0L
         // No duration, no estimate. A live channel's duration is unset (and a
         // VOD's can still be until it loads), so the arithmetic below produced
@@ -10984,7 +11011,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         endsAtClock.visibility = View.VISIBLE
         val positionMs = exoPlayer?.currentPosition ?: 0L
         val remainingMs = (durationMs - positionMs).coerceAtLeast(0L)
-        val endsAt = DateFormats.time(System.currentTimeMillis() + remainingMs, formatter)
+        val endsAt = DateFormats.time(System.currentTimeMillis() + remainingMs, endsFormatter)
         // The chrome's refreshClock writes this same line, so both carry the
         // suffix - otherwise the two writers flicker it on and off every second.
         endsAtClock.text = "Ends at $endsAt${playerSleepSuffix()}"

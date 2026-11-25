@@ -26,7 +26,12 @@ class MdbListBudgetLineTest {
 
     @Test
     fun `the line reads the day's count against the API's limit`() {
-        val line = mdbListBudgetLine(count = 37, limitedUntilMs = 0L, nowMs = now)
+        val line = mdbListBudgetLine(
+            count = 37,
+            limitedUntilMs = 0L,
+            nowMs = now,
+            use24Hour = false
+        )
         assertTrue(line, line.startsWith("mdblist: budget=37/1000"))
         assertTrue(line, line.contains("(reads stop 850, writes stop 980)"))
         assertFalse("nothing to park when the day is not spent", line.contains("limited until"))
@@ -34,20 +39,35 @@ class MdbListBudgetLineTest {
 
     @Test
     fun `a spent day names when the allowance returns`() {
-        val line = mdbListBudgetLine(count = 421, limitedUntilMs = now + 3_600_000L, nowMs = now)
+        val line = mdbListBudgetLine(
+            count = 421,
+            limitedUntilMs = now + 3_600_000L,
+            nowMs = now,
+            use24Hour = false
+        )
         assertTrue(line, line.contains("budget=421/1000"))
         assertTrue(line, line.contains(", limited until "))
     }
 
     @Test
     fun `a park that already lifted is not reported`() {
-        val line = mdbListBudgetLine(count = 980, limitedUntilMs = now - 1L, nowMs = now)
+        val line = mdbListBudgetLine(
+            count = 980,
+            limitedUntilMs = now - 1L,
+            nowMs = now,
+            use24Hour = false
+        )
         assertFalse(line, line.contains("limited until"))
     }
 
     @Test
     fun `the line carries no key material`() {
-        val line = mdbListBudgetLine(count = 12, limitedUntilMs = 0L, nowMs = now)
+        val line = mdbListBudgetLine(
+            count = 12,
+            limitedUntilMs = 0L,
+            nowMs = now,
+            use24Hour = false
+        )
         assertFalse("a report is pasted into issue threads", line.contains("apikey"))
         assertFalse(line.contains("key="))
         assertTrue(

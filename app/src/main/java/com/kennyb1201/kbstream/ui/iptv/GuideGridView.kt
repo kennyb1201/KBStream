@@ -90,6 +90,7 @@ import androidx.tv.material3.SurfaceDefaults
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import com.kennyb1201.kbstream.ui.components.logoArt
+import com.kennyb1201.kbstream.ui.components.rememberUse24HourClock
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.notifications.ReminderRules
@@ -1135,7 +1136,7 @@ internal fun GuideGridView(
                                 .height(GRID_TIME_HEADER_HEIGHT),
                             verticalAlignment = Alignment.Bottom
                         ) {
-                            hourMarks(window).forEach { mark ->
+                            hourMarks(window, rememberUse24HourClock()).forEach { mark ->
                                 Box(
                                     modifier = Modifier.width(
                                         (GuideGrid.MINUTES_PER_HOUR * GRID_SCALE_DP_PER_MIN).dp
@@ -1936,6 +1937,7 @@ private fun GridDetailBlock(
     modifier: Modifier = Modifier,
 ) {
     val channelName = item?.channel?.displayName?.ifBlank { "Live Channel" } ?: "Live Channel"
+    val use24Hour = rememberUse24HourClock()
     val isLive = cell != null && !cell.isGap &&
         nowMs >= cell.startUtcMillis && nowMs < cell.endUtcMillis
 
@@ -1957,7 +1959,7 @@ private fun GridDetailBlock(
         Text(
             text = when {
                 cell == null -> "Move right into the grid to pick a program."
-                else -> gridDetailMeta(channelName, cell, nowMs)
+                else -> gridDetailMeta(channelName, cell, nowMs, use24Hour)
             },
             color = if (cell?.isGap == true || cell == null) KBTextLo else KBAccent,
             style = MaterialTheme.typography.labelMedium,

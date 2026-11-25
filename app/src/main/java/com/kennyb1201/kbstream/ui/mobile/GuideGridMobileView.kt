@@ -75,6 +75,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.platform.LocalContext
 import com.kennyb1201.kbstream.ui.components.logoRequest
+import com.kennyb1201.kbstream.ui.components.rememberUse24HourClock
 import kotlin.math.roundToInt
 import com.kennyb1201.kbstream.ui.iptv.guideRowSlice
 
@@ -252,7 +253,7 @@ internal fun GuideGridMobileView(
             Spacer(modifier = Modifier.width(CHANNEL_CELL_WIDTH))
             Box(modifier = Modifier.weight(1f).fillMaxHeight().clipToBounds()) {
                 Row(modifier = Modifier.horizontalScroll(timeScroll).height(26.dp)) {
-                    hourMarks(window).forEach { mark ->
+                    hourMarks(window, rememberUse24HourClock()).forEach { mark ->
                         Box(
                             modifier = Modifier.width(
                                 (GuideGrid.MINUTES_PER_HOUR * pxPerMin).dp
@@ -570,6 +571,7 @@ private fun MobileGridDetailStrip(
     selected: Pair<IptvChannelWithEpg, GridCell>,
     nowMs: Long,
 ) {
+    val use24Hour = rememberUse24HourClock()
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -591,7 +593,8 @@ private fun MobileGridDetailStrip(
             )
             if (!cell.isGap) {
                 Text(
-                    text = "${item.channel.displayName} · ${gridCellHeadline(cell, nowMs)}",
+                    text = "${item.channel.displayName} · " +
+                        gridCellHeadline(cell, nowMs, use24Hour),
                     color = KBAccent,
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,

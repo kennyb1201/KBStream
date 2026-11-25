@@ -89,6 +89,7 @@ import androidx.tv.material3.Text
 import androidx.compose.ui.platform.LocalContext
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.ui.components.logoRequest
+import com.kennyb1201.kbstream.ui.components.rememberUse24HourClock
 import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.iptv.CatchupProgram
@@ -1502,7 +1503,8 @@ LaunchedEffect(channelListState, groupedChannelIds) {
             isImportingGuide = isImportingGuide,
             guideImportLabel = GuideImportProgress.label(
                 state = guideImport,
-                nowMs = System.currentTimeMillis()
+                nowMs = System.currentTimeMillis(),
+                use24Hour = rememberUse24HourClock()
             ),
             guideStatus = guideStatus,
             error = error,
@@ -2464,7 +2466,10 @@ private fun SetupPanel(
      */
     containFocus: Boolean = false,
     modifier: Modifier = Modifier
-) {    val firstFieldFocusRequester = remember { FocusRequester() }
+) {
+    // The clock the import-status line below reports its last-good time in.
+    val use24Hour = rememberUse24HourClock()
+    val firstFieldFocusRequester = remember { FocusRequester() }
     // Recovery target. Deliberately the LOAD card and NOT a text field: see
     // the recovery block below — re-focusing a field re-opens the IME.
     val recoveryFocusRequester = remember { FocusRequester() }
@@ -2771,9 +2776,9 @@ private fun SetupPanel(
         // Which source last landed here, and whether the background refresh
         // has given up: the two facts that say a guide is going stale BEFORE
         // it reads blank, on the screen that owns the button that fixes it.
-        if (guideStatus.lastGoodLabel().isNotBlank()) {
+        if (guideStatus.lastGoodLabel(use24Hour).isNotBlank()) {
             Text(
-                text = guideStatus.lastGoodLabel(),
+                text = guideStatus.lastGoodLabel(use24Hour),
                 color = KBTextLo,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 8.dp)
@@ -3306,7 +3311,7 @@ private fun GuideHeader(
 
 @Composable
 private fun GuideHeaderClock(modifier: Modifier = Modifier) {
-    val time = rememberCurrentTimeLabel()
+    val time = rememberCurrentTimeLabel(rememberUse24HourClock())
 
     Column(modifier = modifier, horizontalAlignment = Alignment.End) {
         Text(
@@ -3600,6 +3605,7 @@ private fun GuideDetailPanel(
     modifier: Modifier = Modifier
 ) {
     val nowMillis = rememberNowMillis()
+    val use24Hour = rememberUse24HourClock()
 
     Column(
         modifier = modifier
@@ -3696,7 +3702,7 @@ private fun GuideDetailPanel(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-    text = formatTimeRange(program.startUtcMillis, program.endUtcMillis),
+    text = formatTimeRange(program.startUtcMillis, program.endUtcMillis, use24Hour),
     color = KBAccent,
     style = MaterialTheme.typography.labelMedium,
     fontWeight = FontWeight.SemiBold,
@@ -3760,7 +3766,9 @@ private fun NowNextPanel(
             label = "NOW",
             title = nowProgram?.title
                 ?: if (guidePending) "Loading guide…" else "Nothing airing right now",
-            time = nowProgram?.let { formatTimeRange(it.startUtcMillis, it.endUtcMillis) },
+            time = nowProgram?.let {
+                formatTimeRange(it.startUtcMillis, it.endUtcMillis, use24Hour)
+            },
             badge = nowProgram?.let { formatRemainingLabel(it.endUtcMillis - nowMillis) },
             progress = nowProgress,
             description = nowProgram?.description,
@@ -3771,7 +3779,9 @@ private fun NowNextPanel(
             label = "NEXT",
             title = nextProgram?.title
                 ?: if (guidePending) "Loading guide…" else "No next program listed",
-            time = nextProgram?.let { formatTimeRange(it.startUtcMillis, it.endUtcMillis) },
+            time = nextProgram?.let {
+                formatTimeRange(it.startUtcMillis, it.endUtcMillis, use24Hour)
+            },
             badge = nextProgram?.let { formatStartsInLabel(it.startUtcMillis - nowMillis) },
             description = nextProgram?.description,
             modifier = Modifier.weight(1f)
@@ -3898,15 +3908,28 @@ private fun rememberNowMillis(): Long {
     return now
 }
 
+/**
+ * The guide header's clock: the day, the date and the time.
+ *
+ * The date was missing, so a guide left open overnight said `Tue, 2:05 PM` on
+ * Wednesday morning. The day and date are part of the same label (see
+ * [DateFormats.dayClock]) and the tick that already refreshes the minute rolls
+ * them together - nothing extra is read per frame.
+ *
+ * [use24Hour] is the viewer's setting, and it is part of the effect's key: a
+ * toggle that arrives from the account has to re-render the label, not wait for
+ * the next minute to happen to redraw it in the new shape.
+ */
 @Composable
-private fun rememberCurrentTimeLabel(): String {
-    var timeLabel by remember {
-        mutableStateOf(DateFormats.now(DateFormats.WEEKDAY_CLOCK_12H))
+private fun rememberCurrentTimeLabel(use24Hour: Boolean): String {
+    val formatter = remember(use24Hour) { DateFormats.dayClock(use24Hour) }
+    var timeLabel by remember(formatter) {
+        mutableStateOf(DateFormats.now(formatter))
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(formatter) {
         while (true) {
-            timeLabel = DateFormats.now(DateFormats.WEEKDAY_CLOCK_12H)
+            timeLabel = DateFormats.now(formatter)
             delay(30_000)
         }
     }
@@ -3999,6 +4022,7 @@ private fun CatchupDialog(
     onDismiss: () -> Unit,
     onPlay: (CatchupProgram) -> Unit
 ) {
+    val use24Hour = rememberUse24HourClock()
     Dialog(onDismissRequest = onDismiss) {
         KBDialogPanel(title = "Catch-up TV", subtitle = channelName) {
 
@@ -4069,7 +4093,11 @@ private fun CatchupDialog(
                                 }
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Text(
-                                    text = formatCatchupWindow(program.startUtcMillis, program.endUtcMillis),
+                                    text = formatCatchupWindow(
+                                        program.startUtcMillis,
+                                        program.endUtcMillis,
+                                        use24Hour = use24Hour
+                                    ),
                                     color = KBAccent,
                                     style = MaterialTheme.typography.labelMedium
                                 )
@@ -4117,6 +4145,9 @@ private fun ChannelSearchDialog(
     /** Reports whether this dialog's own window holds focus, for the Back decision. */
     onWindowFocusChanged: (Boolean) -> Unit = {}
 ) {
+    // The viewer's clock, for the now/next times in a search hit and for a
+    // program hit's window label.
+    val use24Hour = rememberUse24HourClock()
     // Whether this device can run an in-app voice search at all - false on Fire
     // OS, which ships no recognizer (see [voiceSearchAvailable]).
     val voiceContext = androidx.compose.ui.platform.LocalContext.current
@@ -4334,7 +4365,8 @@ private fun ChannelSearchDialog(
                                         Text(
                                             text = formatTimeRange(
                                                 onNow.startUtcMillis,
-                                                onNow.endUtcMillis
+                                                onNow.endUtcMillis,
+                                                use24Hour
                                             ) + "  " + onNow.title,
                                             color = KBTextHi,
                                             style = MaterialTheme.typography.labelSmall,
@@ -4346,7 +4378,8 @@ private fun ChannelSearchDialog(
                                                 text = "Next  " +
                                                     formatTimeRange(
                                                         following.startUtcMillis,
-                                                        following.endUtcMillis
+                                                        following.endUtcMillis,
+                                                        use24Hour
                                                     ) + "  " + following.title,
                                                 color = KBTextLo,
                                                 style = MaterialTheme.typography.labelSmall,
@@ -4459,7 +4492,8 @@ private fun ChannelSearchDialog(
                                     text = hit.item.channel.displayName + " · " +
                                         formatTimeRange(
                                             hit.program.startUtcMillis,
-                                            hit.program.endUtcMillis
+                                            hit.program.endUtcMillis,
+                                            use24Hour
                                         ),
                                     color = KBTextLo,
                                     style = MaterialTheme.typography.labelSmall,

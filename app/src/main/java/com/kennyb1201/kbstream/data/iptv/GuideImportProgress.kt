@@ -323,7 +323,8 @@ object GuideImportProgress {
      */
     fun label(
         state: GuideImportState?,
-        nowMs: Long
+        nowMs: Long,
+        use24Hour: Boolean
     ): String {
         if (state == null) return ""
         val text = state.outcome?.let { outcomeLabel(it) } ?: buildList {
@@ -338,7 +339,7 @@ object GuideImportProgress {
             }
             add(elapsed(state.startedAtMs, nowMs))
         }.joinToString(" · ")
-        return withStaleness(text, state.guideEndsAtMs, nowMs)
+        return withStaleness(text, state.guideEndsAtMs, nowMs, use24Hour)
     }
 
     /**
@@ -351,9 +352,14 @@ object GuideImportProgress {
      * Only ever past: a guide that runs to next Thursday says nothing here, and
      * neither does a source that has never held a program.
      */
-    internal fun withStaleness(text: String, guideEndsAtMs: Long?, nowMs: Long): String {
+    internal fun withStaleness(
+        text: String,
+        guideEndsAtMs: Long?,
+        nowMs: Long,
+        use24Hour: Boolean
+    ): String {
         if (guideEndsAtMs == null || guideEndsAtMs <= 0L || guideEndsAtMs >= nowMs) return text
-        val ended = DateFormats.time(guideEndsAtMs, DateFormats.MONTH_DAY_CLOCK_12H)
+        val ended = DateFormats.time(guideEndsAtMs, DateFormats.monthDayClock(use24Hour))
         return "$text · Guide data ended $ended"
     }
 

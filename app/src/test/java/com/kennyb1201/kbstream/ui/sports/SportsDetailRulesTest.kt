@@ -87,16 +87,25 @@ class SportsDetailRulesTest {
 
     @Test
     fun `the status line mirrors the card`() {
-        assertEquals("Final", SportsDetailRules.statusLine(game(state = GameState.FINAL)))
+        assertEquals(
+            "Final",
+            SportsDetailRules.statusLine(game(state = GameState.FINAL), use24Hour = false)
+        )
         assertEquals(
             "Q3 4:32",
-            SportsDetailRules.statusLine(game(state = GameState.LIVE, statusDetail = "Q3 4:32"))
+            SportsDetailRules.statusLine(
+                game(state = GameState.LIVE, statusDetail = "Q3 4:32"),
+                use24Hour = false
+            )
         )
         // A live game with no clock still says the one thing that matters.
-        assertEquals("LIVE", SportsDetailRules.statusLine(game(state = GameState.LIVE)))
+        assertEquals(
+            "LIVE",
+            SportsDetailRules.statusLine(game(state = GameState.LIVE), use24Hour = false)
+        )
         // An upcoming game with no date and no detail is not "Today": an
         // undated fixture is the one thing the feed could not say.
-        assertEquals("TBD", SportsDetailRules.statusLine(game()))
+        assertEquals("TBD", SportsDetailRules.statusLine(game(), use24Hour = false))
     }
 
     @Test

@@ -35,7 +35,8 @@ internal const val MDBLIST_TOTAL_CEILING = 980
 internal fun mdbListBudgetLine(
     count: Int,
     limitedUntilMs: Long,
-    nowMs: Long
+    nowMs: Long,
+    use24Hour: Boolean
 ): String = buildString {
     append("mdblist: budget=")
     append(count.coerceAtLeast(0))
@@ -48,6 +49,6 @@ internal fun mdbListBudgetLine(
     append(")")
     if (limitedUntilMs > nowMs) {
         append(", limited until ")
-        append(DateFormats.time(limitedUntilMs, DateFormats.MONTH_DAY_CLOCK_12H))
+        append(DateFormats.time(limitedUntilMs, DateFormats.monthDayClock(use24Hour)))
     }
 }

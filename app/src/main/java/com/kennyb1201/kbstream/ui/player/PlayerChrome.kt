@@ -332,6 +332,18 @@ class PlayerChrome(
 
     private val handler = Handler(Looper.getMainLooper())
 
+    /**
+     * The overlay's wall clock with the day and the date in front of it.
+     *
+     * Both engines draw this row (this is the shared chrome), so the dated
+     * shape is decided in one place; the NativePlayerActivity's own writer keeps
+     * the same two pairs. A bare `2:05 PM` was the one clock in the app that did
+     * not say which evening it belonged to.
+     */
+    private val dayClock12Format by lazy { DateFormats.dayClock12h() }
+    private val dayClock24Format by lazy { DateFormats.dayClock24h() }
+
+    /** The bare-time pair, for the "Ends at" estimate. */
     private val clock12Format by lazy { DateFormats.clock12h() }
     private val clock24Format by lazy { DateFormats.clock24h() }
 
@@ -1111,8 +1123,9 @@ class PlayerChrome(
     private fun refreshClock(positionMs: Long, durationMs: Long) {
         val clockView = clock ?: return
         val endsView = endsAt ?: return
-        val formatter =
-            if (AppPreferences.getUse24HourClock(root.context)) clock24Format else clock12Format
+        val use24Hour = AppPreferences.getUse24HourClock(root.context)
+        val formatter = if (use24Hour) dayClock24Format else dayClock12Format
+        val endsFormatter = if (use24Hour) clock24Format else clock12Format
         val suffix = playerSleepSuffix()
         if (durationMs <= 0L) {
             clockView.text = DateFormats.now(formatter) + suffix
@@ -1122,7 +1135,7 @@ class PlayerChrome(
         clockView.text = DateFormats.now(formatter)
         endsView.visibility = View.VISIBLE
         val remainingMs = (durationMs - positionMs).coerceAtLeast(0L)
-        val endsAtTime = DateFormats.time(System.currentTimeMillis() + remainingMs, formatter)
+        val endsAtTime = DateFormats.time(System.currentTimeMillis() + remainingMs, endsFormatter)
         endsView.text = "Ends at $endsAtTime$suffix"
     }
 

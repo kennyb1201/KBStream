@@ -622,7 +622,7 @@ internal object SettingsSearchIndex {
             "interface.24h-clock",
             SettingsPane.INTERFACE,
             "24-Hour Clock",
-            "clock 24 hour time format"
+            "clock 24 hour time format guide player sports am pm"
         ),
         SettingSearchEntry(
             "interface.rail-catalog-type",

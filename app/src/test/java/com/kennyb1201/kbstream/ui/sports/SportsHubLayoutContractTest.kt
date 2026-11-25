@@ -859,7 +859,8 @@ class SportsHubLayoutContractTest {
         assertTrue(
             "and its own status text is one ellipsized line",
             flat.contains(
-                "text = SportsDetailRules.statusLine(event), style = " +
+                "text = SportsDetailRules.statusLine(event, rememberUse24HourClock()), " +
+                    "style = " +
                     "MaterialTheme.typography.bodySmall, color = " +
                     "if (event.state == GameState.LIVE) KBDanger else KBTextHi, maxLines = 1"
             )

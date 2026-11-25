@@ -2016,7 +2016,11 @@ object AppPreferences {
         SCREENSAVER_TIMEOUT_OPTIONS_MINUTES.minByOrNull { option -> abs(option - raw) }
             ?: DEFAULT_SCREENSAVER_TIMEOUT_MINUTES
 
-    // ── 24-hour clock (player overlay clock) ──────────────────────────
+    // ── 24-hour clock (every clock the app draws) ─────────────────────
+    // The player overlay read this first, which is why the section used to name
+    // it. It is the app's clock convention now: the guide's cells and ruler, its
+    // header, the sports hub, the zap banner and the catch-up caption all read
+    // it (see `ui.components.rememberUse24HourClock`).
     fun getUse24HourClock(context: Context): Boolean =
         prefs(context).getBoolean(KEY_USE_24H_CLOCK, false)
 

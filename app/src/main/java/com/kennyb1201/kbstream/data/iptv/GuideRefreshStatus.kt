@@ -40,13 +40,13 @@ internal data class GuideRefreshStatus(
      * a profile that HAS sources — the difference between a profile nobody
      * configured and a device that never fetched).
      */
-    fun lastGoodLabel(): String = when {
+    fun lastGoodLabel(use24Hour: Boolean): String = when {
         sourceCount == 0 -> ""
         lastGoodSource.isNullOrBlank() || lastGoodAtMs == null || lastGoodAtMs <= 0L ->
             "Guide not imported on this device yet"
         else ->
             "Guide last imported from ${sourceLabel(lastGoodSource)} " +
-                DateFormats.time(lastGoodAtMs, DateFormats.MONTH_DAY_CLOCK_12H)
+                DateFormats.time(lastGoodAtMs, DateFormats.monthDayClock(use24Hour))
     }
 
     /** The [sourceLabel] of the last good source, or blank when there is none. */

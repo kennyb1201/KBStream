@@ -139,7 +139,7 @@ class GuideGridDensityContractTest {
         )
         assertTrue(
             "the meta line is still there",
-            detail.contains("gridDetailMeta(channelName, cell, nowMs)")
+            detail.contains("gridDetailMeta(channelName, cell, nowMs, use24Hour)")
         )
         assertTrue(
             "and still one line",

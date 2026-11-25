@@ -162,9 +162,12 @@ class SportsTeamScheduleRulesTest {
         assertEquals(
             "the month and day, not the weekday: a season is read against the calendar",
             DateFormats.time(dated.dateMs, DateFormats.MONTH_DAY_CLOCK_12H),
-            SportsTeamScheduleRules.dateLine(dated)
+            SportsTeamScheduleRules.dateLine(dated, use24Hour = false)
         )
-        assertEquals("TBD", SportsTeamScheduleRules.dateLine(game("tbd", 0L, GameState.UPCOMING)))
+        assertEquals(
+            "TBD",
+            SportsTeamScheduleRules.dateLine(game("tbd", 0L, GameState.UPCOMING), use24Hour = false)
+        )
         assertEquals("NYY @ BOS", SportsTeamScheduleRules.matchupLine(dated))
     }
 

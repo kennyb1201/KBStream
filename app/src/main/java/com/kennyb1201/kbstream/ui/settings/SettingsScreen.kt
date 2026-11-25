@@ -3771,7 +3771,8 @@ fun SettingsScreen(
                 // from the Hero section (settings reorg §8.2, M8).
                 ToggleRow(
                     label = "24-Hour Clock",
-                    description = "Show the player clock in 24-hour format (off = 12-hour AM/PM).",
+                    description = "Show every clock in 24-hour format - the player, the guide " +
+                        "and the sports hub (off = 12-hour AM/PM).",
                     checked = use24hClock,
                     onToggle = {
                         use24hClock = it

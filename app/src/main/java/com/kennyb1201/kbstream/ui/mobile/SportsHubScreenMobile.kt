@@ -92,6 +92,7 @@ import com.kennyb1201.kbstream.data.sports.TournamentEvent
 import com.kennyb1201.kbstream.data.sports.pointsCell
 import com.kennyb1201.kbstream.data.sports.standingsTeam
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
+import com.kennyb1201.kbstream.ui.components.rememberUse24HourClock
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBCard
 import com.kennyb1201.kbstream.ui.components.logoArt
@@ -1410,7 +1411,7 @@ private fun GameStatusLineMobile(game: SportsGame, livePulse: State<Float>) {
             }
 
             GameState.UPCOMING -> Text(
-                text = SportsDetailRules.statusLine(game),
+                text = SportsDetailRules.statusLine(game, rememberUse24HourClock()),
                 style = MaterialTheme.typography.bodySmall,
                 color = KBTextHi,
                 maxLines = 1,
@@ -1627,7 +1628,7 @@ private fun TournamentCardMobile(
                     Text(
                         // The shared status rule, so an undated upcoming event
                         // reads "Today" here exactly as it does on TV.
-                        text = SportsDetailRules.statusLine(event),
+                        text = SportsDetailRules.statusLine(event, rememberUse24HourClock()),
                         style = MaterialTheme.typography.bodySmall,
                         color = if (event.state == GameState.LIVE) KBDanger else KBTextHi,
                         maxLines = 1,
@@ -2209,7 +2210,7 @@ private fun DetailHeaderMobile(game: SportsGame) {
         }
 
         Text(
-            text = SportsDetailRules.statusLine(game),
+            text = SportsDetailRules.statusLine(game, rememberUse24HourClock()),
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
             color = if (game.state == GameState.LIVE) KBDanger else KBTextLo
@@ -2424,7 +2425,7 @@ private fun TournamentDetailSheetMobile(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = SportsDetailRules.statusLine(event),
+                    text = SportsDetailRules.statusLine(event, rememberUse24HourClock()),
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
                     color = if (event.state == GameState.LIVE) KBDanger else KBTextLo
@@ -2704,16 +2705,16 @@ private fun TeamScheduleRowMobile(game: SportsGame, onClick: () -> Unit) {
                     // The same words the cards use, and the score in the hub's
                     // own shape, so a season row and a card never disagree.
                     text = if (game.state == GameState.UPCOMING) {
-                        SportsDetailRules.statusLine(game)
+                        SportsDetailRules.statusLine(game, rememberUse24HourClock())
                     } else {
-                        "${SportsDetailRules.statusLine(game)} • ${SportsDetailRules.scoreLine(game)}"
+                        "${SportsDetailRules.statusLine(game, rememberUse24HourClock())} • ${SportsDetailRules.scoreLine(game)}"
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = if (game.state == GameState.LIVE) KBDanger else KBTextLo
                 )
             }
             Text(
-                text = SportsTeamScheduleRules.dateLine(game),
+                text = SportsTeamScheduleRules.dateLine(game, rememberUse24HourClock()),
                 style = MaterialTheme.typography.labelSmall,
                 color = KBTextLo
             )

@@ -131,6 +131,7 @@ import com.kennyb1201.kbstream.data.sports.TournamentEvent
 import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBDialogPanel
+import com.kennyb1201.kbstream.ui.components.rememberUse24HourClock
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBTextField
@@ -1259,11 +1260,14 @@ private fun SportsHeader(
 private fun SportsHeaderClock(modifier: Modifier = Modifier) {
     val context = LocalContext.current
 
+    // The day and the date are part of the clock now, not a second label: a hub
+    // left up through midnight said `11:59 PM` on both sides of it, and the
+    // scores under it had already moved to the next day's fixtures.
     fun readClock(): String {
         val formatter = if (AppPreferences.getUse24HourClock(context)) {
-            DateFormats.clock24h()
+            DateFormats.dayClock24h()
         } else {
-            DateFormats.clock12h()
+            DateFormats.dayClock12h()
         }
         return DateFormats.now(formatter)
     }
@@ -1287,10 +1291,15 @@ private fun SportsHeaderClock(modifier: Modifier = Modifier) {
 }
 
 /**
- * Reserved width for the header clock: wide enough for `12:00 PM` and `23:59`
- * at the header's own type size, so the minute roll never resizes the box.
+ * Reserved width for the header clock: wide enough for `Tue, Sep 30 · 11:59 PM`
+ * at the header's own type size, so neither the minute roll nor the day rolling
+ * over at midnight resizes the box.
+ *
+ * It grew with the label. The control row is laid out from the right, so a
+ * narrower reservation simply let the clock eat into the title column mid-tick -
+ * the one thing the reserved width exists to prevent.
  */
-private val SPORTS_CLOCK_MIN_WIDTH = 84.dp
+private val SPORTS_CLOCK_MIN_WIDTH = 196.dp
 
 /**
  * One header control: the word buttons' [KBCard] with a glyph in place of the
@@ -2980,7 +2989,7 @@ private fun GameStatusLine(
             GameState.UPCOMING -> Text(
                 // The sheet's own start-time string, shared rather than
                 // respelled, so the card and the sheet can never disagree.
-                text = SportsDetailRules.statusLine(game),
+                text = SportsDetailRules.statusLine(game, rememberUse24HourClock()),
                 style = MaterialTheme.typography.bodySmall,
                 color = KBTextHi,
                 maxLines = 1,
@@ -3244,7 +3253,7 @@ private fun TournamentCard(
                         // event with no statusDetail (a TBD tee time) fell to
                         // `event.statusDetail` and drew an EMPTY line - while
                         // its own sheet said "Today" for the same event.
-                        text = SportsDetailRules.statusLine(event),
+                        text = SportsDetailRules.statusLine(event, rememberUse24HourClock()),
                         style = MaterialTheme.typography.bodySmall,
                         color = if (event.state == GameState.LIVE) KBDanger else KBTextHi,
                         maxLines = 1,
@@ -4171,7 +4180,7 @@ private fun TournamentDetailSheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = SportsDetailRules.statusLine(event),
+                        text = SportsDetailRules.statusLine(event, rememberUse24HourClock()),
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold,
                         color = if (event.state == GameState.LIVE) KBDanger else KBTextLo
@@ -4523,7 +4532,7 @@ private fun GameDetailSheet(
                 }
 
                 Text(
-                    text = SportsDetailRules.statusLine(game),
+                    text = SportsDetailRules.statusLine(game, rememberUse24HourClock()),
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
                     color = if (game.state == GameState.LIVE) KBDanger else KBTextLo
@@ -4928,7 +4937,7 @@ private fun TeamScheduleRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = SportsTeamScheduleRules.dateLine(game),
+                text = SportsTeamScheduleRules.dateLine(game, rememberUse24HourClock()),
                 style = MaterialTheme.typography.labelMedium,
                 color = KBTextLo,
                 modifier = Modifier.width(150.dp)
@@ -4948,9 +4957,9 @@ private fun TeamScheduleRow(
                 // the hub's own shape, so a season row and a card never disagree
                 // about a 5-3.
                 text = if (game.state == GameState.UPCOMING) {
-                    SportsDetailRules.statusLine(game)
+                    SportsDetailRules.statusLine(game, rememberUse24HourClock())
                 } else {
-                    "${SportsDetailRules.statusLine(game)}  •  ${SportsDetailRules.scoreLine(game)}"
+                    "${SportsDetailRules.statusLine(game, rememberUse24HourClock())}  •  ${SportsDetailRules.scoreLine(game)}"
                 },
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,

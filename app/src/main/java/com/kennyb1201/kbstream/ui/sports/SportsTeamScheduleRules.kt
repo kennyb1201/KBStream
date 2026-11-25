@@ -83,9 +83,9 @@ internal object SportsTeamScheduleRules {
      * today ("Sat, 7:30 PM"), a season against the calendar, where the same
      * weekday comes round every week and names nothing.
      */
-    fun dateLine(game: SportsGame): String =
+    fun dateLine(game: SportsGame, use24Hour: Boolean): String =
         if (game.dateMs > 0L) {
-            DateFormats.time(game.dateMs, DateFormats.MONTH_DAY_CLOCK_12H)
+            DateFormats.time(game.dateMs, DateFormats.monthDayClock(use24Hour))
         } else {
             "TBD"
         }

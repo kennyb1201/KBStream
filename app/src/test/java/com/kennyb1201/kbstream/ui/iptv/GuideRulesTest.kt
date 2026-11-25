@@ -129,7 +129,7 @@ class GuideRulesTest {
     fun `a program's slot reads as two wall-clock times`() {
         assertEquals(
             "9:05 AM - 10:00 AM",
-            formatTimeRange(utc(2026, 9, 30, 9, 5), utc(2026, 9, 30, 10, 0))
+            formatTimeRange(utc(2026, 9, 30, 9, 5), utc(2026, 9, 30, 10, 0), use24Hour = false)
         )
     }
 
@@ -137,11 +137,42 @@ class GuideRulesTest {
     fun `midnight and noon are 12, not 0`() {
         assertEquals(
             "12:00 AM - 12:30 AM",
-            formatTimeRange(utc(2026, 9, 30, 0, 0), utc(2026, 9, 30, 0, 30))
+            formatTimeRange(utc(2026, 9, 30, 0, 0), utc(2026, 9, 30, 0, 30), use24Hour = false)
         )
         assertEquals(
             "12:00 PM - 1:00 PM",
-            formatTimeRange(utc(2026, 9, 30, 12, 0), utc(2026, 9, 30, 13, 0))
+            formatTimeRange(utc(2026, 9, 30, 12, 0), utc(2026, 9, 30, 13, 0), use24Hour = false)
+        )
+    }
+
+    @Test
+    fun `the 24-hour setting changes the slot's shape`() {
+        // Settings -> Interface -> 24-hour clock. The same slot, read the way
+        // the viewer asked: leading zeros and no meridiem.
+        assertEquals(
+            "09:05 - 10:00",
+            formatTimeRange(utc(2026, 9, 30, 9, 5), utc(2026, 9, 30, 10, 0), use24Hour = true)
+        )
+        assertEquals(
+            "00:00 - 00:30",
+            formatTimeRange(utc(2026, 9, 30, 0, 0), utc(2026, 9, 30, 0, 30), use24Hour = true)
+        )
+        assertEquals(
+            "12:00 - 13:00",
+            formatTimeRange(utc(2026, 9, 30, 12, 0), utc(2026, 9, 30, 13, 0), use24Hour = true)
+        )
+    }
+
+    @Test
+    fun `a 24-hour catch-up window keeps its leading zero`() {
+        assertEquals(
+            "Today \u00b7 09:05\u201310:00",
+            formatCatchupWindow(
+                utc(2026, 9, 30, 9, 5),
+                utc(2026, 9, 30, 10, 0),
+                nowMillis = utc(2026, 9, 30, 10, 30),
+                use24Hour = true
+            )
         )
     }
 

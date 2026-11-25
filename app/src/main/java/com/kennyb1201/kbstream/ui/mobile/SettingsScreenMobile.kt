@@ -3253,7 +3253,8 @@ private fun InterfacePaneMobile() {
         // (settings reorg §8.2, M8): it closes the Theme section.
         SettingsToggleMobile(
             label = "24-hour clock",
-            description = "Show the player overlay clock in 24-hour time.",
+            description = "Show every clock in 24-hour time - the player, the guide and the " +
+                "sports hub.",
             checked = use24h,
             onChange = {
                 use24h = it

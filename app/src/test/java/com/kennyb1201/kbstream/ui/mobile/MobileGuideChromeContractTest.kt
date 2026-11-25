@@ -51,7 +51,7 @@ class MobileGuideChromeContractTest {
 
     @Test
     fun `the setup panel carries both, beside the import button`() {
-        val lastGood = setupPanel.indexOf("guideStatus.lastGoodLabel()")
+        val lastGood = setupPanel.indexOf("guideStatus.lastGoodLabel(use24Hour)")
         val failing = setupPanel.indexOf("GuideRefreshStatus.FAILING_LABEL")
         val importButton = setupPanel.indexOf("\"IMPORT GUIDE\"")
 
@@ -88,7 +88,8 @@ class MobileGuideChromeContractTest {
         )
         assertTrue(
             "the channel and when it is on (F2b)",
-            detailStrip.contains("\${item.channel.displayName} · \${gridCellHeadline(cell, nowMs)}")
+            detailStrip.contains("\${item.channel.displayName} · \" +") &&
+                detailStrip.contains("gridCellHeadline(cell, nowMs, use24Hour)")
         )
         assertTrue("and its description", detailStrip.contains("cell.description"))
     }

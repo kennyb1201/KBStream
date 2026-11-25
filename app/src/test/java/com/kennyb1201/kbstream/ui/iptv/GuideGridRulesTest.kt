@@ -343,7 +343,7 @@ class GuideGridRulesTest {
     @Test
     fun `the header labels every hour and dates the first and the day change`() {
         val window = windowFrom(at(22))
-        val marks = hourMarks(window)
+        val marks = hourMarks(window, use24Hour = false)
 
         assertEquals(6, marks.size)
         assertEquals(0, marks[0].offsetMinutes)
@@ -360,10 +360,15 @@ class GuideGridRulesTest {
 
     @Test
     fun `hour labels are 12 hour spellings`() {
-        assertEquals("12 AM", hourLabel(0))
-        assertEquals("12 PM", hourLabel(12))
-        assertEquals("6 PM", hourLabel(18))
-        assertEquals("1 AM", hourLabel(1))
+        assertEquals("12 AM", hourLabel(0, use24Hour = false))
+        assertEquals("12 PM", hourLabel(12, use24Hour = false))
+        assertEquals("6 PM", hourLabel(18, use24Hour = false))
+        assertEquals("1 AM", hourLabel(1, use24Hour = false))
+        // The 24-hour ruler: settings -> Interface, and the labels the cells
+        // under it use, so the strip and the slots cannot disagree.
+        assertEquals("00:00", hourLabel(0, use24Hour = true))
+        assertEquals("09:00", hourLabel(9, use24Hour = true))
+        assertEquals("18:00", hourLabel(18, use24Hour = true))
     }
 
     // ── Cell content ──────────────────────────────────────────────────────
@@ -384,7 +389,7 @@ class GuideGridRulesTest {
             endUtcMillis = start + 30 * minute,
         )
         assertEquals(0f, liveFillFraction(gap, start + 10 * minute), 0.001f)
-        assertEquals("No program data", gridCellHeadline(gap, start))
+        assertEquals("No program data", gridCellHeadline(gap, start, use24Hour = false))
     }
 
     // ── Sliding window ────────────────────────────────────────────────────
@@ -596,7 +601,7 @@ class GuideGridRulesTest {
             description = null,
             category = "Movies",
         )
-        val meta = gridDetailMeta("HBO", cell, now)
+        val meta = gridDetailMeta("HBO", cell, now, use24Hour = false)
         assertTrue(meta, meta.startsWith("HBO · "))
         assertTrue(meta, meta.contains("Starts in 25 min"))
         assertTrue(meta, meta.endsWith(" · Movies"))
@@ -613,7 +618,7 @@ class GuideGridRulesTest {
             title = "News",
             description = null,
         )
-        assertEquals("Sky · On now · 20 min left", gridDetailMeta("Sky", cell, now))
+        assertEquals("Sky · On now · 20 min left", gridDetailMeta("Sky", cell, now, use24Hour = false))
     }
 
     private fun channel(id: String, group: String?): IptvChannelWithEpg = IptvChannelWithEpg(

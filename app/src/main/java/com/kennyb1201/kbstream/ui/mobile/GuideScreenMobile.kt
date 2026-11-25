@@ -71,6 +71,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.ui.components.logoRequest
+import com.kennyb1201.kbstream.ui.components.rememberUse24HourClock
+import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.iptv.CatchupProgram
 import com.kennyb1201.kbstream.data.notifications.ReminderRules
 import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
@@ -124,9 +126,7 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.MobileTheme
 import com.kennyb1201.kbstream.ui.theme.InterFamily
 import com.kennyb1201.kbstream.work.ReminderWorker
-import java.text.SimpleDateFormat
 import java.util.Date
-import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -307,6 +307,10 @@ fun GuideScreenMobile(
             mutableStateOf(IptvReminderStore.load(guidePrefs))
         }
         var reminderBanner by remember { mutableStateOf<IptvReminderStore.Reminder?>(null) }
+        // The viewer's clock, for the import-status line below (settings ->
+        // Interface). One read for the screen; the row and dialog composables
+        // each read it for themselves.
+        val use24Hour = rememberUse24HourClock()
         // Every armed reminder, by the key the worker uses: a program search hit
         // reads it to say "Reminder set" rather than offering to set one twice.
         val reminderKeys = remember(reminders) {
@@ -520,7 +524,7 @@ fun GuideScreenMobile(
                 delay(GUIDE_TICK_MS)
             }
         }
-        val guideImportLabel = GuideImportProgress.label(guideImport, nowMs)
+        val guideImportLabel = GuideImportProgress.label(guideImport, nowMs, use24Hour)
 
         // The grid's hard right edge (F1a): the end of the newest program the
         // guide has imported - the same read the TV grid is handed, and the value
@@ -1261,7 +1265,11 @@ private fun MobileGuideTopBar(
     /** The grid's group drawer (F2k-e); null in list view, where the chips do it. */
     onOpenGroups: (() -> Unit)? = null
 ) {
-    val clock = remember { SimpleDateFormat("h:mm a", Locale.getDefault()) }
+    val use24Hour = rememberUse24HourClock()
+    // The day, the date and the time - the same label the TV header carries, in
+    // the same convention. A guide left open overnight says which day it is
+    // showing without the viewer counting cell widths.
+    val clock = remember(use24Hour) { DateFormats.dayClock(use24Hour) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1281,13 +1289,17 @@ private fun MobileGuideTopBar(
             )
             Text(
                 text = buildList {
+                    // The clock leads: it is the one item on this line that must
+                    // never be the part an over-long group name pushes off the
+                    // end, and the date is what the viewer reads it for.
+                    add(clock.format(Date(nowMs)))
                     add("$channelCount channels")
                     if (groupLabel.isNotBlank()) add(groupLabel)
-                    add(clock.format(Date(nowMs)))
                 }.joinToString("  ·  "),
                 color = KBTextLo,
                 style = MaterialTheme.typography.bodySmall,
-                maxLines = 1
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
         if (onOpenGroups != null) {
@@ -1354,6 +1366,7 @@ private fun MobileGuideChannelRow(
 ) {
     val now = item.now
     val channel = item.channel
+    val use24Hour = rememberUse24HourClock()
 
     Row(
         modifier = Modifier
@@ -1409,7 +1422,11 @@ private fun MobileGuideChannelRow(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = formatTimeRange(now.startUtcMillis, now.endUtcMillis),
+                            text = formatTimeRange(
+                                now.startUtcMillis,
+                                now.endUtcMillis,
+                                use24Hour
+                            ),
                             color = KBTextLo,
                             style = MaterialTheme.typography.bodySmall,
                             maxLines = 1,
@@ -1535,6 +1552,7 @@ private fun MobileProgramHitRow(
     actionActive: Boolean,
     onClick: () -> Unit
 ) {
+    val use24Hour = rememberUse24HourClock()
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1551,7 +1569,11 @@ private fun MobileProgramHitRow(
         )
         Text(
             text = hit.item.channel.displayName.ifBlank { hit.item.channel.name } + "  ·  " +
-                formatTimeRange(hit.program.startUtcMillis, hit.program.endUtcMillis),
+                formatTimeRange(
+                    hit.program.startUtcMillis,
+                    hit.program.endUtcMillis,
+                    use24Hour
+                ),
             color = KBTextLo,
             style = MaterialTheme.typography.bodySmall,
             maxLines = 1,
@@ -1781,6 +1803,8 @@ private fun MobileGuideSetup(
     onCancelGuideImport: () -> Unit = {},
     onBack: () -> Unit
 ) {
+    // The clock the last-good status line reports its import time in.
+    val use24Hour = rememberUse24HourClock()
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -2003,9 +2027,9 @@ private fun MobileGuideSetup(
             // it; the reason they exist is unchanged (a guide goes stale before
             // it reads blank), so they moved here instead of going away. The
             // TRANSIENT import label stays on the main screen (F1b).
-            if (guideStatus.lastGoodLabel().isNotBlank()) {
+            if (guideStatus.lastGoodLabel(use24Hour).isNotBlank()) {
                 Text(
-                    text = guideStatus.lastGoodLabel(),
+                    text = guideStatus.lastGoodLabel(use24Hour),
                     color = KBTextLo,
                     style = MaterialTheme.typography.labelMedium,
                     maxLines = 1,
@@ -2297,6 +2321,7 @@ private fun MobileCatchupDialog(
     onDismiss: () -> Unit,
     onPlay: (CatchupProgram) -> Unit
 ) {
+    val use24Hour = rememberUse24HourClock()
     Dialog(onDismissRequest = onDismiss) {
         KBDialogPanel(title = "Catch-up TV", subtitle = channelName) {
             when {
@@ -2354,7 +2379,8 @@ private fun MobileCatchupDialog(
                             Text(
                                 text = formatCatchupWindow(
                                     program.startUtcMillis,
-                                    program.endUtcMillis
+                                    program.endUtcMillis,
+                                    use24Hour = use24Hour
                                 ),
                                 color = KBTextLo,
                                 style = MaterialTheme.typography.bodySmall,

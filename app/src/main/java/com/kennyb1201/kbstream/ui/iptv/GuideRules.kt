@@ -63,10 +63,17 @@ internal fun formatStartsInLabel(msUntilStart: Long): String =
         else -> "in ${msUntilStart / 86_400_000L} d"
     }
 
-/** `9:05 AM - 10:00 AM`, in the device's own zone. */
-internal fun formatTimeRange(startMillis: Long, endMillis: Long): String {
-    return "${DateFormats.time(startMillis, DateFormats.CLOCK_12H)} - " +
-        DateFormats.time(endMillis, DateFormats.CLOCK_12H)
+/**
+ * `9:05 AM - 10:00 AM` or `09:05 - 10:00`, in the device's own zone.
+ *
+ * [use24Hour] is the viewer's clock setting (settings -> Interface), and it is
+ * required rather than defaulted: this label appears on every cell of the guide,
+ * so a call site that forgot the flag would be a guide that disagrees with the
+ * clock in its own header.
+ */
+internal fun formatTimeRange(startMillis: Long, endMillis: Long, use24Hour: Boolean): String {
+    val fmt = if (use24Hour) DateFormats.CLOCK_24H else DateFormats.CLOCK_12H
+    return "${DateFormats.time(startMillis, fmt)} - ${DateFormats.time(endMillis, fmt)}"
 }
 
 /**
@@ -92,18 +99,30 @@ internal fun formatTimeRange(startMillis: Long, endMillis: Long): String {
 internal fun formatCatchupWindow(
     startUtcMillis: Long,
     endUtcMillis: Long,
-    nowMillis: Long = System.currentTimeMillis()
+    nowMillis: Long = System.currentTimeMillis(),
+    /**
+     * The viewer's clock. Defaulted to the 12-hour shape the caption has always
+     * had, because this is a dialog label rather than the guide's grid: both
+     * call sites pass the setting explicitly, and a test that does not care
+     * should not have to state it.
+     */
+    use24Hour: Boolean = false
 ): String {
     fun fmt(millis: Long): String {
         val cal = Calendar.getInstance()
         cal.timeInMillis = millis
         val hour = cal.get(Calendar.HOUR_OF_DAY)
+        val minute = cal.get(Calendar.MINUTE)
+        // 24-hour keeps the leading zero ("09:05"), because a window caption
+        // reads as a range and "9:05-10:00" makes the two halves look like
+        // different formats.
+        if (use24Hour) return String.format(Locale.US, "%02d:%02d", hour, minute)
         val h12 = if (hour % 12 == 0) 12 else hour % 12
         return String.format(
             Locale.US,
             "%d:%02d%s",
             h12,
-            cal.get(Calendar.MINUTE),
+            minute,
             if (hour >= 12) "pm" else "am"
         )
     }

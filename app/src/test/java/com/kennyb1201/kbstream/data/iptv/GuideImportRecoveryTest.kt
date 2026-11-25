@@ -524,7 +524,7 @@ class GuideImportRecoveryTest {
         assertEquals(
             "the staleness fact is past-only",
             "anything",
-            GuideImportProgress.withStaleness("anything", now + 1L, now)
+            GuideImportProgress.withStaleness("anything", now + 1L, now, use24Hour = false)
         )
     }
 

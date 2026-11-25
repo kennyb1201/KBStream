@@ -80,8 +80,8 @@ class SportsGameDetailSheetContractTest {
     fun `the sheet renders the loaded game and fetches nothing`() {
         val sheet = sheetSource()
         assertTrue(
-            "the status line is the shared one",
-            sheet.contains("SportsDetailRules.statusLine(game)")
+            "the status line is the shared one, in the viewer's clock",
+            sheet.contains("SportsDetailRules.statusLine(game, rememberUse24HourClock())")
         )
         assertTrue(
             "the score line too",

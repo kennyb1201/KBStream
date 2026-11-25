@@ -2437,7 +2437,8 @@ object MdbListClient {
         return mdbListBudgetLine(
             count = budget.count.get(),
             limitedUntilMs = budget.limitedUntilMs,
-            nowMs = System.currentTimeMillis()
+            nowMs = System.currentTimeMillis(),
+            use24Hour = AppPreferences.getUse24HourClock(context)
         )
     }
 

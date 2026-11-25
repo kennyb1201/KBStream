@@ -36,10 +36,10 @@ internal object SportsDetailRules {
      * Live clock / start time / "Final" - the same strings the card draws, from
      * the same helper.
      */
-    fun statusLine(game: SportsGame): String = when (game.state) {
+    fun statusLine(game: SportsGame, use24Hour: Boolean): String = when (game.state) {
         GameState.LIVE -> game.statusDetail.ifBlank { "LIVE" }
         GameState.FINAL -> "Final"
-        GameState.UPCOMING -> upcomingLabel(game.dateMs, game.statusDetail)
+        GameState.UPCOMING -> upcomingLabel(game.dateMs, game.statusDetail, use24Hour)
     }
 
     /**
@@ -48,10 +48,10 @@ internal object SportsDetailRules {
      * and no score, so this is the whole of its state, and the sheet says it
      * exactly as the card does.
      */
-    fun statusLine(event: TournamentEvent): String = when (event.state) {
+    fun statusLine(event: TournamentEvent, use24Hour: Boolean): String = when (event.state) {
         GameState.LIVE -> event.statusDetail.ifBlank { "LIVE" }
         GameState.FINAL -> "Final"
-        GameState.UPCOMING -> upcomingLabel(event.dateMs, event.statusDetail)
+        GameState.UPCOMING -> upcomingLabel(event.dateMs, event.statusDetail, use24Hour)
     }
 
     /**
@@ -197,17 +197,28 @@ internal object SportsDetailRules {
         else -> "Not in your playlist"
     }
 
-    /** "Tue, 7:30 PM" in the device's zone, plus ESPN's own detail if it adds any. */
-    private fun upcomingLabel(dateMs: Long, statusDetail: String): String {
+    /**
+     * "Tue, 7:30 PM" (or "Tue, 19:30") in the device's zone, plus ESPN's own
+     * detail if it adds any.
+     *
+     * [use24Hour] is the viewer's clock setting, from the same switch the hub's
+     * header reads - a card and the clock above it must not disagree about the
+     * same evening.
+     */
+    private fun upcomingLabel(dateMs: Long, statusDetail: String, use24Hour: Boolean): String {
         val when_ = if (dateMs > 0L) {
-            DateFormats.time(dateMs, DateFormats.WEEKDAY_CLOCK_12H)
+            DateFormats.time(dateMs, DateFormats.weekdayClock(use24Hour))
         } else {
             ""
         }
         val detail = statusDetail.trim()
         // ESPN's "7:30 PM ET" duplicates the clock we just formatted; a detail
         // that is only a time adds nothing, so it is only shown when it says
-        // something else (a delayed start, a suspension).
+        // something else (a delayed start, a suspension). The 24-hour token is
+        // recognised too: a provider that says "19:30" is the same duplicate in
+        // the other convention, and now that the clock can be 24-hour, "19:30
+        // • 19:30" would be the one line the toggle could make worse.
+        val timeOnly24 = Regex("^\\d{1,2}:\\d{2}(\\s*[A-Za-z]{1,3})?$")
         return when {
             // No date is not "today": an undated fixture is the one thing the
             // feed could not say, and labelling it Today presented a TBD game
@@ -215,7 +226,8 @@ internal object SportsDetailRules {
             // (a postponed start, a suspension) beats it when it has one.
             when_.isBlank() -> detail.ifBlank { "TBD" }
             detail.isBlank() || detail.contains("PM", ignoreCase = true) ||
-                detail.contains("AM", ignoreCase = true) -> when_
+                detail.contains("AM", ignoreCase = true) ||
+                (use24Hour && timeOnly24.matches(detail)) -> when_
             else -> "$when_ • $detail"
         }
     }

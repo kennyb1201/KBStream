@@ -482,8 +482,15 @@ internal data class GridHourMark(
 internal fun hourMarkLine(mark: GridHourMark): String =
     mark.dayLabel?.let { day -> "$day · ${mark.label}" } ?: mark.label
 
-/** The hour labels across [window], with a day label where the day changes. */
-internal fun hourMarks(window: GridWindow): List<GridHourMark> {
+/**
+ * The hour labels across [window], with a day label where the day changes.
+ *
+ * [use24Hour] is the viewer's clock setting (settings -> Interface). The ruler
+ * is a clock like any other: a 24-hour guide whose ruler still said `3 PM`
+ * while every cell under it said `15:00` would be the loudest disagreement in
+ * the app, because both are in the same field of view.
+ */
+internal fun hourMarks(window: GridWindow, use24Hour: Boolean): List<GridHourMark> {
     val marks = ArrayList<GridHourMark>((window.durationMs / GuideGrid.HOUR_MS).toInt() + 1)
     val cal = Calendar.getInstance()
     cal.timeInMillis = window.startUtcMillis
@@ -494,7 +501,7 @@ internal fun hourMarks(window: GridWindow): List<GridHourMark> {
         val opensDay = lastDay == null || day != lastDay
         marks += GridHourMark(
             offsetMinutes = window.offsetMinutesOf(millis),
-            label = hourLabel(cal.get(Calendar.HOUR_OF_DAY)),
+            label = hourLabel(cal.get(Calendar.HOUR_OF_DAY), use24Hour),
             // The first label always carries the date: the grid can be paged
             // into tomorrow, and a bare "12 AM" does not say which day.
             dayLabel = if (opensDay) DateFormats.time(millis, GRID_DAY_LABEL) else null,
@@ -505,9 +512,10 @@ internal fun hourMarks(window: GridWindow): List<GridHourMark> {
     return marks
 }
 
-/** `12 AM`, `6 PM` - the header's own 12-hour spellings. */
-internal fun hourLabel(hourOfDay: Int): String {
+/** `12 AM`, `6 PM` - or `00:00`, `18:00` on a 24-hour clock. */
+internal fun hourLabel(hourOfDay: Int, use24Hour: Boolean): String {
     val h = ((hourOfDay % 24) + 24) % 24
+    if (use24Hour) return "${h.toString().padStart(2, '0')}:00"
     val h12 = if (h % 12 == 0) 12 else h % 12
     return "$h12 ${if (h < 12) "AM" else "PM"}"
 }
@@ -743,13 +751,14 @@ internal fun gridDetailMeta(
     channelName: String,
     cell: GridCell,
     nowUtcMillis: Long,
+    use24Hour: Boolean,
 ): String {
     val whenLabel = if (!cell.isGap && nowUtcMillis < cell.startUtcMillis) {
-        val range = formatTimeRange(cell.startUtcMillis, cell.endUtcMillis)
+        val range = formatTimeRange(cell.startUtcMillis, cell.endUtcMillis, use24Hour)
         val starts = formatStartsInLabel(cell.startUtcMillis - nowUtcMillis)
         if (starts == "starting") "$range · Starting now" else "$range · Starts $starts"
     } else {
-        gridCellHeadline(cell, nowUtcMillis)
+        gridCellHeadline(cell, nowUtcMillis, use24Hour)
     }
     return listOfNotNull(
         channelName.takeIf { it.isNotBlank() },
@@ -763,10 +772,16 @@ internal fun gridDetailMeta(
  * whether that press can do anything at all (`Ended` is the one that cannot,
  * where the channel has no catch-up).
  */
-internal fun gridCellHeadline(cell: GridCell, nowUtcMillis: Long): String = when {
+internal fun gridCellHeadline(
+    cell: GridCell,
+    nowUtcMillis: Long,
+    use24Hour: Boolean
+): String = when {
     cell.isGap -> "No program data"
-    nowUtcMillis < cell.startUtcMillis -> formatTimeRange(cell.startUtcMillis, cell.endUtcMillis)
-    nowUtcMillis >= cell.endUtcMillis -> "Ended · ${formatTimeRange(cell.startUtcMillis, cell.endUtcMillis)}"
+    nowUtcMillis < cell.startUtcMillis ->
+        formatTimeRange(cell.startUtcMillis, cell.endUtcMillis, use24Hour)
+    nowUtcMillis >= cell.endUtcMillis ->
+        "Ended · ${formatTimeRange(cell.startUtcMillis, cell.endUtcMillis, use24Hour)}"
     else -> "On now · ${formatRemainingLabel(cell.endUtcMillis - nowUtcMillis) ?: "ending"}"
 }
 

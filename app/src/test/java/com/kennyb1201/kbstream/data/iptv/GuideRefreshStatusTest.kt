@@ -20,12 +20,12 @@ class GuideRefreshStatusTest {
 
     @Test
     fun `a profile with no guide sources says nothing`() {
-        assertEquals("", GuideRefreshStatus().lastGoodLabel())
+        assertEquals("", GuideRefreshStatus().lastGoodLabel(use24Hour = false))
         assertEquals(
             "even when a stale stamp exists from a source that was removed",
             "",
             GuideRefreshStatus(lastGoodSource = "https://host/gone.xml", lastGoodAtMs = importedAt)
-                .lastGoodLabel()
+                .lastGoodLabel(use24Hour = false)
         )
     }
 
@@ -33,13 +33,13 @@ class GuideRefreshStatusTest {
     fun `a device that never imported says so`() {
         assertEquals(
             "Guide not imported on this device yet",
-            GuideRefreshStatus(sourceCount = 2).lastGoodLabel()
+            GuideRefreshStatus(sourceCount = 2).lastGoodLabel(use24Hour = false)
         )
         assertEquals(
             "a zero stamp is 'never', not the epoch",
             "Guide not imported on this device yet",
             GuideRefreshStatus(sourceCount = 1, lastGoodSource = "https://host/g.xml", lastGoodAtMs = 0L)
-                .lastGoodLabel()
+                .lastGoodLabel(use24Hour = false)
         )
     }
 
@@ -49,7 +49,7 @@ class GuideRefreshStatusTest {
             sourceCount = 2,
             lastGoodSource = "https://epg.kanya.io/us/guide.xml.gz",
             lastGoodAtMs = importedAt
-        ).lastGoodLabel()
+        ).lastGoodLabel(use24Hour = false)
 
         assertTrue(
             "the source it came from, without the scheme: $label",

@@ -29,7 +29,7 @@ class GuideGridHourMarkContractTest {
     private val rules = source("com/kennyb1201/kbstream/ui/iptv/GuideGridRules.kt")
 
     /** The mark loop inside the sticky time header. */
-    private val marks = grid.slice("hourMarks(window).forEach { mark ->", "LazyColumn(")
+    private val marks = grid.slice("hourMarks(window, rememberUse24HourClock())", "LazyColumn(")
 
     private val minute = 60_000L
     private val hour = GuideGrid.HOUR_MS
@@ -62,7 +62,7 @@ class GuideGridHourMarkContractTest {
         listOf(3, 6, 12).forEach { hours ->
             // 3 PM on Sunday Nov 8, the window the field report opened on.
             val window = GridWindow.opening(at(15), windowHours = hours)
-            val zoomMarks = hourMarks(window)
+            val zoomMarks = hourMarks(window, use24Hour = false)
             assertTrue("a $hours h window has marks", zoomMarks.isNotEmpty())
 
             val opening = zoomMarks.first()
@@ -88,7 +88,7 @@ class GuideGridHourMarkContractTest {
     @Test
     fun `the next midnight marks its own day inline too`() {
         // 12 h from 3 PM reaches 3 AM, so midnight is inside the window.
-        val zoomMarks = hourMarks(GridWindow.opening(at(15), windowHours = 12))
+        val zoomMarks = hourMarks(GridWindow.opening(at(15), windowHours = 12), use24Hour = false)
         val midnight = zoomMarks.first { it.label == "12 AM" }
 
         assertNotNull("S3: the day change still carries the date", midnight.dayLabel)
