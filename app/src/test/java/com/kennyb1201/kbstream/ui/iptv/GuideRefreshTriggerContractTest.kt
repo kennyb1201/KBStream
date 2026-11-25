@@ -241,8 +241,8 @@ class GuideRefreshTriggerContractTest {
     fun `the failing state is shown where the button is`() {
         listOf("the TV form" to tvGuide, "the phone form" to mobileGuide).forEach { (form, src) ->
             assertTrue(
-                "$form must show which source last imported",
-                src.contains("guideStatus.lastGoodLabel()")
+                "$form must show which source last imported, in the viewer's clock",
+                src.contains("guideStatus.lastGoodLabel(use24Hour)")
             )
             assertTrue(
                 "$form must show the failing state beside IMPORT GUIDE",

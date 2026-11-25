@@ -450,9 +450,10 @@ class GuideImportRecoveryTest {
         )
         // No pass at all keeps the old behaviour: the line clears. A RUNNING
         // pass still renders its live counters, not an outcome.
-        assertEquals("", GuideImportProgress.label(null, 0L))
+        assertEquals("", GuideImportProgress.label(null, 0L, use24Hour = false))
         assertTrue(
-            GuideImportProgress.label(GuideImportState(), 0L).contains("0 programs")
+            GuideImportProgress.label(GuideImportState(), 0L, use24Hour = false)
+                .contains("0 programs")
         )
     }
 
@@ -481,7 +482,11 @@ class GuideImportRecoveryTest {
         assertEquals(
             "the status line is what the two guide screens already render",
             "Imported 7 programs",
-            GuideImportProgress.label(GuideImportState(outcome = GuideImportOutcome.Imported(7)), 0L)
+            GuideImportProgress.label(
+                GuideImportState(outcome = GuideImportOutcome.Imported(7)),
+                0L,
+                use24Hour = false
+            )
         )
     }
 
@@ -499,7 +504,8 @@ class GuideImportRecoveryTest {
                     outcome = GuideImportOutcome.EmptyFeedKeptLive,
                     guideEndsAtMs = endedAt
                 ),
-                now
+                now,
+                use24Hour = false
             )
         )
         assertEquals(
@@ -510,7 +516,8 @@ class GuideImportRecoveryTest {
                     outcome = GuideImportOutcome.Imported(12),
                     guideEndsAtMs = now + 60_000L
                 ),
-                now
+                now,
+                use24Hour = false
             )
         )
         assertEquals(
@@ -518,7 +525,8 @@ class GuideImportRecoveryTest {
             "Imported 12 programs",
             GuideImportProgress.label(
                 GuideImportState(outcome = GuideImportOutcome.Imported(12)),
-                now
+                now,
+                use24Hour = false
             )
         )
         assertEquals(
@@ -585,7 +593,7 @@ class GuideImportRecoveryTest {
     // ── helpers ─────────────────────────────────────────────────────
 
     private fun outcomeLabel(outcome: GuideImportOutcome): String =
-        GuideImportProgress.label(GuideImportState(outcome = outcome), 0L)
+        GuideImportProgress.label(GuideImportState(outcome = outcome), 0L, use24Hour = false)
 
     /**
      * The live guide's program rows in a comparable shape: the import must leave

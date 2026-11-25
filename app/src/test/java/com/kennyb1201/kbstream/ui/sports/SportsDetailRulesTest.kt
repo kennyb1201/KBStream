@@ -324,14 +324,21 @@ class SportsDetailRulesTest {
         assertEquals(
             "Round 1 - Play Complete",
             SportsDetailRules.statusLine(
-                tournament(state = GameState.LIVE, statusDetail = "Round 1 - Play Complete")
+                tournament(state = GameState.LIVE, statusDetail = "Round 1 - Play Complete"),
+                use24Hour = false
             )
         )
         // A live round with no detail still says the one thing that matters.
-        assertEquals("LIVE", SportsDetailRules.statusLine(tournament(state = GameState.LIVE)))
-        assertEquals("Final", SportsDetailRules.statusLine(tournament(state = GameState.FINAL)))
+        assertEquals(
+            "LIVE",
+            SportsDetailRules.statusLine(tournament(state = GameState.LIVE), use24Hour = false)
+        )
+        assertEquals(
+            "Final",
+            SportsDetailRules.statusLine(tournament(state = GameState.FINAL), use24Hour = false)
+        )
         // Same fallback as a game's: no clock and no detail reads as "TBD".
-        assertEquals("TBD", SportsDetailRules.statusLine(tournament()))
+        assertEquals("TBD", SportsDetailRules.statusLine(tournament(), use24Hour = false))
     }
 
     @Test

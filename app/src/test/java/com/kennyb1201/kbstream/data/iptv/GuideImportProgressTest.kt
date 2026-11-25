@@ -23,7 +23,7 @@ class GuideImportProgressTest {
     }
 
     private fun label(state: GuideImportState?, nowMs: Long) =
-        GuideImportProgress.label(state, nowMs)
+        GuideImportProgress.label(state, nowMs, use24Hour = false)
 
     private val start = 1_700_000_000_000L
 
