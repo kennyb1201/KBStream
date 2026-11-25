@@ -126,7 +126,6 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.MobileTheme
 import com.kennyb1201.kbstream.ui.theme.InterFamily
 import com.kennyb1201.kbstream.work.ReminderWorker
-import java.util.Date
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -1292,7 +1291,7 @@ private fun MobileGuideTopBar(
                     // The clock leads: it is the one item on this line that must
                     // never be the part an over-long group name pushes off the
                     // end, and the date is what the viewer reads it for.
-                    add(clock.format(Date(nowMs)))
+                    add(DateFormats.time(nowMs, clock))
                     add("$channelCount channels")
                     if (groupLabel.isNotBlank()) add(groupLabel)
                 }.joinToString("  ·  "),

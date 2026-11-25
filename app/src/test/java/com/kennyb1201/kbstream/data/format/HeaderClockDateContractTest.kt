@@ -126,7 +126,8 @@ class HeaderClockDateContractTest {
             .substringBefore("}.joinToString(\"  ·  \")")
         assertTrue(
             "and it is first, so a long group name cannot push the date off the line",
-            header.indexOf("clock.format(Date(nowMs))") < header.indexOf("channelCount channels")
+            header.indexOf("DateFormats.time(nowMs, clock)") <
+                header.indexOf("channelCount channels")
         )
     }
 

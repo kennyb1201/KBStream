@@ -7882,6 +7882,35 @@ fun HomeScreen(
                                         onLoadMore = viewModel::loadMoreForRail
                                     )
 
+                                    // This rail's own art, read from the flow that
+                                    // is filed beside the rails: the derived state
+                                    // recomputes on every art publish but only
+                                    // notifies when THIS rail's map changed, so the
+                                    // other rows (whose maps are the same
+                                    // instances) are not invalidated at all.
+                                    //
+                                    // Hoisted out of the LazyRow's content: that
+                                    // lambda is a LazyListScope receiver, not a
+                                    // composable one, so `remember` cannot be
+                                    // called inside it (it compiles nowhere, and
+                                    // the row's own items still read the value).
+                                    val railArtKey = remember(
+                                        rail.addonName,
+                                        rail.catalogId,
+                                        rail.type
+                                    ) {
+                                        catalogRailKey(
+                                            rail.addonName,
+                                            rail.catalogId,
+                                            rail.type
+                                        )
+                                    }
+                                    val railArt by remember(railArtKey) {
+                                        derivedStateOf {
+                                            railArtState.value[railArtKey]
+                                        }
+                                    }
+
                                     CompositionLocalProvider(
                                         LocalBringIntoViewSpec provides railCardsBringIntoViewSpec
                                     ) {
@@ -7926,31 +7955,6 @@ fun HomeScreen(
                                             horizontalArrangement =
                                                 Arrangement.spacedBy(0.dp)
                                         ) {
-                                            // This rail's own art, read from the flow
-                                            // that is filed beside the rails: the
-                                            // derived state recomputes on every art
-                                            // publish but only notifies when THIS
-                                            // rail's map changed, so the other rows
-                                            // (whose maps are the same instances)
-                                            // are not invalidated at all.
-                                            val railArtKey =
-                                                remember(
-                                                    rail.addonName,
-                                                    rail.catalogId,
-                                                    rail.type
-                                                ) {
-                                                    catalogRailKey(
-                                                        rail.addonName,
-                                                        rail.catalogId,
-                                                        rail.type
-                                                    )
-                                                }
-                                            val railArt by
-                                                remember(railArtKey) {
-                                                    derivedStateOf {
-                                                        railArtState.value[railArtKey]
-                                                    }
-                                                }
                                             itemsIndexed(
                                                 items = rail.items,
                                                 key = { _, meta ->

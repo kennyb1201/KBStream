@@ -3649,7 +3649,12 @@ private fun GuideDetailPanel(
             }
         }
         Spacer(modifier = Modifier.height(12.dp))
-        NowNextPanel(item = item, nowMillis = nowMillis, guidePending = guidePending)
+        NowNextPanel(
+            item = item,
+            nowMillis = nowMillis,
+            use24Hour = use24Hour,
+            guidePending = guidePending
+        )
         Spacer(modifier = Modifier.height(14.dp))
         Text(
             text = "UPCOMING",
@@ -3740,6 +3745,7 @@ private fun GuideDetailPanel(
 private fun NowNextPanel(
     item: IptvChannelWithEpg,
     nowMillis: Long,
+    use24Hour: Boolean,
     /** Its guide row has not been queried yet, so "nothing on" is unknown. */
     guidePending: Boolean = false,
     modifier: Modifier = Modifier
