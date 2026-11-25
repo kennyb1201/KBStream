@@ -2486,15 +2486,19 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     }
 
     /**
-     * The on-screen play/pause: the button, the seek bar's OK, and OK with the
-     * controls down.
+     * The on-screen play/pause: the button and the seek bar's OK.
      *
      * A finished session stays finished here too. mpv's toggle is `cycle pause`,
      * so at the end of the file it replays from the top behind the end card -
      * exactly what the media-key guard in dispatchKeyEvent and the MediaSession's
-     * play override already refuse. These three are the same press by other
-     * names, and OK is the most common one on a TV remote, so they refuse it the
-     * same way. Replay stays an explicit seek. Returns true when swallowed.
+     * play override already refuse. These are the same press by other names, and
+     * OK is the most common one on a TV remote, so they refuse it the same way.
+     * Replay stays an explicit seek. Returns true when swallowed.
+     *
+     * OK with the controls DOWN is deliberately not one of these (spec: mpv
+     * center button, 2026-11-21). That press only raises the chrome, exactly as
+     * the native player's does; the toggle is the press after it, which lands on
+     * the seek bar. Toggling here is what made the first press pause.
      */
     private fun togglePlayPauseFromControls(): Boolean {
         if (endedHandled) return true
@@ -8215,11 +8219,27 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
                 KeyEvent.KEYCODE_DPAD_CENTER,
                 KeyEvent.KEYCODE_ENTER,
-                KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                KeyEvent.KEYCODE_NUMPAD_ENTER,
+                // Gamepad/remote select: the native player's center arm has it
+                // too, so a controller's OK behaves like the D-pad's.
+                KeyEvent.KEYCODE_BUTTON_SELECT -> {
                     if (!controlsVisible) {
-                        // Swallowed at the end of playback, end card up (see
-                        // togglePlayPauseFromControls).
-                        if (togglePlayPauseFromControls()) return true
+                        // OK with the chrome down raises the overlay and does
+                        // NOTHING else - the native player's first press
+                        // (spec: mpv center button, 2026-11-21). It used to
+                        // pause here as well: `togglePlayPauseFromControls()`
+                        // fired before the chrome came up, so the first OK
+                        // paused and the second one (on the seek bar) resumed,
+                        // which read as "MPV pauses when I open the controls".
+                        //
+                        // The toggle is the press AFTER this one: with the
+                        // chrome up, focusControls() has landed the D-pad on
+                        // the seek bar, whose own OK toggles (see
+                        // setupControls). The end-of-playback swallow that
+                        // used to live on this press is not needed any more -
+                        // the press no longer toggles at all, so it cannot
+                        // restart a finished episode either. The end card's own
+                        // OK is above this arm and is untouched.
                         showControls()
                         return true
                     }

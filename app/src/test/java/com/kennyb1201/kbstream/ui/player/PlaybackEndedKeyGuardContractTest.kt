@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import java.io.File
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -42,6 +43,14 @@ class PlaybackEndedKeyGuardContractTest {
         assertTrue("source missing: $file", file.isFile)
         return file.readText()
     }
+
+    /** [text] without its `//` comments, so prose about a call cannot satisfy it. */
+    private fun withoutComments(text: String): String =
+        text.lineSequence()
+            .joinToString("\n") { line ->
+                val marker = line.indexOf("//")
+                if (marker < 0) line else line.substring(0, marker)
+            }
 
     private fun findSourceRoot(): File {
         val prefixes = listOf("", "app/")
@@ -218,11 +227,16 @@ class PlaybackEndedKeyGuardContractTest {
 
     @Test
     fun `every on-screen play path in mpv routes through the ended guard`() {
-        // The button, the seek bar's OK and OK-with-the-controls-down are the
-        // same press the media keys make, and OK is the common one on a TV
-        // remote: they have to refuse a post-end toggle for the same reason (see
-        // togglePlayPauseFromControls). The play/pause button now reaches mpv
-        // through the shared chrome's PlayerChromeHost.
+        // The button and the seek bar's OK are the same press the media keys
+        // make, and OK is the common one on a TV remote: they have to refuse a
+        // post-end toggle for the same reason (see togglePlayPauseFromControls).
+        // The play/pause button now reaches mpv through the shared chrome's
+        // PlayerChromeHost.
+        //
+        // OK with the chrome DOWN is deliberately not one of them any more
+        // (spec: mpv center button, 2026-11-21): that press only raises the
+        // overlay, so it has no toggle left to guard. The arm is pinned below,
+        // because re-adding the toggle there is exactly the bug the spec fixed.
         val source = readSource(MPV)
         assertTrue(
             "the shared chrome's play/pause must go through the guard",
@@ -237,9 +251,23 @@ class PlaybackEndedKeyGuardContractTest {
             controls.contains("togglePlayPauseFromControls()")
         )
         val dispatch = functionBody(MPV, "override fun dispatchKeyEvent(")
+        val centerArm = dispatch
+            .substringAfter("KeyEvent.KEYCODE_DPAD_CENTER,")
+            .substringBefore("KeyEvent.KEYCODE_DPAD_LEFT,")
         assertTrue(
-            "OK with the controls down must go through it too",
-            dispatch.contains("togglePlayPauseFromControls()")
+            "OK with the chrome down must raise the overlay",
+            centerArm.contains("showControls()")
+        )
+        assertTrue(
+            "the arm must answer a gamepad's select too: the native player's does, " +
+                "and a controller's OK is the same press",
+            centerArm.contains("KeyEvent.KEYCODE_BUTTON_SELECT")
+        )
+        assertFalse(
+            "and must not toggle: the first press opens the overlay and the press " +
+                "after it pauses on the seek bar, which is the native player's " +
+                "two-press model (spec: mpv center button, 2026-11-21)",
+            withoutComments(centerArm).contains("togglePlayPauseFromControls")
         )
         val guard = functionBody(MPV, "private fun togglePlayPauseFromControls(): Boolean {")
         assertTrue(
