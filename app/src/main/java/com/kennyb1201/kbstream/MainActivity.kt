@@ -195,9 +195,12 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedContentScope
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.SharedTransitionScope
@@ -1420,65 +1423,23 @@ fun AppRoot(
             com.kennyb1201.kbstream.data.settings.AppPreferences
                 .getShowProfilePicker(applicationContext)
     }
-    val entrySaver = remember(profilesExist, coldLaunch, showProfilePicker) {
-        launchScreenSaver(profilesExist, coldLaunch, showProfilePicker)
-    }
-    val screenState = rememberSaveable(stateSaver = entrySaver) {
-        mutableStateOf<Screen>(launchScreen(profilesExist, showProfilePicker))
-    }
-    // The navigation seam (spec: navcompose, F0). Every `screen = …` below and
-    // in every lambda handed to a child screen now passes through
-    // [NavSeam.navigateTo] instead of writing the state directly.
+    // ── The one owner of navigation (spec: navcompose, F5) ────────────────
     //
-    // The migrated set is EMPTY, and that is the end state of the flip, not a
-    // leftover: every kind renders through the one host now, so no arm may be
-    // blanked. The guards stay in the arms as the revert seam - repopulating this
-    // set blanks those arms again and the host takes over - but nothing may ship
-    // with a kind listed, because the host renders FROM the arm table.
-    val navSeam = remember(screenState) {
-        NavSeam(
-            screenState,
-            migratedKinds = emptySet()
-        )
-    }
-    var screen by navSeam
-
-    // The host a migrated destination renders through (spec: navcompose, F1),
-    // composed INSIDE the renderer's content lambda rather than beside it. One
-    // destination deep, so crossing into a migrated kind is still the shell's
-    // own slide and the hero registry, the splash above it and every focus path
-    // are the ones they always were - a renderer swap at the top of the Box
-    // would have cut the transition in half, and two NavHosts cannot be
-    // composed at once (a NavController attaches to exactly one host), which is
-    // exactly what a transition between two migrated kinds would ask for.
+    // The graph owns the destination. The shell no longer keeps a Screen to
+    // restore - the controller restores its own stack - and [NavSeam] is the
+    // translation: `screen = …` navigates, `screen` mirrors the graph back for
+    // the shell-level readers (the bar, the exit gate, the splash).
     //
-    // Entering a migrated kind navigates nothing: the host opens ON the route of
-    // the screen being entered (see the fork below), so there is no push onto a
-    // start destination first and no enter transition replayed on it. The graph
-    // is rebuilt per entry, which is what makes one shell state - not a stack -
-    // still the single source of truth while destinations move across.
+    // The launch gate is applied to the STACK now instead of to a saved value.
+    // A cold launch with profiles on the device must open on Who's Watching and
+    // discard whatever the graph restored - that is what `launchScreenSaver` did
+    // to the saved Screen, and it is the same predicate, with the TV/phone split
+    // already inside `isColdLaunch`. The discard itself is beside the host.
+    val pickerOnLaunch = profilesExist && coldLaunch && showProfilePicker
+    val launchEntry: Screen = if (pickerOnLaunch) Screen.ProfilePicker() else Screen.Home
     val navController = androidx.navigation.compose.rememberNavController()
-
-    // The graph's root: the screen the shell opened on, captured once. A restore
-    // lands on the same kind the shell restored, so this is what puts it back at
-    // the bottom of the stack.
-    val graphStart = remember {
-        com.kennyb1201.kbstream.ui.navigation.NavRoutes.of(screen)!!
-    }
-    // The shell NEVER pops its host back to the graph root.
-    //
-    // It used to, as the seam's "leaving the migrated kinds" step, and with the
-    // migrated set empty - which is the end state of the flip - that condition
-    // is true on every single screen. So every navigation emptied the stack,
-    // and an emptied stack draws NOTHING: the controller drops an entry that is
-    // left sitting on a NavGraph, `currentBackStackEntry` becomes null, and the
-    // NavHost has no destination to compose. That is the black window reported
-    // on 2026-11-25 right after the profile picker - no screen, no BackHandler,
-    // only the exit prompt's dialog (which owns its own window) still drawing.
-    //
-    // There is nothing left for it to clean up either: the mirror below keeps
-    // the stack at one entry (`popUpTo` the graph id on every navigate), and the
-    // host owns every kind, so the shell never leaves it.
+    val navSeam = remember(navController) { NavSeam(navController, launchEntry) }
+    var screen by navSeam
 
     // Which profile this run of the app may attribute a BACKGROUND write to
     // (see ProfileSession). The picker means "not chosen yet" - a cold launch
@@ -2668,119 +2629,29 @@ fun AppRoot(
             (profilePicker != null && profilePicker.returnTo == null)) &&
             pendingAutoPlay == null
 
-    // Enabled only while the current destination is NOT one a NavHost owns: a
-    // migrated destination's Back belongs to the NavController plus that
-    // destination's own local handler, and this one firing too would pop twice
-    // (spec: navcompose, the seam). Nothing is migrated yet, so this is enabled
-    // exactly as before.
-    BackHandler(enabled = !navSeam.isMigrated(screen)) {
-        if (interceptBack) {
-            confirmExit = true
-            return@BackHandler
-        }
-        // Backing out while "Finding sources" is up cancels the in-flight
-        // resolution (the LaunchedEffect above is keyed on pendingAutoPlay) and
-        // navigates back from the screen underneath.
-        if (pendingAutoPlay != null) {
-            pendingAutoPlay = null
-        }
-        screen = when (val current = screen) {
-
-            is Screen.Addons ->
-                stableBackDestination(current.returnTo)
-
-            // A channel player backs out to whatever launched it, which every
-            // launch states: the guide's own (live, catch-up and DVR alike) set
-            // returnTo = Screen.Guide, and the hub's sets Screen.Sports with the
-            // sheet that raised the launch. Both are explicit at their call
-            // sites (see liveChannelScreen's callers), so "channel" no longer has
-            // to mean "Live TV" here - which is exactly what used to send a game
-            // launched from the hub to the guide with its sheet gone.
-            is Screen.Player ->
-                stableBackDestination(current.returnTo)
-
-            // The channel's source picker is the same launch, and states the
-            // same returnTo the player does, so it is read rather than assumed:
-            // hardcoding the guide here is the other half of "backing out of a
-            // game from the sports hub still sends me to the guide".
-            is Screen.Streams ->
-                stableBackDestination(current.returnTo)
-
-            // Every drill-down goes through stableBackDestination for the
-            // same reason Detail/Streams/Player do: it strips a one-shot
-            // pending target from a Detail destination, so Back can never
-            // re-fire that Detail screen's auto-play.
-            is Screen.Actor ->
-                stableBackDestination(current.returnTo)
-
-            is Screen.Studio ->
-                stableBackDestination(current.returnTo)
-
-            is Screen.Decade ->
-                stableBackDestination(current.returnTo)
-
-            is Screen.Tag ->
-                stableBackDestination(current.returnTo)
-
-            // The hub is opened from the guide's own header, so Back returns
-            // there rather than to Home. A game played FROM the hub is a Player
-            // screen of its own and backs out to Screen.Sports with its sheet
-            // (see the Player branch above), so this branch is only ever the hub
-            // being left for the guide.
-            is Screen.Sports ->
-                Screen.Guide
-
-            is Screen.Collection ->
-                stableBackDestination(current.returnTo)
-
-            is Screen.CatalogGrid ->
-                stableBackDestination(current.returnTo)
-
-            is Screen.KBFolder ->
-                stableBackDestination(current.returnTo)
-
-            is Screen.ProfileEdit ->
-                if (current.returnTo != null) {
-                    stableBackDestination(current.returnTo)
-                } else {
-                    // Opened from the picker's Manage tile (or restored state
-                    // without a returnTo): Back belongs to the picker.
-                    Screen.ProfilePicker()
-                }
-
-            // Unreachable (interceptBack routes the picker to the exit
-            // prompt), but the entry screen must never navigate INTO Home —
-            // kept explicit so a future else-branch reshuffle can't regress
-            // "Back on Who's Watching exits the app".
-            is Screen.ProfilePicker ->
-                // Opened from Settings/top bar: Back belongs to that screen.
-                // Entry picker: unreachable (interceptBack routes it to the
-                // exit prompt) — kept explicit so it can never regress into
-                // "Back on Who's Watching enters Home".
-                current.returnTo ?: Screen.ProfilePicker()
-
-            // Detail carries the screen it was opened from (Search, Home,
-            // an actor page, ...), so Back returns there instead of always
-            // bouncing to Home — clicking a Search result and pressing Back
-            // lands back on that result rail.
-            is Screen.Detail ->
-                stableBackDestination(current.returnTo)
-
-            is Screen.Search -> {
-                // Leaving Search itself: commit the query to recent-search
-                // history and clear the session state, so re-entering Search
-                // starts fresh with the query one chip away. Drill-downs
-                // (Detail/Actor/...) skip this — Back must restore results.
-                // The hoisted list state resets too: re-entering Search
-                // re-composes with a fresh top-of-list view.
-                searchViewModel.exitSearch()
-                searchListScope.launch { searchListState.scrollToItem(0) }
-                Screen.Home
-            }
-
-            else ->
-                Screen.Home
-        }
+    // ── The exit gates, and only them (spec: navcompose, F5) ─────────────
+    //
+    // This used to be the app's Back TABLE: one `when` over the shell's screen
+    // that landed every destination. Those landings now live where the
+    // destinations do - inside the host, one handler per destination, each
+    // composed after the controller and therefore ahead of its pop callback in
+    // the dispatcher's LIFO order (see NavShell; the Streams/Actor field report
+    // is why the stack is one entry and cannot pop at all).
+    //
+    // What is left is the press that is not a destination's business:
+    //
+    //  - Home's exit prompt, and the entry picker's. A picker opened from
+    //    inside the app belongs to its returnTo instead, and answers for itself
+    //    in its own destination;
+    //  - the onboarding stand-in, which stands in for Home without being a
+    //    destination, so nothing inside the host can answer that Back. Its
+    //    `screen` IS Home, which is what `interceptBack` reads.
+    //
+    // Cancelling an in-flight resolve keeps its own arm: on Home the press
+    // reaches the destination's handler instead (`interceptBack` is false while
+    // `pendingAutoPlay` is set), which is the same order it had before.
+    BackHandler(enabled = interceptBack) {
+        confirmExit = true
     }
 
     // Kids Mode time lock: a full-screen overlay that covers every screen
@@ -3949,14 +3820,35 @@ fun AppRoot(
             // re-resolving meta.
             val stableReturnTo = current.copy(pendingTarget = null, autoPlay = false)
 
+            // The host builds this page from its ROUTE, and the route
+            // deliberately drops both one-shots (see DetailRoute: a persisted
+            // argument would re-fire the play on a process-death restore). The
+            // seam's transient slot is the only carrier left, and it has to be
+            // READ: without this take a Continue Watching tap opened Detail and
+            // stopped - `initialTarget` was null, so the auto-play effect's gate
+            // returned every frame and nothing downstream (episode list, resume
+            // lookup, playTargetFor) was ever reached (field report 2026-11-25,
+            // build 6368).
+            //
+            // Taken ONCE per (type, id) and held across recompositions: the slot
+            // nulls itself on take, so a take per composition would lose the
+            // instruction on the page's first recomposition, and a take keyed
+            // more widely would let More Like This press Play on the page that
+            // replaced this one. This arm is the single entry point for both
+            // surfaces - DetailScreen branches to DetailScreenMobile itself -
+            // so the phone gets the same one-shot from here.
+            val arrival = remember(current.type, current.id) {
+                navSeam.takeDetailArrival(current.type, current.id)
+            }
+
             DetailScreen(
                 type = current.type,
                 id = current.id,
-                initialTarget = current.pendingTarget,
+                initialTarget = arrival?.pendingTarget ?: current.pendingTarget,
                 // F1/F3: the billboard's Play press rides the route, so Return
                 // from the player lands on this same Detail without re-firing
                 // it (see stableReturnTo above).
-                autoPlay = current.autoPlay,
+                autoPlay = arrival?.autoPlay ?: current.autoPlay,
                 initialPoster = current.itemPoster,
                 initialBackdrop = current.itemBackdrop,
                 initialClearLogo = current.itemClearLogo,
@@ -5265,7 +5157,7 @@ fun AppRoot(
     // what changed is who owns the stack, the transitions and the landings.
     com.kennyb1201.kbstream.ui.navigation.NavShell(
         navController = navController,
-        startDestination = graphStart,
+        startDestination = com.kennyb1201.kbstream.ui.navigation.NavRoutes.of(launchEntry)!!,
         transitionMs = transitionMs,
         renderScreen = renderScreen,
         onNavigate = { navSeam.navigateTo(it) },
@@ -5303,44 +5195,72 @@ fun AppRoot(
         modifier = Modifier.fillMaxSize()
     )
 
-    // The shell is the source of truth for now, so the stack follows it. One
-    // direction only: a compare-and-skip keeps a destination's own reflection
-    // from sending the effect back the way it came.
+    // ── The graph is the owner; the mirror follows it (spec: F5) ──────────
     //
-    // Back is the shell's too, and the navigate below is what keeps it the
-    // shell's: one entry leaves the controller nothing to pop, so its own Back
-    // callback stays disabled. See the comment in the builder.
+    // One direction now. Every `screen = …` is a route write through the seam,
+    // and this is the way back: the destination the controller comes to rest on
+    // is mirrored into the shell's `screen`, for the readers that are not a
+    // destination's own - the bottom bar, the exit gate, the splash.
     //
-    // A host holding NO entry is not "already showing this screen": it draws
-    // nothing at all, which is a black window. That is why the null case takes
-    // the navigation instead of an early return - it is the one step that can
-    // put a destination back if the stack is ever lost.
-    LaunchedEffect(screen) {
-        val target = com.kennyb1201.kbstream.ui.navigation.NavRoutes.of(screen)
-            ?: return@LaunchedEffect
-        val entry = navController.currentBackStackEntry
-        if (entry != null &&
-            com.kennyb1201.kbstream.ui.navigation.NavRoutes.screenOfEntry(entry) == screen
+    // The same pass flushes a write that arrived before the host attached its
+    // graph: deep links and the remote's "play on TV" bus run in effects
+    // registered above the host, so on the first frame they have nowhere to
+    // navigate yet (the seam queues them).
+    //
+    // And it is where the LAUNCH GATE lands. A cold launch with profiles on the
+    // device must open on Who's Watching and discard whatever the graph
+    // restored - the rule `launchScreenSaver` used to apply to the saved
+    // Screen, with the TV/phone split inside `isColdLaunch`. The launch splash
+    // is still up at this point, so nothing of the discarded destination is
+    // seen.
+    val navEntry by androidx.navigation.compose.currentBackStackEntryAsState()
+    LaunchedEffect(navEntry) {
+        navSeam.follow(navEntry)
+        if (
+            pickerOnLaunch && navEntry != null &&
+            com.kennyb1201.kbstream.ui.navigation.NavRoutes.screenOfEntry(navEntry)
+                !is Screen.ProfilePicker
         ) {
-            return@LaunchedEffect
+            navController.navigate(
+                com.kennyb1201.kbstream.ui.navigation.NavRoutes
+                    .of(Screen.ProfilePicker())!!
+            ) {
+                launchSingleTop = true
+                popUpTo(navController.graph.id) { inclusive = true }
+            }
         }
-        navController.navigate(target) {
-            // Exactly one entry, always: the navigation replaces the whole stack
-            // with the new destination. That is the point of the inclusive pop,
-            // and it is what keeps the host out of Back - a NavController whose
-            // stack holds a single entry has nothing to pop, so its own
-            // OnBackPressedCallback disables itself and the press reaches the
-            // shell's BackHandler above, which lands on `returnTo`.
-            //
-            // Never restore a two-deep stack (`inclusive = false`): the
-            // controller can then pop, it is composed after the shell and so
-            // wins the dispatcher's last-registered-first order, and the pop
-            // reveals the graph's start destination - Home from any drill-down
-            // (field report 2026-11-25, build 6368). The arms keep their state
-            // alive above the graph, so the stack is not where scroll positions
-            // live; the shell's `screen` is the only record of that.
-            launchSingleTop = true
-            popUpTo(navController.graph.id) { inclusive = true }
+    }
+
+    // ── The player overlay (spec: navcompose, F0) ─────────────────────────
+    //
+    // `Screen.Player` is a launch spec, not a destination: it owns its own
+    // Activity, the screen it was opened from keeps its place underneath, and
+    // the host deliberately has no Player destination. So the arm is composed
+    // HERE, above the host, and this is the only place it can run - which is
+    // what makes pressing a source actually launch the player.
+    //
+    // The `AnimatedContent` is there only to hand the arm the
+    // `AnimatedContentScope` it is written against (the hero registry takes one
+    // visibility scope per screen). Its transitions are None: the player's own
+    // window covers this one, and the only thing drawn here is the pre-playback
+    // splash, which must not animate in.
+    val playerOverlay = navSeam.playerLaunch
+    if (playerOverlay != null) {
+        BackHandler {
+            // The player's own exit writes a destination; this is the shell's
+            // way out when a session ended without one (a dropped next-episode
+            // hand-off), and it lands where the Back table's Player arm always
+            // did.
+            navSeam.navigateTo(stableBackDestination(playerOverlay.returnTo))
+        }
+        AnimatedContent(
+            targetState = playerOverlay,
+            transitionSpec = {
+                EnterTransition.None togetherWith ExitTransition.None
+            },
+            label = "player-overlay"
+        ) { player ->
+            renderScreen(player)
         }
     }
 

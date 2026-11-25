@@ -210,7 +210,7 @@ class ProfileReadSafetyContractTest {
         val launch = between(
             source(ACTIVITY),
             "val showProfilePicker = remember(launchProfileHasPin) {",
-            "val entrySaver ="
+            "val pickerOnLaunch ="
         )
         assertTrue(
             "an unreadable profile list forces the picker the way a PIN does: " +

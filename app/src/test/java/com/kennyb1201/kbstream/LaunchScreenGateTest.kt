@@ -325,20 +325,25 @@ class LaunchScreenGateTest {
     fun `the entry screen is seeded from the gate, not from Home`() {
         val main = squash(source(MAIN))
         assertTrue(
-            "the state must start on the gate's answer",
-            main.contains("{ mutableStateOf<Screen>(launchScreen(profilesExist, showProfilePicker)) }")
+            "the graph must open on the gate's answer",
+            main.contains(
+                "val launchEntry: Screen = if (pickerOnLaunch) Screen.ProfilePicker() else Screen.Home"
+            )
         )
         assertTrue(
-            "the saver has to be the gated one",
-            main.contains("stateSaver = entrySaver")
+            "and the gate is the same predicate the saver used, cold-launch split " +
+                "and all",
+            main.contains("val pickerOnLaunch = profilesExist && coldLaunch && showProfilePicker")
         )
         assertTrue(
-            "and the gate is what both halves read",
-            main.contains("launchScreenSaver(profilesExist, coldLaunch, showProfilePicker)")
+            "a cold launch with profiles discards whatever the graph restored, " +
+                "because the picker is the session's door",
+            main.contains("pickerOnLaunch && navEntry != null") &&
+                main.contains("screenOfEntry(navEntry)")
         )
         assertFalse(
-            "seeding the state with Home is the flash this replaced",
-            main.contains("mutableStateOf<Screen>(Screen.Home)")
+            "seeding with Home is the flash this replaced",
+            main.contains("launchEntry: Screen = Screen.Home")
         )
     }
 

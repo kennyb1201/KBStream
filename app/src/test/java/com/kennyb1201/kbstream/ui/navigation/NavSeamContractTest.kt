@@ -1,7 +1,6 @@
 package com.kennyb1201.kbstream.ui.navigation
 
 import java.io.File
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -30,66 +29,79 @@ class NavSeamContractTest {
     private val seam: String by lazy { normalized(stripComments(source(SEAM))) }
 
     @Test
-    fun `the shell's navigation state is still the saveable one, behind the seam`() {
+    fun `the graph owns navigation, and the shell keeps no screen to restore`() {
         assertTrue(
-            "the state object is what rememberSaveable produced, so restoration, " +
-                "the cold-launch gate and the depth-capped codec are untouched",
-            shell.contains("val screenState = rememberSaveable(stateSaver = entrySaver) {") &&
-                shell.contains(
-                    "mutableStateOf<Screen>(launchScreen(profilesExist, showProfilePicker))"
-                )
-        )
-        assertTrue(
-            "and the shell's `screen` IS that state, delegated through the seam - " +
-                "with the migrated set named at the seam, not inherited",
-            shell.contains("val navSeam = remember(screenState) { NavSeam(") &&
-                // Empty since the flip: the host renders from the arm table, so a
-                // named kind would blank the arm the host is about to render.
-                shell.contains("migratedKinds = emptySet()") &&
+            "the seam is built on the controller, with the gate's launch answer as " +
+                "what a read means before the graph exists",
+            shell.contains("val pickerOnLaunch = profilesExist && coldLaunch && showProfilePicker") &&
+                shell.contains("val navSeam = remember(navController) { NavSeam(navController, launchEntry) }") &&
                 shell.contains("var screen by navSeam")
         )
         assertFalse(
-            "no second copy of the navigation state: the old direct delegate is gone",
-            shell.contains("var screen by rememberSaveable(stateSaver = entrySaver)")
+            "no Screen is saved any more: the controller restores its own stack, " +
+                "which is what makes the routes the restore format (and why the " +
+                "one-shots must never become route arguments)",
+            shell.contains("stateSaver = entrySaver") ||
+                shell.contains("val entrySaver = remember(") ||
+                shell.contains("mutableStateOf<Screen>(launchScreen(")
         )
     }
 
     @Test
-    fun `every write goes through one entry point and the set is named explicitly`() {
+    fun `every write navigates, and the player rides above the host`() {
         assertTrue(
-            "one seam function, named with the spec's own vocabulary",
+            "one seam function, named with the spec's own vocabulary, and it is the " +
+                "controller that navigates",
             seam.contains("fun navigateTo(value: Screen) {") &&
-                seam.contains("state.value = value")
+                seam.contains("navController.navigate(target) {")
         )
         assertTrue(
-            "the delegate routes writes to it and reads to the same state",
+            "the delegate routes writes to it and reads to the mirror",
             seam.contains(
                 "operator fun setValue(thisRef: Any?, property: KProperty<*>, value: Screen) ="
             ) && seam.contains("navigateTo(value)") &&
-                seam.contains("operator fun getValue(thisRef: Any?, property: KProperty<*>): Screen = state.value")
+                seam.contains(
+                    "operator fun getValue(thisRef: Any?, property: KProperty<*>): Screen = playerLaunch ?: mirror.value"
+                )
         )
         assertTrue(
-            "the set defaults to EMPTY, so a phase names its destinations at the " +
-                "seam instead of inheriting a renderer for all of them",
-            seam.contains("private val migratedKinds: Set<String> = emptySet()")
+            "and the player is PUBLISHED rather than translated: it has no route, so " +
+                "the arm has to be composed above the host for pressing a source to " +
+                "launch anything at all",
+            seam.contains("if (value is Screen.Player) {") &&
+                seam.contains("playerLaunch = value") &&
+                shell.contains("val playerOverlay = navSeam.playerLaunch") &&
+                shell.contains("renderScreen(player)")
         )
         assertTrue(
-            "and membership is asked by the same type name the renderer keys on, so " +
-                "a phase cannot migrate a kind the transition/content key disagrees about",
-            seam.contains("fun isMigrated(value: Screen): Boolean = value.typeName() in migratedKinds")
+            "a real destination dismisses the overlay, so the player's own exit " +
+                "write is also the dismissal",
+            seam.contains("playerLaunch = null")
         )
     }
 
     @Test
-    fun `the global Back handler stands down for a migrated destination`() {
-        assertEquals(
-            "the shell's global handler is gated on the seam, so a migrated " +
-                "destination's Back is the NavController's (plus its own local " +
-                "handler) and never a double pop",
-            1,
-            Regex("BackHandler\\(enabled = !navSeam\\.isMigrated\\(screen\\)\\)")
-                .findAll(shell)
-                .count()
+    fun `a read mirrors the graph, and a write made before it is queued`() {
+        assertTrue(
+            "the mirror follows the current entry: the destination the controller " +
+                "comes to rest on is what the shell's readers see",
+            seam.contains("fun follow(entry: NavBackStackEntry?)") &&
+                seam.contains("val shown = NavRoutes.screenOfEntry(entry)") &&
+                seam.contains("mirror.value = shown")
+        )
+        assertTrue(
+            "and a write that arrives before the host attaches its graph (the " +
+                "shell's deep-link and remote-play effects run first) waits for it " +
+                "rather than being thrown away",
+            seam.contains("if (navController.currentBackStackEntry == null) {") &&
+                seam.contains("queued = value") &&
+                seam.contains("queued = null")
+        )
+        assertTrue(
+            "the Detail arrival is still taken once and keyed by (type, id), so a " +
+                "return to the page and a More Like This re-target both find nothing",
+            seam.contains("val held = detailArrival ?: return null") &&
+                seam.contains("held.takeIf { it.type == type && it.id == id }")
         )
     }
 

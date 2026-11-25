@@ -86,23 +86,29 @@ class BackHandlerOrderingContractTest {
     }
 
     @Test
-    fun `the shell keeps exactly the two handlers that are not a destination's`() {
+    fun `the shell keeps only the handlers that are not a destination's`() {
         val shell = stripComments(source(MAIN_ACTIVITY))
         assertEquals(
-            "MainActivity must register only the seam-gated global handler and the " +
-                "Kids Time Lock veil: a third one is a destination's Back living " +
-                "in a parent composition, which the host out-orders",
-            2,
+            "MainActivity registers three: the exit gate, the Kids Time Lock veil, " +
+                "and the player overlay's own way out. Anything else is a " +
+                "destination's Back living in a parent composition, which the host " +
+                "out-orders",
+            3,
             HANDLER_CALL.findAll(shell).count()
         )
         assertTrue(
-            "the global handler is enabled only while the current destination is " +
-                "not one the NavHost owns, or a migrated destination's Back is " +
-                "handled twice",
-            shell.contains("BackHandler(enabled = !navSeam.isMigrated(screen))")
+            "the exit gate is Home's and the entry picker's - the rest of the old " +
+                "table now lives in the destinations that own those landings",
+            shell.contains("BackHandler(enabled = interceptBack) {") &&
+                !shell.contains("screen = when (val current = screen)")
         )
         assertTrue(
-            "the time lock veil still swallows Back over everything, migrated or not",
+            "the player is not a destination and never becomes one, so its way out " +
+                "has to live in its overlay",
+            shell.contains("navSeam.navigateTo(stableBackDestination(playerOverlay.returnTo))")
+        )
+        assertTrue(
+            "the time lock veil still swallows Back over everything",
             shell.contains("BackHandler(enabled = true) { }")
         )
     }
@@ -157,23 +163,16 @@ class BackHandlerOrderingContractTest {
             page.contains("BackHandler(onBack = onBack)")
         )
         val shell = stripComments(source(MAIN_ACTIVITY))
-        assertTrue(
-            "the shell lost its is Screen.BingeCat -> render arm",
-            shell.contains("is Screen.BingeCat ->")
-        )
-        assertTrue(
-            "the shell's Back else-arm is still Home, which is what every unmigrated " +
-                "view that falls through to it lands on",
-            shell.substringAfter("screen = when (val current = screen) {")
-                .contains("else ->\n                Screen.Home")
-        )
         assertFalse(
-            "BingeCat grew its own arm in the shell's Back table: the migration keeps " +
-                "the landing in the destination, not in the global handler",
-            Regex("is Screen[.]BingeCat ->").containsMatchIn(
-                shell.substringAfter("screen = when (val current = screen) {")
-                    .substringBefore("else ->")
-            )
+            "the shell's Back table is gone: every landing is the destination that " +
+                "owns it, and a table that came back would answer presses twice",
+            shell.contains("screen = when (val current = screen) {")
+        )
+        assertTrue(
+            "the hub's hardcoded Guide landing lives in its own destination, which " +
+                "is where the table's row went",
+            stripComments(source(PACKAGE + "ui/navigation/NavShell.kt"))
+                .contains("BackHandler { onNavigate(Screen.Guide) }")
         )
     }
 
@@ -205,10 +204,10 @@ class BackHandlerOrderingContractTest {
             addons.contains("BackHandler")
         )
         val shell = stripComments(source(MAIN_ACTIVITY))
-        assertTrue(
-            "the shell's Back table lost its Addons arm, which is what a revert to " +
-                "the unmigrated renderer lands on",
-            shell.contains("is Screen.Addons ->\n                stableBackDestination(current.returnTo)")
+        assertFalse(
+            "and the shell's Back table is gone, so the page's own landing is the " +
+                "only one that answers this press",
+            shell.contains("is Screen.Addons ->\n                stableBackDestination")
         )
     }
 

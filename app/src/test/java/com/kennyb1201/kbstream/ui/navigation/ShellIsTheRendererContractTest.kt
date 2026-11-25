@@ -32,6 +32,12 @@ class ShellIsTheRendererContractTest {
     private val shell: String by lazy {
         stripComments(source("com/kennyb1201/kbstream/ui/navigation/NavShell.kt"))
     }
+    private val routes: String by lazy {
+        stripComments(source("com/kennyb1201/kbstream/ui/navigation/NavRoutes.kt"))
+    }
+    private val seam: String by lazy {
+        stripComments(source("com/kennyb1201/kbstream/ui/navigation/NavSeam.kt"))
+    }
 
     @Test
     fun `the host is emitted once and never behind a migrated guard`() {
@@ -62,10 +68,11 @@ class ShellIsTheRendererContractTest {
     @Test
     fun `no arm is blanked, because the host renders from the arm table`() {
         assertTrue(
-            "the migrated set must stay empty: the host asks the arm table for " +
-                "every kind, so a kind left in the set renders as nothing - a " +
-                "blank screen with a correct-looking stack under it",
-            main.contains("migratedKinds = emptySet()")
+            "no kind may be blanked: the host asks the arm table for every kind, " +
+                "so a seam that answered true would draw nothing for that screen - " +
+                "a blank screen with a correct-looking stack under it",
+            seam.contains("fun isMigrated(value: Screen): Boolean = false") &&
+                main.contains("if (navSeam.isMigrated(current)) Unit")
         )
     }
 
@@ -86,19 +93,26 @@ class ShellIsTheRendererContractTest {
     }
 
     @Test
-    fun `the graph root is captured once and the stack follows the screen value`() {
+    fun `the graph opens on the gate's answer, and the stack is the restore`() {
         assertTrue(
-            "the root must be the screen the shell opened on, captured at the " +
-                "first composition: re-deriving it would move the graph under a viewer",
-            main.contains("val graphStart = remember {")
+            "the gate is the launch predicate the saved Screen used to carry, and " +
+                "the graph opens on its answer",
+            main.contains("val pickerOnLaunch = profilesExist && coldLaunch && showProfilePicker") &&
+                main.contains(
+                    "startDestination = com.kennyb1201.kbstream.ui.navigation.NavRoutes.of(launchEntry)!!"
+                )
         )
         assertTrue(
-            "the effect must compare the controller's current kind before it " +
-                "navigates, or a destination's own membership sends the stack back " +
-                "the way it came (navigate -> screen writes -> navigate)",
-            main.contains("screenOfEntry(entry) == screen")
+            "and it is applied to the STACK: a cold launch with profiles discards " +
+                "whatever the graph restored, so no session can start under the " +
+                "previous viewer's identity",
+            main.contains("LaunchedEffect(navEntry) {") &&
+                main.contains("pickerOnLaunch && navEntry != null")
         )
-        assertTrue(main.contains("launchSingleTop = true"))
+        assertTrue(
+            "a re-target never stacks a second copy of the same destination",
+            main.contains("launchSingleTop = true") || seam.contains("launchSingleTop = true")
+        )
     }
 
     /**
@@ -112,22 +126,26 @@ class ShellIsTheRendererContractTest {
      * pinned here so a future "tidy the stack" cannot restore it.
      */
     @Test
-    fun `the shell never empties the host, and an empty host takes the navigation`() {
+    fun `the shell never empties the host, and a queued write is never dropped`() {
         assertFalse(
             "the shell must never pop the host back to the graph root: with every " +
                 "kind on the host that pop runs on every screen change, leaves the " +
                 "stack empty, and an empty host draws nothing at all",
             main.contains("popBackStack(navController.graph.id")
         )
-        assertFalse(
-            "a missing entry must take the navigation below, not an early return - " +
-                "that return is what left the black window up for ever",
-            main.contains("currentBackStackEntry ?: return@LaunchedEffect")
+        assertTrue(
+            "the mirror follows the graph instead of comparing a value of its own: " +
+                "the destination the controller comes to rest on IS the screen",
+            main.contains("navSeam.follow(navEntry)") &&
+                seam.contains("fun follow(entry: NavBackStackEntry?)")
         )
         assertTrue(
-            "the compare-and-skip stays, so a destination's own reflection cannot " +
-                "send the stack back the way it came",
-            main.contains("screenOfEntry(entry) == screen")
+            "a write that arrives before the host attaches its graph (the shell's " +
+                "deep-link and remote-play effects run first) waits for it rather " +
+                "than being thrown away",
+            seam.contains("if (navController.currentBackStackEntry == null) {") &&
+                seam.contains("queued = value") &&
+                seam.contains("queued = null")
         )
     }
 
@@ -148,31 +166,91 @@ class ShellIsTheRendererContractTest {
     @Test
     fun `back belongs to the shell, and the host never pops it`() {
         assertTrue(
-            "the mirror must replace the whole stack with the single new entry: a " +
-                "host holding one entry cannot pop, and that is what keeps the " +
-                "NavController's own Back callback disabled",
-            main.contains("popUpTo(navController.graph.id) { inclusive = true }")
+            "every navigation must replace the whole stack with the single new " +
+                "entry: a host holding one entry cannot pop, and that is what keeps " +
+                "the NavController's own Back callback disabled",
+            seam.contains("popUpTo(navController.graph.id) { inclusive = true }")
         )
         assertFalse(
             "a stack two deep is poppable, and the controller's callback is registered " +
                 "after the shell's - it would pop the host, swallow the press, and " +
                 "reveal Home from any drill-down",
-            main.contains("popUpTo(navController.graph.id) { inclusive = false }")
+            main.contains("inclusive = false") || seam.contains("inclusive = false")
         )
         assertTrue(
-            "the shell stays the owner of Back for pushed screens",
-            main.contains("BackHandler(enabled = !navSeam.isMigrated(screen))")
+            "the shell's own Back is the exit gate now: every landing moved into " +
+                "the destination that owns it, and this table is gone",
+            main.contains("BackHandler(enabled = interceptBack) {") &&
+                !main.contains("screen = when (val current = screen)")
         )
         // The two the field report broke on, each through the sanitized return so
         // Back lands on the page that pushed it and its one-shots stay stripped.
-        listOf("Screen.Streams", "Screen.Actor").forEach { kind ->
+        listOf("StreamsRoute", "ActorRoute").forEach { route ->
             assertTrue(
-                "$kind must keep its shell Back destination",
-                Regex(
-                    """is ${Regex.escape(kind)} ->\s*\n\s*stableBackDestination\("""
-                ).containsMatchIn(main)
+                "$route must keep a destination of its own that lands on its return",
+                shell.contains(
+                    "onNavigate(NavRoutes.landingOf(entry.toRoute<$route>().returnRoute))"
+                )
             )
         }
+    }
+
+    /**
+     * The Continue Watching regression (field report 2026-11-25, build 6368).
+     *
+     * A CW tap sets the one-shot on the Detail it navigates to; the route
+     * deliberately drops it (a persisted argument would re-fire on a
+     * process-death restore); and the seam's transient slot is then the only
+     * carrier. The slot had NO reader - `takeDetailArrival` was never called
+     * anywhere - so the arm handed the page a route-built Screen with
+     * `initialTarget` null and `autoPlay` false, the auto-play effect's gate
+     * returned every frame, and Detail opened and stopped. The `initialSeason=null`
+     * in the field log is the same null `initialTarget` (it is
+     * `initialTarget?.season`), and the missing `play delivered` line is the
+     * effect never firing - not a slow delivery.
+     */
+    @Test
+    fun `a continue-watching deep link reaches the detail page`() {
+        val arm = main.substringAfter("is Screen.Detail -> {")
+            .substringBefore("onClearLogoResolved")
+        assertTrue(
+            "the arm must take the one-shot from the seam, keyed on this page's " +
+                "(type, id) and held across recompositions - a take per " +
+                "composition would lose it when the slot nulls itself",
+            arm.contains("val arrival = remember(current.type, current.id) {") &&
+                arm.contains("navSeam.takeDetailArrival(current.type, current.id)")
+        )
+        assertTrue(
+            "and hand it to the page as its initial target and billboard flag, " +
+                "falling back to the Screen's own fields - which the route builds " +
+                "empty by design",
+            arm.contains("initialTarget = arrival?.pendingTarget ?: current.pendingTarget") &&
+                arm.contains("autoPlay = arrival?.autoPlay ?: current.autoPlay")
+        )
+
+        // The route must keep dropping it: this fix is the reader, not a new
+        // carrier, and a route argument would survive process death.
+        val routeBuiltDetail = routes
+            .substringAfter("is DetailRoute -> Screen.Detail(")
+            .substringBefore("is ActorRoute")
+        assertTrue("screenOf must still build a Detail from the route", routeBuiltDetail.isNotBlank())
+        assertFalse(
+            "the route must never carry the one-shot: a persisted argument would " +
+                "re-fire the play on a restore",
+            routeBuiltDetail.contains("pendingTarget") || routeBuiltDetail.contains("autoPlay")
+        )
+
+        // And the take itself is once-only and keyed by the page it belongs to.
+        assertTrue(
+            "takeDetailArrival must null the slot as it takes it",
+            seam.contains("val held = detailArrival ?: return null") &&
+                seam.contains("detailArrival = null")
+        )
+        assertTrue(
+            "and return the instruction only to the (type, id) it was meant for, " +
+                "so a More Like This re-target gets nothing from the page it left",
+            seam.contains("held.takeIf { it.type == type && it.id == id }")
+        )
     }
 
     @Test

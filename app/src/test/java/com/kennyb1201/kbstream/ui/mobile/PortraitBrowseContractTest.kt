@@ -379,10 +379,10 @@ class PortraitBrowseContractTest {
         val shell = flat("com/kennyb1201/kbstream/MainActivity.kt")
         assertTrue(
             "the navigation destination survives activity recreation",
-            // The state is still the one rememberSaveable(entrySaver) builds; it
-            // is read and written through the navigation seam now (spec:
-            // navcompose, F0), which is what the second line says.
-            shell.contains("val screenState = rememberSaveable(stateSaver = entrySaver)") &&
+            // The controller owns the destination now (spec: navcompose, F5), so
+            // it is its own back stack that restores; the shell reads it back
+            // through the seam rather than saving a Screen of its own.
+            shell.contains("rememberNavController()") &&
                 shell.contains("var screen by navSeam")
         )
         listOf(
