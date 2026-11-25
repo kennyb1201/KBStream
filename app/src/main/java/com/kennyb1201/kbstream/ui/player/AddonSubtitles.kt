@@ -185,6 +185,22 @@ class AddonSubtitleController(
     private var attachedPlayer: Player? = null
 
     /**
+     * The language the player will arm by itself: the session's remembered or
+     * global subtitle preference (perf spec 2026-11-22, item 2). Empty when
+     * subtitles are off.
+     *
+     * Only [attachTracks] reads it, to fetch the one track the viewer is
+     * actually about to see. Without it the attach downloaded nothing and the
+     * automatic track's bytes were fetched at exactly the moment it was
+     * selected - the subtitle word-by-word appearing over an already-running
+     * picture is the most visible instance of the cost this item removes.
+     */
+    private var preferredLanguage: String = ""
+
+    /** Set once the initial-item handover has been written to the trace. */
+    private var initialItemNoted = false
+
+    /**
      * Optional bulk-status hook: how many offers resolved and how many did not,
      * called on the main thread once per attach attempt.
      *
@@ -210,8 +226,12 @@ class AddonSubtitleController(
         parentType: String,
         season: Int?,
         episode: Int?,
-        episodeStreamId: String? = null
+        episodeStreamId: String? = null,
+        /** The language the player will arm by itself (see [preferredLanguage]). */
+        preferredLanguage: String = ""
     ) {
+        this.preferredLanguage = preferredLanguage
+        initialItemNoted = false
         view.onPlayerAttached = { player ->
             onPlayerAttached(player)
         }
@@ -267,6 +287,65 @@ class AddonSubtitleController(
         // discovery entirely. The next bind/fetch re-runs it once.
         fetchedForVideoId = null
         scope.cancel()
+    }
+
+    /**
+     * Configurations for the media item the player is about to be built with,
+     * or empty when they cannot be known without reading a file (perf spec
+     * 2026-11-22, item 2).
+     *
+     * This is the second half of that item. Discovery starts in [bind], before
+     * any player exists, and the source probe holds the item for up to four
+     * seconds (item 1) - so on a multi-source launch the offers are usually
+     * already here by the time the item is built. Handing them over at that
+     * point makes the tracks part of the item: no `setMediaItem`, no second
+     * `prepare()`, and nothing already buffered toward the start gate to throw
+     * away.
+     *
+     * Deliberately synchronous and I/O-free: it runs between two lines of the
+     * activity's player setup. The batch is all-or-nothing - one offer whose
+     * type only its bytes can settle, and this returns empty and lets
+     * [attachTracks] own the whole set, because a partial handover would leave
+     * that offer attached to nothing: the rebuild path treats an item that
+     * already carries configurations as done.
+     */
+    fun takeInitialConfigurations(): List<MediaItem.SubtitleConfiguration> {
+        if (offers.isEmpty()) return emptyList()
+        if (isSeparateAudioSession()) return emptyList()
+        val known = offers.map { offer ->
+            val cached = downloadCache[offer.url]
+            when {
+                // Already downloaded this session: attach the file, no fetch.
+                cached != null -> ResolvedSubtitle(
+                    url = offer.url,
+                    language = offer.lang,
+                    label = addonSubtitleRowLabel(offer),
+                    uri = cached,
+                    mime = resolveAddonSubtitleMime(offer.url, cached)
+                )
+                // The URL names its type: attach it remote, as the batch would.
+                subtitleMimeIsDecidedByUrl(offer.url) -> ResolvedSubtitle(
+                    url = offer.url,
+                    language = offer.lang,
+                    label = addonSubtitleRowLabel(offer),
+                    uri = Uri.parse(offer.url),
+                    mime = resolveSubtitleMimeFrom(offer.url, "")
+                )
+                // Only the bytes know: this cannot ride the initial item.
+                else -> null
+            }
+        }
+        if (known.any { it == null }) return emptyList()
+        val tracks = known.filterNotNull()
+        if (tracks.isEmpty()) return emptyList()
+        val configs = tracks.map { it.toSubtitleConfiguration() }
+        if (!initialItemNoted) {
+            initialItemNoted = true
+            PlaybackSessionTrace.note(
+                "addon subs: ${configs.size} track(s) rode the initial item"
+            )
+        }
+        return configs
     }
 
     private fun onPlayerAttached(player: Player) {
@@ -346,7 +425,8 @@ class AddonSubtitleController(
             player.addListener(readyListener)
             return
         }
-        // Skip when this media item already carries sidecar configs: either
+        // Skip when this media item already carries configurations: either
+        // they rode the item when it was built ([takeInitialConfigurations]),
         // we attached a moment ago (idempotency across setPlayer calls) or
         // the user loaded an external subtitle file, which must not be
         // clobbered by addon tracks.
@@ -383,8 +463,30 @@ class AddonSubtitleController(
                 // four permits for its own full timeout while the batch's
                 // working hosts queue behind them.
                 val batch = AddonSubtitleSource.BatchAbort()
+                // The one track the player will arm by itself is fetched here,
+                // ahead of the batch (item 2). Its bytes would otherwise be
+                // pulled at the instant it is selected, which is the one
+                // subtitle fetch a viewer is guaranteed to notice: the words
+                // start appearing over an already-running picture. Exactly one
+                // file, and none at all without a preferred language.
+                val preferred = offers.firstOrNull {
+                    addonSubtitleMatchesLanguage(it.lang, preferredLanguage)
+                }
+                val eager = preferred?.let { offer ->
+                    async {
+                        permits.withPermit {
+                            runCatchingCancellable { download(offer.url, batch) }.getOrNull()
+                        }
+                    }
+                }
                 offers.map { offer ->
                     async {
+                        // Awaited OUTSIDE the permits, or this offer would be
+                        // waiting for a slot its own download is waiting for.
+                        // The download caches into `downloadCache`, so the
+                        // branches below see it as any other held copy; if it
+                        // failed, they resolve the offer the ordinary way.
+                        if (offer === preferred) eager?.await()
                         permits.withPermit {
                             runCatchingCancellable {
                                 // A copy this session already holds is the best
@@ -430,20 +532,7 @@ class AddonSubtitleController(
 
             // The configurations stay SEQUENTIAL and in offer order (awaitAll
             // preserves it), so the picker lists the same tracks it always did.
-            val configs = resolved.map { track ->
-                val builder = MediaItem.SubtitleConfiguration.Builder(track.uri)
-                    .setMimeType(track.mime)
-                    .setLanguage(track.language)
-                    .setLabel(track.label)
-                    .setSelectionFlags(0)
-                // EVERY addon track is tagged: an ASS/SSA one so the player can
-                // route the selected track to the libass overlay instead of
-                // rendering it flattened, any other one so a track the addons
-                // published is never mistaken for a container track. Nothing is
-                // ever guessed from language + label (see AddonAssTracks).
-                AddonAssTracks.trackConfigIdFor(track.mime, track.url)?.let(builder::setId)
-                builder.build()
-            }
+            val configs = resolved.map { it.toSubtitleConfiguration() }
 
             // Report the batch BEFORE attaching, so the all-failed case - which
             // has nothing to attach and used to be silent apart from a Log.w -
@@ -481,6 +570,28 @@ class AddonSubtitleController(
                 Log.i(TAG, "Attached ${configs.size} addon subtitle track(s)")
             }
         }
+    }
+
+    /**
+     * The picker configuration for one resolved track.
+     *
+     * Shared by the batch attach and the initial-item handover
+     * ([takeInitialConfigurations]), so a track cannot be tagged one way on the
+     * item and another way when it is rebuilt in.
+     */
+    private fun ResolvedSubtitle.toSubtitleConfiguration(): MediaItem.SubtitleConfiguration {
+        val builder = MediaItem.SubtitleConfiguration.Builder(uri)
+            .setMimeType(mime)
+            .setLanguage(language)
+            .setLabel(label)
+            .setSelectionFlags(0)
+        // EVERY addon track is tagged: an ASS/SSA one so the player can
+        // route the selected track to the libass overlay instead of
+        // rendering it flattened, any other one so a track the addons
+        // published is never mistaken for a container track. Nothing is
+        // ever guessed from language + label (see AddonAssTracks).
+        AddonAssTracks.trackConfigIdFor(mime, url)?.let(builder::setId)
+        return builder.build()
     }
 
     /**
@@ -800,6 +911,22 @@ internal object AddonSubtitleSource {
  * Null only when the offer names itself nowhere - the shape this returned
  * before, and the one the picker's own fallback exists for.
  */
+/**
+ * Whether an offer's language [tag] is the language the player will arm by
+ * itself, [wanted] (perf spec 2026-11-22, item 2).
+ *
+ * A prefix match in either direction, so "en" finds "en-US" and a session
+ * remembered as "pt-BR" finds an offer published as "pt". Case and surrounding
+ * space are ignored: add-ons are not consistent about either, and a miss here
+ * only means the track is fetched on selection instead of ahead of it.
+ */
+internal fun addonSubtitleMatchesLanguage(tag: String?, wanted: String): Boolean {
+    val offer = tag?.trim()?.lowercase().orEmpty()
+    val target = wanted.trim().lowercase()
+    if (offer.isEmpty() || target.isEmpty()) return false
+    return offer == target || offer.startsWith("$target-") || target.startsWith("$offer-")
+}
+
 internal fun addonSubtitleRowLabel(offer: SubtitleEntry): String? {
     val base = offer.label ?: offer.lang?.uppercase()
     val urlKind = SubtitleKindRules.tagText(offer.url)

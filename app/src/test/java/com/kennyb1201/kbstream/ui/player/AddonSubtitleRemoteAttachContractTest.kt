@@ -82,6 +82,68 @@ class AddonSubtitleRemoteAttachContractTest {
     }
 
     @Test
+    fun `the track the player arms by itself is fetched ahead of selection`() {
+        assertTrue(
+            "the preferred offer is found by language",
+            attach.contains("addonSubtitleMatchesLanguage(it.lang, preferredLanguage)")
+        )
+        assertTrue(
+            "its download is started before the batch is mapped, so the batch " +
+                "reads it out of the cache instead of attaching it remote",
+            attach.indexOf("val eager = preferred?.let") in 0 until
+                attach.indexOf("if (offer === preferred) eager?.await()")
+        )
+        assertTrue(
+            "and it is awaited outside the permits, or it starves its own slot",
+            attach.indexOf("if (offer === preferred) eager?.await()") <
+                attach.indexOf("permits.withPermit", attach.indexOf("if (offer === preferred)"))
+        )
+        assertTrue(
+            "the language is handed over at bind, from the session's own preference",
+            activity.contains("preferredLanguage = preferredSubtitleLang")
+        )
+    }
+
+    @Test
+    fun `tracks discovered before the item exists ride the initial item`() {
+        assertTrue(
+            "the activity asks for them while it builds the item, not after prepare",
+            activity.indexOf("addonSubtitleController.takeInitialConfigurations()") in 0 until
+                activity.indexOf("val initialMediaItem")
+        )
+        assertTrue(
+            "the handover is all-or-nothing: a partial one would strand the offer " +
+                "that needed its bytes, because a rebuild into an item that already " +
+                "carries configurations is a no-op",
+            source.contains("if (known.any { it == null }) return emptyList()")
+        )
+        assertTrue(
+            "a hand-picked external file still wins over the addon set",
+            activity.contains("val addonConfigs = if (sidecar == null)") &&
+                activity.contains("mediaItemBuilder.setSubtitleConfigurations(addonConfigs)")
+        )
+        assertTrue(
+            "and the handover is a trace line, so a paste can say whether it happened",
+            source.contains("addon subs: \${configs.size} track(s) rode the initial item")
+        )
+    }
+
+    @Test
+    fun `the preferred language matches a region-tagged offer`() {
+        assertTrue(addonSubtitleMatchesLanguage("en", "en"))
+        assertTrue(addonSubtitleMatchesLanguage("en-US", "en"))
+        assertTrue(addonSubtitleMatchesLanguage("pt", "pt-BR"))
+        assertTrue(addonSubtitleMatchesLanguage(" EN-us ", "en"))
+        assertTrue(!addonSubtitleMatchesLanguage("es", "en"))
+        assertTrue(!addonSubtitleMatchesLanguage(null, "en"))
+        assertTrue(!addonSubtitleMatchesLanguage("en", ""))
+        assertTrue(
+            "no prefix-in-the-other-direction false positive for two-letter codes",
+            !addonSubtitleMatchesLanguage("eng", "en")
+        )
+    }
+
+    @Test
     fun `the attach is still one rebuild, and still after the download gate`() {
         assertTrue(
             "exactly one setMediaItem",

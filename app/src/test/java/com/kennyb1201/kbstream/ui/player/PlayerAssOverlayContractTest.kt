@@ -213,8 +213,10 @@ class PlayerAssOverlayContractTest {
             addonSubtitles.contains("languageKey")
         )
         assertTrue(
-            "every addon offer is tagged, so a format with no tag is positively not one of ours",
-            addonSubtitles.contains("AddonAssTracks.trackConfigIdFor(track.mime, track.url)")
+            "every addon offer is tagged, so a format with no tag is positively not one of ours - " +
+                "in the one place a configuration is built, so the initial-item handover and " +
+                "the rebuild cannot tag the same track differently",
+            addonSubtitles.contains("AddonAssTracks.trackConfigIdFor(mime, url)")
         )
         assertTrue(
             "and the routing is the config id, nothing else",

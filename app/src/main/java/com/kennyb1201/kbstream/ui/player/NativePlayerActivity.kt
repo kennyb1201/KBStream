@@ -4676,7 +4676,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 parentType = parentType,
                 season = season,
                 episode = episode,
-                episodeStreamId = episodeStreamId
+                episodeStreamId = episodeStreamId,
+                // The track the player will arm by itself: the controller
+                // fetches that one up front, so it is there when selection
+                // applies it rather than starting to download then (perf spec
+                // 2026-11-22, item 2).
+                preferredLanguage = preferredSubtitleLang
             )
         }
 
@@ -7376,10 +7381,25 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
                         .build()
                 }
-                val initialMediaItem = if (sidecar != null) {
-                    mediaItemBuilder.setSubtitleConfigurations(listOf(sidecar)).build()
+                // Addon tracks discovered before this point ride the item too,
+                // so the player never has to be re-prepared to get them (perf
+                // spec 2026-11-22, item 2). Empty when discovery has not
+                // finished, or when an offer's type needs its bytes - in which
+                // case the attach path owns the whole batch and rebuilds once,
+                // as before. A hand-picked external file wins outright: it is
+                // the user's own choice, and it is what the rebuild path
+                // already refused to clobber.
+                val addonConfigs = if (sidecar == null) {
+                    addonSubtitleController.takeInitialConfigurations()
                 } else {
-                    mediaItemBuilder.build()
+                    emptyList()
+                }
+                val initialMediaItem = when {
+                    sidecar != null ->
+                        mediaItemBuilder.setSubtitleConfigurations(listOf(sidecar)).build()
+                    addonConfigs.isNotEmpty() ->
+                        mediaItemBuilder.setSubtitleConfigurations(addonConfigs).build()
+                    else -> mediaItemBuilder.build()
                 }
                 val urlMimeType = resolveMimeType(currentUrl)
                 val isManifest = mimeType == MimeTypes.APPLICATION_M3U8 ||
