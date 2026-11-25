@@ -88,11 +88,9 @@ class NavHostHostingContractTest {
         // formatting.
         val kinds = Regex("\"(\\w+)\"").findAll(migrated).map { it.groupValues[1] }.toList()
         assertEquals(
-            "the migrated set is F1's eight leaf pages, each with a BackHandler of " +
-                "its own: the remote, stats, the catalog builder, the two tracker " +
-                "connect pages, and now the add-on page, BingeCat and the " +
-                "public-lists browser - all reached from more than one place or " +
-                "whose hardware Back had to start agreeing with its header",
+            "the migrated set is F1's eight leaves (each answering Back itself) " +
+                "followed by F2's eight browse drill-downs, whose primitive" +
+                " arguments are the whole of their state",
             listOf(
                 "remote",
                 "stats",
@@ -101,7 +99,15 @@ class NavHostHostingContractTest {
                 "trakt",
                 "addons",
                 "bingecat",
-                "publicLists"
+                "publicLists",
+                "actor",
+                "studio",
+                "decade",
+                "tag",
+                "collection",
+                "catalogGrid",
+                "kbFolder",
+                "yearReview"
             ),
             kinds
         )

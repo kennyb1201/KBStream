@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.navigation
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -14,7 +15,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.toRoute
 import com.kennyb1201.kbstream.Screen
+import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.publiclists.PublicListVendor
+import com.kennyb1201.kbstream.ui.actor.ActorScreen
 import com.kennyb1201.kbstream.ui.addons.AddonsScreen
 import com.kennyb1201.kbstream.ui.addons.AddonsViewModel
 import com.kennyb1201.kbstream.ui.addons.CatalogBuilderScreen
@@ -22,11 +25,19 @@ import com.kennyb1201.kbstream.ui.bingecat.BingeCatConnectScreen
 import com.kennyb1201.kbstream.ui.bingecat.BingeCatPublicListsScreen
 import com.kennyb1201.kbstream.ui.bingecat.BingeCatPublicListsViewModel
 import com.kennyb1201.kbstream.ui.bingecat.BingeCatViewModel
+import com.kennyb1201.kbstream.ui.collection.CollectionScreen
+import com.kennyb1201.kbstream.ui.decade.DecadeScreen
+import com.kennyb1201.kbstream.ui.home.CatalogGridScreen
+import com.kennyb1201.kbstream.ui.kb.KBFolderScreen
+import com.kennyb1201.kbstream.ui.mobile.CatalogGridScreenMobile
 import com.kennyb1201.kbstream.ui.publiclists.PublicListsScreen
 import com.kennyb1201.kbstream.ui.publiclists.PublicListsViewModel
 import com.kennyb1201.kbstream.ui.remote.RemoteScreen
 import com.kennyb1201.kbstream.ui.settings.StatsScreen
+import com.kennyb1201.kbstream.ui.settings.YearReviewScreen
 import com.kennyb1201.kbstream.ui.simkl.SimklConnectScreen
+import com.kennyb1201.kbstream.ui.studio.StudioScreen
+import com.kennyb1201.kbstream.ui.tag.TagScreen
 import com.kennyb1201.kbstream.ui.trakt.TraktConnectScreen
 
 // ---------------------------------------------------------------------------
@@ -213,6 +224,203 @@ internal fun NavHostGraph(
                     vm = checkNotNull(bingeCatViewModel)
                 )
             }
+        }
+
+        // ── F2: the browse drill-downs ────────────────────────────────────
+        //
+        // These pages were written for the shell's global Back table and none of
+        // the six below registers a handler of its own, so the DESTINATION
+        // registers the landing - once, above the screen, covering both form
+        // factors. It sits inside the NavHost entry, after the controller's pop
+        // callback, which is the same slot the shell's handler occupied; a
+        // screen that opens a dialog still registers later and wins.
+        //
+        // Each one carries the screen it is as `self`, rebuilt from the route:
+        // the Detail it opens returns to THIS page (with this page's own
+        // returnTo inside), exactly as the arm handed `current`.
+        composable<ActorRoute> { entry ->
+            val route = entry.toRoute<ActorRoute>()
+            val self = Screen.Actor(
+                personId = route.personId,
+                returnTo = NavRoutes.decoded(route.returnRoute) ?: Screen.Home
+            )
+            BackHandler { onNavigate(NavRoutes.landingOf(route.returnRoute)) }
+            ActorScreen(
+                actorId = route.personId,
+                onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) },
+                onNavigateDetail = { type, id ->
+                    onNavigate(Screen.Detail(type = type, id = id, returnTo = self))
+                }
+            )
+        }
+
+        // A studio page has two kinds on one rail (a TMDB company, a catalog
+        // network/service), and the flags that pick it are the route's own
+        // arguments, so the page reopens as the one that was opened.
+        composable<StudioRoute> { entry ->
+            val route = entry.toRoute<StudioRoute>()
+            val self = Screen.Studio(
+                id = route.id,
+                name = route.name,
+                isNetwork = route.isNetwork,
+                providerId = route.providerId,
+                networkOrCompanyId = route.networkOrCompanyId,
+                networkIsCompany = route.networkIsCompany,
+                originalsCompanyId = route.originalsCompanyId,
+                returnTo = NavRoutes.decoded(route.returnRoute) ?: Screen.Home
+            )
+            BackHandler { onNavigate(NavRoutes.landingOf(route.returnRoute)) }
+            StudioScreen(
+                route.id,
+                route.name,
+                route.isNetwork,
+                route.providerId,
+                route.networkOrCompanyId,
+                route.networkIsCompany,
+                route.originalsCompanyId,
+                onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) },
+                onNavigateDetail = { type, id ->
+                    onNavigate(Screen.Detail(type = type, id = id, returnTo = self))
+                }
+            )
+        }
+
+        composable<DecadeRoute> { entry ->
+            val route = entry.toRoute<DecadeRoute>()
+            val self = Screen.Decade(
+                decadeStart = route.decadeStart,
+                name = route.name,
+                returnTo = NavRoutes.decoded(route.returnRoute) ?: Screen.Home
+            )
+            BackHandler { onNavigate(NavRoutes.landingOf(route.returnRoute)) }
+            DecadeScreen(
+                route.decadeStart,
+                route.name,
+                onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) },
+                onNavigateDetail = { type, id ->
+                    onNavigate(Screen.Detail(type = type, id = id, returnTo = self))
+                }
+            )
+        }
+
+        composable<TagRoute> { entry ->
+            val route = entry.toRoute<TagRoute>()
+            val self = Screen.Tag(
+                id = route.id,
+                name = route.name,
+                isKeyword = route.isKeyword,
+                mediaType = route.mediaType,
+                returnTo = NavRoutes.decoded(route.returnRoute) ?: Screen.Home
+            )
+            BackHandler { onNavigate(NavRoutes.landingOf(route.returnRoute)) }
+            TagScreen(
+                route.id,
+                route.name,
+                route.isKeyword,
+                route.mediaType,
+                onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) },
+                onNavigateDetail = { type, id ->
+                    onNavigate(Screen.Detail(type = type, id = id, returnTo = self))
+                }
+            )
+        }
+
+        composable<CollectionRoute> { entry ->
+            val route = entry.toRoute<CollectionRoute>()
+            val self = Screen.Collection(
+                id = route.id,
+                name = route.name,
+                returnTo = NavRoutes.decoded(route.returnRoute) ?: Screen.Home
+            )
+            BackHandler { onNavigate(NavRoutes.landingOf(route.returnRoute)) }
+            CollectionScreen(
+                route.id,
+                route.name,
+                onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) },
+                onNavigateDetail = { type, id ->
+                    onNavigate(Screen.Detail(type = type, id = id, returnTo = self))
+                }
+            )
+        }
+
+        // A whole add-on catalog as a poster grid, from Home's rail long-press.
+        // The phone twin has a handler of its own (it closes its menu first) and
+        // registers after this one, so it still wins there; on a television there
+        // was nothing but the shell's arm, which this replaces.
+        composable<CatalogGridRoute> { entry ->
+            val route = entry.toRoute<CatalogGridRoute>()
+            val self = Screen.CatalogGrid(
+                title = route.title,
+                addonName = route.addonName,
+                catalogId = route.catalogId,
+                type = route.type,
+                returnTo = NavRoutes.decoded(route.returnRoute) ?: Screen.Home
+            )
+            val openGridItem: (com.kennyb1201.kbstream.data.addon.MetaPreview) -> Unit = { meta ->
+                onNavigate(Screen.Detail(type = meta.type, id = meta.id, returnTo = self))
+            }
+            BackHandler { onNavigate(NavRoutes.landingOf(route.returnRoute)) }
+            if (!FormFactor.isTv) {
+                CatalogGridScreenMobile(
+                    title = route.title,
+                    addonName = route.addonName,
+                    catalogId = route.catalogId,
+                    type = route.type,
+                    onItemClick = openGridItem,
+                    onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) }
+                )
+            } else {
+                CatalogGridScreen(
+                    title = route.title,
+                    addonName = route.addonName,
+                    catalogId = route.catalogId,
+                    type = route.type,
+                    onItemClick = openGridItem,
+                    onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) }
+                )
+            }
+        }
+
+        // One imported KB folder. Its own handler walks the folder's internal
+        // Back first and lands here at its root, so nothing is registered above
+        // it - the page already answers the press.
+        composable<KBFolderRoute> { entry ->
+            val route = entry.toRoute<KBFolderRoute>()
+            val self = Screen.KBFolder(
+                folderId = route.folderId,
+                returnTo = NavRoutes.decoded(route.returnRoute) ?: Screen.Home
+            )
+            KBFolderScreen(
+                folderId = route.folderId,
+                onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) },
+                onItemClick = { type, imdbId, poster, backdrop, _ ->
+                    onNavigate(
+                        Screen.Detail(
+                            type = type,
+                            id = imdbId,
+                            itemPoster = poster,
+                            itemBackdrop = backdrop,
+                            itemOverview = null,
+                            returnTo = self
+                        )
+                    )
+                }
+            )
+        }
+
+        // `year == null` stays null all the way to the screen: the route carries
+        // "this year", resolved at render, so a destination restored in June
+        // does not pin December's year. Its Back is the arm's - the raw
+        // returnTo, not the sanitizer's, because this page is only ever opened
+        // from Library or Settings and never carries a one-shot autoplay.
+        composable<YearReviewRoute> { entry ->
+            val route = entry.toRoute<YearReviewRoute>()
+            YearReviewScreen(
+                onBack = {
+                    onNavigate(NavRoutes.decoded(route.returnRoute) ?: Screen.Home)
+                },
+                year = route.year
+            )
         }
     }
 }

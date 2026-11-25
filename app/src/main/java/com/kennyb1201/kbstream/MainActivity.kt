@@ -1453,7 +1453,17 @@ fun AppRoot(
                 // of their entry points.
                 "addons",
                 "bingecat",
-                "publicLists"
+                "publicLists",
+                // F2: the browse drill-downs. Primitive arguments only, and chains
+                // still cross into the unmigrated Detail through the seam.
+                "actor",
+                "studio",
+                "decade",
+                "tag",
+                "collection",
+                "catalogGrid",
+                "kbFolder",
+                "yearReview"
             )
         )
     }
@@ -3550,13 +3560,18 @@ fun AppRoot(
         }
 
         is Screen.YearReview -> {
+            if (navSeam.isMigrated(current)) Unit
+            else {
             com.kennyb1201.kbstream.ui.settings.YearReviewScreen(
                 onBack = { screen = current.returnTo },
                 year = current.year
             )
+            }
         }
 
         is Screen.CatalogGrid -> {
+            if (navSeam.isMigrated(current)) Unit
+            else {
             // The TV grid is a D-pad grid of focusable cards with no touch
             // scrolling; the phone gets the same pager, ViewModel and menu over
             // a finger-scrolled touch grid. Same branch rule as onboarding:
@@ -3590,9 +3605,12 @@ fun AppRoot(
                     onBack = closeGrid
                 )
             }
+            }
         }
 
         is Screen.KBFolder -> {
+            if (navSeam.isMigrated(current)) Unit
+            else {
             KBFolderScreen(
                 folderId = current.folderId,
                 onBack = { screen = stableBackDestination(current.returnTo) },
@@ -3607,6 +3625,7 @@ fun AppRoot(
                     )
                 }
             )
+            }
         }
 
         is Screen.Addons -> {
@@ -4118,6 +4137,8 @@ fun AppRoot(
         }
 
         is Screen.Actor -> {
+            if (navSeam.isMigrated(current)) Unit
+            else {
 
             ActorScreen(
                 actorId = current.personId,
@@ -4134,9 +4155,12 @@ fun AppRoot(
                         )
                 }
             )
+            }
         }
 
         is Screen.Studio -> {
+            if (navSeam.isMigrated(current)) Unit
+            else {
 
             StudioScreen(
                 current.id,
@@ -4158,9 +4182,12 @@ fun AppRoot(
                         )
                 }
             )
+            }
         }
 
         is Screen.Decade -> {
+            if (navSeam.isMigrated(current)) Unit
+            else {
 
             DecadeScreen(
                 current.decadeStart,
@@ -4177,9 +4204,12 @@ fun AppRoot(
                         )
                 }
             )
+            }
         }
 
         is Screen.Tag -> {
+            if (navSeam.isMigrated(current)) Unit
+            else {
 
             TagScreen(
                 current.id,
@@ -4198,9 +4228,12 @@ fun AppRoot(
                         )
                 }
             )
+            }
         }
 
         is Screen.Collection -> {
+            if (navSeam.isMigrated(current)) Unit
+            else {
 
             CollectionScreen(
                 current.id,
@@ -4217,6 +4250,7 @@ fun AppRoot(
                         )
                 }
             )
+            }
         }
 
         is Screen.Streams -> {

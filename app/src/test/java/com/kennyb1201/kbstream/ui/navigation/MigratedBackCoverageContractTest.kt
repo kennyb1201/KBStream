@@ -66,7 +66,25 @@ class MigratedBackCoverageContractTest {
         "publicLists" to listOf(
             "$PACKAGE" + "ui/publiclists/PublicListsScreen.kt",
             "$PACKAGE" + "ui/mobile/PublicListsScreenMobile.kt"
-        )
+        ),
+        // F2's drill-downs were written for the shell's global Back table and
+        // none of these six pages registers a handler of its own, so the
+        // DESTINATION registers the landing - once, above the screen, still
+        // inside the NavHost entry and so still after the controller's pop.
+        "actor" to listOf(GRAPH),
+        "studio" to listOf(GRAPH),
+        "decade" to listOf(GRAPH),
+        "tag" to listOf(GRAPH),
+        "collection" to listOf(GRAPH),
+        // The grid branches on form factor INSIDE the destination (it always did,
+        // in the arm), and neither page registers a handler - the one above them
+        // covers both. The touch twin's own note says as much.
+        "catalogGrid" to listOf(GRAPH),
+        // The folder's D-pad page answered Back itself; its touch twin never did
+        // and inherited the shell's arm, so the landing is registered above the
+        // form-factor branch and covers both.
+        "kbFolder" to listOf("$PACKAGE" + "ui/kb/KBFolderScreen.kt"),
+        "yearReview" to listOf("$PACKAGE" + "ui/settings/YearReviewScreen.kt")
     )
 
     @Test
@@ -157,5 +175,8 @@ class MigratedBackCoverageContractTest {
     private companion object {
         const val PACKAGE = "com/kennyb1201/kbstream/"
         const val MAIN_ACTIVITY = "$PACKAGE" + "MainActivity.kt"
+
+        /** The host itself: F2's drill-downs register their landing there. */
+        const val GRAPH = PACKAGE + "ui/navigation/NavHostGraph.kt"
     }
 }

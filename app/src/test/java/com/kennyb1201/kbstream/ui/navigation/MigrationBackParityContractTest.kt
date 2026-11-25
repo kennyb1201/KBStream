@@ -48,7 +48,20 @@ class MigrationBackParityContractTest {
         // the browser. Only the route's own argument is right for all of them.
         Triple("addons", "Screen.Addons", "stableBackDestination(current.returnTo)"),
         Triple("bingecat", "Screen.BingeCat", "stableBackDestination(current.returnTo)"),
-        Triple("publicLists", "Screen.PublicLists", "stableBackDestination(current.returnTo)")
+        Triple("publicLists", "Screen.PublicLists", "stableBackDestination(current.returnTo)"),
+        // F2: each drill-down lands on its own return argument, through the
+        // sanitizer - the arm's landing, for every one of them.
+        Triple("actor", "Screen.Actor", "stableBackDestination(current.returnTo)"),
+        Triple("studio", "Screen.Studio", "stableBackDestination(current.returnTo)"),
+        Triple("decade", "Screen.Decade", "stableBackDestination(current.returnTo)"),
+        Triple("tag", "Screen.Tag", "stableBackDestination(current.returnTo)"),
+        Triple("collection", "Screen.Collection", "stableBackDestination(current.returnTo)"),
+        Triple("catalogGrid", "Screen.CatalogGrid", "stableBackDestination(current.returnTo)"),
+        Triple("kbFolder", "Screen.KBFolder", "stableBackDestination(current.returnTo)"),
+        // Year in review is the one arm that does NOT sanitize: it is opened from
+        // Library or Settings only and can never carry a one-shot autoplay, so its
+        // arm hands back the raw returnTo and the destination does the same.
+        Triple("yearReview", "Screen.YearReview", "{ screen = current.returnTo }")
     )
 
     @Test
@@ -101,6 +114,8 @@ class MigrationBackParityContractTest {
             val graphLanding = when (armLanding) {
                 "stableBackDestination(current.returnTo)" ->
                     "NavRoutes.landingOf(route.returnRoute)"
+                "{ screen = current.returnTo }" ->
+                    "NavRoutes.decoded(route.returnRoute)"
                 else -> armLanding
             }
             assertTrue(
@@ -110,6 +125,31 @@ class MigrationBackParityContractTest {
                 destination!!.contains(graphLanding)
             )
         }
+    }
+
+    @Test
+    fun `a destination whose page never answered Back registers the landing itself`() {
+        // The shell's global handler is what answered these six, and it stands
+        // down for a migrated kind - so the destination has to register the
+        // press, and it has to do it in the destination's own body (after the
+        // controller's pop callback) rather than anywhere above the host.
+        listOf("actor", "studio", "decade", "tag", "collection", "catalogGrid")
+            .forEach { kind ->
+                val (_, variant, _) = parity.first { it.first == kind }
+                val route = variant.removePrefix("Screen.")
+                val destination = graphBody(route)
+                    ?: error("$kind has no composable<$route" + "Route> in the graph")
+                assertTrue(
+                    "$kind's destination registers no BackHandler, and its page has " +
+                        "none: with the shell's handler standing down, Back would reach " +
+                        "the activity and finish the app instead of landing on the opener",
+                    destination.contains("BackHandler {")
+                )
+                assertTrue(
+                    "$kind's destination must register the landing its route carries",
+                    destination.contains("NavRoutes.landingOf(route.returnRoute)")
+                )
+            }
     }
 
     @Test

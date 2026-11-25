@@ -55,6 +55,12 @@ fun KBFolderScreen(
     ) -> Unit,
     viewModel: KBFolderViewModel = hiltViewModel()
 ) {
+    // Both form factors leave the folder on Back, and the touch page has no
+    // handler of its own - it inherited the shell's arm. A migrated kind has
+    // none, so the landing is registered above the branch; the D-pad page's own
+    // handler sits below and registers later, so it still wins there.
+    BackHandler(onBack = onBack)
+
     // The phone entry: the same ViewModel, folder load and navigation calls,
     // drawn as the collection's poster grid. One branch; the TV page below is
     // unchanged (see KBFolderScreenMobile).
