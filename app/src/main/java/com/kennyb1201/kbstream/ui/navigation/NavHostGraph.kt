@@ -10,6 +10,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -19,19 +21,16 @@ import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.publiclists.PublicListVendor
 import com.kennyb1201.kbstream.ui.actor.ActorScreen
 import com.kennyb1201.kbstream.ui.addons.AddonsScreen
-import com.kennyb1201.kbstream.ui.addons.AddonsViewModel
 import com.kennyb1201.kbstream.ui.addons.CatalogBuilderScreen
 import com.kennyb1201.kbstream.ui.bingecat.BingeCatConnectScreen
 import com.kennyb1201.kbstream.ui.bingecat.BingeCatPublicListsScreen
 import com.kennyb1201.kbstream.ui.bingecat.BingeCatPublicListsViewModel
-import com.kennyb1201.kbstream.ui.bingecat.BingeCatViewModel
 import com.kennyb1201.kbstream.ui.collection.CollectionScreen
 import com.kennyb1201.kbstream.ui.decade.DecadeScreen
 import com.kennyb1201.kbstream.ui.home.CatalogGridScreen
 import com.kennyb1201.kbstream.ui.kb.KBFolderScreen
 import com.kennyb1201.kbstream.ui.mobile.CatalogGridScreenMobile
 import com.kennyb1201.kbstream.ui.publiclists.PublicListsScreen
-import com.kennyb1201.kbstream.ui.publiclists.PublicListsViewModel
 import com.kennyb1201.kbstream.ui.remote.RemoteScreen
 import com.kennyb1201.kbstream.ui.settings.StatsScreen
 import com.kennyb1201.kbstream.ui.settings.YearReviewScreen
@@ -79,21 +78,21 @@ internal fun NavHostGraph(
     /** Every destination navigates through the seam, exactly like the arms did. */
     onNavigate: (Screen) -> Unit,
     /**
-     * Activity-scoped ViewModels for the leaves that own state across the seam,
-     * resolved and handed in by the shell.
+     * The activity's ViewModel store, for the destinations that own
+     * activity-scoped state.
      *
-     * Inside a NavHost the ViewModel store owner is the back-stack entry, so a
-     * screen's default `hiltViewModel()` is scoped to the visit. Three of these
-     * pages are not: the two public-list browsers must not lose the level the
-     * viewer left (or restart an import) when Detail opens over them, and the
-     * add-on page must not refetch what it already has on every entry. The arms
-     * they replace resolved them in the activity's composition, which is what
-     * these parameters preserve - only the resolution point moved, not the life.
+     * Inside a NavHost `LocalViewModelStoreOwner` is the back-stack entry, and
+     * the shell pops that entry the moment it leaves the kind - so a screen's
+     * default `hiltViewModel()` would be scoped to the VISIT. Every arm this
+     * graph replaces resolved its ViewModel in the activity's composition, and
+     * that is not cosmetic: a browse page open its Detail and come back must
+     * still have its loaded pages, the public-list browsers must keep the level
+     * the viewer left and an import already following its job, and the catalog
+     * grid SHARES Home's ViewModel with the rails it was opened from. Passing
+     * the owner through keeps the instance and its life exactly as they were -
+     * only the place it is resolved moves.
      */
-    addonsViewModel: AddonsViewModel? = null,
-    bingeCatViewModel: BingeCatViewModel? = null,
-    bingeCatPublicListsViewModel: BingeCatPublicListsViewModel? = null,
-    publicListsViewModel: PublicListsViewModel? = null,
+    viewModelOwner: ViewModelStoreOwner,
     modifier: Modifier = Modifier
 ) {
     NavHost(
@@ -166,7 +165,7 @@ internal fun NavHostGraph(
             val route = entry.toRoute<AddonsRoute>()
             AddonsScreen(
                 onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) },
-                viewModel = checkNotNull(addonsViewModel)
+                viewModel = hiltViewModel(viewModelStoreOwner = viewModelOwner)
             )
         }
 
@@ -189,7 +188,7 @@ internal fun NavHostGraph(
                 onOpenTitle = { mediaType, id ->
                     onNavigate(Screen.Detail(type = mediaType, id = id, returnTo = self))
                 },
-                vm = checkNotNull(publicListsViewModel)
+                vm = hiltViewModel(viewModelStoreOwner = viewModelOwner)
             )
         }
 
@@ -202,7 +201,11 @@ internal fun NavHostGraph(
             val self = Screen.BingeCat(
                 returnTo = NavRoutes.decoded(route.returnRoute) ?: Screen.Home
             )
-            val lists = checkNotNull(bingeCatPublicListsViewModel)
+            // The browser's state, from the activity's store: the arm this
+            // replaced resolved it there so a trip into Detail would not lose
+            // the level the viewer left or restart an import.
+            val lists: BingeCatPublicListsViewModel =
+                hiltViewModel(viewModelStoreOwner = viewModelOwner)
             val listsState by lists.uiState.collectAsStateWithLifecycle()
             if (listsState.browsing) {
                 BingeCatPublicListsScreen(
@@ -221,7 +224,7 @@ internal fun NavHostGraph(
                 BingeCatConnectScreen(
                     onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) },
                     onBrowsePublicLists = { lists.open() },
-                    vm = checkNotNull(bingeCatViewModel)
+                    vm = hiltViewModel(viewModelStoreOwner = viewModelOwner)
                 )
             }
         }
@@ -247,6 +250,7 @@ internal fun NavHostGraph(
             BackHandler { onNavigate(NavRoutes.landingOf(route.returnRoute)) }
             ActorScreen(
                 actorId = route.personId,
+                viewModel = hiltViewModel(viewModelStoreOwner = viewModelOwner),
                 onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) },
                 onNavigateDetail = { type, id ->
                     onNavigate(Screen.Detail(type = type, id = id, returnTo = self))
@@ -278,6 +282,7 @@ internal fun NavHostGraph(
                 route.networkOrCompanyId,
                 route.networkIsCompany,
                 route.originalsCompanyId,
+                viewModel = hiltViewModel(viewModelStoreOwner = viewModelOwner),
                 onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) },
                 onNavigateDetail = { type, id ->
                     onNavigate(Screen.Detail(type = type, id = id, returnTo = self))
@@ -296,6 +301,7 @@ internal fun NavHostGraph(
             DecadeScreen(
                 route.decadeStart,
                 route.name,
+                viewModel = hiltViewModel(viewModelStoreOwner = viewModelOwner),
                 onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) },
                 onNavigateDetail = { type, id ->
                     onNavigate(Screen.Detail(type = type, id = id, returnTo = self))
@@ -318,6 +324,7 @@ internal fun NavHostGraph(
                 route.name,
                 route.isKeyword,
                 route.mediaType,
+                viewModel = hiltViewModel(viewModelStoreOwner = viewModelOwner),
                 onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) },
                 onNavigateDetail = { type, id ->
                     onNavigate(Screen.Detail(type = type, id = id, returnTo = self))
@@ -336,6 +343,7 @@ internal fun NavHostGraph(
             CollectionScreen(
                 route.id,
                 route.name,
+                viewModel = hiltViewModel(viewModelStoreOwner = viewModelOwner),
                 onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) },
                 onNavigateDetail = { type, id ->
                     onNavigate(Screen.Detail(type = type, id = id, returnTo = self))
@@ -366,6 +374,7 @@ internal fun NavHostGraph(
                     addonName = route.addonName,
                     catalogId = route.catalogId,
                     type = route.type,
+                    viewModel = hiltViewModel(viewModelStoreOwner = viewModelOwner),
                     onItemClick = openGridItem,
                     onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) }
                 )
@@ -375,6 +384,9 @@ internal fun NavHostGraph(
                     addonName = route.addonName,
                     catalogId = route.catalogId,
                     type = route.type,
+                    // Home's own ViewModel: the grid reads the rails the app just
+                    // drew, which live in that instance.
+                    viewModel = hiltViewModel(viewModelStoreOwner = viewModelOwner),
                     onItemClick = openGridItem,
                     onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) }
                 )
@@ -392,6 +404,7 @@ internal fun NavHostGraph(
             )
             KBFolderScreen(
                 folderId = route.folderId,
+                viewModel = hiltViewModel(viewModelStoreOwner = viewModelOwner),
                 onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) },
                 onItemClick = { type, imdbId, poster, backdrop, _ ->
                     onNavigate(
@@ -419,7 +432,8 @@ internal fun NavHostGraph(
                 onBack = {
                     onNavigate(NavRoutes.decoded(route.returnRoute) ?: Screen.Home)
                 },
-                year = route.year
+                year = route.year,
+                viewModel = hiltViewModel(viewModelStoreOwner = viewModelOwner)
             )
         }
     }

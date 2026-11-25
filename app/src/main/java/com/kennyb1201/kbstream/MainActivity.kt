@@ -5162,31 +5162,17 @@ fun AppRoot(
             val start = remember {
                 com.kennyb1201.kbstream.ui.navigation.NavRoutes.of(current)!!
             }
-            // The three leaves below own activity-scoped ViewModels, and the
-            // arms they replace resolved them HERE, in the activity's
-            // composition - for reasons their own notes give: a trip into Detail
-            // must not lose the browse level or restart an import, and the
-            // add-on page must not refetch what it already has. Inside a NavHost
-            // the store owner is the back-stack entry, which the shell pops the
-            // moment it leaves the kind, so the shell resolves them and hands
-            // them down: same instance, same life as before.
-            val addonsVm: com.kennyb1201.kbstream.ui.addons.AddonsViewModel? =
-                if (current is Screen.Addons) hiltViewModel() else null
-            val bingeCatVm: com.kennyb1201.kbstream.ui.bingecat.BingeCatViewModel? =
-                if (current is Screen.BingeCat) hiltViewModel() else null
-            val bingeCatListsVm: com.kennyb1201.kbstream.ui.bingecat.BingeCatPublicListsViewModel? =
-                if (current is Screen.BingeCat) hiltViewModel() else null
-            val publicListsVm: com.kennyb1201.kbstream.ui.publiclists.PublicListsViewModel? =
-                if (current is Screen.PublicLists) hiltViewModel() else null
             com.kennyb1201.kbstream.ui.navigation.NavHostGraph(
                 navController = navController,
                 startDestination = start,
                 transitionMs = transitionMs,
                 onNavigate = { navSeam.navigateTo(it) },
-                addonsViewModel = addonsVm,
-                bingeCatViewModel = bingeCatVm,
-                bingeCatPublicListsViewModel = bingeCatListsVm,
-                publicListsViewModel = publicListsVm,
+                // The activity's own store, so a destination resolves the same
+                // ViewModel instance its arm did. Inside the host the store
+                // owner is the back-stack entry, which this shell pops when it
+                // leaves the kind - a browse page's loaded pages, a browser's
+                // level and Home's rails would all be thrown away with it.
+                viewModelOwner = this@MainActivity,
                 modifier = Modifier.fillMaxSize()
             )
         }
