@@ -141,10 +141,16 @@ class NavHostHostingContractTest {
                 "destination instead of the renderer for all of them",
             seam.contains("private val migratedKinds: Set<String> = emptySet()")
         )
+        // navigateTo now also records Detail's play-on-arrival one-shot (see
+        // DetailArrivalIsNotRestorableContractTest), so what is pinned here is the
+        // part the shell depends on: every navigation still lands in the state.
         assertTrue(
-            "navigateTo must still be the state write it always was while nothing " +
-                "is migrated",
-            seam.contains("fun navigateTo(value: Screen) {\n        state.value = value\n    }")
+            "navigateTo must still write the state: the shell's `screen` stays the " +
+                "single source of truth while destinations move across, so a " +
+                "navigation that only recorded an intent would leave the renderer " +
+                "showing the previous screen",
+            seam.contains("fun navigateTo(value: Screen) {") &&
+                seam.contains("state.value = value")
         )
     }
 

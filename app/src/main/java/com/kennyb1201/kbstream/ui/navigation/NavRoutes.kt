@@ -131,23 +131,36 @@ internal data class YearReviewRoute(
 
 // ── Browse drill-downs ────────────────────────────────────────────────────
 
+/**
+ * A title's page.
+ *
+ * The two one-shot fields on [Screen.Detail] - `autoPlay` and `pendingTarget` -
+ * are deliberately NOT route arguments, and their absence here is the whole
+ * point of this note:
+ *
+ *  - a type-safe argument is PERSISTED in the entry's saved state, so a
+ *    process-death restore would hand the page a play instruction the viewer
+ *    never gave. That is the incident `NavStateSerialization` records against
+ *    `pendingTarget` (a recreated app silently auto-playing the episode, which
+ *    reads as the binge restarting);
+ *  - it is also IMMUTABLE once the entry exists, so "clear it after the first
+ *    frame" cannot be done by editing the argument - it means replacing the
+ *    entry, which re-enters the destination and replays its transition and
+ *    focus request, the exact flash F4's acceptance forbids.
+ *
+ * They ride in [NavSeam]'s transient slot instead: set by the navigation that
+ * means "play on arrival", taken once by this page, and gone with the process.
+ */
 @Serializable
 @SerialName("detail")
 internal data class DetailRoute(
     val type: String,
     val id: String,
-    val autoPlay: Boolean = false,
     val itemPoster: String? = null,
     val itemBackdrop: String? = null,
     val itemClearLogo: String? = null,
     val itemOverview: String? = null,
-    val returnRoute: String? = null,
-    /**
-     * The one-shot play intent ([Screen.Detail.pendingTarget]) does not fit a
-     * type-safe argument, so it rides here as the existing codec's JSON. Null
-     * for every ordinary visit; filled at this destination's phase (F4).
-     */
-    val payloadJson: String? = null
+    val returnRoute: String? = null
 )
 
 @Serializable
@@ -318,19 +331,17 @@ internal object NavRoutes {
             year = screen.year,
             returnRoute = returnOf(screen.returnTo)
         )
+        // What survives is what the route carries. The play-on-arrival
+        // instruction is transient by definition, so `navigateTo` hands it to
+        // the seam's one-shot slot while this line hands over the page itself.
         is Screen.Detail -> DetailRoute(
             type = screen.type,
             id = screen.id,
-            autoPlay = screen.autoPlay,
             itemPoster = screen.itemPoster,
             itemBackdrop = screen.itemBackdrop,
             itemClearLogo = screen.itemClearLogo,
             itemOverview = screen.itemOverview,
-            returnRoute = returnOf(screen.returnTo),
-            // The payload codec for pendingTarget lands with F4, the phase that
-            // migrates Detail; until then this destination is unmigrated and
-            // the seam renders it from the Screen value itself.
-            payloadJson = null
+            returnRoute = returnOf(screen.returnTo)
         )
         is Screen.Actor -> ActorRoute(
             personId = screen.personId,
@@ -478,7 +489,6 @@ internal object NavRoutes {
         is DetailRoute -> Screen.Detail(
             type = route.type,
             id = route.id,
-            autoPlay = route.autoPlay,
             itemPoster = route.itemPoster,
             itemBackdrop = route.itemBackdrop,
             itemClearLogo = route.itemClearLogo,

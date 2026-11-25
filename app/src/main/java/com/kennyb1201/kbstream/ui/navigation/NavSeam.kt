@@ -43,9 +43,46 @@ internal class NavSeam(
     /** Whether [value]'s kind is rendered by the NavHost rather than the old renderer. */
     fun isMigrated(value: Screen): Boolean = value.typeName() in migratedKinds
 
+    /**
+     * The play-on-arrival instruction for a Detail page that has not opened yet.
+     *
+     * Deliberately a plain field: NOT `rememberSaveable`, not part of the route,
+     * not part of the restore codec. `Screen.Detail.autoPlay` and
+     * `pendingTarget` are one-shots, and every persistence path they could take
+     * re-fires them - a restore that auto-plays the episode the viewer was
+     * watching reads as the binge restarting from there. The codec already
+     * refuses to encode `pendingTarget` for exactly that reason; this field is
+     * that refusal made structural, because a route argument would be saved by
+     * the NavController whether the codec agrees or not.
+     *
+     * It is held here rather than in MainActivity because the seam is the one
+     * place every navigation passes through: a navigation that carries an intent
+     * sets it, any other navigation clears it, and the page takes it once.
+     */
+    private var detailArrival: Screen.Detail? = null
+
     /** The one navigation entry point: every `screen = …` in the shell lands here. */
     fun navigateTo(value: Screen) {
+        // Only the navigation being made right now can carry an intent: anything
+        // else that happens between this call and the page's first frame means
+        // the viewer has moved on, and a stale instruction must not survive to
+        // play something they did not ask for.
+        detailArrival = (value as? Screen.Detail)
+            ?.takeIf { it.autoPlay || it.pendingTarget != null }
         state.value = value
+    }
+
+    /**
+     * The arrival instruction this page owns, taken exactly once.
+     *
+     * Keyed by (type, id): More Like This re-targets Detail without leaving it,
+     * and an instruction meant for the page being left must not press Play on
+     * the page that replaced it.
+     */
+    fun takeDetailArrival(type: String, id: String): Screen.Detail? {
+        val held = detailArrival ?: return null
+        detailArrival = null
+        return held.takeIf { it.type == type && it.id == id }
     }
 
     operator fun getValue(thisRef: Any?, property: KProperty<*>): Screen = state.value
