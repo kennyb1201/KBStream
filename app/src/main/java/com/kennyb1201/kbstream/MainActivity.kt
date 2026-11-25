@@ -128,6 +128,7 @@ import com.kennyb1201.kbstream.ui.mobile.CatalogGridScreenMobile
 import com.kennyb1201.kbstream.ui.mobile.MobileAdaptiveRules
 import com.kennyb1201.kbstream.ui.mobile.MobileBottomNav
 import com.kennyb1201.kbstream.ui.mobile.MobileNavRail
+import com.kennyb1201.kbstream.ui.mobile.rememberMobileWindowWidthClass
 import com.kennyb1201.kbstream.ui.navigation.NavSeam
 import com.kennyb1201.kbstream.ui.mobile.MobileHomeTopRequest
 import com.kennyb1201.kbstream.ui.mobile.MobileNavDestination
