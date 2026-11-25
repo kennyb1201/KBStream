@@ -21,6 +21,10 @@ import org.junit.Test
  * line that makes a silent no-logo answerable, the cap and the rendering, and
  * that none of it changed the request, the decode or the tint.
  *
+ * The tint gate is pinned here too (spec 2026-11-24, the tint gate): the same
+ * Chappelle's file is a white-on-opaque-black title card, so the dark verdict
+ * must not fire on a mostly-opaque image at all.
+ *
  * Read from the source and the trace object: the paint itself needs a TV, a
  * network and Coil's decoder.
  */
@@ -39,6 +43,13 @@ class HeroLogoTraceContractTest {
         screen
             .substringAfter("internal fun HeroClearLogo(")
             .substringBefore("private fun isDarkMonochromeArtwork(")
+    }
+
+    /** The dark-mark verdict itself, from its signature to the next declaration. */
+    private val verdict: String by lazy {
+        screen
+            .substringAfter("private fun isDarkMonochromeArtwork(")
+            .substringBefore("\nprivate ")
     }
 
     @Test
@@ -133,12 +144,12 @@ class HeroLogoTraceContractTest {
         assertEquals(
             "exactly one draw record in the whole screen",
             1,
-            Regex("HeroLogoTrace\\.recordDraw\\(").findAll(screen).count()
+            occurrences(screen, "HeroLogoTrace.recordDraw(")
         )
         assertEquals(
             "and exactly one failure record",
             1,
-            Regex("HeroLogoTrace\\.recordFailure\\(").findAll(screen).count()
+            occurrences(screen, "HeroLogoTrace.recordFailure(")
         )
         assertTrue(
             "the record lives inside the request's own onSuccess, which Coil " +
@@ -195,6 +206,68 @@ class HeroLogoTraceContractTest {
             source(PREVIEW).contains("tmdbId = tmdbId,")
         )
     }
+
+    @Test
+    fun `the tint only fires on a mostly transparent image`() {
+        // Field case (spec 2026-11-24, the tint gate): Chappelle's Show's hero
+        // clearlogo is white letters on an OPAQUE black card. The dark verdict
+        // fired on it, and SrcIn turned the whole card near-white - a slab. The
+        // gate below is what tells a wordmark from a full-bleed title card.
+        assertTrue(
+            "the verdict counts transparent pixels at all: without that it cannot " +
+                "tell dark lettering from a dark background",
+            verdict.contains("var transparent = 0L") && verdict.contains("transparent++")
+        )
+        assertTrue(
+            "counted in the SAME walk as the opaque pixels, before the sample is " +
+                "recycled - one sample, one pass, no extra bitmap",
+            verdict.indexOf("transparent++") in 0 until verdict.indexOf("if (sample !== bitmap)")
+        )
+        assertEquals(
+            "one scaled sample and nothing else: the gate rides the pass that was " +
+                "already being paid for on the hero's focus path",
+            1,
+            occurrences(verdict, "createScaledBitmap(")
+        )
+        assertTrue(
+            "and the fraction is a NECESSARY condition of the dark verdict: an " +
+                "image that is half opaque or more returns false however dark its " +
+                "opaque pixels are. That is the Chappelle's case - the card must " +
+                "draw as Detail draws it, untinted",
+            verdict.contains("if (transparent * 2 < total) return false")
+        )
+        assertTrue(
+            "the verdict's own cutoffs are untouched and still come after the " +
+                "gate: this change is about which images the verdict applies to, " +
+                "not about how dark is dark",
+            verdict.contains("luminanceSum / count < 148L && saturationSum / count < 42L") &&
+                verdict.indexOf("transparent * 2 < total") in 0 until
+                verdict.indexOf("luminanceSum / count < 148L")
+        )
+        assertTrue(
+            "and the KDoc says which images the tint is for, so the next reader " +
+                "does not have to re-derive it from a photo",
+            screen.contains("dark lettering on a mostly transparent background")
+        )
+    }
+
+    @Test
+    fun `the verdict keeps its name and its one call site`() {
+        assertEquals(
+            "one definition, under the name the three contract tests read",
+            1,
+            occurrences(screen, "private fun isDarkMonochromeArtwork(")
+        )
+        assertEquals(
+            "exactly one call - the drawer's own analysis, which is the only place " +
+                "a clearlogo is tinted - and it still passes the bitmap it drew",
+            1,
+            occurrences(screen, "isDarkMonochromeArtwork(drawn)")
+        )
+    }
+
+    private fun occurrences(text: String, needle: String): Int =
+        text.split(needle).size - 1
 
     private fun source(relativePath: String): String {
         val file = File(sourceRoot, relativePath)

@@ -1595,11 +1595,26 @@ internal fun HeroClearLogo(
     }
 }
 
+/**
+ * Whether a clearlogo is dark lettering on a mostly transparent background, and so
+ * wants the near-white tint to stay legible on the hero.
+ *
+ * The tint is SrcIn, which paints every opaque pixel one colour. That is right for
+ * a wordmark and destructive for a full-bleed title card: TMDB's Chappelle's Show
+ * logo is white letters on an opaque black background, so tinting it floods that
+ * background near-white and leaves the letters white with it - a solid slab.
+ *
+ * The tint therefore only fires on a mostly-transparent image, where the letters
+ * cover a minority of the box (spec 2026-11-24, the tint gate). A mostly-opaque
+ * image is a title card and is drawn as-is, which is exactly what Detail does
+ * with the same file.
+ */
 private fun isDarkMonochromeArtwork(bitmap: android.graphics.Bitmap): Boolean {
     val sample = android.graphics.Bitmap.createScaledBitmap(bitmap, 48, 24, true)
     var luminanceSum = 0L
     var saturationSum = 0L
     var count = 0L
+    var transparent = 0L
 
     for (y in 0 until sample.height) {
         for (x in 0 until sample.width) {
@@ -1613,12 +1628,25 @@ private fun isDarkMonochromeArtwork(bitmap: android.graphics.Bitmap): Boolean {
                     (0.2126f * red + 0.7152f * green + 0.0722f * blue).toLong()
                 saturationSum += (maxOf(red, green, blue) - minOf(red, green, blue)).toLong()
                 count++
+            } else {
+                // The same alpha threshold as the opaque side, counted in the same
+                // walk: a second pass over the sample would pay for the gate twice.
+                transparent++
             }
         }
     }
 
     if (sample !== bitmap) sample.recycle()
     if (count == 0L) return false
+    // The tint only ever applies to a wordmark. A full-bleed title card is opaque
+    // almost everywhere - Chappelle's is 27% transparent, opaque mean luminance
+    // 102 - while a wordmark's letters cover a minority of the box (Joey is 78%
+    // transparent). Half is the empty band between those two classes; a dark
+    // wordmark that lands under it merely draws untinted, which is the safe
+    // direction, because the tint's failure is a white slab rather than a
+    // legibility nit.
+    val total = count + transparent
+    if (transparent * 2 < total) return false
 
     return luminanceSum / count < 148L && saturationSum / count < 42L
 }
