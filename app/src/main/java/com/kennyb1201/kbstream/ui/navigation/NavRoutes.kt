@@ -1,5 +1,8 @@
 package com.kennyb1201.kbstream.ui.navigation
 
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavDestination.Companion.hasRoute
+import androidx.navigation.toRoute
 import com.kennyb1201.kbstream.Screen
 import com.kennyb1201.kbstream.decodeScreen
 import com.kennyb1201.kbstream.encodeScreen
@@ -405,6 +408,54 @@ internal object NavRoutes {
         // Not a destination: it launches a player Activity and lives as an
         // overlay above the renderer. Nothing to route, nothing to restore.
         is Screen.Player -> null
+    }
+
+    /**
+     * The [Screen] a back-stack entry stands for.
+     *
+     * The host owns the shell, so the things that used to read the shell's
+     * `screen` - the transition rules (`navDepth`, `topLevelTab`), the bottom
+     * bar's lit item, the top-bar summon's `hostsAppTopBar`, the exit-confirm
+     * predicate - read the CURRENT ENTRY instead. Going through the route's own
+     * arguments matters: the transitions compare two screens, and a Detail vs a
+     * Streams is a different depth, not a different route name.
+     */
+    fun screenOfEntry(entry: NavBackStackEntry): Screen = when {
+        entry.destination.hasRoute<HomeRoute>() -> Screen.Home
+        entry.destination.hasRoute<SearchRoute>() -> Screen.Search
+        entry.destination.hasRoute<GuideRoute>() -> Screen.Guide
+        entry.destination.hasRoute<LibraryRoute>() -> Screen.Library
+        entry.destination.hasRoute<SettingsRoute>() -> Screen.Settings
+        entry.destination.hasRoute<RemoteRoute>() -> Screen.Remote
+        entry.destination.hasRoute<StatsRoute>() -> Screen.Stats
+        entry.destination.hasRoute<SportsRoute>() -> screenOf(entry.toRoute<SportsRoute>())
+        entry.destination.hasRoute<AddonsRoute>() -> screenOf(entry.toRoute<AddonsRoute>())
+        entry.destination.hasRoute<CatalogBuilderRoute>() ->
+            screenOf(entry.toRoute<CatalogBuilderRoute>())
+        entry.destination.hasRoute<SimklRoute>() -> screenOf(entry.toRoute<SimklRoute>())
+        entry.destination.hasRoute<TraktRoute>() -> screenOf(entry.toRoute<TraktRoute>())
+        entry.destination.hasRoute<BingeCatRoute>() -> screenOf(entry.toRoute<BingeCatRoute>())
+        entry.destination.hasRoute<PublicListsRoute>() ->
+            screenOf(entry.toRoute<PublicListsRoute>())
+        entry.destination.hasRoute<YearReviewRoute>() ->
+            screenOf(entry.toRoute<YearReviewRoute>())
+        entry.destination.hasRoute<DetailRoute>() -> screenOf(entry.toRoute<DetailRoute>())
+        entry.destination.hasRoute<ActorRoute>() -> screenOf(entry.toRoute<ActorRoute>())
+        entry.destination.hasRoute<StudioRoute>() -> screenOf(entry.toRoute<StudioRoute>())
+        entry.destination.hasRoute<DecadeRoute>() -> screenOf(entry.toRoute<DecadeRoute>())
+        entry.destination.hasRoute<TagRoute>() -> screenOf(entry.toRoute<TagRoute>())
+        entry.destination.hasRoute<CollectionRoute>() -> screenOf(entry.toRoute<CollectionRoute>())
+        entry.destination.hasRoute<CatalogGridRoute>() ->
+            screenOf(entry.toRoute<CatalogGridRoute>())
+        entry.destination.hasRoute<KBFolderRoute>() -> screenOf(entry.toRoute<KBFolderRoute>())
+        entry.destination.hasRoute<ProfilePickerRoute>() ->
+            screenOf(entry.toRoute<ProfilePickerRoute>())
+        entry.destination.hasRoute<ProfileEditRoute>() ->
+            screenOf(entry.toRoute<ProfileEditRoute>())
+        entry.destination.hasRoute<StreamsRoute>() -> screenOf(entry.toRoute<StreamsRoute>())
+        // No route names anything else: the player is an overlay, not a
+        // destination, and an entry that matched no route cannot exist.
+        else -> Screen.Home
     }
 
     /**
