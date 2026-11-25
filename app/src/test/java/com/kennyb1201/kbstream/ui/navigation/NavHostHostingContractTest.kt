@@ -80,25 +80,39 @@ class NavHostHostingContractTest {
     }
 
     @Test
-    fun `exactly one kind is migrated and the graph opens on it`() {
+    fun `the F1 leaves are the migrated set and the host opens on the entered route`() {
         val migrated = Regex("migratedKinds = setOf\\(([^)]*)\\)")
             .find(shell)?.groupValues?.get(1)
             ?: error("the seam is constructed without a migrated set")
-        assertFalse(
-            "a second migrated kind needs the host owned by a wrapper rather than " +
-                "the renderer's own slot: a transition between two migrated kinds " +
-                "would compose two NavHosts over one controller",
-            migrated.contains(",")
-        )
         assertEquals(
-            "the first destination to move across is the remote control",
-            "\"remote\"",
+            "the migrated set is the three leaf pages whose Back is unambiguous: " +
+                "the remote, the stats page and the catalog builder",
+            "\"remote\", \"stats\", \"catalogBuilder\"",
             migrated
         )
         assertTrue(
-            "and the graph's start destination is that same route, which is what " +
-                "makes entering it navigate nothing",
+            "the host opens on the route of the screen being entered, captured at " +
+                "mount, so entering a migrated kind navigates nothing and replays " +
+                "no enter transition",
+            shell.contains("val start = remember {") &&
+                shell.contains(
+                    "com.kennyb1201.kbstream.ui.navigation.NavRoutes.of(current)!!"
+                ) &&
+                shell.contains("startDestination = start,")
+        )
+        assertTrue(
+            "and the graph must open on that captured destination, not on a fixed one",
+            graph.contains("startDestination = startDestination,")
+        )
+        assertFalse(
+            "a fixed start destination would paint the wrong screen for a frame " +
+                "before the real one is pushed over it",
             graph.contains("startDestination = RemoteRoute,")
+        )
+        assertTrue(
+            "the host may only be composed for the destination being ENTERED: " +
+                "two NavHosts over one controller fails at attach time",
+            shell.contains("if (!navSeam.isMigrated(screen) || current === screen) {")
         )
         val seam = stripComments(source(SEAM))
         assertTrue(
@@ -114,14 +128,13 @@ class NavHostHostingContractTest {
     }
 
     @Test
-    fun `the graph starts at the first F1 destination and lands Back on its opener`() {
+    fun `the graph composes the F1 leaves and lands Back where the arms did`() {
         assertTrue(
-            "the start destination must be a route the table actually has",
-            graph.contains("startDestination = RemoteRoute,")
-        )
-        assertTrue(
-            "Remote is the first F1 destination",
-            graph.contains("composable<RemoteRoute> {")
+            "the three leaves the shell hands the host must all be composed here, " +
+                "or the host would open on a route it has no destination for",
+            graph.contains("composable<RemoteRoute> {") &&
+                graph.contains("composable<StatsRoute> {") &&
+                graph.contains("composable<CatalogBuilderRoute> {")
         )
         assertTrue(
             "its Back must land on Settings, which is what the shell's arm did " +

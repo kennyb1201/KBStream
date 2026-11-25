@@ -1436,7 +1436,7 @@ fun AppRoot(
     // `screen` is still the same value from the same saved state, so the
     // restoration codec, smart-casts and the cold-launch gate are untouched.
     val navSeam = remember(screenState) {
-        NavSeam(screenState, migratedKinds = setOf("remote"))
+        NavSeam(screenState, migratedKinds = setOf("remote", "stats", "catalogBuilder"))
     }
     var screen by navSeam
 
@@ -1449,12 +1449,11 @@ fun AppRoot(
     // composed at once (a NavController attaches to exactly one host), which is
     // exactly what a transition between two migrated kinds would ask for.
     //
-    // That last point is why only ONE kind is migrated here. While the set has a
-    // single member, the graph's start destination IS that kind's route, so
-    // entering it navigates nothing: the host opens on it, and no transition is
-    // replayed on the entry `launchSingleTop` settles. The phase that adds a
-    // second destination must give the host a wrapper that owns its graph;
-    // NavHostHostingContractTest fails until it does.
+    // Entering a migrated kind navigates nothing: the host opens ON the route of
+    // the screen being entered (see the fork below), so there is no push onto a
+    // start destination first and no enter transition replayed on it. The graph
+    // is rebuilt per entry, which is what makes one shell state - not a stack -
+    // still the single source of truth while destinations move across.
     val navController = androidx.navigation.compose.rememberNavController()
     LaunchedEffect(screen) {
         if (!navSeam.isMigrated(screen) && navController.currentBackStackEntry != null) {
@@ -3079,12 +3078,26 @@ fun AppRoot(
     // shell's own transition slot; everything else is the `when` it has always
     // been. The splash picker further down stays outside both, above either.
     if (navSeam.isMigrated(current)) {
-        com.kennyb1201.kbstream.ui.navigation.NavHostGraph(
-            navController = navController,
-            transitionMs = transitionMs,
-            onNavigate = { navSeam.navigateTo(it) },
-            modifier = Modifier.fillMaxSize()
-        )
+        // The host belongs to the destination being ENTERED. During a transition
+        // AnimatedContent keeps both screens composed and a NavController
+        // attaches to exactly one NavHost, so the OUTGOING side of a migrated ->
+        // migrated move would be a second host: it renders as an empty slot
+        // instead. (Nothing navigates between two migrated kinds yet; the phase
+        // that adds such a move gives the host the navigate it needs.)
+        if (!navSeam.isMigrated(screen) || current === screen) {
+            // Captured once, at the composition that mounts this host: the route
+            // of the screen being entered is the destination it opens on.
+            val start = remember {
+                com.kennyb1201.kbstream.ui.navigation.NavRoutes.of(current)!!
+            }
+            com.kennyb1201.kbstream.ui.navigation.NavHostGraph(
+                navController = navController,
+                startDestination = start,
+                transitionMs = transitionMs,
+                onNavigate = { navSeam.navigateTo(it) },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
     } else
     CompositionLocalProvider(
         // Null under reduced motion: HeroTransitionHost skipped the registry

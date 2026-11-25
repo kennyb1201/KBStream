@@ -44,7 +44,7 @@ class NavSeamContractTest {
                 "with the one migrated kind named at the seam, not inherited",
             shell.contains(
                 "val navSeam = remember(screenState) { NavSeam(screenState, " +
-                    "migratedKinds = setOf(\"remote\")) }"
+                    "migratedKinds = setOf(\"remote\", \"stats\", \"catalogBuilder\")) }"
             ) && shell.contains("var screen by navSeam")
         )
         assertFalse(

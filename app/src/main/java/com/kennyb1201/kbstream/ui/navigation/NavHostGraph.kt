@@ -26,9 +26,11 @@ import com.kennyb1201.kbstream.ui.settings.StatsScreen
 // restoration codec, the cold-launch gate and the exit-confirm dialog working
 // exactly as they do today, phase by phase.
 //
-// The graph starts with the first F1 destination and grows one at a time. Until
-// a kind is listed in `NavSeam.migratedKinds` nothing here composes, so F0 ships
-// a host with zero destinations migrated.
+// The graph opens ON the destination being entered: the shell hands it the route
+// of the screen it is showing, so the host never has to navigate itself onto the
+// right screen on its first frame (which would push it over a start destination
+// for a frame, then replay an enter transition). A destination is added here
+// when its kind joins `NavSeam.migratedKinds`; nothing here composes until then.
 //
 // Transitions: a stack push is always "deeper" and a pop always "back", which is
 // the shell's own two rules for everything that is not a lateral tab move - the
@@ -42,6 +44,12 @@ import com.kennyb1201.kbstream.ui.settings.StatsScreen
 @Composable
 internal fun NavHostGraph(
     navController: NavHostController,
+    /**
+     * The route of the screen being entered: the shell captures it once, when
+     * this host is composed for that screen, so a re-entry opens on the new
+     * destination rather than resuming the previous stack.
+     */
+    startDestination: Any,
     /** The shell's animation length; 0 is reduced motion and stays instant. */
     transitionMs: Int,
     /** Every destination navigates through the seam, exactly like the arms did. */
@@ -50,7 +58,7 @@ internal fun NavHostGraph(
 ) {
     NavHost(
         navController = navController,
-        startDestination = RemoteRoute,
+        startDestination = startDestination,
         modifier = modifier,
         enterTransition = {
             slideInHorizontally(tween(transitionMs)) { width -> width / 6 } +
