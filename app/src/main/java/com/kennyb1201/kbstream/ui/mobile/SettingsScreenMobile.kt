@@ -438,13 +438,20 @@ private fun SettingsPaneContentMobile(
     onOpenTrakt: () -> Unit,
     onOpenBingeCat: () -> Unit,
     onOpenBingeCatPublicLists: () -> Unit,
-    onOpenPublicLists: () -> Unit,
+    onOpenPublicLists: (String) -> Unit,
     onOpenProfiles: () -> Unit,
-    onOpenTorBoxFile: () -> Unit,
+    onOpenTorBoxFile: (
+        type: String,
+        id: String,
+        title: String,
+        season: Int?,
+        episode: Int?,
+        file: CloudMatch
+    ) -> Unit,
     onOpenCatalogManager: () -> Unit,
     onOpenCatalogBuilder: () -> Unit,
     onOpenStats: () -> Unit,
-    onOpenYearReview: () -> Unit
+    onOpenYearReview: (Int?) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         PaneHeaderMobile(pane = open, onBack = onBack)
