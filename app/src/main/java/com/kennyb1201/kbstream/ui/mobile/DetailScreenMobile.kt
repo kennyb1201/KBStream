@@ -108,6 +108,7 @@ import com.kennyb1201.kbstream.ui.components.heroSharedElement
 import com.kennyb1201.kbstream.ui.components.LibraryAdds
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
+import com.kennyb1201.kbstream.ui.components.PlayFromBeginningSelection
 import com.kennyb1201.kbstream.ui.components.RatingChipSource
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.WatchedCheckBadge
@@ -924,9 +925,20 @@ fun DetailScreenMobile(
             }
         }
 
-        fun playCurrent() {
+        /**
+         * The Play button's press: the movie, or the episode a press on this
+         * page would start - the resume episode when the season on screen owns
+         * it, else the season's first. A poster menu's "Play from Beginning"
+         * reaches the same target through [fromStart] rather than choosing an
+         * episode of its own, so the two can never drift: [fromStart] only
+         * zeroes the position and sets the begin-from flag, it never changes
+         * WHICH episode plays ("from the beginning" restarts the in-progress
+         * unit, it does not jump to S1E1 - the TV's `playTargetFor` states the
+         * same rule).
+         */
+        fun playCurrent(fromStart: Boolean = false) {
             if (normalizedType == "movie") {
-                openMovie(fromStart = false)
+                openMovie(fromStart = fromStart)
                 return
             }
 
@@ -938,7 +950,7 @@ fun DetailScreenMobile(
             val resumeHere = targetEpisode != null &&
                 resumeInfo?.season == currentSeason
             val episode = if (resumeHere) targetEpisode else episodes.firstOrNull()
-            episode?.let { openEpisode(it, currentSeason) }
+            episode?.let { openEpisode(it, currentSeason, fromStart = fromStart) }
         }
 
         // ---- Home's billboard Play, carried on the route ----
@@ -1064,6 +1076,30 @@ fun DetailScreenMobile(
             if (normalizedType == "series" && episodesLoading) return@LaunchedEffect
             manualPickDelivered = true
             openCurrentStreams()
+        }
+
+        // ---- a poster menu's "Play from Beginning" ----
+        // The same shared sheet raises this row as a one-shot request and then
+        // navigates here, exactly as it does "Play Manually" above; the TV page
+        // has always read it (`DetailScreen`'s `startOver`), the phone never
+        // did, so the row landed on Details and stopped. Read once as this
+        // title's page appears - `consume()` clears the request whether it was
+        // fresh or stale, so a back-stack return can never replay it - then
+        // deliver it once the page's own target exists.
+        var startOver by remember(type, id) { mutableStateOf(false) }
+        LaunchedEffect(type, id) {
+            startOver = PlayFromBeginningSelection.consume()
+        }
+        var startOverDelivered by remember(type, id) { mutableStateOf(false) }
+        LaunchedEffect(startOver, isLoading, meta, tmdbDetail, episodesLoading, episodes) {
+            if (!startOver || startOverDelivered || isLoading) return@LaunchedEffect
+            if (meta == null && tmdbDetail == null) return@LaunchedEffect
+            // A series needs the listing before it can name an episode; a
+            // listing that settled empty leaves the row where the Play button
+            // would be too - this page's own target is its first file.
+            if (normalizedType == "series" && episodesLoading) return@LaunchedEffect
+            startOverDelivered = true
+            playCurrent(fromStart = true)
         }
 
         // ---- long-press subjects ----

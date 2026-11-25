@@ -802,8 +802,55 @@ class DetailScreenMobileContractTest {
         )
         assertTrue(
             "and a tap must still be the plain resume path",
-            mobile.contains("fun playCurrent()") &&
-                mobile.contains("openEpisode(it, currentSeason)")
+            mobile.contains("fun playCurrent(fromStart: Boolean = false)") &&
+                mobile.contains("openEpisode(it, currentSeason, fromStart = fromStart)")
+        )
+    }
+
+    /**
+     * A poster menu's "Play from Beginning" is the same one-shot request shape
+     * as "Play Manually" above: the shared long-press sheet raises it and then
+     * navigates to Detail, where it has to be read. The TV page has always
+     * consumed it; the phone never did, so the row landed on Details and
+     * stopped - and the page went on playing from the saved progress (field
+     * report 2026-11-25). The START OVER button and the episode menu's own row
+     * both reach a from-start play directly; only the poster-menu path was dead.
+     */
+    @Test
+    fun `a poster menu's play from beginning is delivered, not parked on the page`() {
+        val mobile = mobileDetail()
+        assertTrue(
+            "the page must read the poster menu's request as it appears, once - " +
+                "consume() clears it whether it was fresh or stale, so a second " +
+                "arrival cannot replay it",
+            mobile.contains("startOver = PlayFromBeginningSelection.consume()")
+        )
+        assertTrue(
+            "and deliver it through the same from-start play START OVER uses, " +
+                "once the page's own target exists - never on a page still loading",
+            mobile.contains(
+                "if (!startOver || startOverDelivered || isLoading) " +
+                    "return@LaunchedEffect"
+            ) &&
+                mobile.contains("startOverDelivered = true") &&
+                mobile.contains("playCurrent(fromStart = true)")
+        )
+        assertTrue(
+            "the delivery must be the Play button's own target with the position " +
+                "zeroed and the begin-from flag set - position 0 alone lets the " +
+                "player fall back to the saved history",
+            mobile.contains("openMovie(fromStart = fromStart)") &&
+                mobile.contains("openEpisode(it, currentSeason, fromStart = fromStart)") &&
+                mobile.contains("startFromBeginning = fromStart")
+        )
+        assertTrue(
+            "a series waits for its listing before it can name an episode, and " +
+                "names the one the Play button would have played",
+            mobile.contains(
+                "if (normalizedType == \"series\" && episodesLoading) " +
+                    "return@LaunchedEffect"
+            ) &&
+                mobile.contains("val episode = if (resumeHere) targetEpisode else episodes.firstOrNull()")
         )
     }
 
