@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.bingecat
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
@@ -73,6 +74,15 @@ fun BingeCatConnectScreen(
     onBrowsePublicLists: () -> Unit = {},
     vm: BingeCatViewModel = hiltViewModel()
 ) {
+    // The page's only Back came from the shell's else-arm - its own header is a
+    // connect button, not a back control, and the touch twin inherited the same
+    // arm. A migrated kind has neither: the shell's handler stands down inside a
+    // NavHost and the controller has only the entered destination to pop, so the
+    // press would leave the app. This lands where the arm did, and it covers
+    // both form factors because it sits above the branch. Registered inside the
+    // destination, it comes after the controller's callback: LIFO wins.
+    BackHandler(onBack = onBack)
+
     // Leaving ends the attempt (spec audit 2026-11-18, Onboarding M1): the
     // ViewModel's own doc claimed BACK cancelled the poll, and nothing did.
     DisposableEffect(Unit) {

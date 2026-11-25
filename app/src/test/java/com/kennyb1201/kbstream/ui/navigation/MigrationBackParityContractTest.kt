@@ -42,7 +42,13 @@ class MigrationBackParityContractTest {
         // The two tracker pages state their own returnTo, so both entries land on
         // the opener rather than on whichever one Settings happened to be under.
         Triple("simkl", "Screen.Simkl", "stableBackDestination(current.returnTo)"),
-        Triple("trakt", "Screen.Trakt", "stableBackDestination(current.returnTo)")
+        Triple("trakt", "Screen.Trakt", "stableBackDestination(current.returnTo)"),
+        // F1's leaves with more than one entry point: three for the add-on page,
+        // Settings plus onboarding for the connect pages, Settings' two rows for
+        // the browser. Only the route's own argument is right for all of them.
+        Triple("addons", "Screen.Addons", "stableBackDestination(current.returnTo)"),
+        Triple("bingecat", "Screen.BingeCat", "stableBackDestination(current.returnTo)"),
+        Triple("publicLists", "Screen.PublicLists", "stableBackDestination(current.returnTo)")
     )
 
     @Test
@@ -175,12 +181,21 @@ class MigrationBackParityContractTest {
             ?.filter { it.isNotEmpty() }
             ?: error("the seam is no longer constructed with a migrated set")
 
-    /** The arm's body, from its `is Screen.X ->` to the next arm at the same depth. */
+    /**
+     * The RENDERER's arm for [variant], from its `is Screen.X ->` to the next arm
+     * at the same depth.
+     *
+     * Anchored to the renderer on purpose: the shell also has a `when` over the
+     * same variants in its global BackHandler, and `Screen.Addons` has an arm
+     * there that comes FIRST in the file. Measuring that one would check the
+     * landing Back already takes rather than the arm this test is reverting to.
+     */
     private fun armBody(variant: String): String? {
+        val renderer = shell.substringAfter("contentKey = { it.typeName() }", "")
         val marker = "is $variant ->"
-        val start = shell.indexOf(marker)
+        val start = renderer.indexOf(marker)
         if (start < 0) return null
-        val rest = shell.substring(start + marker.length)
+        val rest = renderer.substring(start + marker.length)
         val end = rest.indexOf("\n        is Screen.")
         return if (end < 0) rest else rest.substring(0, end)
     }

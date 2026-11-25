@@ -414,4 +414,19 @@ internal object NavRoutes {
                 runCatching { decodeScreen(JSONObject(returnRoute)) }.getOrDefault(Screen.Home)
             }
         )
+
+    /**
+     * The screen a route's [returnRoute] names, decoded but NOT sanitized.
+     *
+     * [landingOf] answers "where does Back go", so it runs the sanitizer. This
+     * answers "which screen is my opener", which is data a child screen is
+     * handed verbatim (the `returnTo` a Detail or a player carries), exactly as
+     * the arm passed `current`. Null when there is no argument or it cannot be
+     * read, and the caller then uses that screen's own default - which is what
+     * encoding the default would have produced anyway.
+     */
+    fun decoded(returnRoute: String?): Screen? =
+        returnRoute?.let { encoded ->
+            runCatching { decodeScreen(JSONObject(encoded)) }.getOrNull()
+        }
 }

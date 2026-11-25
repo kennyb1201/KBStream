@@ -83,13 +83,27 @@ class NavHostHostingContractTest {
         val migrated = Regex("migratedKinds = setOf\\(([^)]*)\\)")
             .find(shell)?.groupValues?.get(1)
             ?: error("the seam is constructed without a migrated set")
+        // Parsed rather than compared as text: the set is now long enough to be
+        // written one kind per line, and what this pins is membership, not
+        // formatting.
+        val kinds = Regex("\"(\\w+)\"").findAll(migrated).map { it.groupValues[1] }.toList()
         assertEquals(
-            "the migrated set is the leaf pages whose Back is unambiguous: the " +
-                "remote, the stats page, the catalog builder, and the two connect " +
-                "pages - which moved together with a BackHandler of their own, " +
-                "because hardware Back and the header arrow now agree",
-            "\"remote\", \"stats\", \"catalogBuilder\", \"simkl\", \"trakt\"",
-            migrated
+            "the migrated set is F1's eight leaf pages, each with a BackHandler of " +
+                "its own: the remote, stats, the catalog builder, the two tracker " +
+                "connect pages, and now the add-on page, BingeCat and the " +
+                "public-lists browser - all reached from more than one place or " +
+                "whose hardware Back had to start agreeing with its header",
+            listOf(
+                "remote",
+                "stats",
+                "catalogBuilder",
+                "simkl",
+                "trakt",
+                "addons",
+                "bingecat",
+                "publicLists"
+            ),
+            kinds
         )
         assertTrue(
             "the host opens on the route of the screen being entered, captured at " +

@@ -1441,7 +1441,20 @@ fun AppRoot(
     val navSeam = remember(screenState) {
         NavSeam(
             screenState,
-            migratedKinds = setOf("remote", "stats", "catalogBuilder", "simkl", "trakt")
+            migratedKinds = setOf(
+                "remote",
+                "stats",
+                "catalogBuilder",
+                "simkl",
+                "trakt",
+                // F1's last three: the leaves whose Back is "returnTo" and whose
+                // pages are reached from more than one place, so the route's
+                // return argument is the only landing that can be right for all
+                // of their entry points.
+                "addons",
+                "bingecat",
+                "publicLists"
+            )
         )
     }
     var screen by navSeam
@@ -3597,6 +3610,8 @@ fun AppRoot(
         }
 
         is Screen.Addons -> {
+            if (navSeam.isMigrated(current)) Unit
+            else {
 
             // Add-on management only: the TV header draws no back control (the
             // remote's Back is the single way out, and it follows returnTo; the
@@ -3607,6 +3622,7 @@ fun AppRoot(
                 // Screen.Addons branch): the add-ons page's own returnTo.
                 onBack = { screen = stableBackDestination(current.returnTo) }
             )
+            }
         }
 
         is Screen.CatalogBuilder -> {
@@ -3715,6 +3731,8 @@ fun AppRoot(
         }
 
         is Screen.PublicLists -> {
+            if (navSeam.isMigrated(current)) Unit
+            else {
             // The activity-scoped ViewModel, for the same reason the BingeCat
             // browser's is: opening a title's Detail and coming back must
             // return to the level the viewer left, and a save already reported
@@ -3735,9 +3753,12 @@ fun AppRoot(
                 },
                 vm = hiltViewModel()
             )
+            }
         }
 
         is Screen.BingeCat -> {
+            if (navSeam.isMigrated(current)) Unit
+            else {
             // The public-lists browser lives INSIDE Settings → BingeCat: its own
             // level stack and its own Back, with the connect page one press away.
             // The ViewModel is activity-scoped so that opening a title's Detail
@@ -3771,6 +3792,7 @@ fun AppRoot(
                     onBack = { screen = stableBackDestination(current.returnTo) },
                     onBrowsePublicLists = { publicListsVm.open() }
                 )
+            }
             }
         }
 
@@ -5106,11 +5128,31 @@ fun AppRoot(
             val start = remember {
                 com.kennyb1201.kbstream.ui.navigation.NavRoutes.of(current)!!
             }
+            // The three leaves below own activity-scoped ViewModels, and the
+            // arms they replace resolved them HERE, in the activity's
+            // composition - for reasons their own notes give: a trip into Detail
+            // must not lose the browse level or restart an import, and the
+            // add-on page must not refetch what it already has. Inside a NavHost
+            // the store owner is the back-stack entry, which the shell pops the
+            // moment it leaves the kind, so the shell resolves them and hands
+            // them down: same instance, same life as before.
+            val addonsVm: com.kennyb1201.kbstream.ui.addons.AddonsViewModel? =
+                if (current is Screen.Addons) hiltViewModel() else null
+            val bingeCatVm: com.kennyb1201.kbstream.ui.bingecat.BingeCatViewModel? =
+                if (current is Screen.BingeCat) hiltViewModel() else null
+            val bingeCatListsVm: com.kennyb1201.kbstream.ui.bingecat.BingeCatPublicListsViewModel? =
+                if (current is Screen.BingeCat) hiltViewModel() else null
+            val publicListsVm: com.kennyb1201.kbstream.ui.publiclists.PublicListsViewModel? =
+                if (current is Screen.PublicLists) hiltViewModel() else null
             com.kennyb1201.kbstream.ui.navigation.NavHostGraph(
                 navController = navController,
                 startDestination = start,
                 transitionMs = transitionMs,
                 onNavigate = { navSeam.navigateTo(it) },
+                addonsViewModel = addonsVm,
+                bingeCatViewModel = bingeCatVm,
+                bingeCatPublicListsViewModel = bingeCatListsVm,
+                publicListsViewModel = publicListsVm,
                 modifier = Modifier.fillMaxSize()
             )
         }

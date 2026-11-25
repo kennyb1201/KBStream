@@ -51,6 +51,21 @@ class MigratedBackCoverageContractTest {
         "trakt" to listOf(
             "$PACKAGE" + "ui/trakt/TraktConnectScreen.kt",
             "$PACKAGE" + "ui/mobile/TraktConnectScreenMobile.kt"
+        ),
+        // The add-on page's handler is registered above its form-factor branch,
+        // so the one file covers the TV page and the touch twin - which is the
+        // point: the touch page had none and inherited the shell's.
+        "addons" to listOf("$PACKAGE" + "ui/addons/AddonsScreen.kt"),
+        // Two pages behind one destination, and both need their own: the connect
+        // page (no handler before the migration) and the browser it opens.
+        "bingecat" to listOf(
+            "$PACKAGE" + "ui/bingecat/BingeCatConnectScreen.kt",
+            "$PACKAGE" + "ui/bingecat/BingeCatPublicListsScreen.kt",
+            "$PACKAGE" + "ui/mobile/BingeCatPublicListsScreenMobile.kt"
+        ),
+        "publicLists" to listOf(
+            "$PACKAGE" + "ui/publiclists/PublicListsScreen.kt",
+            "$PACKAGE" + "ui/mobile/PublicListsScreenMobile.kt"
         )
     )
 

@@ -37,7 +37,8 @@ class BackHandlerOrderingContractTest {
         "Addons" to "ui/addons/AddonsScreen.kt",
         "CatalogBuilder" to "ui/addons/CatalogBuilderScreen.kt",
         "PublicLists" to "ui/publiclists/PublicListsScreen.kt",
-        "BingeCat public lists" to "ui/bingecat/BingeCatPublicListsScreen.kt"
+        "BingeCat public lists" to "ui/bingecat/BingeCatPublicListsScreen.kt",
+        "BingeCat connect" to "ui/bingecat/BingeCatConnectScreen.kt"
     ).mapValues { (_, path) -> PACKAGE + path }
 
     /**
@@ -53,11 +54,6 @@ class BackHandlerOrderingContractTest {
         "ui/mobile/TraktConnectScreenMobile.kt",
         "ui/mobile/PublicListsScreenMobile.kt",
         "ui/mobile/BingeCatPublicListsScreenMobile.kt"
-    ).map { PACKAGE + it }
-
-    /** No handler in the file: their hardware Back is the shell's else-arm. */
-    private val shellBackedPages: List<String> = listOf(
-        "ui/bingecat/BingeCatConnectScreen.kt"
     ).map { PACKAGE + it }
 
     @Test
@@ -147,30 +143,33 @@ class BackHandlerOrderingContractTest {
     }
 
     @Test
-    fun `the last connect page without a handler of its own still defers to the shell`() {
-        shellBackedPages.forEach { path ->
-            assertFalse(
-                "$path has grown its own BackHandler: good, but then it belongs in " +
-                    "the first test's list - the split this one records is closed, and " +
-                    "the commit that closes it says so",
-                stripComments(source(path)).contains("BackHandler")
-            )
-        }
+    fun `the last connect page's Back now belongs to the page, closing the split`() {
+        // The split this test used to record - BingeCat's hardware Back was the
+        // shell's else-arm (Home) while its header went to returnTo - is closed
+        // by F1's last commit, which is what the previous version of this test
+        // asked the closing commit to say. Migrated, the shell's arm stands
+        // down, so an unhandled press would reach the activity and finish the
+        // app; the page answers it on the landing the arrow always used.
+        val page = stripComments(source(PACKAGE + "ui/bingecat/BingeCatConnectScreen.kt"))
+        assertTrue(
+            "the BingeCat connect page must answer Back on the landing its header " +
+                "button uses, or a migrated BingeCat lets the press close the app",
+            page.contains("BackHandler(onBack = onBack)")
+        )
         val shell = stripComments(source(MAIN_ACTIVITY))
         assertTrue(
             "the shell lost its is Screen.BingeCat -> render arm",
             shell.contains("is Screen.BingeCat ->")
         )
         assertTrue(
-            "the shell's Back else-arm is still Home - that is what answers that " +
-                "page's hardware Back while the arrow reads returnTo",
+            "the shell's Back else-arm is still Home, which is what every unmigrated " +
+                "view that falls through to it lands on",
             shell.substringAfter("screen = when (val current = screen) {")
                 .contains("else ->\n                Screen.Home")
         )
         assertFalse(
-            "BingeCat now has its own Back arm in the shell, so hardware Back was " +
-                "made to agree with the arrow - a deliberate behaviour change this " +
-                "test must record",
+            "BingeCat grew its own arm in the shell's Back table: the migration keeps " +
+                "the landing in the destination, not in the global handler",
             Regex("is Screen[.]BingeCat ->").containsMatchIn(
                 shell.substringAfter("screen = when (val current = screen) {")
                     .substringBefore("else ->")
@@ -179,17 +178,36 @@ class BackHandlerOrderingContractTest {
     }
 
     @Test
-    fun `the phone Addons screen still defers its Back to the shell on purpose`() {
+    fun `the phone Addons page is answered by its parent page, not by a second handler`() {
+        // It used to defer to the shell's `is Screen.Addons ->` arm, because its
+        // Back is only reached with no dialog over it. That arm is gone for a
+        // migrated kind, so the landing moved to the page itself - ABOVE the
+        // form-factor branch, so one rule covers the D-pad page and the touch
+        // twin, and the twin must not register a second handler for a press the
+        // parent already answers.
+        val page = stripComments(source(PACKAGE + "ui/addons/AddonsScreen.kt"))
+        val handlerAt = page.indexOf("BackHandler(onBack = onBack)")
+        val branchAt = page.indexOf("FormFactor.isTv")
+        assertTrue(
+            "the add-on page does not answer Back itself, so a migrated kind lets " +
+                "the press reach the activity",
+            handlerAt >= 0
+        )
+        assertTrue(
+            "the parent's handler must sit above the form-factor branch, or only " +
+                "one of the two pages is covered",
+            branchAt < 0 || handlerAt < branchAt
+        )
         val addons = stripComments(source(PACKAGE + "ui/mobile/AddonsScreenMobile.kt"))
         assertFalse(
-            "the phone Addons screen grew its own BackHandler; if that is deliberate " +
-                "it has to be added to the list above, because the shell would " +
-                "otherwise handle the same press twice",
+            "the phone Addons screen grew its own BackHandler while its parent " +
+                "registers one: two handlers answer the same press",
             addons.contains("BackHandler")
         )
         val shell = stripComments(source(MAIN_ACTIVITY))
         assertTrue(
-            "the shell no longer answers Addons' Back itself",
+            "the shell's Back table lost its Addons arm, which is what a revert to " +
+                "the unmigrated renderer lands on",
             shell.contains("is Screen.Addons ->\n                stableBackDestination(current.returnTo)")
         )
     }

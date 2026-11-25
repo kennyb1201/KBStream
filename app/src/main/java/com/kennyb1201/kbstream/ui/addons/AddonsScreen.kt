@@ -94,6 +94,17 @@ fun AddonsScreen(
     onBack: () -> Unit,
     viewModel: AddonsViewModel = hiltViewModel()
 ) {
+    // Both form factors answer Back here.
+    //
+    // On a television this page drew no back control and left the press to the
+    // shell's else-arm; on a phone it inherited the same arm through the shared
+    // header arrow. A migrated kind has neither - the shell's handler stands
+    // down inside a NavHost - so the landing those arms ran is registered here,
+    // where it covers TV and touch with one rule. The dialogs below register
+    // their own handlers later, so the dispatcher's LIFO order still gives them
+    // the press while they are open.
+    BackHandler(onBack = onBack)
+
     // The phone entry: the same activity-scoped ViewModel and the same
     // management calls, laid out as a list with a detail sheet. One branch; the
     // TV page below is unchanged (see AddonsScreenMobile).
