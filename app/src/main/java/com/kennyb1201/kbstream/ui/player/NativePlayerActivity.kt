@@ -6487,6 +6487,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             listOf(playerView, subtitleText, subtitleAssImage, p5VideoGlesView),
             findViewById(R.id.chrome_layer)
         )
+        // The wide-window sibling (spec 2026-11-22, F9): same seam, same
+        // restore-exactly contract, layout params only. It is called here rather
+        // than beside it because every path that re-lays the stage out - both
+        // config changes and the post-layout pass - already comes through this
+        // function, and the two stages must be applied together or a rotation
+        // from a capped landscape back to portrait would leave the cap on.
+        PlayerWideStage.apply(this, root, findViewById(R.id.chrome_bottom_cluster))
     }
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {

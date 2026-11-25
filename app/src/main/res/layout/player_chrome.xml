@@ -246,8 +246,14 @@
             android:orientation="horizontal"
             android:visibility="gone" />
 
-        <!-- Bottom section: seekbar + controls. -->
+        <!-- Bottom section: seekbar + controls.
+
+             Named so the wide-window stage can cap and centre it (spec
+             2026-11-22, adaptive layouts F9): on a tablet in landscape the
+             controls otherwise stretch the full 1280dp, which is a reach across
+             the screen for a thumb. An id adds nothing to the layout. -->
         <LinearLayout
+            android:id="@+id/chrome_bottom_cluster"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical">

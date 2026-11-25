@@ -19,6 +19,7 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import com.kennyb1201.kbstream.R
@@ -578,5 +579,51 @@ internal object PlayerPortraitStage {
         val saved = originals.getOrPut(chrome) { intArrayOf(params.topMargin) }
         params.topMargin = if (applies) band else saved[0]
         chrome.layoutParams = params
+    }
+}
+
+/**
+ * The wide-window stage (spec 2026-11-22, adaptive layouts F9): full-frame video,
+ * with the bottom chrome cluster capped and centred.
+ *
+ * On a tablet in landscape the shared chrome is the television's layout - one
+ * row of controls stretched across the whole window - which is a reach across
+ * 1280dp for a thumb. Above 840dp the cluster is capped at 960dp and centred;
+ * nothing else moves, and the picture stays full-frame (a wide window has the
+ * height for it, unlike the portrait stage's sliver).
+ *
+ * The same restore-exactly contract as [PlayerPortraitStage]: the original width
+ * and gravity are remembered per view, so dropping back below the breakpoint, or
+ * a television (where [MobileAdaptiveRules.playerWideStageApplies] answers false
+ * whatever the window reports), puts the XML's own params back. Layout params
+ * only - no playback, position or `playWhenReady` state is touched.
+ */
+internal object PlayerWideStage {
+
+    private val originals = java.util.WeakHashMap<View, IntArray>()
+
+    fun apply(activity: Activity, root: View, cluster: View?) {
+        val view = cluster ?: return
+        if (root.width <= 0) return
+        val widthDp = activity.resources.configuration.screenWidthDp
+        val applies = com.kennyb1201.kbstream.ui.mobile.MobileAdaptiveRules
+            .playerWideStageApplies(
+                com.kennyb1201.kbstream.FormFactor.isTv,
+                widthDp
+            )
+        val params = view.layoutParams as? LinearLayout.LayoutParams ?: return
+        val saved = originals.getOrPut(view) { intArrayOf(params.width, params.gravity) }
+        if (applies) {
+            val density = activity.resources.displayMetrics.density
+            val capPx = (com.kennyb1201.kbstream.ui.mobile.MobileAdaptiveRules
+                .PLAYER_CHROME_MAX_WIDTH_DP * density).toInt()
+            params.width = minOf(capPx, root.width)
+            params.gravity = Gravity.CENTER_HORIZONTAL
+        } else {
+            params.width = saved[0]
+            params.gravity = saved[1]
+        }
+        view.layoutParams = params
+        if (view is ViewGroup) view.requestLayout()
     }
 }

@@ -2909,6 +2909,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             listOf(surface),
             findViewById(R.id.chrome_layer)
         )
+        // The wide-window sibling (spec 2026-11-22, F9): same seam, same
+        // restore-exactly contract, layout params only.
+        PlayerWideStage.apply(this, root, findViewById(R.id.chrome_bottom_cluster))
     }
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
