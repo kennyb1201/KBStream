@@ -32,6 +32,8 @@ class BackHandlerOrderingContractTest {
     private val ownHandlers: Map<String, String> = linkedMapOf(
         "Stats" to "ui/settings/StatsScreen.kt",
         "Remote" to "ui/remote/RemoteScreen.kt",
+        "Simkl" to "ui/simkl/SimklConnectScreen.kt",
+        "Trakt" to "ui/trakt/TraktConnectScreen.kt",
         "Addons" to "ui/addons/AddonsScreen.kt",
         "CatalogBuilder" to "ui/addons/CatalogBuilderScreen.kt",
         "PublicLists" to "ui/publiclists/PublicListsScreen.kt",
@@ -47,14 +49,14 @@ class BackHandlerOrderingContractTest {
     private val mobileHandlers: List<String> = listOf(
         "ui/mobile/StatsScreenMobile.kt",
         "ui/mobile/CatalogBuilderScreenMobile.kt",
+        "ui/mobile/SimklConnectScreenMobile.kt",
+        "ui/mobile/TraktConnectScreenMobile.kt",
         "ui/mobile/PublicListsScreenMobile.kt",
         "ui/mobile/BingeCatPublicListsScreenMobile.kt"
     ).map { PACKAGE + it }
 
     /** No handler in the file: their hardware Back is the shell's else-arm. */
     private val shellBackedPages: List<String> = listOf(
-        "ui/simkl/SimklConnectScreen.kt",
-        "ui/trakt/TraktConnectScreen.kt",
         "ui/bingecat/BingeCatConnectScreen.kt"
     ).map { PACKAGE + it }
 
@@ -110,39 +112,70 @@ class BackHandlerOrderingContractTest {
     }
 
     @Test
-    fun `the connect pages' Back is the shell's, and it is Home while the arrow is returnTo`() {
+    fun `the two connect pages on the host land both Back and the arrow on returnTo`() {
+        // Simkl and Trakt moved with their own handler, which is the one thing a
+        // migrated kind cannot do without: the shell's global handler stands down
+        // for it, and the NavController's stack holds only the entered
+        // destination, so an unhandled press would reach the activity and finish
+        // the app. `onBack` is also what the header arrow calls, so the two
+        // agree now - they did not when hardware Back was the shell's Home.
+        listOf(
+            PACKAGE + "ui/simkl/SimklConnectScreen.kt",
+            PACKAGE + "ui/trakt/TraktConnectScreen.kt",
+            PACKAGE + "ui/mobile/SimklConnectScreenMobile.kt",
+            PACKAGE + "ui/mobile/TraktConnectScreenMobile.kt"
+        ).forEach { path ->
+            assertTrue(
+                "$path must answer Back from inside its own composition, on the " +
+                    "same landing its header button uses",
+                stripComments(source(path)).contains("BackHandler(onBack = onBack)")
+            )
+        }
+        val graph = stripComments(source(PACKAGE + "ui/navigation/NavHostGraph.kt"))
+        listOf("SimklRoute", "TraktRoute").forEach { route ->
+            assertTrue(
+                "$route has no destination: the kind is migrated but nothing renders " +
+                    "it",
+                graph.contains("composable<$route> { entry ->")
+            )
+        }
+        assertTrue(
+            "and both land Back on their own return argument, decoded and sanitized",
+            graph.contains("SimklConnectScreen(\n                onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) }") &&
+                graph.contains("TraktConnectScreen(\n                onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) }")
+        )
+    }
+
+    @Test
+    fun `the last connect page without a handler of its own still defers to the shell`() {
         shellBackedPages.forEach { path ->
             assertFalse(
                 "$path has grown its own BackHandler: good, but then it belongs in " +
-                    "the first test's list - the split this one records is closed",
+                    "the first test's list - the split this one records is closed, and " +
+                    "the commit that closes it says so",
                 stripComments(source(path)).contains("BackHandler")
             )
         }
         val shell = stripComments(source(MAIN_ACTIVITY))
-        listOf("is Screen.Trakt ->", "is Screen.Simkl ->", "is Screen.BingeCat ->")
-            .forEach { arm ->
-                assertTrue("the shell lost its $arm render arm", shell.contains(arm))
-            }
         assertTrue(
-            "the connect pages' header arrow still lands on returnTo",
-            shell.contains("onBack = { screen = stableBackDestination(current.returnTo) }")
+            "the shell lost its is Screen.BingeCat -> render arm",
+            shell.contains("is Screen.BingeCat ->")
         )
-        val backWhen = shell.substringAfter("screen = when (val current = screen) {")
-            .substringBefore("else ->")
         assertTrue(
-            "the shell's Back else-arm is still Home - that is what answers these " +
-                "pages' hardware Back today",
+            "the shell's Back else-arm is still Home - that is what answers that " +
+                "page's hardware Back while the arrow reads returnTo",
             shell.substringAfter("screen = when (val current = screen) {")
                 .contains("else ->\n                Screen.Home")
         )
-        listOf("Simkl", "Trakt", "BingeCat").forEach { name ->
-            assertFalse(
-                "$name now has its own Back arm in the shell, so hardware Back was " +
-                    "made to agree with the arrow - that is a deliberate behaviour " +
-                    "change and this test must say so",
-                Regex("is Screen[.]$name ->").containsMatchIn(backWhen)
+        assertFalse(
+            "BingeCat now has its own Back arm in the shell, so hardware Back was " +
+                "made to agree with the arrow - a deliberate behaviour change this " +
+                "test must record",
+            Regex("is Screen[.]BingeCat ->").containsMatchIn(
+                shell.substringAfter("screen = when (val current = screen) {")
+                    .substringBefore("else ->")
             )
-        }
+        )
     }
 
     @Test

@@ -1436,7 +1436,10 @@ fun AppRoot(
     // `screen` is still the same value from the same saved state, so the
     // restoration codec, smart-casts and the cold-launch gate are untouched.
     val navSeam = remember(screenState) {
-        NavSeam(screenState, migratedKinds = setOf("remote", "stats", "catalogBuilder"))
+        NavSeam(
+            screenState,
+            migratedKinds = setOf("remote", "stats", "catalogBuilder", "simkl", "trakt")
+        )
     }
     var screen by navSeam
 
@@ -3074,7 +3077,7 @@ fun AppRoot(
     // Modifier.heroSourceElement(type, id), the Detail hero with
     // Modifier.heroSharedElement(type, id); no screen has to grow a parameter
     // to join the flight.
-    // The one migrated destination renders through the NavHost here, inside the
+    // A migrated destination renders through the NavHost here, inside the
     // shell's own transition slot; everything else is the `when` it has always
     // been. The splash picker further down stays outside both, above either.
     if (navSeam.isMigrated(current)) {

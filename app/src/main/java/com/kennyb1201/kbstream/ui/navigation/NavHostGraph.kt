@@ -15,6 +15,8 @@ import com.kennyb1201.kbstream.Screen
 import com.kennyb1201.kbstream.ui.addons.CatalogBuilderScreen
 import com.kennyb1201.kbstream.ui.remote.RemoteScreen
 import com.kennyb1201.kbstream.ui.settings.StatsScreen
+import com.kennyb1201.kbstream.ui.simkl.SimklConnectScreen
+import com.kennyb1201.kbstream.ui.trakt.TraktConnectScreen
 
 // ---------------------------------------------------------------------------
 // The NavHost a migrated destination renders through (spec: navcompose, F0).
@@ -89,6 +91,29 @@ internal fun NavHostGraph(
         composable<CatalogBuilderRoute> { entry ->
             val route = entry.toRoute<CatalogBuilderRoute>()
             CatalogBuilderScreen(
+                onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) }
+            )
+        }
+
+        // The two connect pages both carry their return destination, because the
+        // same page is opened from Settings' tracker row and from onboarding's
+        // setup card. Landing Back on the route's own argument is what makes the
+        // header arrow and hardware Back agree - they did not before the
+        // migration, when the arrow read returnTo and the press fell through to
+        // the shell's else-arm and went Home. Each page now registers that same
+        // landing from inside its own composition (see SimklConnectScreen and
+        // TraktConnectScreen), which is what a migrated kind needs: the shell's
+        // global handler stands down for it.
+        composable<SimklRoute> { entry ->
+            val route = entry.toRoute<SimklRoute>()
+            SimklConnectScreen(
+                onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) }
+            )
+        }
+
+        composable<TraktRoute> { entry ->
+            val route = entry.toRoute<TraktRoute>()
+            TraktConnectScreen(
                 onBack = { onNavigate(NavRoutes.landingOf(route.returnRoute)) }
             )
         }

@@ -41,11 +41,10 @@ class NavSeamContractTest {
         )
         assertTrue(
             "and the shell's `screen` IS that state, delegated through the seam - " +
-                "with the one migrated kind named at the seam, not inherited",
-            shell.contains(
-                "val navSeam = remember(screenState) { NavSeam(screenState, " +
-                    "migratedKinds = setOf(\"remote\", \"stats\", \"catalogBuilder\")) }"
-            ) && shell.contains("var screen by navSeam")
+                "with the migrated kinds named at the seam, not inherited",
+            shell.contains("val navSeam = remember(screenState) { NavSeam(") &&
+                shell.contains("migratedKinds = setOf(") &&
+                shell.contains("var screen by navSeam")
         )
         assertFalse(
             "no second copy of the navigation state: the old direct delegate is gone",

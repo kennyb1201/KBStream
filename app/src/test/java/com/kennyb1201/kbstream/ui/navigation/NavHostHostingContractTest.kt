@@ -65,10 +65,9 @@ class NavHostHostingContractTest {
             shell.contains("navController.popBackStack(navController.graph.id, inclusive = false)")
         )
         assertFalse(
-            "entering a migrated kind must not navigate: while one kind is " +
-                "migrated the graph's start destination IS its route, so the " +
-                "host opens on it, and navigating to it would replace that " +
-                "entry and replay its enter transition",
+            "entering a migrated kind must not navigate: the host opens on the " +
+                "route of the screen being entered, and navigating to it would " +
+                "replace that entry and replay its enter transition",
             shell.contains("navController.navigate(")
         )
         assertFalse(
@@ -85,9 +84,11 @@ class NavHostHostingContractTest {
             .find(shell)?.groupValues?.get(1)
             ?: error("the seam is constructed without a migrated set")
         assertEquals(
-            "the migrated set is the three leaf pages whose Back is unambiguous: " +
-                "the remote, the stats page and the catalog builder",
-            "\"remote\", \"stats\", \"catalogBuilder\"",
+            "the migrated set is the leaf pages whose Back is unambiguous: the " +
+                "remote, the stats page, the catalog builder, and the two connect " +
+                "pages - which moved together with a BackHandler of their own, " +
+                "because hardware Back and the header arrow now agree",
+            "\"remote\", \"stats\", \"catalogBuilder\", \"simkl\", \"trakt\"",
             migrated
         )
         assertTrue(

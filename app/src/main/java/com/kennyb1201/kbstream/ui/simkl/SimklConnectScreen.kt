@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.simkl
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
@@ -83,6 +84,13 @@ fun SimklConnectScreen(
         )
         return
     }
+
+    // The destination's own Back (spec: navcompose, F1). The shell's global
+    // handler stands down for a migrated kind, so this is what answers the
+    // press - and it lands on returnTo, the same place the header button goes.
+    // It sits inside the composable, after the host has registered its pop
+    // callback, so the dispatcher's LIFO order still gives it the press.
+    BackHandler(onBack = onBack)
 
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     val scrollState = rememberScrollState()

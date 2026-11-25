@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.mobile
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -88,6 +89,10 @@ fun SimklConnectScreenMobile(
     DisposableEffect(Unit) {
         onDispose { vm.stopPolling() }
     }
+    // The phone twin answers Back itself, exactly as the television page does
+    // (see SimklConnectScreen): the shell's global handler stands down for a
+    // migrated kind, so a page without this one would let Back finish the app.
+    BackHandler(onBack = onBack)
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     var showDisconnectConfirm by remember { mutableStateOf(false) }
     // A kids profile gets the account controls, but not without a parent: the

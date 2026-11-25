@@ -36,8 +36,22 @@ class MigratedBackCoverageContractTest {
      */
     private val handlers: Map<String, List<String>> = mapOf(
         "remote" to listOf("$PACKAGE" + "ui/remote/RemoteScreen.kt"),
-        "stats" to listOf("$PACKAGE" + "ui/settings/StatsScreen.kt"),
-        "catalogBuilder" to listOf("$PACKAGE" + "ui/addons/CatalogBuilderScreen.kt")
+        "stats" to listOf(
+            "$PACKAGE" + "ui/settings/StatsScreen.kt",
+            "$PACKAGE" + "ui/mobile/StatsScreenMobile.kt"
+        ),
+        "catalogBuilder" to listOf(
+            "$PACKAGE" + "ui/addons/CatalogBuilderScreen.kt",
+            "$PACKAGE" + "ui/mobile/CatalogBuilderScreenMobile.kt"
+        ),
+        "simkl" to listOf(
+            "$PACKAGE" + "ui/simkl/SimklConnectScreen.kt",
+            "$PACKAGE" + "ui/mobile/SimklConnectScreenMobile.kt"
+        ),
+        "trakt" to listOf(
+            "$PACKAGE" + "ui/trakt/TraktConnectScreen.kt",
+            "$PACKAGE" + "ui/mobile/TraktConnectScreenMobile.kt"
+        )
     )
 
     @Test
@@ -71,12 +85,20 @@ class MigratedBackCoverageContractTest {
                         "destination that has none lets Back finish the activity " +
                         "instead of landing on the screen that opened it"
                 )
-            assertTrue(
-                "$kind has no BackHandler in ${files.joinToString()}: inside the " +
-                    "NavHost nothing else can land its Back, and the NavController " +
-                    "has only the entered destination to pop",
-                files.any { source(it).contains("BackHandler(") }
-            )
+            files.forEach { path ->
+                val text = stripComments(source(path))
+                assertTrue(
+                    "$kind has no BackHandler in $path: inside the NavHost nothing " +
+                        "else can land its Back, and the NavController has only the " +
+                        "entered destination to pop - so the press reaches the " +
+                        "activity and finishes it. A form-factor twin needs its own, " +
+                        "because the other one returns before it registers one",
+                    // Both call shapes: `BackHandler { ... }` answers Back with a
+                    // body (the phone catalog builder cancels a draft before it
+                    // leaves), and `BackHandler(onBack = ...)` hands it on.
+                    Regex("BackHandler\\s*[({]").containsMatchIn(text)
+                )
+            }
         }
     }
 
