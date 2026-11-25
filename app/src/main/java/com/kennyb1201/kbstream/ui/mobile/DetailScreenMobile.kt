@@ -1749,26 +1749,105 @@ fun DetailScreenMobile(
                 )
             )
 
-            // F7a of the adaptive-layout spec: on a Medium window the single
-            // column is capped at 720dp and centred - 720dp is where an overview
-            // paragraph stops being prose and starts being a scan. Compact is
-            // untouched (the rule answers 0 and the column fills the window),
-            // and the header art is capped with it, being 16:9 of the column.
-            val detailColumnCapDp = MobileAdaptiveRules.detailColumnMaxWidthDp(
-                rememberMobileWindowWidthClass()
-            )
+            // F7a/F7b of the adaptive-layout spec.
+            //
+            // Medium: the single column is capped at 720dp and centred - 720dp
+            // is where an overview paragraph stops being prose and starts being
+            // a scan. Compact is untouched (the rule answers 0 and the column
+            // fills the window), and the header art is capped with it, being
+            // 16:9 of the column.
+            //
+            // Expanded: list-detail. The header (art, title block, and the CTA
+            // row and facts that follow it) sits in a fixed left pane with its
+            // own scroll, and the page's sections keep the list on the right.
+            // Nothing is duplicated: the header is one lambda called by whichever
+            // list is showing it, so the trailer, the hero chrome fade and the
+            // season/episode selection stay in the single hoisted state they
+            // already had - the panes are layout only.
+            val widthClass = rememberMobileWindowWidthClass()
+            val detailColumnCapDp = MobileAdaptiveRules.detailColumnMaxWidthDp(widthClass)
+            val twoPane = MobileAdaptiveRules.detailTwoPaneApplies(widthClass)
+            val detailHeader: @Composable () -> Unit = {
+                MobileDetailHeader(
+                    // The other end of the phone's poster -> Detail flight:
+                    // the same type/id the card armed on press.
+                    type = type,
+                    id = id,
+                    title = displayName,
+                    backdropUrl = heroBackdropUrl,
+                    logoUrl = clearLogoUrl,
+                    metaLine = detailMetaLine(normalizedType, tmdbDetail),
+                    trailerPlayback = heroTrailer,
+                    trailerMuted = trailerMuted,
+                    trailerVideoId = trailerKey,
+                    onTrailerProgress = { _, durationMs ->
+                        if (durationMs > 0L) trailerDurationMs = durationMs
+                    },
+                    onTrailerEnded = { stopHeroTrailer() },
+                    // A mid-play death asks the ladder for a DIFFERENT
+                    // request (see requestTrailerRetry): another client's
+                    // URL class first, and an identical re-sign only once,
+                    // resumed PAST the position that refused.
+                    onTrailerFailed = { positionMs ->
+                        // This callback carries no duration (the player
+                        // only reports one on the refusal path), so the
+                        // skip falls back to its constant unless the
+                        // stream's own length makes the chunk span exact.
+                        requestTrailerRetry(positionMs, durationMs = 0L)
+                    },
+                    // A googlevideo 403 that the classifier calls a
+                    // refused identity is a property of the URL class that
+                    // signed it, not of the video, so it walks the same
+                    // ladder - and answers whether a replacement was
+                    // requested, exactly as the shared player asks its
+                    // owner.
+                    // A refused identity walks the IDENTITY ladder, so its
+                    // exhaustion blocks the video and its death line names
+                    // the resolve's kind - the TV hero's rule, matched.
+                    onTrailerRefused = { positionMs, durationMs ->
+                        requestTrailerRetry(positionMs, durationMs, identity = true)
+                    },
+                    onCloseTrailer = { stopHeroTrailer() },
+                    onBack = { backDispatcher?.onBackPressed() },
+                    chromeAlpha = { heroChrome }
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                // The capped single column is centred by the row itself, which
+                // is also how the two-pane row lays its children out - one
+                // arrangement, no per-branch alignment.
+                horizontalArrangement = Arrangement.Center
+            ) {
+            if (twoPane) {
+                LazyColumn(
+                    modifier = Modifier
+                        .width(MobileAdaptiveRules.DETAIL_LEFT_PANE_WIDTH_DP.dp)
+                        .fillMaxHeight(),
+                    state = rememberIdleLazyListState(),
+                    contentPadding = PaddingValues(bottom = 28.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp)
+                ) {
+                    item(key = "header") { detailHeader() }
+                }
+            }
             LazyColumn(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .then(
-                        if (detailColumnCapDp > 0) {
-                            Modifier.widthIn(max = detailColumnCapDp.dp)
-                        } else {
-                            Modifier
-                        }
-                    )
-                    .fillMaxWidth()
-                    .align(Alignment.TopCenter),
+                modifier = if (twoPane) {
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                } else {
+                    Modifier
+                        .fillMaxHeight()
+                        .then(
+                            if (detailColumnCapDp > 0) {
+                                Modifier.widthIn(max = detailColumnCapDp.dp)
+                            } else {
+                                Modifier
+                            }
+                        )
+                        .fillMaxWidth()
+                },
                 // The page is the longest list on the phone and had no state at
                 // all, so scrolling into its lower half paid every section's
                 // first composition on the landing frame (spec 2026-11-18, F4).
@@ -1776,50 +1855,8 @@ fun DetailScreenMobile(
                 contentPadding = PaddingValues(bottom = 28.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp)
             ) {
-                item(key = "header") {
-                    MobileDetailHeader(
-                        // The other end of the phone's poster -> Detail flight:
-                        // the same type/id the card armed on press.
-                        type = type,
-                        id = id,
-                        title = displayName,
-                        backdropUrl = heroBackdropUrl,
-                        logoUrl = clearLogoUrl,
-                        metaLine = detailMetaLine(normalizedType, tmdbDetail),
-                        trailerPlayback = heroTrailer,
-                        trailerMuted = trailerMuted,
-                        trailerVideoId = trailerKey,
-                        onTrailerProgress = { _, durationMs ->
-                            if (durationMs > 0L) trailerDurationMs = durationMs
-                        },
-                        onTrailerEnded = { stopHeroTrailer() },
-                        // A mid-play death asks the ladder for a DIFFERENT
-                        // request (see requestTrailerRetry): another client's
-                        // URL class first, and an identical re-sign only once,
-                        // resumed PAST the position that refused.
-                        onTrailerFailed = { positionMs ->
-                            // This callback carries no duration (the player
-                            // only reports one on the refusal path), so the
-                            // skip falls back to its constant unless the
-                            // stream's own length makes the chunk span exact.
-                            requestTrailerRetry(positionMs, durationMs = 0L)
-                        },
-                        // A googlevideo 403 that the classifier calls a
-                        // refused identity is a property of the URL class that
-                        // signed it, not of the video, so it walks the same
-                        // ladder - and answers whether a replacement was
-                        // requested, exactly as the shared player asks its
-                        // owner.
-                        // A refused identity walks the IDENTITY ladder, so its
-                        // exhaustion blocks the video and its death line names
-                        // the resolve's kind - the TV hero's rule, matched.
-                        onTrailerRefused = { positionMs, durationMs ->
-                            requestTrailerRetry(positionMs, durationMs, identity = true)
-                        },
-                        onCloseTrailer = { stopHeroTrailer() },
-                        onBack = { backDispatcher?.onBackPressed() },
-                        chromeAlpha = { heroChrome }
-                    )
+                if (!twoPane) {
+                    item(key = "header") { detailHeader() }
                 }
 
                 item(key = "cta") {
@@ -2789,6 +2826,7 @@ fun DetailScreenMobile(
                         }
                     }
                 }
+            }
             }
 
             // ---- overlays ----
