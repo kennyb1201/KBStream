@@ -25,6 +25,16 @@ import org.junit.Test
  */
 class LogoAlphaContractTest {
 
+    /**
+     * The names alpha-bearing art answers to (see [isLogoArtName]).
+     *
+     * Kept here rather than in the assertion so every rule in the class sees the
+     * same list: the stream badges were invisible to the first version of this
+     * contract only because their identifier said "badge".
+     */
+    private val LOGO_ART_NAME_TOKENS =
+        listOf("logo", "wordmark", "crest", "badge", "brand", "mark", "icon")
+
     private val sourceRoot: File by lazy { findSourceRoot() }
 
     private fun findSourceRoot(): File {
@@ -255,6 +265,18 @@ class LogoAlphaContractTest {
             call.contains("loadLogo(") ||
             call.contains("allowRgb565(false)")
 
+    /**
+     * The names alpha-bearing art answers to, not just "logo".
+     *
+     * A stream badge pack image is a brand mark on transparency - the same art
+     * class, drawn from `model = badge.imageURL` - and the first pass of this
+     * contract walked past it because the identifier never said "logo". A
+     * clearlogo, a crest, a wordmark, an add-on icon and a badge are all
+     * transparent marks; a poster, a backdrop and a still never are.
+     */
+    private fun isLogoArtName(text: String): Boolean =
+        LOGO_ART_NAME_TOKENS.any { text.contains(it, ignoreCase = true) }
+
     @Test
     fun `the shared helper is the opt-out`() {
         val helper = read(File(sourceRoot, "com/kennyb1201/kbstream/ui/components/LogoArt.kt"))
@@ -271,7 +293,7 @@ class LogoAlphaContractTest {
         sources().forEach { file ->
             imageCalls(code(read(file))).forEach { call ->
                 val model = modelExpression(call) ?: return@forEach
-                if (!model.contains("logo", ignoreCase = true)) return@forEach
+                if (!isLogoArtName(model)) return@forEach
                 if (isOptedOut(call)) return@forEach
                 violations += "${relative(file)}: model = $model"
             }
@@ -297,7 +319,7 @@ class LogoAlphaContractTest {
             imageCalls(text).forEach { call ->
                 val at = text.indexOf(call)
                 val name = enclosingFunction(spans, at) ?: return@forEach
-                if (!name.contains("logo", ignoreCase = true)) return@forEach
+                if (!isLogoArtName(name)) return@forEach
                 if (isOptedOut(call)) return@forEach
                 violations += "${relative(file)}: $name"
             }
@@ -341,7 +363,7 @@ class LogoAlphaContractTest {
                 val fromLogo = fed.any { name ->
                     assignment.findAll(body).any { m ->
                         m.groupValues[1] == name &&
-                            m.groupValues[2].contains("logo", ignoreCase = true)
+                            isLogoArtName(m.groupValues[2])
                     }
                 }
                 if (fromLogo) {
@@ -359,6 +381,20 @@ class LogoAlphaContractTest {
     }
 
     @Test
+    fun `a badge pack image never decodes as 565`() {
+        // A stream badge (4K, HDR, a network's own mark) is a brand mark on
+        // transparency and draws through BadgeChip's AsyncImage. Its model is
+        // `badge.imageURL`, so the identifier never said "logo" and the first
+        // pass of this contract walked past the one surface where a 565 decode
+        // turns a badge into a solid rectangle inside its chip.
+        val chip = read(File(sourceRoot, "com/kennyb1201/kbstream/ui/components/StreamBadgeChip.kt"))
+        assertTrue(
+            "the badge draw must build its request through logoRequest(...)",
+            chip.contains("logoRequest(badgeContext, badge.imageURL)")
+        )
+    }
+
+    @Test
     fun `a logo handed to a view never decodes as 565`() {
         // The player chrome and the byw panel load logos into ImageViews, where
         // there is no `model =` to inspect - the receiver names the art.
@@ -366,7 +402,7 @@ class LogoAlphaContractTest {
         val violations = sources().mapNotNull { file ->
             val text = code(read(file))
             val bad = pattern.findAll(text).filter { match ->
-                match.groupValues[1].contains("logo", ignoreCase = true) &&
+                isLogoArtName(match.groupValues[1]) &&
                     !isOptedOut(callAt(text, match.range.last))
             }.map { callAt(text, it.range.last).trim() }.toList()
             if (bad.isEmpty()) null
@@ -410,6 +446,7 @@ class LogoAlphaContractTest {
             "com/kennyb1201/kbstream/ui/home/HomeScreensaver.kt",
             "com/kennyb1201/kbstream/ui/components/BrandMarkImage.kt",
             "com/kennyb1201/kbstream/ui/components/StudioChip.kt",
+            "com/kennyb1201/kbstream/ui/components/StreamBadgeChip.kt",
             "com/kennyb1201/kbstream/ui/components/touch/TouchChips.kt",
             "com/kennyb1201/kbstream/ui/components/touch/TouchStudioChip.kt",
             "com/kennyb1201/kbstream/ui/iptv/GuideGridView.kt",

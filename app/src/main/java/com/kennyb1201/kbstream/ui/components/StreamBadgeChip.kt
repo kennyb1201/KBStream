@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.badges.StreamBadge
@@ -81,8 +82,15 @@ fun StreamBadgeChip(
             if (imageFailed) {
                 BadgeTextPill(badge)
             } else {
+                val badgeContext = LocalContext.current
                 AsyncImage(
-                    model = badge.imageURL,
+                    // A badge pack image is a brand mark on transparency, the
+                    // same art class as a clearlogo: decoded as RGB_565 its
+                    // transparent pixels turn opaque and the badge draws as a
+                    // solid rectangle (see [logoRequest]).
+                    model = remember(badgeContext, badge.imageURL) {
+                        logoRequest(badgeContext, badge.imageURL)
+                    },
                     contentDescription = badge.name,
                     contentScale = ContentScale.Fit,
                     onError = { imageFailed = true },
