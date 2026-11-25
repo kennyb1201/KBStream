@@ -797,11 +797,18 @@ jobs:
       # APK builds so an error fails the run before any artifact is produced.
       # Severity policy is in the lint block of app/build.gradle.kts: errors
       # fail, warnings are reported and uploaded below.
+      #
+      # ONE variant, not two. `lintDebug` and `lintRelease` analyse the SAME
+      # inputs in this project - src/debug does not exist, and src/release holds
+      # only the baseline profile - so the pair was one analysis run twice for
+      # the same answer. Measured on run 45628257798: that step took 77m45s
+      # (14:13:01Z -> 15:30:46Z) of a 112-minute tagged run, the single longest
+      # thing this workflow does. Release is the variant kept, because it is the
+      # configuration that ships and m33 added it precisely because a
+      # release-only lint issue had no other gate. Everything lint says about
+      # src/main is said by this pass.
       - name: Run Android Lint
-        # m33: lintRelease too. The PR gate has run both since the sweep-8 F5
-        # report, but a direct push to main only ran the debug variant, so a
-        # release-only lint issue could reach a tagged build ungated.
-        run: ./gradlew lintDebug lintRelease --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
+        run: ./gradlew lintRelease --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
 
@@ -813,8 +820,8 @@ jobs:
         with:
           name: android-lint-report
           path: |
-            app/build/reports/lint-results-debug.html
-            app/build/reports/lint-results-debug.xml
+            app/build/reports/lint-results-release.html
+            app/build/reports/lint-results-release.xml
           if-no-files-found: ignore
 
       - name: Build debug APK

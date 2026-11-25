@@ -79,14 +79,16 @@ jobs:
       - name: Fetch MPV engine AAR
         run: bash scripts/fetch_mpv_aar.sh
 
-      # `lintRelease` as well as `lintDebug`: the release variant is the one that
-      # ships, and lint's findings are not identical between variants (the
-      # release-only `lintVitalRelease` that assembleRelease runs is the FATAL
-      # subset alone, so everything below fatal had no gate at all). This is the
-      # PR gate on purpose - the tagged release build keeps its current length.
-      - name: Lint, Android Lint (debug + release) and unit tests
+      # `lintRelease` and not `lintDebug` beside it: the release variant is the
+      # one that ships, and lint's findings are not identical between variants
+      # (the release-only `lintVitalRelease` that assembleRelease runs is the
+      # FATAL subset alone, so everything below fatal had no gate at all). The
+      # debug pass is the same analysis over the same inputs - src/debug does
+      # not exist and src/release holds only the baseline profile - and it cost
+      # a second ~39-minute analysis. Same choice as build.yml's tag gate.
+      - name: Lint (Android Lint, release variant) and unit tests
         run: >-
-          ./gradlew ktlintCheck lintDebug lintRelease testDebugUnitTest
+          ./gradlew ktlintCheck lintRelease testDebugUnitTest
           --console=plain --no-daemon
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"

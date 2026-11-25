@@ -547,7 +547,7 @@ android {
         lintConfig = file("lint.xml")
         // No htmlReport/xmlReport here: AGP 9 removed both flags because lint
         // now always writes its HTML and XML reports (the CI upload still finds
-        // them at app/build/reports/lint-results-debug.{html,xml}).
+        // them at app/build/reports/lint-results-release.{html,xml}).
     }
 
     testOptions {

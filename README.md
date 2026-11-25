@@ -324,7 +324,7 @@ Two gates with different jobs. Both run in CI, both fail the build on an error:
 ```sh
 ./gradlew ktlintCheck    # fails on an import nothing references
 ./gradlew ktlintFormat   # removes them
-./gradlew lintDebug      # Android Lint (CI only, see below)
+./gradlew lintRelease    # Android Lint (CI only, see below)
 ```
 
 Android Lint is configured in the `lint` block of `app/build.gradle.kts`:
