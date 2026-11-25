@@ -201,6 +201,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.togetherWith
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.SharedTransitionScope
@@ -5213,7 +5214,7 @@ fun AppRoot(
     // Screen, with the TV/phone split inside `isColdLaunch`. The launch splash
     // is still up at this point, so nothing of the discarded destination is
     // seen.
-    val navEntry by androidx.navigation.compose.currentBackStackEntryAsState()
+    val navEntry by navController.currentBackStackEntryAsState()
     LaunchedEffect(navEntry) {
         navSeam.follow(navEntry)
         if (
