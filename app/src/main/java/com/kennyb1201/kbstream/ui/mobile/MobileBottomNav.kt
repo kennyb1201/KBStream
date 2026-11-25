@@ -5,7 +5,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -21,6 +23,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -216,6 +221,92 @@ fun MobileBottomNav(
                 }
                 MobileProfileButton(onClick = onSwitchProfile)
             }
+        }
+    }
+}
+
+/**
+ * F2: the same five destinations as a left rail, for an expanded window.
+ *
+ * Same list, same callbacks, same selected item - [MobileNavDestination.entries]
+ * and `onSelect` are what the bar uses, so the two hosts cannot drift apart: a
+ * sixth destination would appear on both or on neither. What changes is only
+ * where the row sits. A bar along the bottom of a 1280dp window is a phone
+ * control stretched thin; a rail on its left edge keeps the five items a thumb
+ * length apart and hands the screen the width they used to take from its height.
+ *
+ * The profile door moves to the rail's foot rather than its head: at the top it
+ * would read as a header of the destinations, and this rail has no header.
+ *
+ * [MainActivity] only composes this where it would compose the bar, so a
+ * television and every pushed screen (Detail, a grid, the player) see neither.
+ */
+@Composable
+fun MobileNavRail(
+    selected: MobileNavDestination,
+    onSelect: (MobileNavDestination) -> Unit,
+    onSwitchProfile: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    MobileTheme {
+        Row(modifier = modifier.fillMaxHeight()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(MobileAdaptiveRules.NAVIGATION_RAIL_WIDTH_DP.dp)
+                    .background(KBSurface),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                NavigationRail(
+                    modifier = Modifier.weight(1f),
+                    containerColor = KBSurface,
+                    contentColor = KBTextLo,
+                    // The shell's root box already pads the system bars on a
+                    // phone, exactly as it does for the bar above.
+                    windowInsets = WindowInsets(0, 0, 0, 0)
+                ) {
+                    MobileNavDestination.entries.forEach { destination ->
+                        NavigationRailItem(
+                            selected = destination == selected,
+                            onClick = { onSelect(destination) },
+                            icon = {
+                                Icon(
+                                    imageVector = destination.icon,
+                                    // The label is the item's accessible name;
+                                    // a description here would read it twice.
+                                    contentDescription = null,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = destination.label,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            colors = NavigationRailItemDefaults.colors(
+                                selectedIconColor = KBAccent,
+                                selectedTextColor = KBAccent,
+                                indicatorColor = KBAccent.copy(alpha = 0.16f),
+                                unselectedIconColor = KBTextLo,
+                                unselectedTextColor = KBTextLo
+                            )
+                        )
+                    }
+                }
+                MobileProfileButton(onClick = onSwitchProfile)
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            // The same hairline the bar draws under itself, on the edge that is
+            // now the rail's: without it the rail and a poster grid behind it
+            // are one surface and the rail reads as a margin.
+            Box(
+                modifier = Modifier
+                    .width(1.dp)
+                    .fillMaxHeight()
+                    .background(KBTextLo.copy(alpha = 0.16f))
+            )
         }
     }
 }

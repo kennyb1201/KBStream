@@ -125,7 +125,9 @@ import com.kennyb1201.kbstream.ui.detail.DetailScreen
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.home.CatalogGridScreen
 import com.kennyb1201.kbstream.ui.mobile.CatalogGridScreenMobile
+import com.kennyb1201.kbstream.ui.mobile.MobileAdaptiveRules
 import com.kennyb1201.kbstream.ui.mobile.MobileBottomNav
+import com.kennyb1201.kbstream.ui.mobile.MobileNavRail
 import com.kennyb1201.kbstream.ui.navigation.NavSeam
 import com.kennyb1201.kbstream.ui.mobile.MobileHomeTopRequest
 import com.kennyb1201.kbstream.ui.mobile.MobileNavDestination
@@ -2999,8 +3001,25 @@ fun AppRoot(
     // screen needed a bottom inset of its own. (A bar drawn as an overlay is the
     // arrangement that would have needed every screen edited.) On a television
     // the bar is null and this column holds the one child it always had.
+    // F2 of the adaptive-layout spec: an expanded window hosts those same five
+    // destinations as a left rail and the screen takes the width the bottom bar
+    // was not using. The destination is the bar's own (`mobileNavDestination`),
+    // so the rail inherits its policy for free: null on a television and null on
+    // every pushed screen, which is where the rail must not appear either.
+    val navigationRail = mobileNavDestination != null &&
+        MobileAdaptiveRules.navigationRailApplies(rememberMobileWindowWidthClass())
     Column(modifier = Modifier.fillMaxSize()) {
-    Box(modifier = Modifier.weight(1f).fillMaxWidth()
+    // The rail and the screen share a row; on a compact window the row holds the
+    // one child it always had, so nothing about the phone's layout moves.
+    Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+    if (navigationRail) {
+        MobileNavRail(
+            selected = mobileNavDestination ?: MobileNavDestination.Home,
+            onSelect = onMobileNavSelect,
+            onSwitchProfile = onMobileSwitchProfile
+        )
+    }
+    Box(modifier = Modifier.weight(1f).fillMaxHeight()
             // Bubble phase, not preview: the screen gets the press first. A
             // screen that gives Left or Up a job of its own (TV Guide's channel
             // column switches groups, Library's calendar pages months, Spotlight
@@ -5288,6 +5307,7 @@ fun AppRoot(
     // the window rather than at the bottom of it, and the launch splash took
     // a layout slot instead of covering the screen.
     } // closes the screen Box above the bottom bar
+    } // closes the content row the rail shares with the screen
 
     // The bar, on the phone's five top-level destinations and nowhere else.
     // It is a CHILD of this column and the column's last one: the screen above
@@ -5310,7 +5330,9 @@ fun AppRoot(
     if (mobileNavDestination != null) barDestination.value = mobileNavDestination
     val barMotionMs = rememberMotionMs(KB_SCREEN_TRANSITION_MS)
     AnimatedVisibility(
-        visible = mobileNavDestination != null,
+        // The rail is the same navigation on a wide window, so the bar withdraws
+        // there rather than stacking a second copy of the five items.
+        visible = mobileNavDestination != null && !navigationRail,
         enter = fadeIn(tween(barMotionMs)) +
             slideInVertically(tween(barMotionMs)) { it / 2 } +
             expandVertically(tween(barMotionMs)),

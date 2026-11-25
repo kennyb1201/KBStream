@@ -145,6 +145,9 @@ internal object MobileAdaptiveRules {
     fun navigationRailApplies(widthClass: MobileWidthClass): Boolean =
         widthClass == MobileWidthClass.Expanded
 
+    /** The rail's width in the expanded shell. */
+    const val NAVIGATION_RAIL_WIDTH_DP = 80
+
     /**
      * The player's wide-window chrome stage (F9): full-frame video with the
      * bottom control cluster capped and centred.
