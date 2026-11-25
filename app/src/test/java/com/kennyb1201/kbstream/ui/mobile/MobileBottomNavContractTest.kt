@@ -246,7 +246,9 @@ class MobileBottomNavContractTest {
     @Test
     fun `the shell hosts the bar, outside the screen switch`() {
         val main = activity()
-        val switch = main.indexOf("AnimatedContent(")
+        // The screen switch became the host's arm table (navcompose F3-F5):
+        // `renderScreen` is what the bar must be hosted outside of now.
+        val switch = main.indexOf("val renderScreen:")
         val bar = main.indexOf("MobileBottomNav(")
         assertTrue("the shell must draw the bottom bar", bar >= 0)
         assertTrue(

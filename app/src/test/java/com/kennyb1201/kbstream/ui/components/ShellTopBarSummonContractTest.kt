@@ -47,9 +47,13 @@ class ShellTopBarSummonContractTest {
     // The shell's screen Box fills the height of the row the navigation rail
     // shares with it (adaptive-layout spec, F2), so the slice starts at the
     // Box's own modifier rather than the width one it carried before the rail.
+    // The slice ends where the screen tree begins. Since the host owns the shell
+    // (navcompose F3-F5) that is `renderScreen`, the arm table's declaration -
+    // there is no `AnimatedContent` here any more, and slicing to a marker that
+    // no longer exists would hand this test the whole rest of the activity.
     private fun handler(): String =
         activity().substringAfter("Box(modifier = Modifier.weight(1f).fillMaxHeight()")
-            .substringBefore("AnimatedContent(")
+            .substringBefore("val renderScreen:")
 
     @Test
     fun `both dead presses summon, and only those two`() {

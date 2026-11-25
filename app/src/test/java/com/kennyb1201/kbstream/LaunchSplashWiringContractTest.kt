@@ -335,8 +335,10 @@ class LaunchSplashWiringContractTest {
     @Test
     fun `the splash is drawn above the screen transition container`() {
         val activity = source("com/kennyb1201/kbstream/MainActivity.kt")
+        // The screen transition container is the host now (navcompose F3-F5):
+        // its arms close here, and the host that draws them is emitted below.
         val transitionClose = activity.indexOf(
-            "} // closes AnimatedContent( targetState = screen ) { current -> ... }"
+            "} // closes renderScreen( current ) - the arm table"
         )
         // The splash is emitted through an AnimatedVisibility now (it fades out
         // into the screen instead of being cut), so its `visible` line is what
