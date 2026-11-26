@@ -2480,9 +2480,13 @@ fun DetailScreenMobile(
                                 // Stable per-row handlers (perf spec
                                 // 2026-11-22, item 4 remainder): a season rail
                                 // hands its rows fresh closures otherwise, and
-                                // the callbacks are read at press time.
+                                // the callbacks are read at press time. A local
+                                // function is not a value, so the trait carries
+                                // the call.
                                 val currentOpenEpisode =
-                                    rememberUpdatedState(openEpisode)
+                                    rememberUpdatedState<(ResolvedEpisode, Int) -> Unit> {
+                                        ep, epSeason -> openEpisode(ep, epSeason)
+                                    }
                                 val episodeClick = remember(episode, currentSeason) {
                                     {
                                         currentOpenEpisode.value(
@@ -2533,7 +2537,9 @@ fun DetailScreenMobile(
                             // Stable per-row handlers and modifier (perf spec
                             // 2026-11-22, item 4 remainder).
                             val currentOpenEpisode =
-                                rememberUpdatedState(openEpisode)
+                                rememberUpdatedState<(ResolvedEpisode, Int) -> Unit> {
+                                    ep, epSeason -> openEpisode(ep, epSeason)
+                                }
                             val listEpisodeClick = remember(episode, currentSeason) {
                                 {
                                     currentOpenEpisode.value(episode, currentSeason)

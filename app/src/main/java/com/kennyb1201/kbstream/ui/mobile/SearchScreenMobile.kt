@@ -1032,7 +1032,10 @@ fun SearchScreenMobile(
                                 // shape as the titles rail above.
                                 val currentOnPersonClick =
                                     rememberUpdatedState(onPersonClick)
-                                val tileClick = remember(person) {
+                                // Typed as the click it is: the last statement is
+                                // a safe call (`Unit?`), which would otherwise make
+                                // the whole lambda return `Unit?`.
+                                val tileClick: () -> Unit = remember(person) {
                                     {
                                         viewModel.onActorOpened(person)
                                         currentOnPersonClick.value?.invoke(person)
@@ -1062,7 +1065,7 @@ fun SearchScreenMobile(
                             ) { studio ->
                                 val currentOnStudioClick =
                                     rememberUpdatedState(onStudioClick)
-                                val tileClick = remember(studio) {
+                                val tileClick: () -> Unit = remember(studio) {
                                     {
                                         viewModel.onStudioOpened(studio)
                                         currentOnStudioClick.value?.invoke(studio)

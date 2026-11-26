@@ -8259,8 +8259,12 @@ fun HomeScreen(
                                                 // they fire, and a hook is still
                                                 // absent when the caller has no
                                                 // callback to give it.
+                                                // A local function is not a value:
+                                                // the trait carries the call.
                                                 val currentSelectHero =
-                                                    rememberUpdatedState(selectHero)
+                                                    rememberUpdatedState<(MetaPreview) -> Unit> {
+                                                        item -> selectHero(item)
+                                                    }
                                                 val currentRailUpHook =
                                                     rememberUpdatedState(railUpHook)
                                                 val currentHeadLeftHook =

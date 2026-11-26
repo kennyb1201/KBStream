@@ -41,13 +41,12 @@ class CardClickStabilitySweepContractTest {
             assertTrue(
                 "${site.path}: ${site.name} has to be a remembered instance, or " +
                     "the card is handed a new click on every parent pass",
-                Regex("""val ${Regex.escape(site.name)} = remember\(""")
-                    .containsMatchIn(src)
+                rememberedInstance(site.name).containsMatchIn(src)
             )
             assertTrue(
                 "${site.path}: the remembered closure reads the caller's handler at " +
                     "press time, so a new handler does not rebuild the card",
-                src.contains("rememberUpdatedState(")
+                readsAtPressTime(src)
             )
         }
     }
@@ -113,8 +112,8 @@ class CardClickStabilitySweepContractTest {
             assertTrue(
                 "${site.path}: ${site.name} is a remembered instance and reads its " +
                     "handler at press time",
-                Regex("""val ${Regex.escape(site.name)} = remember\(""")
-                    .containsMatchIn(src) && src.contains("rememberUpdatedState(")
+                rememberedInstance(site.name).containsMatchIn(src) &&
+                readsAtPressTime(src)
             )
         }
 
@@ -150,7 +149,8 @@ class CardClickStabilitySweepContractTest {
             "the collections fixture remembers its own, and the on-screen one " +
                 "is not the same key",
             search.contains("val tileClick = remember(result, tileKey, railKey, index) {") &&
-                search.contains("val tileClick = remember(collection, tileKey, index) {")
+                Regex("""val tileClick(\s*:[^=]+)? = remember\(collection, tileKey, index\) \{""")
+                    .containsMatchIn(search)
         )
 
         val grid = stripComments(source(CATALOG_GRID))
@@ -194,6 +194,22 @@ class CardClickStabilitySweepContractTest {
             detail.contains("if (!isUnavailable) currentOnClick.value()")
         )
     }
+
+    /**
+     * `rememberUpdatedState(...)`, or the same call with its lambda typed
+     * (`rememberUpdatedState<T> { ... }`) — the type argument may itself carry
+     * a `->`, so only the opening bracket is matched.
+     */
+    private fun readsAtPressTime(src: String): Boolean =
+        Regex("""rememberUpdatedState\s*[<(]""").containsMatchIn(src)
+
+    /**
+     * `val name = remember(`, with or without a declared type: a handler whose
+     * lambda would otherwise infer `() -> Unit?` is annotated, and the pin is
+     * about the remembered instance, not about how the val is spelled.
+     */
+    private fun rememberedInstance(name: String): Regex =
+        Regex("""val ${Regex.escape(name)}(\s*:[^=]+)? = remember\(""")
 
     private data class Site(val path: String, val name: String, val clickCount: Int)
 

@@ -129,11 +129,17 @@ class KBHeroTransition(
      */
     @Composable
     private fun sharedElementModifier(key: String): Modifier {
-        val sharedContentState = rememberSharedContentState(key = key)
+        // The state factory is a member of the transition scope (the same one
+        // `Modifier.sharedElement` is called on below), not a top-level
+        // composable, so it needs that receiver.
+        val sharedContentState = with(sharedScope) {
+            rememberSharedContentState(key = key)
+        }
         // One transform per screen rather than one per card per pass: it is
-        // part of the node's identity.
+        // part of the node's identity. Built as the fun interface it is, rather
+        // than a bare lambda whose parameter types `remember` cannot infer.
         val boundsTransform: BoundsTransform = remember(durationMs) {
-            { _, _ -> tween(durationMs) }
+            BoundsTransform { _, _ -> tween(durationMs) }
         }
         return remember(sharedContentState, visibilityScope, boundsTransform, key) {
             with(sharedScope) {

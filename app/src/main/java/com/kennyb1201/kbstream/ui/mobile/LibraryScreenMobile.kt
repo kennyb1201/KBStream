@@ -702,7 +702,12 @@ fun LibraryScreenMobile(
                         // 2026-11-22, item 4 remainder): the tile used to be
                         // handed fresh closures and a rebuilt modifier on every
                         // pass, and a paging grid recomposes its cells often.
-                        val currentOpenItem = rememberUpdatedState(openItem)
+                        // A local function is not a value, so the trait carries
+                        // the call (the tile's own `item` is not shadowed).
+                        val currentOpenItem =
+                            rememberUpdatedState<(LibraryItem, Int) -> Unit> {
+                                clicked, clickedIndex -> openItem(clicked, clickedIndex)
+                            }
                         val tileClick = remember(item, index) {
                             { currentOpenItem.value(item, index) }
                         }

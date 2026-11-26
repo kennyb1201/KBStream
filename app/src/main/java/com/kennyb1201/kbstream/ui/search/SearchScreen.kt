@@ -1106,7 +1106,10 @@ fun SearchScreen(
                             // 2026-11-22, item 4 remainder), the same shape as
                             // the poster rails above.
                             val currentOnPersonClick = rememberUpdatedState(onPersonClick)
-                            val tileClick = remember(person, tileKey, index) {
+                            // Typed as the click it is: the last statement is a
+                            // safe call (`Unit?`), which would otherwise make the
+                            // whole lambda return `Unit?`.
+                            val tileClick: () -> Unit = remember(person, tileKey, index) {
                                 {
                                     SearchReturnFocus.record(
                                         SearchReturnTarget(
@@ -1163,7 +1166,7 @@ fun SearchScreen(
                             }
                             // Stable per-card handlers and modifier, as above.
                             val currentOnStudioClick = rememberUpdatedState(onStudioClick)
-                            val tileClick = remember(studio, tileKey, index) {
+                            val tileClick: () -> Unit = remember(studio, tileKey, index) {
                                 {
                                     SearchReturnFocus.record(
                                         SearchReturnTarget(
@@ -1230,7 +1233,7 @@ fun SearchScreen(
                             // Stable per-tile handlers and modifier (perf spec
                             // 2026-11-22, item 4 remainder).
                             val currentOnCollectionClick = rememberUpdatedState(onCollectionClick)
-                            val tileClick = remember(collection, tileKey, index) {
+                            val tileClick: () -> Unit = remember(collection, tileKey, index) {
                                 {
                                     SearchReturnFocus.record(
                                         SearchReturnTarget(
