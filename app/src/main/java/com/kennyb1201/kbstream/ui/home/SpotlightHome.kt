@@ -808,14 +808,17 @@ internal const val SPOTLIGHT_HERO_ITEM_KEY = "spotlight_hero"
 /**
  * The spotlight hero's share of the viewport.
  *
- * 52%: big enough to be the layout's banner, small enough that the first rail
- * shows under it without scrolling (the spec's ceiling is 60%). A fraction, not
- * a dp height, so it holds at every TV density.
+ * 60%: the tallest this layout allows. It is still a banner and not a full
+ * screen - the 40% left over is what shows the first rail under it without
+ * scrolling - but the hero reads as the page's subject rather than a strip
+ * above the rails (2026-11-25: 52% was too short next to the reference the
+ * commission came with). A fraction, not a dp height, so it holds at every TV
+ * density.
  */
-internal const val SPOTLIGHT_HERO_FRACTION = 0.52f
+internal const val SPOTLIGHT_HERO_FRACTION = 0.60f
 
 /**
- * The hero item's height on this screen: 52% of the viewport, in dp.
+ * The hero item's height on this screen: 60% of the viewport, in dp.
  *
  * One function so the item, the placeholder that reserves its space and the
  * billboard itself cannot disagree about how tall the hero is.

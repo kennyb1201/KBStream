@@ -807,7 +807,7 @@ fun HomeScreenMobile(
                     item(key = "billboard", contentType = "hero") {
                         MobileBillboard(
                             // Non-null above Compact: the rule's cap, in place
-                            // of the 16:10 aspect the frame falls back to.
+                            // of the 16:11 aspect the frame falls back to.
                             heroHeight = billboardHeightDp.takeIf { it > 0 }?.dp,
                             pages = billboardPages,
                             cycleMs = billboardCycleMs,
@@ -880,23 +880,46 @@ fun HomeScreenMobile(
                                                     key = { "cw:" + it.id },
                                                     contentType = { "continue-card" }
                                                 ) { item ->
-                                                    ContinueWatchingCard(
-                                                        item = item,
-                                                        onClick = {
+                                                    // Stable per-card handlers
+                                                    // (perf spec 2026-11-22, item
+                                                    // 4 remainder): the rail used
+                                                    // to rebuild both closures per
+                                                    // card per pass. Every
+                                                    // callback is read at press
+                                                    // time, so a new handler from
+                                                    // the screen does not rebuild
+                                                    // the card.
+                                                    val currentOnItemClick =
+                                                        rememberUpdatedState(onItemClick)
+                                                    val currentOnOpenDetailTarget =
+                                                        rememberUpdatedState(
+                                                            onOpenDetailTarget
+                                                        )
+                                                    val currentOnOpenStreams =
+                                                        rememberUpdatedState(onOpenStreams)
+                                                    val cardClick = remember(item) {
+                                                        {
                                                             openUpNextVerified(
                                                                 item = item,
                                                                 viewModel = viewModel,
                                                                 scope = scope,
                                                                 mode = UpNextOpen.RESUME,
-                                                                onOpenDetails = onItemClick,
+                                                                onOpenDetails =
+                                                                    currentOnItemClick.value,
                                                                 onOpenDetailTarget =
-                                                                    onOpenDetailTarget,
-                                                                onOpenStreams = onOpenStreams
+                                                                    currentOnOpenDetailTarget.value,
+                                                                onOpenStreams =
+                                                                    currentOnOpenStreams.value
                                                             )
-                                                        },
-                                                        onLongClick = {
-                                                            continueWatchingMenu = item
                                                         }
+                                                    }
+                                                    val cardLongClick = remember(item) {
+                                                        { continueWatchingMenu = item }
+                                                    }
+                                                    ContinueWatchingCard(
+                                                        item = item,
+                                                        onClick = cardClick,
+                                                        onLongClick = cardLongClick
                                                     )
                                                 }
                                             }
@@ -932,11 +955,19 @@ fun HomeScreenMobile(
                                                     key = { "up:" + it.id },
                                                     contentType = { "upcoming-card" }
                                                 ) { episode ->
+                                                    // Stable per-card click, same
+                                                    // rule as the rail above.
+                                                    val currentOnItemClick =
+                                                        rememberUpdatedState(onItemClick)
+                                                    val cardClick = remember(episode) {
+                                                        {
+                                                            currentOnItemClick
+                                                                .value(episode.detail())
+                                                        }
+                                                    }
                                                     UpcomingCard(
                                                         episode = episode,
-                                                        onClick = {
-                                                            onItemClick(episode.detail())
-                                                        }
+                                                        onClick = cardClick
                                                     )
                                                 }
                                             }
@@ -993,6 +1024,60 @@ fun HomeScreenMobile(
                                                     // with no wordmark once the
                                                     // row was reshaped (field
                                                     // 2026-10-28).
+                                                    // Stable per-card handlers
+                                                    // (perf spec 2026-11-22,
+                                                    // item 4 remainder): a rail
+                                                    // pass used to rebuild both
+                                                    // closures, so no card could
+                                                    // skip. The handler is read
+                                                    // through rememberUpdatedState.
+                                                    val currentOnItemClick =
+                                                        rememberUpdatedState(onItemClick)
+                                                    val cardClick = remember(meta) {
+                                                        {
+                                                            armHeroSource(
+                                                                meta.type,
+                                                                meta.id
+                                                            )
+                                                            currentOnItemClick.value(meta)
+                                                        }
+                                                    }
+                                                    val cardLongClick = remember(meta) {
+                                                        {
+                                                            menuTarget =
+                                                                RailMenuTarget(meta)
+                                                        }
+                                                    }
+                                                    // The size chain is remembered
+                                                    // per card too (perf spec
+                                                    // 2026-11-22, item 4
+                                                    // remainder): it could not be
+                                                    // until the hero source was a
+                                                    // remembered element, and it
+                                                    // is the same chain either
+                                                    // branch wears.
+                                                    val heroModifier = Modifier
+                                                        .heroSourceOnPress(
+                                                            meta.type,
+                                                            meta.id
+                                                        )
+                                                    val landscapeModifier = remember(
+                                                        heroModifier,
+                                                        railLandscapeWidth,
+                                                        railLandscapeHeight
+                                                    ) {
+                                                        heroModifier
+                                                            .width(railLandscapeWidth)
+                                                            .height(railLandscapeHeight)
+                                                    }
+                                                    val cardModifier = remember(
+                                                        heroModifier,
+                                                        railPosterSize
+                                                    ) {
+                                                        heroModifier
+                                                            .width(railPosterSize.width)
+                                                            .height(railPosterSize.height)
+                                                    }
                                                     if (landscapeCards) {
                                                         val art = topPicksArt[
                                                             meta.landscapeArtKey()
@@ -1012,24 +1097,9 @@ fun HomeScreenMobile(
                                                             isWatched = watched,
                                                             isPartiallyWatched =
                                                                 partiallyWatched,
-                                                            onClick = {
-                                                                armHeroSource(
-                                                                    meta.type,
-                                                                    meta.id
-                                                                )
-                                                                onItemClick(meta)
-                                                            },
-                                                            onLongClick = {
-                                                                menuTarget =
-                                                                    RailMenuTarget(meta)
-                                                            },
-                                                            modifier = Modifier
-                                                                .heroSourceOnPress(
-                                                                    meta.type,
-                                                                    meta.id
-                                                                )
-                                                                .width(railLandscapeWidth)
-                                                                .height(railLandscapeHeight)
+                                                            onClick = cardClick,
+                                                            onLongClick = cardLongClick,
+                                                            modifier = landscapeModifier
                                                         )
                                                     } else {
                                                         PosterCard(
@@ -1043,33 +1113,14 @@ fun HomeScreenMobile(
                                                             isWatched = watched,
                                                             isPartiallyWatched =
                                                                 partiallyWatched,
-                                                            onClick = {
-                                                                armHeroSource(
-                                                                    meta.type,
-                                                                    meta.id
-                                                                )
-                                                                onItemClick(meta)
-                                                            },
+                                                            onClick = cardClick,
                                                             // No owning Rail: this row
                                                             // is not a catalog, so the
                                                             // menu offers its own
                                                             // actions and no "Open in
                                                             // Grid".
-                                                            onLongClick = {
-                                                                menuTarget =
-                                                                    RailMenuTarget(meta)
-                                                            },
-                                                            modifier = Modifier
-                                                                .heroSourceOnPress(
-                                                                    meta.type,
-                                                                    meta.id
-                                                                )
-                                                                .width(
-                                                                    railPosterSize.width
-                                                                )
-                                                                .height(
-                                                                    railPosterSize.height
-                                                                )
+                                                            onLongClick = cardLongClick,
+                                                            modifier = cardModifier
                                                         )
                                                     }
                                                 }
@@ -1297,6 +1348,57 @@ fun HomeScreenMobile(
                                                     meta.id,
                                                     meta.type
                                                 ) in partialWatchedKeys
+                                            // Stable per-card handlers (perf
+                                            // spec 2026-11-22, item 4
+                                            // remainder): a rail pass used to
+                                            // rebuild both closures, so no card
+                                            // could skip. The handler and the
+                                            // rail the menu opens with are read
+                                            // at press time.
+                                            val currentOnItemClick =
+                                                rememberUpdatedState(onItemClick)
+                                            val currentRail = rememberUpdatedState(rail)
+                                            val cardClick = remember(meta) {
+                                                {
+                                                    // The phone's hero flight: a
+                                                    // press IS the source signal
+                                                    // (no D-pad focus to arm it
+                                                    // with).
+                                                    armHeroSource(meta.type, meta.id)
+                                                    currentOnItemClick.value(meta)
+                                                }
+                                            }
+                                            val cardLongClick = remember(meta) {
+                                                {
+                                                    menuTarget = RailMenuTarget(
+                                                        meta,
+                                                        currentRail.value
+                                                    )
+                                                }
+                                            }
+                                            // The size chain is remembered per
+                                            // card (perf spec 2026-11-22, item 4
+                                            // remainder), now that the hero
+                                            // source is a remembered element.
+                                            val heroModifier = Modifier
+                                                .heroSourceOnPress(meta.type, meta.id)
+                                            val landscapeModifier = remember(
+                                                heroModifier,
+                                                railLandscapeWidth,
+                                                railLandscapeHeight
+                                            ) {
+                                                heroModifier
+                                                    .width(railLandscapeWidth)
+                                                    .height(railLandscapeHeight)
+                                            }
+                                            val cardModifier = remember(
+                                                heroModifier,
+                                                railPosterSize
+                                            ) {
+                                                heroModifier
+                                                    .width(railPosterSize.width)
+                                                    .height(railPosterSize.height)
+                                            }
                                             if (landscapeCards) {
                                                 // Landscape rows carry their own
                                                 // resolved backdrop + clearlogo
@@ -1367,22 +1469,9 @@ fun HomeScreenMobile(
                                                         rail.ranked,
                                                         index
                                                     ),
-                                                    onClick = {
-                                                        // The phone's hero flight:
-                                                        // a press IS the source
-                                                        // signal (no D-pad focus
-                                                        // to arm it with).
-                                                        armHeroSource(meta.type, meta.id)
-                                                        onItemClick(meta)
-                                                    },
-                                                    onLongClick = {
-                                                        menuTarget =
-                                                            RailMenuTarget(meta, rail)
-                                                    },
-                                                    modifier = Modifier
-                                                        .heroSourceOnPress(meta.type, meta.id)
-                                                        .width(railLandscapeWidth)
-                                                        .height(railLandscapeHeight)
+                                                    onClick = cardClick,
+                                                    onLongClick = cardLongClick,
+                                                    modifier = landscapeModifier
                                                 )
                                             } else {
                                                 PosterCard(
@@ -1395,18 +1484,9 @@ fun HomeScreenMobile(
                                                     isWatched = watched,
                                                     isPartiallyWatched =
                                                         partiallyWatched,
-                                                    onClick = {
-                                                        armHeroSource(meta.type, meta.id)
-                                                        onItemClick(meta)
-                                                    },
-                                                    onLongClick = {
-                                                        menuTarget =
-                                                            RailMenuTarget(meta, rail)
-                                                    },
-                                                    modifier = Modifier
-                                                        .heroSourceOnPress(meta.type, meta.id)
-                                                        .width(railPosterSize.width)
-                                                        .height(railPosterSize.height)
+                                                    onClick = cardClick,
+                                                    onLongClick = cardLongClick,
+                                                    modifier = cardModifier
                                                 )
                                             }
                                         }
@@ -1811,9 +1891,15 @@ private fun MobileCollectionSection(
                 key = { index, tile -> collectionRailKey(index, tile) },
                 contentType = { _, _ -> "collection-tile" }
             ) { _, tile ->
+                // Stable per-tile click (perf spec 2026-11-22, item 4
+                // remainder), read through rememberUpdatedState.
+                val currentOnOpenFolder = rememberUpdatedState(onOpenFolder)
+                val tileClick = remember(tile) {
+                    { currentOnOpenFolder.value(tile.first) }
+                }
                 CollectionFolderCard(
                     folder = tile.second,
-                    onClick = { onOpenFolder(tile.first) }
+                    onClick = tileClick
                 )
             }
         }
@@ -1926,13 +2012,23 @@ private fun MobileBrowseShortcutSection(
                 key = { it.categoryKey + ":" + it.id },
                 contentType = { "shortcut" }
             ) { shortcut ->
+                // Stable per-card handlers (perf spec 2026-11-22, item 4
+                // remainder), read at press time.
+                val currentOnOpen = rememberUpdatedState(onOpen)
+                val currentOnLongPress = rememberUpdatedState(onLongPress)
+                val shortcutClick = remember(shortcut) {
+                    { currentOnOpen.value(shortcut) }
+                }
+                val shortcutLongClick = remember(shortcut) {
+                    { currentOnLongPress.value(shortcut) }
+                }
                 BrowseShortcutCard(
                     shortcut = shortcut,
                     art = artByKey[shortcut.chipKey()],
                     width = cardWidth,
                     height = cardHeight,
-                    onClick = { onOpen(shortcut) },
-                    onLongClick = { onLongPress(shortcut) }
+                    onClick = shortcutClick,
+                    onLongClick = shortcutLongClick
                 )
             }
         }
@@ -2175,7 +2271,7 @@ private fun MobileHero(
     /**
      * A fixed frame height, for a screen that cannot size the hero by width.
      *
-     * Null is the phone's own rule below (16:10 off the width). A TV Home is
+     * Null is the phone's own rule below (16:11 off the width). A TV Home is
      * wider than it is tall by a lot, so the same width math asks for a frame
      * taller than the viewport - see MobileBillboard's cap.
      */
@@ -2229,15 +2325,19 @@ private fun MobileHero(
                     // overflow instead of the bottom of the screen.
                     Modifier.height(heroHeight)
                 } else {
-                    // 16:10, not 16:9 (spec 2.8, chosen 2026-10-30): the billboard
-                    // is the first thing on Home and at 16:9 inside the premium
-                    // refresh's 16dp margins it read small. On a 390dp phone the
-                    // frame is 358dp wide, so 16:10 is ~224dp tall - ~23dp more
-                    // than 16:9 in the same margins, and a touch more than the old
-                    // full-bleed 16:9 (~219dp), which is the point. A 16:9 backdrop
-                    // under ContentScale.Crop here overflows on the SIDES (~11% of
-                    // width), which is the room the Ken Burns pan sweeps.
-                    Modifier.aspectRatio(16f / 10f)
+                    // 16:11 (2026-11-25), which was 16:10 by spec 2.8. The
+                    // billboard is the first thing on Home and it has to read as
+                    // the page's subject, not a strip above the rails: on a 390dp
+                    // phone 16:11 is ~268dp tall against 16:10's ~244dp, and the
+                    // first rail still shows below it. The width is what the
+                    // frame is sized off - full bleed, edge to edge - so this is
+                    // the one number that grows it.
+                    //
+                    // The backdrop is still ContentScale.Crop: a 16:9 still
+                    // overflows on the SIDES (~11% of width under 16:10, a little
+                    // less under this frame), which is the room the Ken Burns pan
+                    // sweeps in, and the art fills whatever height the frame gets.
+                    Modifier.aspectRatio(16f / 11f)
                 }
             )
             // THE PAGE CLIPS TO ITS OWN BOUNDS (spec 2026-11-17, F1). Every page
@@ -2279,8 +2379,9 @@ private fun MobileHero(
             //
             // The size is: without it Coil decodes the source at its own
             // resolution (a 1920- or 3840-wide backdrop) for a frame that is
-            // ~358dp wide. 1280x800 matches this 16:10 frame and still covers a
-            // 3x phone - the same handful of megabytes, asked for once.
+            // ~358dp wide. 1280x800 covers this 16:11 frame (a taller crop than
+            // 16:10 asks for, off the same 16:9 source) and still covers a 3x
+            // phone - the same handful of megabytes, asked for once.
             model = remember(backdropUrl) {
                 ImageRequest.Builder(context)
                     .data(backdropUrl)
@@ -2453,9 +2554,14 @@ private fun MobileHero(
                             .height(HeroLogoHeight)
                             .widthIn(max = HeroLogoWidth)
                     } else {
+                        // Raised with the frame (2026-11-25): a 40dp mark in a
+                        // 268dp-tall billboard reads small, and the wordmark is
+                        // the page's only branding above the meta line. Still
+                        // well under the TV box (HeroLogoHeight 82dp), so the
+                        // two surfaces keep their own scale.
                         Modifier
-                            .height(40.dp)
-                            .widthIn(max = 220.dp)
+                            .height(48.dp)
+                            .widthIn(max = 260.dp)
                     }
                 )
             } else {
@@ -2572,7 +2678,7 @@ internal fun MobileBillboard(
     /**
      * A fixed hero height, for the TV Home.
      *
-     * The phone sizes the frame by width (16:10), which on a television asks
+     * The phone sizes the frame by width (16:11), which on a television asks
      * for more height than the viewport has and leaves the rails nothing: the
      * hero is the whole screen and the rail list is composed with a zero
      * viewport, so the D-pad has nowhere to go and nothing can reach the top
@@ -4219,6 +4325,45 @@ private fun MobileLibraryListRail(
                     addonType = meta.type,
                     addonBackdrop = carriedArt.effective
                 )
+                // Stable per-card handlers (perf spec 2026-11-22, item 4
+                // remainder): the click and the carried-art failure callback
+                // are remembered per item, so a pass that changed nothing hands
+                // the card the same instances. The handler is read through
+                // rememberUpdatedState; the failure lambda is keyed on the same
+                // poster URL its state is, because it writes through that
+                // state's delegate.
+                val currentOnOpen = rememberUpdatedState(onOpen)
+                val cardClick = remember(meta) {
+                    {
+                        armHeroSource(meta.type, meta.id)
+                        currentOnOpen.value(meta)
+                    }
+                }
+                val cardArtFailed: (Throwable?) -> Unit =
+                    remember(meta.poster) { { carriedArtFailed = true } }
+                // The size chain is remembered per card (perf spec 2026-11-22,
+                // item 4 remainder), now that the hero source is a remembered
+                // element.
+                val heroModifier = Modifier
+                    .heroSourceOnPress(meta.type, meta.id)
+                val landscapeModifier = remember(
+                    heroModifier,
+                    landscapeWidth,
+                    landscapeHeight
+                ) {
+                    heroModifier
+                        .width(landscapeWidth)
+                        .height(landscapeHeight)
+                }
+                val cardModifier = remember(
+                    heroModifier,
+                    posterWidth,
+                    posterHeight
+                ) {
+                    heroModifier
+                        .width(posterWidth)
+                        .height(posterHeight)
+                }
                 if (landscapeCards) {
                     LandscapeCard(
                         // A Library row carries the service's poster but not a
@@ -4233,19 +4378,13 @@ private fun MobileLibraryListRail(
                                 ?: resolvedPoster
                         ),
                         logoUrl = resolvedLandscapeArt.second,
-                        onBackdropError = { carriedArtFailed = true },
+                        onBackdropError = cardArtFailed,
                         fallbackTitle = meta.name,
                         contentDescription = meta.name,
                         isWatched = watched,
                         isPartiallyWatched = partiallyWatched,
-                        onClick = {
-                            armHeroSource(meta.type, meta.id)
-                            onOpen(meta)
-                        },
-                        modifier = Modifier
-                            .heroSourceOnPress(meta.type, meta.id)
-                            .width(landscapeWidth)
-                            .height(landscapeHeight)
+                        onClick = cardClick,
+                        modifier = landscapeModifier
                     )
                 } else {
                     PosterCard(
@@ -4254,18 +4393,12 @@ private fun MobileLibraryListRail(
                             rawId = meta.id,
                             fallbackUrl = carriedArt.effective ?: resolvedPoster
                         ),
-                        onPosterError = { carriedArtFailed = true },
+                        onPosterError = cardArtFailed,
                         contentDescription = meta.name,
                         isWatched = watched,
                         isPartiallyWatched = partiallyWatched,
-                        onClick = {
-                            armHeroSource(meta.type, meta.id)
-                            onOpen(meta)
-                        },
-                        modifier = Modifier
-                            .heroSourceOnPress(meta.type, meta.id)
-                            .width(posterWidth)
-                            .height(posterHeight)
+                        onClick = cardClick,
+                        modifier = cardModifier
                     )
                 }
             }

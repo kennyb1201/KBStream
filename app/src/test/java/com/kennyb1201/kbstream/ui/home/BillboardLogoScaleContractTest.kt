@@ -59,15 +59,17 @@ class BillboardLogoScaleContractTest {
     }
 
     @Test
-    fun `the phone frame keeps the box it had`() {
+    fun `the phone frame keeps a box of its own`() {
         val block = logoBlock()
         assertTrue(
-            "S2: the phone billboard's logo is untouched",
-            block.contains(".height(40.dp)") && block.contains(".widthIn(max = 220.dp)")
+            "the phone billboard's logo is its own pair of numbers, not the TV " +
+                "hero's box (48 x 260 since the taller 2026-11-25 frame; it was " +
+                "40 x 220, which read small in the new height)",
+            block.contains(".height(48.dp)") && block.contains(".widthIn(max = 260.dp)")
         )
         assertTrue(
             "and the phone is the else branch of that same flag",
-            block.substringAfter("} else {").contains(".height(40.dp)")
+            block.substringAfter("} else {").contains(".height(48.dp)")
         )
     }
 

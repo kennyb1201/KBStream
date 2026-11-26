@@ -382,8 +382,8 @@ internal const val BILLBOARD_KEN_BURNS_PAN_FRACTION = 0.02f
  * to [BILLBOARD_KEN_BURNS_PAN_FRACTION] of its width. Coverage at EVERY point of
  * the sweep therefore needs `(s - 1) / 2 >= PAN_FRACTION` at the SMALLEST scale,
  * which is `s >= 1 + 2 * PAN_FRACTION`. A floor of 1.0 only covered the pan on a
- * frame whose backdrop overflows on the SIDES (the phone's 16:10 frame over a 16:9
- * art, ~11% each side); on the TV Spotlight frame (~3.3:1, full width, height
+ * frame whose backdrop overflows on the SIDES (the phone's 16:10/16:11 frame over
+ * a 16:9 art, ~11% each side); on the TV Spotlight frame (~3.3:1, full width, height
  * overflowing instead) the width is the constraining dimension and that overscan
  * is ZERO, so the translated image stopped covering the frame and the neighbouring
  * pager page's art showed as a sliver at the edge - on every page, because every

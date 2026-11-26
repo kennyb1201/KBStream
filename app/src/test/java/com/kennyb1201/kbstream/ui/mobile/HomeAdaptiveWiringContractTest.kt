@@ -58,8 +58,9 @@ class HomeAdaptiveWiringContractTest {
             home.contains("Modifier.height(heroHeight)")
         )
         assertTrue(
-            "and the compact fallback is still the 16:10 aspect the phone ships",
-            home.contains("Modifier.aspectRatio(16f / 10f)")
+            "and the compact fallback is still the aspect the phone ships " +
+                "(16:11 since 2026-11-25)",
+            home.contains("Modifier.aspectRatio(16f / 11f)")
         )
     }
 

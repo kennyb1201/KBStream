@@ -55,20 +55,23 @@ internal object MobileAdaptiveRules {
     }
 
     /**
-     * Home's billboard height, or 0 for "keep today's `aspectRatio(16f / 10f)`".
+     * Home's billboard height, or 0 for "keep today's `aspectRatio(16f / 11f)`".
      *
      * A phone sizes the hero by its width and that is right on a 400dp window: a
      * full-bleed 16:10 banner is the top third of the screen. The same rule on an
      * 800dp tablet portrait asks for a 500dp hero - most of the window, with no
      * rail below it - which is exactly the failure the TV's fixed `heroHeight`
      * exists to avoid. So above Compact the height is the smaller of the 16:10
-     * height and 45% of the window's height.
+     * width slice and HALF the window's height: the cap that keeps a rail on
+     * screen matches the taller frame the phone draws (2026-11-25, 45% -> 50%),
+     * so the banner does not go back to being a strip the moment the window is
+     * wide enough for the rule to apply.
      */
     fun homeBillboardHeightDp(widthClass: MobileWidthClass, widthDp: Int, heightDp: Int): Int {
         if (widthClass == MobileWidthClass.Compact) return 0
         val sixteenByTen = (widthDp * 10f / 16f).toInt()
-        val fortyFivePercent = (heightDp * 45 / 100)
-        return minOf(sixteenByTen, fortyFivePercent)
+        val halfTheWindow = (heightDp * 50 / 100)
+        return minOf(sixteenByTen, halfTheWindow)
     }
 
     /**

@@ -45,14 +45,17 @@ class MobileAdaptiveRulesTest {
     }
 
     @Test
-    fun `the billboard is capped at 45 percent of a wide window's height`() {
-        // 800dp tablet portrait, 1280dp tall: 16:10 asks for 500dp, the cap
-        // gives 576 - so the cap does not bind and the hero stays 16:10.
+    fun `the billboard is capped at half of a wide window's height`() {
+        // 800dp tablet portrait, 1280dp tall: the 16:10 width slice asks for
+        // 500dp, the cap gives 640 - so the cap does not bind and the hero
+        // stays at the width slice.
         assertEquals(500, MobileAdaptiveRules.homeBillboardHeightDp(MobileWidthClass.Medium, 800, 1280))
-        // 1280dp landscape, 800dp tall: 16:10 asks for 800dp, 45% gives 360.
-        assertEquals(360, MobileAdaptiveRules.homeBillboardHeightDp(MobileWidthClass.Expanded, 1280, 800))
+        // 1280dp landscape, 800dp tall: the width slice asks for 800dp, half the
+        // window gives 400 (2026-11-25: 45% gave 360, a strip next to the phone's
+        // taller frame).
+        assertEquals(400, MobileAdaptiveRules.homeBillboardHeightDp(MobileWidthClass.Expanded, 1280, 800))
         // A short window binds too.
-        assertEquals(225, MobileAdaptiveRules.homeBillboardHeightDp(MobileWidthClass.Medium, 800, 500))
+        assertEquals(250, MobileAdaptiveRules.homeBillboardHeightDp(MobileWidthClass.Medium, 800, 500))
     }
 
     @Test

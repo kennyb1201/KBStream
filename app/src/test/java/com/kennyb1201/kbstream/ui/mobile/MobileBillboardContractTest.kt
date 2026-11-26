@@ -134,7 +134,7 @@ class MobileBillboardContractTest {
         // F3 of the adaptive-layout spec put the window rule's cap in front of
         // the pages, so the call is no longer one line: the billboard is still
         // handed its pages, and the height is the rule's answer (null on a
-        // compact window, which is the 16:10 frame it always drew).
+        // compact window, which is the width-derived 16:11 frame it draws).
         val call = home.substring(
             home.indexOf("MobileBillboard("),
             home.indexOf("onPlay = { page ->", home.indexOf("MobileBillboard("))

@@ -54,7 +54,7 @@ class SpotlightFixContractTest {
         val section = source(SPOTLIGHT_HOME)
         assertTrue(
             "one named fraction, so the cap is a rule rather than a number in a call",
-            section.contains("SPOTLIGHT_HERO_FRACTION = 0.52f")
+            section.contains("SPOTLIGHT_HERO_FRACTION = 0.60f")
         )
         assertTrue(
             "and it is the VIEWPORT height that is fractioned - the fix has to " +
@@ -78,9 +78,10 @@ class SpotlightFixContractTest {
             hero.contains("Modifier.height(heroHeight)")
         )
         assertTrue(
-            "...and keeps its width-driven 16:10 only when there is none, which " +
-                "is what leaves the phone's own frame exactly as it was",
-            hero.contains("Modifier.aspectRatio(16f / 10f)")
+            "...and keeps its width-driven frame only when there is none, which " +
+                "is what leaves the phone's own frame to the phone's own rule " +
+                "(16:11 since 2026-11-25, 16:10 before it)",
+            hero.contains("Modifier.aspectRatio(16f / 11f)")
         )
         assertTrue(
             "a fixed height travels through the pager to every page",
@@ -101,15 +102,16 @@ class SpotlightFixContractTest {
         // F3 of the adaptive-layout spec gives the phone a cap as well, but the
         // cap this test is about is the TELEVISION's fixed hero height. The
         // phone's is the window rule's answer, and that answer is null on a
-        // compact window - which is the 16:10 frame the phone always drew, so
-        // nothing about the phone's billboard moves at 599dp or below.
+        // compact window - which is the width-derived frame the phone draws
+        // (16:11), so nothing about the phone's billboard is the TV's cap at
+        // 599dp or below.
         val start = mobile.indexOf("MobileBillboard(")
         assertTrue("the phone must still draw the billboard", start >= 0)
         val call = mobile.substring(start, mobile.indexOf("onPlay = { page ->", start))
         assertTrue(
             "the phone's height must be the rule's answer and nothing else: " +
-                "null below 600dp is the 16:10 frame this test protects, and a " +
-                "literal in its place would be the television's cap leaking in",
+                "null below 600dp is the width-derived frame this test protects, " +
+                "and a literal in its place would be the television's cap leaking in",
             call.contains("heroHeight = billboardHeightDp.takeIf { it > 0 }?.dp")
         )
         assertFalse(
