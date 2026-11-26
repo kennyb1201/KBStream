@@ -127,12 +127,14 @@ object PlayUpdater {
             // The callback does not name the build; the info the last check kept
             // does, and the prompt names what Open installs.
             versionCode = availableInfo?.availableVersionCode() ?: 0
-        ) ?: return@InstallStateUpdatedListener
-        state.value = next
-        // Downloaded is a moment to OFFER the restart, not to take it: handing
-        // the update to Play here restarted the app the instant the download
-        // finished (and, in the field, did not bring it back).
-        if (next is UpdateState.ReadyToInstall) _promptOpen.value = true
+        )
+        if (next != null) {
+            state.value = next
+            // Downloaded is a moment to OFFER the restart, not to take it:
+            // handing the update to Play here restarted the app the instant the
+            // download finished (and, in the field, did not bring it back).
+            if (next is UpdateState.ReadyToInstall) _promptOpen.value = true
+        }
     }
 
     /**

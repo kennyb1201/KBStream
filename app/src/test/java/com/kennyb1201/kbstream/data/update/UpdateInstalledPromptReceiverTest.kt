@@ -47,11 +47,12 @@ class UpdateInstalledPromptReceiverTest {
 
         AppUpdater.InstallStatusReceiver().onReceive(app, success())
 
-        val started = shadowOf(app).nextStartedActivity
-        assertNotNull(
-            "an install nobody is told about is the bug this prompt exists to fix",
-            started
-        )
+        // requireNotNull rather than assertNotNull: JUnit's assertion returns
+        // Unit, so the intent would stay platform-typed-nullable at the reads
+        // below.
+        val started = requireNotNull(shadowOf(app).nextStartedActivity) {
+            "an install nobody is told about is the bug this prompt exists to fix"
+        }
         assertEquals(
             "the prompt is this app's own activity",
             MainActivity::class.java.name,
