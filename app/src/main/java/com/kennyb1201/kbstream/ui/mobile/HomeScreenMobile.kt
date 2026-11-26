@@ -80,6 +80,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -100,6 +102,7 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.reporting.ComposeChurn
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.kb.BrowseHomeRail
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
@@ -2736,11 +2739,13 @@ internal fun MobileBillboard(
     /**
      * Reports whether one of the hero's own pills holds focus (F4/F5).
      *
-     * Two things depend on it. The entry claim only counts as LANDED when focus
-     * is observed here, not when `requestFocus()` returned true (F4). And the
-     * billboard holds still while it is true (F5): Left/Right move between Play,
-     * Details and Trailer, and a cycle that advanced under them replaced the
-     * focused pill mid-traversal.
+     * Three things depend on it. The entry claim only counts as LANDED when focus
+     * is observed here, not when `requestFocus()` returned true (F4). The
+     * billboard holds its page still while it is true (F5): Left/Right move
+     * between Play, Details and Trailer, and a cycle that advanced under them
+     * replaced the focused pill mid-traversal. And on the D-pad surface the
+     * sweep's pause reads it the other way (2026-11-25): focus AWAY from the
+     * pills is the viewer on the rails, so the pan holds until they come back.
      */
     onPillFocusChange: (Boolean) -> Unit = {},
     /**
@@ -2768,6 +2773,9 @@ internal fun MobileBillboard(
      */
     onWarmNextPageArt: (String?) -> Unit = {}
 ) {
+    // Walk diagnostics: counted before the empty return, so a billboard with no
+    // pages is still a billboard that ran (see ComposeChurn).
+    ComposeChurn.note("billboard")
     if (pages.isEmpty()) return
 
     val scope = rememberCoroutineScope()
@@ -2969,8 +2977,11 @@ internal fun MobileBillboard(
 
     // Whether one of the hero's OWN pills holds focus (F5). Written by the pill
     // row's focus observer below and read by the hold, which must not change the
-    // page under it. The SWEEP deliberately does not read it (2026-11-15): the
-    // backdrop keeps panning under the pills, and only the page has to hold.
+    // page under it. On the D-pad surface it also holds the SWEEP now (2026-11-25,
+    // F1): focus on a rail card or in the top bar is the viewer walking away from
+    // the billboard, and the sweep must not spend frames behind them. The phone's
+    // pills never take focus on touch, so the sweep's input is gated to the
+    // surface that has a D-pad - see `sweepHoldsForFocus` below.
     var pillsFocused by remember { mutableStateOf(false) }
     // WHICH pill the hand is on (F2, 2026-11-17), and the requesters that can put
     // it back after a page change. A caller-supplied entry requester (the TV) is
@@ -3491,14 +3502,31 @@ internal fun MobileBillboard(
     // is waiting out its delay) - so the move is never playing to a screen
     // nobody is looking at, and the fill never advances under a pause.
     //
-    // The ONE rung it does not share is the pills (2026-11-15). The hold still
-    // waits there - the page must not change under the viewer - but the sweep
-    // keeps panning: a focused pill is not a screen nobody is looking at, it is
-    // the viewer looking at THIS page, and the freeze it used to add was the
-    // reported "i have to hit left from the play button for the effect to work".
-    // Splitting the two halves of that hold is the fix: the page stays still
-    // because the cycle timer still reads the flag, and the still keeps moving
-    // because this list no longer does.
+    // Two more inputs say "nobody is looking at the billboard" (2026-11-25). On
+    // the D-pad surface, focus away from the pills is the viewer on the rails or
+    // in the top bar: the sweep freezes mid-move there, which is the point - the
+    // backdrop is a 1280x720 bitmap re-transformed every frame it runs, four
+    // times the pixels of 1080p on a 4K output, and the rail walk is exactly the
+    // jank being chased. And on either surface, a frame scrolled fully above the
+    // viewport is not being looked at at all. Both are only INPUTS: the driver
+    // below still holds the fraction it reached and resumes the rest of the same
+    // fixed duration, so neither can restart or snap the move.
+    //
+    // The PAGE cycle's pill hold stays separate (2026-11-15): the page must not
+    // change under a focused pill, and that hold is still `pillsHoldCycle` on the
+    // timer. This list only decides whether the still moves.
+    //
+    // The focus input is gated to the surface with a D-pad: only the TV pill row
+    // takes an UP out of the hero (to the top bar), and the phone's pills never
+    // hold focus on touch - an ungated `!pillsFocused` would freeze the phone's
+    // sweep for good. `heroHeight != null` cannot be the marker any more: above
+    // Compact the phone's hero takes a fixed height too
+    // (MobileAdaptiveRules.homeBillboardHeightDp, 2026-11-25).
+    val sweepHoldsForFocus = onPillUpPressed != null && !pillsFocused
+    // F2 (2026-11-25): whether any part of this frame is in the window. Written
+    // by the frame's own position observer below; true until the first layout, so
+    // a fresh composition is never frozen before the observer has run.
+    var billboardOnScreen by remember { mutableStateOf(true) }
     val sweepPaused = reducedMotion ||
         backgrounded ||
         // F4: a scroll over the hero (the rail list on a TV, the page on the
@@ -3510,7 +3538,13 @@ internal fun MobileBillboard(
         autoTrailerArmed ||
         // The Ken Burns sweep is the other half of the hold (audit a1): the
         // still must not keep moving under an expanded card either.
-        trailerSuppressed
+        trailerSuppressed ||
+        // F1 (2026-11-25): focus has left the billboard for the rails or the top
+        // bar - the D-pad surface only, see the gate above.
+        sweepHoldsForFocus ||
+        // F2 (2026-11-25): the frame is scrolled fully above the viewport. Read
+        // on the frame itself, not handed in by the Home list.
+        !billboardOnScreen
     // The page this Animatable belongs to. It is what distinguishes a page
     // CHANGE (snap back to the start) from a pause (hold where it is): the
     // effect below is keyed on the page, and a pause only stops the tween, so
@@ -3715,6 +3749,15 @@ internal fun MobileBillboard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
+            // F2 (2026-11-25): the frame reports its own window position, so the
+            // sweep can hold once the whole billboard is scrolled above the
+            // viewport. Written only on a crossing: the observer runs on every
+            // scroll frame, and a write per frame would recompose the billboard
+            // for a value that did not change.
+            .onGloballyPositioned { coordinates ->
+                val onScreen = coordinates.boundsInWindow().bottom > 0f
+                if (onScreen != billboardOnScreen) billboardOnScreen = onScreen
+            }
     ) {
         Box(
             modifier = Modifier

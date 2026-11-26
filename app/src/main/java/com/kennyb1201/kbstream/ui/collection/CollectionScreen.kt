@@ -279,7 +279,7 @@ fun CollectionScreen(
         // Full-bleed screen (matches SearchScreen): horizontal edge spacing
         // lives in the header/panel padding and the rail's contentPadding,
         // NOT on this container. A fixed-inset parent would clip the rail
-        // items at the inset edge, chopping the focused poster's 1.03 scale
+        // items at the inset edge, chopping the focused poster's 1.015 scale
         // + accent glow on the first/last tile.
         Column(
             modifier = Modifier
@@ -391,7 +391,7 @@ fun CollectionScreen(
                         state = rowState,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         // 24dp edge insets (matching the header) keep the focused
-                        // poster's 1.03 scale + glow from clipping on the first
+                        // poster's 1.015 scale + glow from clipping on the first
                         // and last tiles.
                         contentPadding = PaddingValues(
                             // Vertical room for the focus glow too, not just the

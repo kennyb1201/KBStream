@@ -27,6 +27,7 @@ import androidx.tv.material3.Border
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.Glow
+import com.kennyb1201.kbstream.data.reporting.ComposeChurn
 import com.kennyb1201.kbstream.ui.theme.CardShape
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusCard
@@ -136,6 +137,9 @@ fun KBCard(
     shape: Shape = CardShape,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    // Walk diagnostics: every focus surface in the app goes through this body,
+    // so its count is the card-wide churn a walk pays (see ComposeChurn).
+    ComposeChurn.note("kbcard")
     // Timestamp of the most recent "fresh" KeyDown (repeatCount == 0), or 0L
     // when no Select/Enter press is armed. The sentinel is the point: a KeyUp
     // that arrives WITHOUT its own KeyDown - the press began before this card

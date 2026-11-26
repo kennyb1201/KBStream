@@ -438,14 +438,21 @@ object KBSpacing {
 // of a full-bleed row is a lurch that shoves its neighbors — so the scale is
 // now chosen by surface class and nothing else:
 //
-//   row (1.02) < card (1.03) < button (1.04) < chip (1.06) < tile (1.08)
+//   card (1.015) < row (1.02) < button (1.04) < chip (1.06) < tile (1.08)
+//
+// The card sat at 1.03 until 2026-11-26: a rail walk runs two of these
+// animations per D-pad step (the card being left shrinking, the one being
+// entered growing) on top of the scroll, and the lift is the cheapest piece of
+// that work there is to halve. It is not the cue at rest either — the 2dp ring
+// is — so a smaller lift costs nothing a viewer was reading. That puts the card
+// just UNDER the row rather than just over it; every other pair is unchanged.
 //
 // KBFocusNone is not "unpolished": a surface wider than about half the screen
 // takes its focus cue from color and border instead, because growing it would
 // move more than it lights up.
 const val KBFocusNone = 1f
 const val KBFocusRow = 1.02f
-const val KBFocusCard = 1.03f
+const val KBFocusCard = 1.015f
 const val KBFocusButton = 1.04f
 const val KBFocusChip = 1.06f
 const val KBFocusTile = 1.08f

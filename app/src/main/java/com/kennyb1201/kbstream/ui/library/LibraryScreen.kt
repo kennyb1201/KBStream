@@ -1498,7 +1498,7 @@ private fun ItemGrid(
         // disposes this grid, so a return has a state to scroll (see
         // [BrowseReturnFocus]).
         state = gridState,
-        // The top gap is not decoration: a focused KBCard scales to 1.03 and
+        // The top gap is not decoration: a focused KBCard scales to 1.015 and
         // throws a 12.dp glow, and a lazy grid clips its viewport — with
         // bottom-only padding the FIRST row was sliced flat along its top edge
         // the moment it took focus (poster, focus border and glow all cut).

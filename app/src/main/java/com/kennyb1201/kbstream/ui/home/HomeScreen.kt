@@ -34,6 +34,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
+import com.kennyb1201.kbstream.data.reporting.ComposeChurn
 import com.kennyb1201.kbstream.ui.components.TrackFocusSteps
 import com.kennyb1201.kbstream.ui.components.TrackScrollFrames
 import com.kennyb1201.kbstream.ui.components.rememberIdleLazyListState
@@ -330,7 +331,7 @@ private val HomeHeroHeight = 300.dp
 private val RailTopContentPadding = 0.dp
 
 // No bottom padding: a card's box already reserves [PosterFocusHeadroom] below
-// the artwork for the focus glow and its 1.03 scale, so anything here is dead
+// the artwork for the focus glow and its 1.015 scale, so anything here is dead
 // air charged against the next rail's title — which is exactly what made that
 // title a row of dots at the panel edge. See [RailLanding] for the packing.
 private val RailBottomContentPadding = 0.dp
@@ -5531,6 +5532,10 @@ fun HomeScreen(
     viewModel: HomeViewModel =
         hiltViewModel()
 ) {
+    // Walk diagnostics: this body's own executions, per metered gesture (see
+    // ComposeChurn). Home recomposing is the thing every previous pass in this
+    // file removed; the count is what proves it stayed away.
+    ComposeChurn.note("home")
     // Re-warm after a pressure event (dig four, 2026-11-16, §3f). Every warm in
     // the ViewModel is driven by a resolve, and a resolve by a focus change - so
     // a trim taken while Home was away left the hero and the tiles on disk until
@@ -8985,6 +8990,9 @@ private fun SpotlightTopTint(
     railListState: LazyListState,
     focusedItemState: State<MetaPreview?>
 ) {
+    // Its own executions, counted for the same reason the read is scoped here:
+    // this is the composable a focus step is allowed to invalidate.
+    ComposeChurn.note("spotlight.tint")
     // Only once the billboard has scrolled away (spec B2).
     val heroScrolledAway by remember {
         derivedStateOf {

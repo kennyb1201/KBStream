@@ -53,7 +53,18 @@ object UiFrameTrace {
      */
     private const val WALK_TAIL_MS = 2_000L
 
-    private class Session(val label: String) {
+    private class Session(
+        val label: String,
+        /**
+         * The churn counters as they stood when the gesture opened.
+         *
+         * Only the DELTA is this gesture's: the counters are process-lifetime,
+         * so a walk read after a fling would otherwise report every body that
+         * ran since launch. Taken here rather than in the composable because the
+         * session is what decides which frames belong to the gesture.
+         */
+        val churnAtStart: Map<String, Long>
+    ) {
         val deltas = IntArray(MAX_FRAMES)
         var count = 0
 
@@ -138,7 +149,7 @@ object UiFrameTrace {
      */
     fun begin(label: String) {
         active?.let { finish(it) }
-        val session = Session(label)
+        val session = Session(label, ComposeChurn.snapshot())
         active = session
         val choreographer = Choreographer.getInstance()
         val callback =
@@ -264,6 +275,11 @@ object UiFrameTrace {
         // the moment a gesture ended, which is what the tail is measured from.
         lastEndedAtMs = SystemClock.elapsedRealtime()
         val stats = FrameHistogram.of(session.deltas, session.count) ?: return
+        // The composables this gesture actually executed, counted in their own
+        // bodies (see [ComposeChurn]). A suffix, not a second line: it is read
+        // against this line's `frames=` and `animP50=`, and a separate entry
+        // could be displaced by the ring without them.
+        val churn = ComposeChurn.suffix(ComposeChurn.since(session.churnAtStart))
         val line = FrameHistogram.line(session.label, stats) +
             FrameHistogram.decodeSplit(
                 FrameHistogram.of(session.decodeDeltas, session.decodeCount),
@@ -283,7 +299,8 @@ object UiFrameTrace {
                 draw = FrameHistogram.phases(session.phaseDraw, session.phaseCount),
                 phaseFrames = session.phaseCount,
                 sessionFrames = stats.frames
-            )
+            ) +
+            churn
         synchronized(entries) {
             // Longest wins for a label. The report is read after the gesture, on
             // the way to Settings, so a short stray session taken on that trip

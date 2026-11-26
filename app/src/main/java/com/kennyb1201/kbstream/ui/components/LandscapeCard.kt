@@ -37,6 +37,7 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.kennyb1201.kbstream.data.reporting.ComposeChurn
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -103,6 +104,9 @@ fun LandscapeCard(
     /** The row's air date, when the card is an episode's (the panel's meta line). */
     airDate: String? = null
 ) {
+    // Walk diagnostics: the landscape twin of PosterCard's count (see
+    // ComposeChurn) - the rail's own card shape.
+    ComposeChurn.note("landscape")
     val context = LocalContext.current
     var hasError by remember(backdropUrl) { mutableStateOf(false) }
     var focused by remember { mutableStateOf(false) }

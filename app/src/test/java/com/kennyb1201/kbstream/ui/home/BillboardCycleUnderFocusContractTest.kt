@@ -15,8 +15,9 @@ import org.junit.Test
  *
  * What is pinned here is that wiring, and that nothing else moved: the TV hero
  * still holds (it passes a non-null entry requester and takes the default), the
- * other pauses are still in the cycle effect, and the sweep still ignores the
- * pills. The interactive half — S1–S3, a page change forced under a focused pill —
+ * other pauses are still in the cycle effect, and the sweep's own focus input
+ * (added 2026-11-25) is the D-pad surface's - never the cycle's hold. The
+ * interactive half — S1–S3, a page change forced under a focused pill —
  * needs the device; the press rule's arithmetic is covered in
  * BillboardPressPageTest, and this class claims no frame.
  */
@@ -141,11 +142,23 @@ class BillboardCycleUnderFocusContractTest {
         ).forEach { rung ->
             assertTrue("the cycle still pauses on $rung", cycle.contains(rung))
         }
+        // 2026-11-25: the sweep gained a focus input of its own, gated to the
+        // D-pad surface. That is not this hold coming back through the side door:
+        // the timer still reads `pillsHoldCycle`, and none of the sweep's inputs
+        // is a key of this effect, so a rail walk holds the still without
+        // re-arming or freezing the page cycle.
+        val sweep = mobile.substringAfter("val sweepPaused = reducedMotion ||")
+            .substringBefore("// The page this Animatable belongs to")
         assertTrue(
-            "the sweep still ignores the pills",
-            mobile.substringAfter("val sweepPaused = reducedMotion ||")
-                .substringBefore("// The page this Animatable belongs to")
-                .let { sweep -> !sweep.contains("pillsFocused") && !sweep.contains("pillsHoldCycle") }
+            "the sweep's focus input is the D-pad surface's, through its own gate",
+            mobile.contains("val sweepHoldsForFocus = onPillUpPressed != null && !pillsFocused") &&
+                sweep.contains("sweepHoldsForFocus")
+        )
+        assertFalse(
+            "and the cycle's hold stays its own: it reads none of the sweep's inputs",
+            cycle.contains("sweepHoldsForFocus") ||
+                cycle.contains("billboardOnScreen") ||
+                sweep.contains("pillsHoldCycle")
         )
     }
 

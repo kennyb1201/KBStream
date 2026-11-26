@@ -27,6 +27,7 @@ import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.imdb.ImdbTrailerData
 import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.data.reporting.ComposeChurn
 import com.kennyb1201.kbstream.data.reporting.SpotlightDiagTrace
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
@@ -470,6 +471,10 @@ internal fun SpotlightPreviewHost(
     onExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Walk diagnostics: the panel host is the scope a focus step writes to, so
+    // its body count per gesture is the number that says whether the step's
+    // animation work starts here (see ComposeChurn).
+    ComposeChurn.note("spotlight.panel")
     val imdbId = ImdbTrailerData.imdbIdOf(focusedItemState.value?.id)
     var expanded by remember { mutableStateOf<ExpandedPanel?>(null) }
     val snapshot = tracker.snapshot

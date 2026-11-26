@@ -336,7 +336,7 @@ class SpotlightScrollHeroContractTest {
     //        (2026-11-15) only the PAGE half of that hold survives ──────────
 
     @Test
-    fun `the TV cycle holds while a hero pill holds focus, the phone's does not, and the sweep never does`() {
+    fun `the TV hero holds its cycle and its sweep under a focused pill, the phone's billboard does neither`() {
         val mobile = flat(source(MOBILE))
         assertTrue(
             "the pill group reports its own focus as one node, so three pills cannot " +
@@ -368,15 +368,23 @@ class SpotlightScrollHeroContractTest {
             mobile.contains("holdCycleWhilePillsFocused = false") &&
                 mobile.contains("holdCycleWhilePillsFocused: Boolean = true")
         )
-        // The two halves are split on purpose (2026-11-15): a focused pill is
-        // the viewer looking at this page, not a screen nobody is watching, so
-        // the still keeps panning while the page is held.
+        // The sweep gained a focus input of its own (2026-11-25, F1: "Pause it
+        // while I'm on the rails"): on the D-pad surface, focus off the pills is
+        // the viewer walking the rails underneath the billboard, and the pan must
+        // hold still behind them. It is gated to that surface - the phone's pills
+        // never take focus on touch, so a bare `!pillsFocused` would freeze the
+        // phone's sweep for good.
         val sweepRungs = mobile
             .substringAfter("val sweepPaused = reducedMotion ||")
             .substringBefore("// The page this Animatable belongs to")
+        assertTrue(
+            "the sweep holds when focus leaves the pills on the D-pad surface",
+            mobile.contains("val sweepHoldsForFocus = onPillUpPressed != null && !pillsFocused") &&
+                sweepRungs.contains("sweepHoldsForFocus")
+        )
         assertFalse(
-            "the sweep keeps moving under the pills - the reported freeze",
-            sweepRungs.contains("pillsFocused")
+            "and never on a bare focus test, which would freeze the phone's sweep for good",
+            sweepRungs.contains("!pillsFocused")
         )
         assertTrue(
             "every other rung of the hold still pauses it",
@@ -396,9 +404,9 @@ class SpotlightScrollHeroContractTest {
             mobile.contains("onDispose { if (pillsFocused) onPillFocusChange(false) }")
         )
         assertTrue(
-            "and the split is stated where the sweep's pause list is declared",
-            mobile.contains("The ONE rung it does not share is the pills") &&
-                mobile.contains("keeps panning:")
+            "and the separate cycle hold is stated where the sweep's pause list is declared",
+            mobile.contains("The PAGE cycle's pill hold stays separate") &&
+                mobile.contains("This list only decides whether the still moves.")
         )
         assertFalse(
             "and no key maps Left/Right to a page change: the timer is the only " +

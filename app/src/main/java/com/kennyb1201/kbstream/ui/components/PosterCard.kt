@@ -34,6 +34,7 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.kennyb1201.kbstream.data.reporting.ComposeChurn
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -186,6 +187,9 @@ fun PosterCard(
     spotlightExpandable: Boolean = true,
     overlayContent: (@Composable BoxScope.() -> Unit)? = null
 ) {
+    // Walk diagnostics: the number of CARD bodies a walk runs, which is what a
+    // rail walk multiplies anything a card does by (see ComposeChurn).
+    ComposeChurn.note("poster")
     val context = LocalContext.current
     var hasError by remember(posterUrl) { mutableStateOf(false) }
     // ...and a poster URL that exists but has not LOADED is not art on screen

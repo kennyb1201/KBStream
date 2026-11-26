@@ -609,8 +609,13 @@ and pans up to 2% of its width over the page's own dwell (a fixed 10 s under
 layer on the image so nothing re-measures; the copy and buttons fade and rise
 8dp once per page entry; and the progress segments fill from the same single
 animation the sweep runs on, which is what makes them pause and resume together
-from the held fraction. With system animations off there is no sweep and no
-entrance, and the segments show position only. The look lives in
+from the held fraction. The sweep alone also holds still when nobody is looking
+at it (2026-11-25): on the TV hero whenever the pills do not hold focus - the
+viewer is on the rails or in the top bar - and on the phone whenever the frame is
+scrolled fully above the viewport. Both freeze in place and resume from the
+fraction they reached; the page cycle's own pill hold is a separate input and is
+unchanged. With system animations off there is no sweep and no entrance, and the
+segments show position only. The look lives in
 `ui/home/BillboardRules.kt` as numbers, so `BillboardSweepRulesTest` can check
 the direction alternation, the dwell and the caps without a frame clock.
 Trailers are the billboard's own choice (`Off` by default, `Auto-play`,

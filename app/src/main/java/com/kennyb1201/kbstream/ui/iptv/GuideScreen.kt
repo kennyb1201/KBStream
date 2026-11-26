@@ -3364,7 +3364,7 @@ private fun GroupChip(
 ){
     // A chip, not a card: the group strip is a run of interactive chips, so it
     // takes the chip corner and focus scale (10dp / 1.06) rather than the
-    // 12dp / 1.03 card treatment (see KBShapeChip in Theme.kt).
+    // 12dp / 1.015 card treatment (see KBShapeChip in Theme.kt).
     KBCard(
     onClick = onClick,
     onLongClick = onLongClick,
