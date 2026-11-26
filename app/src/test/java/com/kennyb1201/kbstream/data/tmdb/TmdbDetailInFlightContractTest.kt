@@ -103,7 +103,11 @@ class TmdbDetailInFlightContractTest {
         val body = detailBody()
         assertTrue(
             "the map must be consulted before the network call",
-            body.contains("detailFetchInFlight[key]?.let { pending -> return pending.await() }")
+            // F5b (2026-11-26) reported the shared answer's source inside this
+            // branch, so the pin is its shape rather than one exact line:
+            // the lookup still returns the pending fetch's result.
+            body.contains("detailFetchInFlight[key]?.let { pending ->") &&
+                body.contains("return pending.await()")
         )
         assertTrue(
             "the check-then-register window must be closed with putIfAbsent",

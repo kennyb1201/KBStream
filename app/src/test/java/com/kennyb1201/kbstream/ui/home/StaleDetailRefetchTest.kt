@@ -222,7 +222,11 @@ class StaleDetailRefetchTest {
                 "        if (!forceRefresh) {\n" +
                     "            val cached = detailCache[key]\n" +
                     "            if (cached != null && now - cached.first < detailCacheTtlMs) {\n" +
-                    "                cached.second?.let { return TmdbDetailLookup.Found(it) }"
+                    // F5b (2026-11-26) reports the hit's source before it
+                    // returns; the skip is still the guard this pins.
+                    "                cached.second?.let { detail ->\n" +
+                    "                    onSource?.invoke(\"mem\")\n" +
+                    "                    return TmdbDetailLookup.Found(detail)"
             ) &&
                 repo.windowed("val diskCached = if (forceRefresh) {".length)
                     .count { it == "val diskCached = if (forceRefresh) {" } >= 2
