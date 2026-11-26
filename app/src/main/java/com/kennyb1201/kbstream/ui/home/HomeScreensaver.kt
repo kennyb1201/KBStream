@@ -46,7 +46,7 @@ import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.ui.components.logoRequest
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
-import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 
@@ -292,14 +292,21 @@ internal fun HomeScreensaver(
                     // No genre until this title has resolved one: the label
                     // never delays a slide, and a placeholder would be text
                     // about nothing. An EYEBROW, not a second title line -
-                    // tracked capitals in the muted grey - two genres at most
-                    // - one line, capped at the wordmark's own width so a long
-                    // line ellipsizes instead of running past the art it
-                    // labels.
+                    // tracked capitals, two genres at most - one line, capped
+                    // at the wordmark's own width so a long line ellipsizes
+                    // instead of running past the art it labels.
+                    //
+                    // In the app's primary white, not the muted grey it was
+                    // drawn in until 2026-11-25: at television distance the
+                    // grey line read as part of the backdrop, and the genre is
+                    // the one fact on the slide besides the title. KBTextHi is
+                    // the same warm off-white the title text uses everywhere
+                    // else, so it is white on the dark art without being a
+                    // colder white than the rest of the app.
                     genre?.let { line ->
                         Text(
                             text = line.uppercase(),
-                            color = KBTextLo,
+                            color = KBTextHi,
                             style = MaterialTheme.typography.bodySmall,
                             letterSpacing = ScreensaverGenreTracking,
                             textAlign = TextAlign.Center,

@@ -479,8 +479,10 @@ class ScreensaverWiringContractTest {
         assertTrue("the genre is drawn as tracked capitals: $label", label.contains("line.uppercase()"))
         assertTrue("tracked", label.contains("letterSpacing = ScreensaverGenreTracking"))
         assertTrue(
-            "at a small, dim label size rather than the title's near-white body text",
-            label.contains("color = KBTextLo") &&
+            "at a small label size, in the app's primary white rather than the " +
+                "muted grey (2026-11-25: the grey line disappeared into the " +
+                "backdrop at TV distance)",
+            label.contains("color = KBTextHi") &&
                 label.contains("style = MaterialTheme.typography.bodySmall")
         )
         assertTrue(
