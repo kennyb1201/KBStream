@@ -241,7 +241,14 @@ class StaleDetailRefetchTest {
         assertTrue(
             "and the external-id route has its own bypass, because it files under " +
                 "a different key - a fresh detail fetched by TMDB id never answers it",
-            repo.contains("forceRefresh: Boolean = false\n    ): TmdbDetailLookup {") &&
+            // F5b (2026-11-26) added an optional onSource after the bypass
+            // flag, so the parameter list is pinned as it now reads.
+            repo.contains(
+                "        forceRefresh: Boolean = false,\n" +
+                    "        /** See [lookupDetailByTmdbId]'s parameter of the same name. */\n" +
+                    "        onSource: ((String) -> Unit)? = null\n" +
+                    "    ): TmdbDetailLookup {"
+            ) &&
                 repo.contains("val railDiskCached = if (forceRefresh) {")
         )
 
