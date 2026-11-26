@@ -768,6 +768,41 @@ internal fun gridDetailMeta(
 }
 
 /**
+ * Whether every cell in a row is a gap - the row has no programme at all in the
+ * window, so the whole row is one span the guide cannot fill.
+ */
+internal fun isGapOnlyRow(cells: List<GridCell>): Boolean = cells.none { !it.isGap }
+
+/**
+ * The text a grid cell draws as its title.
+ *
+ * A channel with no programmes in the window is a single gap cell: a blank box on
+ * the TV and "No program data" on the phone. TiviMate names the channel in that
+ * cell instead, and the field report behind this (2026-11-26, Prime's "24/7
+ * Laughs") is the same fact read from the other side: that channel is a
+ * `<channel>` with zero `<programme>` entries in the epg6.xml.gz both apps read,
+ * so the cell is genuinely empty, not mismatched - and an empty box looks like a
+ * rendering failure. Naming the channel reads as a line-up the guide has no data
+ * for, which is what it is.
+ *
+ * Only a gap-ONLY row gets the name: repeating the channel in every hole between
+ * two programmes would be noise, so a hole in a populated row keeps the
+ * surface's own text ([gapText] - blank on the TV, "No program data" on the
+ * phone). The cell is still a gap to everything else: focusable, OK does nothing,
+ * no live fill, no score or reminder line.
+ */
+internal fun gridCellTitle(
+    cell: GridCell,
+    channelName: String,
+    gapOnlyRow: Boolean,
+    gapText: String,
+): String = when {
+    !cell.isGap -> cell.title.orEmpty()
+    gapOnlyRow -> channelName.trim().ifBlank { gapText }
+    else -> gapText
+}
+
+/**
  * The label the grid's own cells fall back to for [cell] - the time range and
  * whether that press can do anything at all (`Ended` is the one that cannot,
  * where the channel has no catch-up).
@@ -949,6 +984,47 @@ internal fun autoFollowWindow(
     return next.takeIf { it != window }
 }
 
+/**
+ * The window the guide re-anchors to when the clock rolls into a new hour, or
+ * null when it must stay put (2026-11-26).
+ *
+ * The grid opens on the hour once and a six-hour window is wide enough that the
+ * F2a edge follow does not fire for hours: a guide opened at 1 AM still read
+ * 1-7 AM at 2 AM, with the ruler, the left edge and every cell's place on the
+ * axis anchored to an hour that had ended. The now-line and the live highlight
+ * were never the stale part - [rememberNowMillis] ticks them - the AXIS was.
+ *
+ * The rule:
+ *
+ *  - only the hour that just ended rolls. A window opening two or more hours
+ *    back is a viewer who has been away, not one who watched the rollover, so
+ *    it is left where it is (the F2a follow is what handles a window the clock
+ *    has left entirely);
+ *  - a viewer who paged the axis keeps it - the same "never yank a paged
+ *    viewer" rule [autoFollowWindow] enforces at the right edge, applied to the
+ *    rollover. [viewerPaged] is the caller's flag, set on a manual page and
+ *    cleared by a re-anchor or a fresh open;
+ *  - the move is a fresh [GridWindow.opening] at the same span, so the ruler
+ *    and the hour marks recompute from the new hour. It is a slide, not a
+ *    reload: [keepForWindow] holds every programme that overlaps the new
+ *    window, and only the newly exposed span is read.
+ */
+internal fun hourRolloverWindow(
+    window: GridWindow,
+    nowUtcMillis: Long,
+    windowHours: Int,
+    viewerPaged: Boolean,
+): GridWindow? {
+    if (viewerPaged) return null
+    val opening = GridWindow.opening(nowUtcMillis, windowHours)
+    // Already on the new hour: nothing to do.
+    if (opening.startUtcMillis == window.startUtcMillis) return null
+    // Exactly one hour behind is a rollover; anything further back is a viewer
+    // who has been away, and is not dragged forward.
+    if (window.startUtcMillis != opening.startUtcMillis - GuideGrid.HOUR_MS) return null
+    return opening
+}
+
 /** Fraction of the cell already aired, 0..1 - the live cell's fill (F2h). */
 internal fun liveFillFraction(cell: GridCell, nowUtcMillis: Long): Float {
     if (cell.isGap || cell.durationMs <= 0L) return 0f
@@ -958,6 +1034,30 @@ internal fun liveFillFraction(cell: GridCell, nowUtcMillis: Long): Float {
         .toFloat()
         .coerceIn(0f, 1f)
 }
+
+/**
+ * Whether the guide's corner preview may play right now (2026-11-26).
+ *
+ * The preview is the guide's foreground audio and nothing else. Three things
+ * have to hold, and each is a case that was reported as sound where it should
+ * have been silent:
+ *
+ *  - the app is in the FOREGROUND - TV Home and an input switch stop the
+ *    activity without disposing the guide, and the audio used to play over the
+ *    launcher;
+ *  - no fullscreen player is ACTIVE - the player is an overlay above the host,
+ *    so the guide (and this preview) stay composed under it and the two used to
+ *    play together;
+ *  - the preview has not FAILED (F13h) - its error path stops the player, and a
+ *    later start or a cleared player must not restart a dead feed.
+ *
+ * Pure so the truth table is checked on the JVM; the composable owns the player.
+ */
+internal fun previewCanPlay(
+    inForeground: Boolean,
+    playerActive: Boolean,
+    failed: Boolean,
+): Boolean = inForeground && !playerActive && !failed
 
 /**
  * Whether a cell in the window read should still be held for the new window.

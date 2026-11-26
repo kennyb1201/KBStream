@@ -3766,6 +3766,12 @@ fun AppRoot(
                     )
                 },
 
+                // The player is an overlay ABOVE this screen, so the guide is
+                // not disposed when it starts - the corner preview would keep
+                // playing under it (double audio, 2026-11-26). The launch is
+                // the shell's, so it is the shell that says a player is up.
+                playerActive = navSeam.playerLaunch != null,
+
                 // The sports hub: a row of leagues over the same playlist the
                 // guide is showing. Back returns here, which is why the hub is
                 // a sibling of the guide rather than a pane inside it.

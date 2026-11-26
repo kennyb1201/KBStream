@@ -59,8 +59,11 @@ import com.kennyb1201.kbstream.ui.iptv.autoFollowWindow
 import com.kennyb1201.kbstream.ui.iptv.guideRowGuideState
 import com.kennyb1201.kbstream.ui.iptv.cellWidthDp
 import com.kennyb1201.kbstream.ui.iptv.gridCellHeadline
+import com.kennyb1201.kbstream.ui.iptv.gridCellTitle
 import com.kennyb1201.kbstream.ui.iptv.gridContentWidthDp
 import com.kennyb1201.kbstream.ui.iptv.hourMarks
+import com.kennyb1201.kbstream.ui.iptv.hourRolloverWindow
+import com.kennyb1201.kbstream.ui.iptv.isGapOnlyRow
 import com.kennyb1201.kbstream.ui.iptv.scoreFor
 import com.kennyb1201.kbstream.ui.iptv.liveFillFraction
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -161,6 +164,26 @@ internal fun GuideGridMobileView(
         ) ?: return@LaunchedEffect
         autoFollowedEdgeMs = window.endUtcMillis
         Log.d(TAG, "follow window ${window.startUtcMillis} -> ${next.startUtcMillis}")
+        window = next
+        timeScroll.scrollTo(0)
+    }
+
+    // 2026-11-26: the window opens on the hour once, so an hour that rolls over
+    // while the guide is open used to leave the axis - ruler, left edge, cell
+    // places - on the hour it opened on, while the now-line ticked inside it.
+    // This re-anchors the fresh window on the tick that crosses the hour, the
+    // same rule the TV grid uses ([hourRolloverWindow]). The phone has no page
+    // gesture that moves the WINDOW (a drag moves the viewport inside it, and
+    // the follow above moves the window to live time), so a rollover is always
+    // the viewer still watching the hour turn.
+    LaunchedEffect(nowMs, window.startUtcMillis) {
+        val next = hourRolloverWindow(
+            window = window,
+            nowUtcMillis = nowMs,
+            windowHours = GRID_SPAN_HOURS,
+            viewerPaged = false,
+        ) ?: return@LaunchedEffect
+        Log.d(TAG, "hour rollover ${window.startUtcMillis} -> ${next.startUtcMillis}")
         window = next
         timeScroll.scrollTo(0)
     }
@@ -298,6 +321,11 @@ internal fun GuideGridMobileView(
             items(items = rows, key = { row -> row.first.channel.id }) { row ->
                 val item = row.first
                 val cells = row.second
+                // A channel with no programmes in the window is one wide gap: its
+                // cell names the channel instead of saying "No program data"
+                // (TiviMate parity, 2026-11-26). A hole in a populated row keeps
+                // the old text.
+                val gapOnlyRow = remember(cells) { isGapOnlyRow(cells) }
                 Row(modifier = Modifier.fillMaxWidth().height(MOBILE_ROW_HEIGHT)) {
                     MobileChannelCell(
                         item = item,
@@ -363,6 +391,8 @@ internal fun GuideGridMobileView(
                                         )
                                         MobileProgramCell(
                                             cell = cell,
+                                            channelName = item.channel.displayName,
+                                            gapOnlyRow = gapOnlyRow,
                                             pxPerMin = pxPerMin,
                                             isLive = !cell.isGap &&
                                                 nowMs >= cell.startUtcMillis &&
@@ -507,6 +537,10 @@ private fun MobileChannelCell(
 @Composable
 private fun MobileProgramCell(
     cell: GridCell,
+    /** The row's channel: a gap-only row draws it in place of "No program data". */
+    channelName: String,
+    /** True when this row has no programme at all in the window. */
+    gapOnlyRow: Boolean,
     /** The grid's fixed scale (F1a); the cell is as wide as its air time at it. */
     pxPerMin: Int,
     isLive: Boolean,
@@ -542,11 +576,18 @@ private fun MobileProgramCell(
     ) {
         Column {
             Text(
-                text = cell.title.orEmpty(),
+                // The gap-only name is one line so it reads as a placeholder; a
+                // populated row's hole keeps the two-line "No program data".
+                text = gridCellTitle(
+                    cell = cell,
+                    channelName = channelName,
+                    gapOnlyRow = gapOnlyRow,
+                    gapText = "No program data"
+                ),
                 color = if (cell.isGap) KBTextLo else KBTextHi,
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = if (isLive) FontWeight.SemiBold else FontWeight.Normal,
-                maxLines = 2,
+                maxLines = if (cell.isGap && gapOnlyRow) 1 else 2,
                 overflow = TextOverflow.Ellipsis
             )
             // F3m-c: the second line is the score while a game is on (or reading

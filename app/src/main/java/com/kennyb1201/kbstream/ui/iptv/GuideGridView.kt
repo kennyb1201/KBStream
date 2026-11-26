@@ -77,6 +77,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -252,6 +255,16 @@ internal fun GuideGridView(
      */
     previewEnabled: Boolean,
     /**
+     * Whether a fullscreen player is up (2026-11-26).
+     *
+     * The player is an overlay arm ABOVE the host, not a destination: the guide
+     * stays composed underneath it, so the preview's release never runs and its
+     * audio played under the player - double audio. The preview pauses while
+     * this is true and resumes when it clears. Owned by the shell (`navSeam`
+     * has the launch), passed down because the grid is what draws the preview.
+     */
+    playerActive: Boolean = false,
+    /**
      * The channel the preview plays: the last one played, if any (F13b/F13c).
      * Null means the viewer has never played a live channel, and then there is
      * no preview to draw at all.
@@ -282,6 +295,11 @@ internal fun GuideGridView(
     var pendingScrollCellId by remember { mutableStateOf<String?>(null) }
     var pendingSidebarFocus by remember { mutableStateOf(false) }
     var focusLiveOnNextWindow by remember { mutableStateOf(false) }
+    // Whether the viewer has paged the time axis since the window opened. The
+    // hour rollover never drags a window they placed themselves (2026-11-26),
+    // so this is set by the right-edge page below and cleared by any move back
+    // to live time (a follow, an hour re-anchor, a fresh open).
+    var pagedByViewer by remember { mutableStateOf(false) }
     var focusHome by remember { mutableStateOf(GridFocusHome.CHANNEL) }
 
     val rowListState = rememberLazyListState()
@@ -406,6 +424,28 @@ internal fun GuideGridView(
         ) ?: return@LaunchedEffect
         autoFollowedEdgeMs = window.endUtcMillis
         window = next
+        // The window is on live time again, so the hour rollover may resume
+        // anchoring it.
+        pagedByViewer = false
+        focusLiveOnNextWindow = true
+    }
+
+    // 2026-11-26: the window is opened on the hour once, and for hours nothing
+    // moves it - so a guide opened at 1 AM still read 1-7 AM at 2 AM, ruler and
+    // left edge included, while the now-line ticked inside it. On the tick that
+    // crosses an hour this re-anchors the fresh window (same span, new hour),
+    // through the same focus re-anchor the edge follow uses, so the focused
+    // row's live cell is what the viewer lands on. The rule is
+    // [hourRolloverWindow]: a viewer who paged keeps their window.
+    LaunchedEffect(nowMs, window.startUtcMillis) {
+        val next = hourRolloverWindow(
+            window = window,
+            nowUtcMillis = nowMs,
+            windowHours = GRID_SPAN_HOURS,
+            viewerPaged = pagedByViewer,
+        ) ?: return@LaunchedEffect
+        pagedByViewer = false
+        window = next
         focusLiveOnNextWindow = true
     }
 
@@ -425,6 +465,8 @@ internal fun GuideGridView(
         val end = scheduleEndMs ?: return@LaunchedEffect
         if (window.startUtcMillis >= end) {
             window = GridWindow.opening(System.currentTimeMillis())
+            // A fresh open: the viewer has not paged the window they are on.
+            pagedByViewer = false
         }
     }
 
@@ -887,6 +929,9 @@ internal fun GuideGridView(
                 )
                 if (next == window) return true
                 window = next
+                // The viewer placed this window; the hour rollover must not
+                // drag it back (2026-11-26).
+                pagedByViewer = true
                 val first = rows[rowIndex].cells.firstOrNull { !it.isGap }
                 if (first != null) handoffFocus(rowIndex, first, "cell-right-page")
                 return true
@@ -1089,6 +1134,7 @@ internal fun GuideGridView(
         GridTopBand(
             previewEnabled = previewEnabled,
             previewChannel = previewChannel,
+            playerActive = playerActive,
             item = focusedItem,
             cell = detailCell,
             nowMs = nowMs,
@@ -1530,6 +1576,9 @@ private fun ProgramRow(
 ) {
     val nowOffsetDp = ((nowMs - window.startUtcMillis) / 60_000L * GRID_SCALE_DP_PER_MIN).toInt()
     val nowInWindow = nowMs in window.startUtcMillis until window.endUtcMillis
+    // A channel with no programmes in the window is one wide gap: its cell names
+    // the channel instead of drawing a blank box (TiviMate parity, 2026-11-26).
+    val gapOnlyRow = remember(row.cells) { isGapOnlyRow(row.cells) }
 
     BoxWithConstraints(modifier = modifier.clipToBounds()) {
         // The row draws the viewport plus a screen of slack, not its whole span
@@ -1589,6 +1638,8 @@ private fun ProgramRow(
                             val score = scoreFor(channelId, cell, nowMs, scores)
                             ProgramCell(
                                 cell = cell,
+                                channelName = row.item.channel.displayName,
+                                gapOnlyRow = gapOnlyRow,
                                 isFocused = cell.id == focusedCellId,
                                 isLive = !cell.isGap &&
                                     nowMs >= cell.startUtcMillis && nowMs < cell.endUtcMillis,
@@ -1628,6 +1679,10 @@ private fun ProgramRow(
 @Composable
 private fun ProgramCell(
     cell: GridCell,
+    /** The row's channel: a gap-only row draws it in place of a blank title. */
+    channelName: String,
+    /** True when this row has no programme at all in the window. */
+    gapOnlyRow: Boolean,
     isFocused: Boolean,
     isLive: Boolean,
     nowMs: Long,
@@ -1691,7 +1746,9 @@ private fun ProgramCell(
     ) {
         Column {
             Text(
-                text = cell.title.orEmpty(),
+                // A gap-only row names its channel; a hole in a populated row
+                // stays blank, so the name does not read as a programme.
+                text = gridCellTitle(cell, channelName, gapOnlyRow, gapText = ""),
                 color = if (cell.isGap) KBTextLo else KBTextHi,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = if (isLive) FontWeight.SemiBold else FontWeight.Normal,
@@ -1727,6 +1784,8 @@ private fun ProgramCell(
 private fun GridTopBand(
     previewEnabled: Boolean,
     previewChannel: IptvChannel?,
+    /** A fullscreen player is up: the preview pauses until it clears. */
+    playerActive: Boolean,
     item: IptvChannelWithEpg?,
     cell: GridCell?,
     nowMs: Long,
@@ -1749,6 +1808,7 @@ private fun GridTopBand(
             if (channel != null) {
                 GridPreview(
                     channel = channel,
+                    playerActive = playerActive,
                     modifier = Modifier
                         .width(GRID_PREVIEW_WIDTH)
                         .height(GRID_PREVIEW_HEIGHT)
@@ -1776,7 +1836,12 @@ private fun GridTopBand(
  * (F13f).
  */
 @Composable
-private fun GridPreview(channel: IptvChannel, modifier: Modifier = Modifier) {
+private fun GridPreview(
+    channel: IptvChannel,
+    /** A fullscreen player is up: the preview is not the audio any more. */
+    playerActive: Boolean,
+    modifier: Modifier = Modifier,
+) {
     val context = LocalContext.current
     var failed by remember(channel.streamUrl) { mutableStateOf(channel.streamUrl.isBlank()) }
 
@@ -1834,6 +1899,46 @@ private fun GridPreview(channel: IptvChannel, modifier: Modifier = Modifier) {
                 player.release()
             }
         }
+    }
+
+    // F13g (2026-11-26): the preview plays only while it is the foreground
+    // audio. Two states take that away, and neither disposes this composition:
+    //
+    //  - the app leaving the foreground (TV Home, an input switch) STOPS the
+    //    activity with the composition retained, so the release above never ran
+    //    and the audio kept playing over the launcher - the picture had no
+    //    surface to survive, the audio did;
+    //  - a fullscreen player starting. It is an OVERLAY arm above the host, not
+    //    a destination, so the guide stays composed underneath it and again
+    //    nothing is released - the reported double audio.
+    //
+    // Pause/resume, not release, so coming back does not re-buffer. One gate for
+    // both reasons: a failed preview stopped itself and is never restarted
+    // (F13h), and a resume while the app is still in the background (the player
+    // cleared there) must not happen.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var inForeground by remember(lifecycleOwner) {
+        mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+    }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> inForeground = true
+                Lifecycle.Event.ON_STOP -> inForeground = false
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val canPlay = previewCanPlay(
+        inForeground = inForeground,
+        playerActive = playerActive,
+        failed = failed,
+    )
+    LaunchedEffect(previewPlayer, canPlay) {
+        val player = previewPlayer ?: return@LaunchedEffect
+        if (player.playWhenReady != canPlay) player.playWhenReady = canPlay
     }
 
     Box(

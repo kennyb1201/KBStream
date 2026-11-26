@@ -187,7 +187,15 @@ fun GuideScreen(
      * the hub's entry point is a row in this screen's header rather than a
      * destination of its own on Home.
      */
-    onOpenSports: (() -> Unit)? = null
+    onOpenSports: (() -> Unit)? = null,
+    /**
+     * Whether a fullscreen player is up (2026-11-26). The TV grid's corner
+     * preview pauses while it is: the player is an overlay above the host, so
+     * the guide stays composed under it and the preview would otherwise play
+     * alongside it. Wired by MainActivity from the shell's player launch; the
+     * phone guide has no preview and does not read it.
+     */
+    playerActive: Boolean = false,
 ) {
     // Phase 2's screen rule: one branch at the entry, the phone layout in a
     // separate tv-free file, the same ViewModel and callbacks behind both. The
@@ -1753,6 +1761,7 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                             onSidebarVisibleChange = { gridSidebarVisible = it },
                             previewEnabled = gridPreviewEnabled,
                             previewChannel = gridPreviewChannel,
+                            playerActive = playerActive,
                             headerFocusRequester = viewToggleFocusRequester,
                             onPlay = { item ->
                                 selectedChannelId = item.channel.id

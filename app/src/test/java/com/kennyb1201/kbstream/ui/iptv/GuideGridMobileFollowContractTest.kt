@@ -20,7 +20,10 @@ import org.junit.Test
  * This file pins the rule the phone now shares (the same [autoFollowWindow], no
  * mobile fork) and, from the sources, the two things the rule cannot show on the
  * JVM: that the phone grid calls it on the tick with the scroll reset, and that
- * the hourly re-open is gone. S1-S3 are the field's own checks.
+ * the UNCONDITIONAL hourly re-open is gone. (2026-11-26 added a guarded hour
+ * rollover - a window still on the live hour re-anchors, a paged one does not -
+ * which is pinned in [GuideHourRolloverContractTest].) S1-S3 are the field's own
+ * checks.
  */
 class GuideGridMobileFollowContractTest {
 
@@ -174,19 +177,23 @@ class GuideGridMobileFollowContractTest {
             "F3c: a follow leaves a line to point at",
             follow.contains("Log.d(TAG, \"follow window")
         )
+        // 2026-11-26: the hour rollover is a second window move, so the view
+        // follows it the same way. Both resets belong to a window move - a
+        // viewer's own drag is never undone (F2b) - so the count is one per
+        // move, not one in the file.
         assertEquals(
-            "F2b: nothing else in the phone file scrolls the axis for the viewer",
-            1,
+            "F2b: only the window moves scroll the axis for the viewer",
+            2,
             Regex("scrollTo\\(0\\)").findAll(mobile).count()
         )
     }
 
     @Test
-    fun `the hourly re-open is gone`() {
+    fun `the unconditional hourly re-open is gone`() {
         val mobile = source("com/kennyb1201/kbstream/ui/mobile/GuideGridMobileView.kt")
 
         assertFalse(
-            "F1b: the window no longer re-opens on the hour",
+            "F1b: the window no longer re-opens on the hour for every viewer",
             mobile.contains("remember(nowMs / GuideGrid.HOUR_MS)")
         )
         assertTrue(
