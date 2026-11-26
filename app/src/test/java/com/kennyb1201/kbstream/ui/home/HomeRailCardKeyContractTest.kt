@@ -59,9 +59,16 @@ class HomeRailCardKeyContractTest {
         val focusBlock = home.substringAfter("val catalogCardKeyPrefix")
             .substringAfter(".onFocusChanged { focusState ->")
             .substringBefore(".then(")
+        // The card computes the namespaced key once and names it; the focus
+        // block records that, so the pin follows the name rather than the
+        // concatenation it used to spell out inline.
         assertTrue(
             "a focused catalog card must remember its namespaced key",
-            focusBlock.contains("catalogCardKeyPrefix")
+            focusBlock.contains("catalogCardKey")
+        )
+        assertTrue(
+            "and that key must still be built from the namespaced prefix",
+            home.contains("catalogCardKeyPrefix +")
         )
         assertTrue(
             "and the restore must still look the remembered key up",

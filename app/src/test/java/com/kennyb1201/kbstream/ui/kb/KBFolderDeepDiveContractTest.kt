@@ -205,7 +205,9 @@ class KBFolderDeepDiveContractTest {
             "the layout that comes back is the one that can honour a rail-less grid " +
                 "record: the grid attaches the page's return requester to the card the " +
                 "record names",
-            layouts.contains("isReturnItem ->\n                                                Modifier.focusRequester(returnFocusRequester)")
+            Regex(
+                "isReturnItem ->\\s+Modifier\\.focusRequester\\(returnFocusRequester\\)"
+            ).containsMatchIn(layouts)
         )
     }
 

@@ -282,7 +282,11 @@ class HomeScreenMobileContractTest {
         }
         assertTrue(
             "KB collections must open their folder screen",
-            mobile.contains("MobileCollectionSection(") && mobile.contains("onOpenFolder(")
+            mobile.contains("MobileCollectionSection(") &&
+                // The section is handed the folder callback; its tiles read it
+                // through `rememberUpdatedState`, so the call site itself is
+                // the wiring that matters.
+                mobile.contains("onOpenFolder = onOpenKBFolder")
         )
         assertTrue(
             "Browse chips must open their discover screen and be removable from Home",

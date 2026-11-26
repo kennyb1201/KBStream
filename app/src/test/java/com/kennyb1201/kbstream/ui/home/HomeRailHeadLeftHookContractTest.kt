@@ -207,7 +207,10 @@ class HomeRailHeadLeftHookContractTest {
         )
         assertTrue(
             "every catalog rail, including the app-built Top Today / kids / guest rows",
-            body(home, "val posterModifier = Modifier", "Box(")
+            // The card's chain is remembered whole now, so the slice runs from
+            // that `remember` to the `modifier = posterModifier` that applies
+            // it.
+            body(home, "val posterModifier = remember(", "modifier = posterModifier")
                 .contains(".homeRailHeadLeftTopBarHook(")
         )
         assertTrue(
