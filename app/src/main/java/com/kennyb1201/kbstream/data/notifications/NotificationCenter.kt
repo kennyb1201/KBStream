@@ -43,6 +43,10 @@ internal object NotificationCenter {
     const val CHANNEL_NEW_EPISODES = "new_episodes"
     const val CHANNEL_LIVE_REMINDERS = "live_reminders"
     const val CHANNEL_GAME_REMINDERS = "game_reminders"
+    const val CHANNEL_UPDATES = "updates"
+
+    /** One notification, so a second install replaces the first rather than stacking. */
+    private const val UPDATE_INSTALLED_ID = 4001
 
     /**
      * Extras on the guide deep link: which channel a reminder tap should tune
@@ -91,6 +95,11 @@ internal object NotificationCenter {
             "Game reminders",
             "Silent alerts when a team you follow is about to play.",
             importance = NotificationManager.IMPORTANCE_LOW
+        ),
+        ChannelSpec(
+            CHANNEL_UPDATES,
+            "App updates",
+            "Says when a downloaded update has been installed."
         )
     )
 
@@ -298,6 +307,60 @@ internal object NotificationCenter {
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             }
         }.getOrNull()
+    }
+
+    /**
+     * "Update installed - tap to open", the fallback for the sideloaded
+     * updater's install-complete prompt.
+     *
+     * The prompt is an activity started from the installer's success callback,
+     * and a vendor ROM (or a locked screen) can refuse that start. A notification
+     * is the only other way to tell someone the new build is waiting for them -
+     * without it, the install ends exactly the way this fix exists to end: the
+     * viewer on the launcher, with no idea the update landed.
+     *
+     * The tap opens the app itself rather than a review screen: there is nothing
+     * to decide, the install already happened, and the running build will be the
+     * new one the next launch reads.
+     */
+    // See programReminder: canPost() gates this, and the runCatching below
+    // catches the SecurityException of a grant revoked in the gap.
+    @SuppressLint("MissingPermission")
+    fun updateInstalled(context: Context): Boolean {
+        ensureChannels(context)
+        if (!canPost(context)) {
+            Log.i(TAG, "update-installed alert skipped: notifications disabled")
+            return false
+        }
+
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val tap = PendingIntent.getActivity(
+            context,
+            UPDATE_INSTALLED_ID,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val body = "Update installed — tap to open"
+        val notification = NotificationCompat.Builder(context, CHANNEL_UPDATES)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("KBStream updated")
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(tap)
+            .build()
+
+        return runCatching {
+            NotificationManagerCompat.from(context)
+                .notify(UPDATE_INSTALLED_ID, notification)
+            true
+        }.getOrElse {
+            Log.w(TAG, "could not post the update alert: ${it.message}")
+            false
+        }
     }
 
     /**

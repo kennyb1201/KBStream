@@ -30,12 +30,21 @@ class UpdatePopupMobileInputContractTest {
         MainActivitySource.read().replace(Regex("\\s+"), " ")
     }
 
-    /** The popup itself, bounded by the next declaration after it. */
+    /**
+     * The popup itself, bounded by the next composable after it.
+     *
+     * The next declaration is now one of the token-based prompts that followed
+     * it in spec 2026-11-25 (Play's "Update ready" and the sideloaded
+     * "Update installed"), which is why the bound is the next `@Composable`
+     * rather than a named function: what these counts and rules are about is
+     * THIS dialog, and a region that quietly grew to include its neighbours
+     * would make every one of them meaningless.
+     */
     private val popup: String by lazy {
         val start = source.indexOf("private fun UpdateAvailablePopup(")
         assertTrue("UpdateAvailablePopup must exist", start >= 0)
-        val end = source.indexOf("/** * The destination a Home Browse tile opens.", start)
-        assertTrue("the popup body must be bounded by the next declaration", end > start)
+        val end = source.indexOf("@Composable private fun ", start)
+        assertTrue("the popup body must be bounded by the next composable", end > start)
         source.substring(start, end)
     }
 

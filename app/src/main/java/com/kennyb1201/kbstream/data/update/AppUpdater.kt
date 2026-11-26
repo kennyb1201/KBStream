@@ -195,7 +195,9 @@ object AppUpdater {
      * Session status callback. PackageInstaller sends EXTRA_STATUS here after
      * commit(): PENDING_USER_ACTION means "show the confirmation dialog whose
      * intent is in EXTRA_INTENT", SUCCESS means the app was replaced (the
-     * process is being killed — nothing to do), anything else is a failure.
+     * process is being killed - so the install-complete prompt is started from
+     * here, which is the last moment anything can be said), anything else is a
+     * failure.
      * Must be a declared receiver (the system targets it explicitly).
      */
     class InstallStatusReceiver : BroadcastReceiver() {
@@ -228,9 +230,23 @@ object AppUpdater {
                     }
                 }
                 PackageInstaller.STATUS_SUCCESS -> {
-                    // App was replaced; the process dies around now. Nothing
-                    // to clean up — the next launch reads the pending-install
-                    // marker and reports the result.
+                    // The install landed and the process was replaced, so this
+                    // callback is the ONLY notification the viewer gets - and
+                    // until it was acted on here, they were left on the
+                    // launcher with nothing to open (the Installed dialog needs
+                    // a manual launch, which is exactly what did not happen).
+                    //
+                    // The callback is delivered through the IntentSender the
+                    // session was committed with, which carries the
+                    // background-activity-start allowance for this delivery -
+                    // that is the basis the prompt is started on. When the
+                    // start is refused (a vendor ROM, a locked screen), the
+                    // notification is the fallback: neither a prompt nor an
+                    // alert is not an option.
+                    if (!startInstalledPrompt(context)) {
+                        com.kennyb1201.kbstream.data.notifications.NotificationCenter
+                            .updateInstalled(context)
+                    }
                 }
                 // The two ways a user-facing install stops short. Both are
                 // the user's own action (or the device's policy), so they get
@@ -258,6 +274,44 @@ object AppUpdater {
     }
 
     private const val TAG = "AppUpdater"
+
+    /**
+     * Extra on [com.kennyb1201.kbstream.MainActivity]'s intent: the sideloaded
+     * updater's install landed, so show the Open/Close prompt.
+     */
+    const val EXTRA_UPDATE_INSTALLED = "com.kennyb1201.kbstream.extra.UPDATE_INSTALLED"
+
+    /**
+     * Whether this launch's intent is the install-complete prompt. Read by the
+     * shell at both doors a launch can use (the cold intent and `onNewIntent`),
+     * because a prompt is a one-intent request either way.
+     */
+    fun requestsInstalledPrompt(intent: Intent?): Boolean =
+        intent?.getBooleanExtra(EXTRA_UPDATE_INSTALLED, false) == true
+
+    /**
+     * Opens the install-complete prompt: this app's own activity, carrying
+     * [EXTRA_UPDATE_INSTALLED], which the shell draws as the Open/Close dialog
+     * over Home.
+     *
+     * Called from the session callback's STATUS_SUCCESS delivery, which is where
+     * the permission to start an activity from a receiver comes from (the
+     * IntentSender the session was committed with). Returns false rather than
+     * throwing when the start is refused, so the caller can fall back.
+     */
+    internal fun startInstalledPrompt(context: Context): Boolean {
+        val intent = Intent(context, com.kennyb1201.kbstream.MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_UPDATE_INSTALLED, true)
+        }
+        return try {
+            context.startActivity(intent)
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "install-complete prompt could not start", t)
+            false
+        }
+    }
 
     /** Where a downloaded APK waits for the installer. */
     private const val UPDATES_DIR = "updates"
@@ -516,6 +570,35 @@ object AppUpdater {
             // the only place those notes can still be shown.
             notes = prefs.getString(KEY_PENDING_INSTALL_NOTES, null).orEmpty()
         )
+    }
+
+    /**
+     * Re-arms the launch-after announcement for the build that is already
+     * running.
+     *
+     * The install-complete prompt is raised by the launch that the installer's
+     * success callback started, and that launch's [confirmInstallOnLaunch] has
+     * already consumed the pending-install marker - so without this, closing the
+     * prompt would mean the update was never announced again. Close is not "the
+     * announcement was made": the viewer closed it without opening the app, and
+     * the next manual launch still has to say the install landed (the Installed
+     * phase of the update dialog, exactly as it read before this prompt existed).
+     *
+     * The running build is the installed one here - STATUS_SUCCESS is what this
+     * is called after - so the package manager is the honest source for both
+     * numbers, not the marker that just went away.
+     */
+    internal fun rearmInstallAnnouncement(context: Context, notes: String = "") {
+        val code = runCatching { installedVersionCode(context) }.getOrNull() ?: return
+        val name = runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        }.getOrNull().orEmpty()
+        Prefs.file(context, PREFS).edit()
+            .putLong(KEY_PENDING_INSTALL_CODE, code)
+            .putString(KEY_PENDING_INSTALL_NAME, name)
+            .putLong(KEY_PENDING_INSTALL_AT, System.currentTimeMillis())
+            .putString(KEY_PENDING_INSTALL_NOTES, clampNotes(notes))
+            .apply()
     }
 
     /**

@@ -2423,6 +2423,25 @@ fun AppRoot(
         }
     }
 
+    // The sideloaded updater's install-complete prompt (spec 2026-11-25). An
+    // install replaces the process that started it, so the only thing that can
+    // tell the viewer it landed is the installer session's own success callback:
+    // it starts this activity with an extra (see
+    // AppUpdater.InstallStatusReceiver), and the prompt is drawn from here, over
+    // Home, with the new build already on disk.
+    //
+    // Read at composition, not in an effect: `UpdateAvailablePopup` draws the
+    // Installed phase for the very same `Updated` state this launch raised, so a
+    // flag that arrived a frame late would flash that dialog first. Set from
+    // either door a launch can use - the cold intent here, `onNewIntent` below.
+    //
+    // Saveable so a re-create (a theme or density change) does not resurrect a
+    // prompt the viewer has already answered: the intent still carries the
+    // extra, and the answer is this value.
+    var installedUpdatePrompt by rememberSaveable {
+        mutableStateOf(AppUpdater.requestsInstalledPrompt(hostActivity?.intent))
+    }
+
     fun routeAniListLink(link: String?) {
         if (link == null) return
         if (!AniListLinks.isCallback(link)) {
@@ -2474,6 +2493,9 @@ fun AppRoot(
     // app forward.
     LaunchedEffect(incomingIntent) {
         val intent = incomingIntent ?: return@LaunchedEffect
+        if (AppUpdater.requestsInstalledPrompt(intent)) {
+            installedUpdatePrompt = true
+        }
         applyLaunchIntentExtras(intent)
         // Cleared through the activity, so the same intent cannot be routed
         // again if this shell re-enters composition.
@@ -2675,7 +2697,42 @@ fun AppRoot(
     // launch check found a newer release that hasn't been dismissed for this
     // version. Covers Home/Search/Detail/Player/Guide/Library/Profiles.
     if (screen !is Screen.Settings && !timeLocked.locked) {
-        UpdateAvailablePopup(isPlaying = screen is Screen.Player)
+        UpdateAvailablePopup(
+            isPlaying = screen is Screen.Player,
+            // The install-complete prompt below says the same thing, with the
+            // Open/Close the Installed phase does not have. Two dialogs stacked
+            // on one another is worse than either.
+            installedPrompt = installedUpdatePrompt
+        )
+    }
+
+    if (!timeLocked.locked) {
+        // Play's restart is the viewer's choice now (spec 2026-11-25). The
+        // download finishing opens this prompt instead of handing the update to
+        // Play on the spot, which restarted the app unannounced - and, on the
+        // devices this was reported from, did not bring it back at all.
+        PlayUpdatePrompt()
+
+        if (installedUpdatePrompt) {
+            UpdateInstalledPrompt(
+                onOpen = {
+                    installedUpdatePrompt = false
+                    // The install has been announced; the viewer is opening it.
+                    AppUpdater.acknowledge()
+                },
+                onClose = { notes ->
+                    installedUpdatePrompt = false
+                    // Close is not "announced": the viewer closed the prompt
+                    // without opening the app, and the launch that carried it
+                    // already spent the pending-install marker. Re-arm it so the
+                    // next manual launch still shows the Installed phase, exactly
+                    // as it did before this prompt existed.
+                    AppUpdater.rearmInstallAnnouncement(context, notes)
+                    AppUpdater.acknowledge()
+                    hostActivity?.finish()
+                }
+            )
+        }
     }
 
     // The exit prompt sits before the onboarding early-return so Back is also
@@ -5214,24 +5271,53 @@ fun AppRoot(
     // Screen, with the TV/phone split inside `isColdLaunch`. The launch splash
     // is still up at this point, so nothing of the discarded destination is
     // seen.
+    //
+    // The launch gate is a ONE-SHOT (spec 2026-11-25, the picker loop): it
+    // discards a restored non-picker stack at launch, and it must never
+    // re-fire - leaving the picker by picking a profile is the gate's END, not
+    // a reason to return to it.
+    //
+    // On 6376 the gate ran on every `navEntry` change and its condition never
+    // cleared: `profilesExist`, `coldLaunch` and `showProfilePicker` are all
+    // launch-time values that a pick does not change, so the pick - a
+    // navigation to something that is not the picker - matched the condition
+    // and was sent straight back. Every pick looped.
+    //
+    // Plain `remember`, not `rememberSaveable`: a fresh process gets a fresh
+    // gate (correct - a fresh process may have a restored stack to discard),
+    // and within one process run the gate looks at most once.
+    var launchGateApplied by remember { mutableStateOf(false) }
     val navEntry by navController.currentBackStackEntryAsState()
     LaunchedEffect(navEntry) {
+        // The mirror is NOT gated: it has to run on every entry change, which is
+        // the whole way `screen` follows the graph.
         navSeam.follow(navEntry)
         // A delegated property cannot be smart-cast, so the entry is read into a
         // local once (the same reason `screen` is read into `profilePicker`
         // below).
         val entry = navEntry
-        if (
-            pickerOnLaunch && entry != null &&
-            com.kennyb1201.kbstream.ui.navigation.NavRoutes.screenOfEntry(entry)
-                !is Screen.ProfilePicker
-        ) {
-            navController.navigate(
-                com.kennyb1201.kbstream.ui.navigation.NavRoutes
-                    .of(Screen.ProfilePicker())!!
-            ) {
-                launchSingleTop = true
-                popUpTo(navController.graph.id) { inclusive = true }
+        // Only a real destination counts. A null entry is the host not attached
+        // yet, so a restored stack that lands a frame later still gets its one
+        // discard.
+        if (entry != null) {
+            val gateStep = launchGateStep(
+                pickerOnLaunch = pickerOnLaunch,
+                gateApplied = launchGateApplied,
+                entryIsPicker = com.kennyb1201.kbstream.ui.navigation.NavRoutes
+                    .screenOfEntry(entry) is Screen.ProfilePicker
+            )
+            // Marked applied BEFORE the navigate, so a re-entrant effect run
+            // cannot fire it twice. It is set whether the gate fired or not:
+            // that first real destination was the gate's one look.
+            launchGateApplied = true
+            if (gateStep == LaunchGateStep.SHOW_PICKER) {
+                navController.navigate(
+                    com.kennyb1201.kbstream.ui.navigation.NavRoutes
+                        .of(Screen.ProfilePicker())!!
+                ) {
+                    launchSingleTop = true
+                    popUpTo(navController.graph.id) { inclusive = true }
+                }
             }
         }
     }
@@ -5582,7 +5668,15 @@ private fun KidsTimeLockOverlay() {
 }
 
 @Composable
-private fun UpdateAvailablePopup(isPlaying: Boolean) {
+private fun UpdateAvailablePopup(
+    isPlaying: Boolean,
+    /**
+     * True while the sideloaded updater's install-complete prompt is up (see
+     * [UpdateInstalledPrompt]). The Installed phase would say the same thing
+     * under this dialog, and two dialogs at once is worse than either.
+     */
+    installedPrompt: Boolean = false
+) {
     val context = LocalContext.current
     val updateState by AppUpdater.state.collectAsStateWithLifecycle()
 
@@ -5649,7 +5743,7 @@ private fun UpdateAvailablePopup(isPlaying: Boolean) {
     val phase = when {
         downloading != null -> UpdatePhase.Downloading
         installing != null -> UpdatePhase.Installing
-        installed != null -> UpdatePhase.Installed
+        installed != null && !installedPrompt -> UpdatePhase.Installed
         installStarted && failed != null -> UpdatePhase.Failed
         available != null && !hidden && !suppressForPlayback -> UpdatePhase.Offer
         else -> null
@@ -5849,6 +5943,191 @@ private fun UpdateAvailablePopup(isPlaying: Boolean) {
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * The Play build's "update ready" prompt (spec 2026-11-25).
+ *
+ * Play's flexible flow downloads in the background while the viewer keeps using
+ * the app. When the download finishes, the update is theirs to install - and
+ * until this prompt existed, the app handed it straight to Play from inside the
+ * install callback, so the restart happened without being asked for and, in the
+ * field, without bringing the app back: the viewer was left on the launcher.
+ *
+ * So this is the one door to
+ * [com.kennyb1201.kbstream.data.update.PlayUpdater.completeUpdate], drawn by the shell
+ * rather than by a Settings row (the row is only reached by someone who was
+ * already in Settings). Open installs and restarts; Close, Back and a scrim tap
+ * all just hide it, because the download must never be thrown away - the state
+ * stays ready, the next launch re-adopts it, and the About row reopens it.
+ *
+ * Phone-only, like the updater:
+ * [com.kennyb1201.kbstream.data.update.PlayUpdater.isEnabled] is false on TV and in a
+ * debug build, so a build that cannot complete an update never shows it.
+ */
+@Composable
+private fun PlayUpdatePrompt() {
+    if (!com.kennyb1201.kbstream.data.update.PlayUpdater.isEnabled()) return
+
+    val state by
+        com.kennyb1201.kbstream.data.update.PlayUpdater.state.collectAsStateWithLifecycle()
+    val promptOpen by
+        com.kennyb1201.kbstream.data.update.PlayUpdater.promptOpen.collectAsStateWithLifecycle()
+    val ready = state as? com.kennyb1201.kbstream.data.update.PlayUpdater.UpdateState.ReadyToInstall
+
+    // A prompt with nothing downloaded behind it has no Open to offer: the state
+    // can move on (a failure, a retry) while it is up. Close it instead of
+    // drawing it empty.
+    if (promptOpen && ready == null) {
+        LaunchedEffect(Unit) {
+            com.kennyb1201.kbstream.data.update.PlayUpdater.dismissPrompt()
+        }
+        return
+    }
+    if (!promptOpen || ready == null) return
+
+    Dialog(
+        onDismissRequest = {
+            // Close, Back and the scrim are the same act: hide the prompt, keep
+            // the downloaded build.
+            com.kennyb1201.kbstream.data.update.PlayUpdater.dismissPrompt()
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                // Same 560dp cap and 16dp outer gutter as the sideloaded update
+                // dialog, so the two prompts are one shape on a phone.
+                .widthIn(max = 560.dp)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .background(KBSurface, KBShapePanel)
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
+                .padding(22.dp)
+        ) {
+            UpdateDialogTitle(
+                if (ready.versionCode > 0) {
+                    "UPDATE READY — BUILD ${ready.versionCode}"
+                } else {
+                    "UPDATE READY"
+                }
+            )
+            UpdateDialogBody(
+                "The update is downloaded and ready. Open installs it and restarts " +
+                    "KBStream on the new version."
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 18.dp)
+            ) {
+                DialogPlate(
+                    mobile = true,
+                    modifier = Modifier.weight(1f),
+                    onClick = { com.kennyb1201.kbstream.data.update.PlayUpdater.completeUpdate() }
+                ) {
+                    UpdateDialogButton("OPEN", KBAccent, bold = true)
+                }
+                DialogPlate(
+                    mobile = true,
+                    modifier = Modifier.weight(1f),
+                    onClick = { com.kennyb1201.kbstream.data.update.PlayUpdater.dismissPrompt() }
+                ) {
+                    UpdateDialogButton("CLOSE", KBTextHi)
+                }
+            }
+            UpdateDialogFootnote(
+                "Closing keeps the download — the prompt returns on the next launch, " +
+                    "and from Settings / About."
+            )
+        }
+    }
+}
+
+/**
+ * The sideloaded updater's install-complete prompt (spec 2026-11-25).
+ *
+ * An install replaces the process that started it, so neither the app that
+ * handed the APK over nor the receiver can show anything after it lands. The
+ * session callback's STATUS_SUCCESS starts this activity with
+ * [AppUpdater.EXTRA_UPDATE_INSTALLED] and the barrel is cleared by the time it
+ * composes: this prompt is the app's first chance to say the new build is
+ * installed, and the only one that does not need a trip to the launcher.
+ *
+ * Open just dismisses it - the running process IS the new build, so there is
+ * nothing to launch. Close dismisses it, re-arms the launch-after announcement
+ * (the launch that carried the prompt already spent the pending-install marker)
+ * and finishes the activity, so the viewer lands where they were going.
+ *
+ * A television gets the offer dialog's rules: D-pad buttons that work and a Back
+ * that does nothing, because a barrier is better than a prompt someone walks
+ * past without opening the app they just updated. A phone can Back / tap the
+ * scrim, which is Close.
+ */
+@Composable
+private fun UpdateInstalledPrompt(
+    onOpen: () -> Unit,
+    onClose: (notes: String) -> Unit
+) {
+    val mobile = !FormFactor.isTv
+    val updateState by AppUpdater.state.collectAsStateWithLifecycle()
+    // The notes the launch-after announcement would have shown: they are already
+    // downloaded with the release, and Close hands them to the marker so the
+    // next launch's Installed phase still reads the whole thing.
+    val notes = (updateState as? AppUpdater.UpdateState.Updated)?.notes.orEmpty()
+    val build = BuildConfig.VERSION_NAME
+    val version = if (build.isBlank()) {
+        "Build ${BuildConfig.VERSION_CODE}"
+    } else {
+        "KBStream $build (build ${BuildConfig.VERSION_CODE})"
+    }
+
+    Dialog(onDismissRequest = if (mobile) { { onClose(notes) } } else { {} }) {
+        Column(
+            modifier = Modifier
+                .then(
+                    if (mobile) {
+                        Modifier
+                            .widthIn(max = 560.dp)
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                    } else {
+                        Modifier.width(560.dp)
+                    }
+                )
+                .background(KBSurface, KBShapePanel)
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
+                .padding(22.dp)
+        ) {
+            UpdateDialogTitle("UPDATE INSTALLED")
+            UpdateDialogBody("$version is installed and running. Open it now, or close this.")
+            UpdateDialogNotes(notes)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 18.dp)
+            ) {
+                DialogPlate(
+                    mobile = mobile,
+                    modifier = Modifier.weight(1f),
+                    onClick = onOpen
+                ) {
+                    UpdateDialogButton("OPEN", KBAccent, bold = true)
+                }
+                DialogPlate(
+                    mobile = mobile,
+                    modifier = Modifier.weight(1f),
+                    onClick = { onClose(notes) }
+                ) {
+                    UpdateDialogButton("CLOSE", KBTextHi)
+                }
+            }
+            UpdateDialogFootnote(
+                "Closing keeps the update — the next launch still tells you it installed."
+            )
         }
     }
 }

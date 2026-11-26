@@ -4899,7 +4899,7 @@ private fun PlayUpdateCardMobile() {
         is PlayUpdater.UpdateState.Available -> "Update available — tap to update"
         is PlayUpdater.UpdateState.Downloading ->
             if (s.percent >= 0) "Downloading update… ${s.percent}%" else "Downloading update…"
-        PlayUpdater.UpdateState.ReadyToInstall -> "Update ready — restart to finish"
+        is PlayUpdater.UpdateState.ReadyToInstall -> "Update ready — restart to finish"
         PlayUpdater.UpdateState.Checking -> "Checking for updates…"
         is PlayUpdater.UpdateState.Failed -> "Couldn't check for updates — tap to retry"
         PlayUpdater.UpdateState.UpToDate -> "You're up to date — check again"
@@ -4910,8 +4910,8 @@ private fun PlayUpdateCardMobile() {
             "Play downloads it in the background — you can keep watching"
         is PlayUpdater.UpdateState.Downloading ->
             "Play is fetching the new build; it installs when you restart"
-        PlayUpdater.UpdateState.ReadyToInstall ->
-            "Play will install it and restart the app"
+        is PlayUpdater.UpdateState.ReadyToInstall ->
+            "Tap to install it — Play restarts into the new version"
         is PlayUpdater.UpdateState.Failed -> s.message
         else -> "Updates on this install come from the Play Store"
     }
@@ -4920,7 +4920,10 @@ private fun PlayUpdateCardMobile() {
         onClick = {
             when (state) {
                 is PlayUpdater.UpdateState.Available -> PlayUpdater.startUpdate(context)
-                PlayUpdater.UpdateState.ReadyToInstall -> PlayUpdater.completeUpdate()
+                // A door to the same prompt the shell draws everywhere else,
+                // never a direct completeUpdate(): a tap on an informational
+                // row used to restart the app with nothing said first.
+                is PlayUpdater.UpdateState.ReadyToInstall -> PlayUpdater.requestPrompt()
                 is PlayUpdater.UpdateState.Checking,
                 is PlayUpdater.UpdateState.Downloading -> Unit
                 else -> PlayUpdater.checkForUpdate(context)
