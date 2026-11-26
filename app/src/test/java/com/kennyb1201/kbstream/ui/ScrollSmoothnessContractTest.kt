@@ -107,12 +107,21 @@ class ScrollSmoothnessContractTest {
         val poster = read(POSTER)
         assertTrue(
             "PosterCard must remember its ImageRequest keyed on the poster URL",
-            poster.contains("model = remember(posterUrl) {")
+            // 2026-11-26 (art-decode audit): the requested size is a key now
+            // too - the rail passes the tile's own size, and a request built
+            // for a stale size would miss the entry the warm wrote (see
+            // HomeRailMetrics.artSizePx). Still one build per key, not one per
+            // composition.
+            poster.contains(
+                "model = remember(posterUrl, requestWidthPx, requestHeightPx) {"
+            )
         )
         val landscape = read(LANDSCAPE)
         assertTrue(
             "LandscapeCard's backdrop request must be remembered",
-            landscape.contains("model = remember(effectiveUrl) {")
+            landscape.contains(
+                "model = remember(effectiveUrl, requestWidthPx, requestHeightPx) {"
+            )
         )
         // The card's corner clearlogo is drawn through BrandMarkImage (a black
         // wordmark on the dark corner is unreadable - see
