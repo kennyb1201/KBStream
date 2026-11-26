@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.profiles
 
 import android.util.Log
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -36,6 +37,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
@@ -255,6 +257,37 @@ fun ProfilePickerScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
+        // The app's own mark and name, above the question (spec 2026-11-25).
+        // The picker is the launch screen on a profiles device and it was the
+        // one screen that never said which app this is. The same pair the
+        // splash draws (ui/components/LaunchSplash.kt), smaller: this is a
+        // header, not a splash.
+        //
+        // The mark is decorative - the wordmark under it is the name, so a
+        // screen reader must not stop on it - and neither the mark nor the
+        // wordmark is focusable or asked for focus: the landing below still
+        // aims at the first tile, and anything focusable up here would take a
+        // D-pad press (and the initial ring) away from it.
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(bottom = 16.dp)
+        ) {
+            Image(
+                painter = painterResource(R.drawable.ic_launcher_foreground),
+                contentDescription = null,
+                modifier = Modifier.size(72.dp)
+            )
+            Text(
+                text = "KBSTREAM",
+                color = KBAccent,
+                // The splash's wordmark, one step down: same accent, same 6sp
+                // tracking, so the two read as one brand.
+                style = MaterialTheme.typography.headlineSmall.copy(letterSpacing = 6.sp),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 6.dp)
+            )
+        }
+
         // The screen's name, through the shared page title (Batch F item 38):
         // it was a headlineMedium+Bold of its own, so walking in from Library
         // or Add-ons changed the size of the app's name for the screen.

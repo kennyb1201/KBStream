@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.mobile
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -48,6 +49,7 @@ import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
+import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -150,6 +152,33 @@ fun ProfilePickerScreenMobile(
                 .padding(horizontal = 16.dp, vertical = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // The app's own mark and name, above the question (spec
+            // 2026-11-25). The picker is the launch screen on a profiles
+            // phone, and this is the surface that used to open with a bare
+            // question and no brand at all. Same mark, wordmark, accent and
+            // 6sp tracking as the splash, smaller - a header, not a splash.
+            //
+            // Nothing here is focusable or asked for focus: the mark is
+            // decorative (the wordmark is the name) and touch needs no ring,
+            // so the profile tiles keep the screen's only landing point.
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(bottom = 12.dp)
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.ic_launcher_foreground),
+                    contentDescription = null,
+                    modifier = Modifier.size(56.dp)
+                )
+                Text(
+                    text = "KBSTREAM",
+                    color = KBAccent,
+                    style = MaterialTheme.typography.titleLarge.copy(letterSpacing = 6.sp),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+
             Text(
                 text = "Who's watching?",
                 color = KBTextHi,
