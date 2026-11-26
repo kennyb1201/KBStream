@@ -184,7 +184,13 @@ class ContinueWatchingTrackerLegsTest {
         )
         assertTrue(
             "and the authority is still read once per merge, for the winner rule",
-            viewModel().contains("val resumeAuthority =\n                            AppPreferences.getResumeAuthority(getApplication())")
+            // F5 (2026-11-26) moved this read above the local rows build, so
+            // the pin is the pair and its hand-off, not their indentation.
+            viewModel().contains("val resumeAuthority =") &&
+                viewModel().contains(
+                    "AppPreferences.getResumeAuthority(getApplication())"
+                ) &&
+                viewModel().contains("resumeAuthority = resumeAuthority,")
         )
     }
 

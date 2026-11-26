@@ -392,20 +392,31 @@ class StaleDetailRefetchTest {
     @Test
     fun `the merge filters on the map, not a set of show keys`() {
         val vm = viewModel()
-        val merge = slice(vm, "val locallyFinishedShows:", "locallyFinished =")
+        // Whitespace-insensitive since F5 (2026-11-26): the map and its filter
+        // moved above the local rows build so the pass can publish through it
+        // as each row answers, and the pins must not depend on its indentation.
+        val squash = vm.replace(Regex("\\s+"), " ")
+        val merge =
+            squash.substringAfter("val locallyFinishedShows:")
+                .substringBefore("val localProgress =")
 
         assertTrue(
             "a map keyed by the show's keys",
-            merge.contains("MutableMap<String, LocallyFinishedShow>") &&
+            merge.contains("MutableMap<String, LocallyFinishedShow> =") &&
                 merge.contains("Collections.synchronizedMap(")
         )
         assertTrue(
             "handed to the local pass...",
-            merge.contains("loadLocalNextUpItems(\n                                    localItems,\n                                    locallyFinishedShows")
+            squash.contains(
+                "val localCards = localProgress.cards() + loadLocalNextUpItems( " +
+                    "localItems, locallyFinishedShows )"
+            )
         )
         assertTrue(
             "...and to the tracker filter",
-            merge.contains("trackerCardLocallyFinished(\n                                        item,\n                                        locallyFinishedShows")
+            merge.contains(
+                "trackerCardLocallyFinished( item, locallyFinishedShows )"
+            )
         )
         assertTrue(
             "an empty map still short-circuits, as the empty set did",
@@ -413,7 +424,7 @@ class StaleDetailRefetchTest {
         )
         assertFalse(
             "and nothing still passes a bare set of keys",
-            vm.contains("trackerCardLocallyFinished(\n                                        item,\n                                        locallyFinishedShowKeys")
+            vm.contains("locallyFinishedShowKeys")
         )
     }
 

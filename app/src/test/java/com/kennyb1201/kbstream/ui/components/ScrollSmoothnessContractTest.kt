@@ -102,12 +102,19 @@ class ScrollSmoothnessContractTest {
         // Dig four §3b/§3e (rank 2) split the response by level: a foreground
         // CRITICAL trims (graded LRU), and only BACKGROUND and above - the
         // process has left the screen - clears the whole cache.
-        val fullClear = trim.indexOf("releaseImageMemoryCache(this)")
-        val background = trim.indexOf("ComponentCallbacks2.TRIM_MEMORY_BACKGROUND")
+        // 2026-11-26 (art-decode audit): the level split is
+        // [ImageCacheTrim.releaseFor]'s rule now, so the old ordering check -
+        // the clear's line after the BACKGROUND guard's - became a wiring
+        // check: BACKGROUND is what ASKS for the clear, and the clear arm is
+        // the one that answers it. The rule itself is pinned in
+        // TwoStageTrimContractTest, where it can be run.
         assertTrue(
             "a full clear is gated on BACKGROUND and above, where nothing is on " +
-                "screen to blank: $fullClear vs $background",
-            fullClear > 0 && background > 0 && fullClear > background
+                "screen to blank",
+            trim.contains(
+                "backgrounded = level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND"
+            ) &&
+                trim.contains("ImageCacheRelease.CLEAR -> releaseImageMemoryCache(this)")
         )
         // 2026-11-26 (art-decode audit): the response is a `when` over
         // ImageCacheRelease now. The property this test keeps is unchanged - a
