@@ -107,8 +107,11 @@ class ShellIsTheRendererContractTest {
                 "whatever the graph restored, so no session can start under the " +
                 "previous viewer's identity",
             main.contains("LaunchedEffect(navEntry) {") &&
-                main.contains("pickerOnLaunch &&") &&
-                main.contains("!is Screen.ProfilePicker")
+                // Asked as the gate's own one-shot decision since the picker
+                // loop fix (2026-11-25): the predicate alone re-fired on every
+                // destination change, and the pick is a non-picker destination.
+                main.contains("pickerOnLaunch = pickerOnLaunch") &&
+                main.contains("is Screen.ProfilePicker")
         )
         assertTrue(
             "a re-target never stacks a second copy of the same destination",

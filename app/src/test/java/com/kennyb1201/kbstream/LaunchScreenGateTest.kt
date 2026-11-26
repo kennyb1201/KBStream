@@ -339,9 +339,10 @@ class LaunchScreenGateTest {
         )
         assertTrue(
             "a cold launch with profiles discards whatever the graph restored, " +
-                "because the picker is the session's door",
-            main.contains("pickerOnLaunch &&") &&
-                main.contains("!is Screen.ProfilePicker")
+                "because the picker is the session's door - and the gate is asked " +
+                "for that one decision, not handed a bare condition",
+            main.contains("pickerOnLaunch = pickerOnLaunch") &&
+                main.contains("is Screen.ProfilePicker")
         )
         assertFalse(
             "seeding with Home is the flash this replaced",
@@ -357,6 +358,117 @@ class LaunchScreenGateTest {
         assertFalse(
             "a post-composition flip cannot help but flash Home first",
             main.contains("ProfileManager.hasProfiles(applicationContext)) { screen = Screen.ProfilePicker() }")
+        )
+    }
+
+    // ── the gate's one shot (2026-11-25: the picker loop) ─────────────
+
+    /**
+     * The shell's own protocol: one decision per settled entry, with the marker
+     * set as soon as a real destination has been looked at. This is what the
+     * effect in MainActivity runs, so the sequence below is the sequence a
+     * viewer's presses produce.
+     */
+    private class GateRun(private val pickerOnLaunch: Boolean = true) {
+        private var applied = false
+
+        fun settle(entryIsPicker: Boolean): LaunchGateStep {
+            val step = launchGateStep(
+                pickerOnLaunch = pickerOnLaunch,
+                gateApplied = applied,
+                entryIsPicker = entryIsPicker
+            )
+            applied = true
+            return step
+        }
+    }
+
+    @Test
+    fun `picking a profile leaves the picker for good`() {
+        val run = GateRun()
+
+        // A cold launch with profiles starts ON the picker (`launchEntry`), so
+        // the gate's one look lands there.
+        assertEquals(LaunchGateStep.PASS, run.settle(entryIsPicker = true))
+        // The pick: the mirror navigates the host to Home. On 6376 this is the
+        // entry that was sent straight back to Who's Watching.
+        assertEquals(
+            "the pick must not be sent back to the picker - every pick looped",
+            LaunchGateStep.PASS,
+            run.settle(entryIsPicker = false)
+        )
+        // And it stays gone for the rest of the process run.
+        assertEquals(LaunchGateStep.PASS, run.settle(entryIsPicker = false))
+    }
+
+    @Test
+    fun `a restored non-picker stack is discarded once, and the pick after it stays home`() {
+        val run = GateRun()
+
+        assertEquals(
+            "a launch that restored Home is discarded to the picker, exactly once",
+            LaunchGateStep.SHOW_PICKER,
+            run.settle(entryIsPicker = false)
+        )
+        // The discard lands the host on the picker.
+        assertEquals(LaunchGateStep.PASS, run.settle(entryIsPicker = true))
+        assertEquals(
+            "and the pick that follows is never sent back",
+            LaunchGateStep.PASS,
+            run.settle(entryIsPicker = false)
+        )
+    }
+
+    @Test
+    fun `a launch with the picker switched off is never gated`() {
+        val run = GateRun(pickerOnLaunch = false)
+
+        assertEquals(LaunchGateStep.PASS, run.settle(entryIsPicker = false))
+        assertEquals(LaunchGateStep.PASS, run.settle(entryIsPicker = false))
+    }
+
+    @Test
+    fun `the launch gate is one shot in the shell`() {
+        val main = squash(source(MAIN))
+        assertTrue(
+            "the gate carries a one-shot marker beside it",
+            main.contains("var launchGateApplied by remember { mutableStateOf(false) }")
+        )
+        assertFalse(
+            "per-composition, not saved: a fresh process may have a restored " +
+                "stack to discard, so the gate starts fresh with it",
+            main.contains("launchGateApplied by rememberSaveable")
+        )
+        assertFalse(
+            "and it is not a condition on every entry any more - that shape is " +
+                "the 6376 loop: the pick is a non-picker entry, so it matched",
+            main.contains("if (pickerOnLaunch && entry != null &&")
+        )
+
+        val effect = main.substringAfter("LaunchedEffect(navEntry) {")
+            .substringBefore("The player overlay")
+        assertTrue(
+            "the mirror still runs on every entry, un-gated: it is the first " +
+                "statement, above the gate's own `if`",
+            effect.contains("navSeam.follow(navEntry)") &&
+                effect.indexOf("navSeam.follow(navEntry)") <
+                effect.indexOf("if (entry != null)")
+        )
+        assertTrue(
+            "the gate itself asks the one-shot decision",
+            effect.contains("val gateStep = launchGateStep(")
+        )
+        assertTrue(
+            "the marker is set before anything navigates, so a re-entrant run " +
+                "cannot fire the gate twice",
+            effect.indexOf("launchGateApplied = true") in
+                0 until effect.indexOf("navController.navigate(")
+        )
+        assertTrue(
+            "and the navigate it guards is still the picker, discarding the stack",
+            effect.contains("Screen.ProfilePicker()") &&
+                effect.contains("launchSingleTop = true") &&
+                effect.contains("popUpTo(navController.graph.id)")
         )
     }
 
