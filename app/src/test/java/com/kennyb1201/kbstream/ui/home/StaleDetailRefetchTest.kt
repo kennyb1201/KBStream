@@ -170,10 +170,19 @@ class StaleDetailRefetchTest {
             "and each link threads it to the next instead of swallowing it: the " +
                 "TMDB-id route, the IMDb passthrough and all three raw-id branches",
             repo.contains("lookupDetailByTmdbId(tmdbId, type, forceRefresh) as? TmdbDetailLookup.Found") &&
-                repo.contains("lookupDetailByExternalId(imdbId, \"imdb_id\", type, forceRefresh)") &&
-                repo.contains("lookupDetailByTmdbId(tmdbId, type, forceRefresh)") &&
-                repo.contains("lookupDetailByImdbId(trimmed.substringBefore(':'), type, forceRefresh)") &&
-                repo.contains("lookupDetailByExternalId(tvdbId, \"tvdb_id\", type, forceRefresh)")
+                // F5b (2026-11-26) added an optional onSource callback after
+                // forceRefresh, so each link carries it too - the force
+                // refresh is still threaded, which is what this pins.
+                repo.contains(
+                    "lookupDetailByExternalId(imdbId, \"imdb_id\", type, forceRefresh, onSource)"
+                ) &&
+                repo.contains("lookupDetailByTmdbId(tmdbId, type, forceRefresh, onSource)") &&
+                repo.contains(
+                    "lookupDetailByImdbId(trimmed.substringBefore(':'), type, forceRefresh, onSource)"
+                ) &&
+                repo.contains(
+                    "lookupDetailByExternalId(tvdbId, \"tvdb_id\", type, forceRefresh, onSource)"
+                )
         )
 
         val vm = viewModel()

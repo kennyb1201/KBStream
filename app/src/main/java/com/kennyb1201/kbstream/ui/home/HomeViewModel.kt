@@ -8546,7 +8546,7 @@ Log.d(
                                     arrivals.publishLocalCards(cards)
                                 }
                             },
-                        ) { entry ->
+                        ) { entry, rowClock ->
             // A row whose enrichment has not answered in
             // UP_NEXT_ROW_ENRICH_TIMEOUT_MS publishes the card it already IS
             // (spec 2026-11-24, F3). The collection below used to await every
@@ -8575,6 +8575,12 @@ Log.d(
             val enriched =
                 withTimeoutOrNull(UP_NEXT_ROW_ENRICH_TIMEOUT_MS) {
             lookupSemaphore.withPermit {
+                // F5b (spec 2026-11-26): the permit is what the row waits
+                // for, so the wait is timed from here, not inferred.
+                localProgress.notePermit(
+                    rowClock,
+                    android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs
+                )
                 run row@ {
 
         val isEpisodePlayback =
@@ -8688,7 +8694,11 @@ Log.d(
                     when (
                         val lookup = tmdbRepository.lookupDetailForRawId(
                             parentId,
-                            entry.type
+                            entry.type,
+                            // F5b: which cache answered, for the pass's summary.
+                            onSource = { source ->
+                                localProgress.noteLookupSource(rowClock, source)
+                            }
                         )
                     ) {
                         is TmdbDetailLookup.Found -> lookup.detail
@@ -9060,9 +9070,23 @@ Log.d(
                 // WITHOUT their enrichment, rather than leaving a thin card to
                 // be read as a TMDB miss.
                 PerfTrace.recordCount("home.cwRowTimeout", 1)
+                // And timed (F5b): the row still lands with its seed card, so
+                // its outcome has to be the timeout, not the landing.
+                localProgress.noteTimedOut(rowClock)
             }
             enriched ?: instantContinueWatchingItem(entry)
                         }
+
+                        // F5b (spec 2026-11-26): ONE line per build, after the
+                        // pass ends - the per-row timeline the first publish's
+                        // latency has to be read from. Never one line per row:
+                        // 108 rows would flush CwLoadTrace's 24-line window and
+                        // take the publish lines with them.
+                        CwLoadTrace.note(
+                            cwBuildId,
+                            android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs,
+                            localProgress.summaryLine(rows = history.size)
+                        )
 
                         // A series with watched episodes but no in-progress row
                         // still has unwatched aired episodes, so it belongs on the

@@ -66,7 +66,7 @@ class CwLocalIncrementalPublishContractTest {
                     publish = { cards ->
                         published.add(elapsedMs(startedAt) to cards.map { it.id })
                     },
-                    enrich = { row ->
+                    enrich = { row, _ ->
                         when (row) {
                             // Never answers inside the pass's deadline: the
                             // field device's cold-TMDB row.
@@ -138,7 +138,7 @@ class CwLocalIncrementalPublishContractTest {
                     nowMs = { elapsedMs(startedAt) },
                     keyOf = { row -> row },
                     publish = { publishes += 1 },
-                    enrich = { row ->
+                    enrich = { row, _ ->
                         delay(5_000)
                         card("${row}Rich")
                     }
@@ -149,6 +149,109 @@ class CwLocalIncrementalPublishContractTest {
             assertTrue(
                 "the deadline ended the pass, not the row's 5s (${elapsedMs(startedAt)}ms)",
                 elapsedMs(startedAt) < 1_500L
+            )
+        }
+
+    // ── F5b: why the first publish is late ─────────────────────────────────
+
+    @Test
+    fun `the pass's summary names the first landing, the timeout and the deadline`() =
+        runBlocking {
+            val startedAt = System.nanoTime()
+            val progress =
+                CwLocalProgress(
+                    listOf("fast" to card("fastSeed"), "slow" to card("slowSeed"))
+                )
+
+            cwLocalItemsIncrementally(
+                rows = listOf("fast", "slow"),
+                progress = progress,
+                deadlineAtMs = 200L,
+                nowMs = { elapsedMs(startedAt) },
+                keyOf = { row -> row },
+                publish = { },
+                enrich = { row, timing ->
+                    when (row) {
+                        // Never answers inside the pass's deadline.
+                        "slow" -> {
+                            delay(5_000)
+                            card("slowRich")
+                        }
+                        else -> {
+                            progress.notePermit(timing, elapsedMs(startedAt))
+                            progress.noteLookupSource(timing, "net")
+                            delay(10)
+                            card("fastRich")
+                        }
+                    }
+                }
+            )
+
+            val summary = progress.summaryLine(rows = 2)
+            assertTrue("the fast row landed: $summary", summary.contains("rows landed=1/2"))
+            assertTrue(
+                "and its landing is the pass's firstLand: $summary",
+                Regex("firstLand=\\+(\\d+)ms").find(summary)
+                    ?.groupValues
+                    ?.get(1)
+                    ?.toLong()
+                    ?.let { it in 0L..150L } == true
+            )
+            assertTrue(
+                "the row that never answered is a timeout: $summary",
+                summary.contains("timeouts=1")
+            )
+            assertTrue(
+                "the deadline fired, with the fast row on the slice: $summary",
+                summary.contains("deadlineFired=yes") &&
+                    summary.contains("landedAtDeadline=1")
+            )
+            assertTrue(
+                "the cache the lookup answered from is counted: $summary",
+                summary.contains("cacheHits=0 net=1")
+            )
+            assertTrue(
+                "and the slowest row is named by its lookup time: $summary",
+                summary.contains("slowest=fast:")
+            )
+        }
+
+    @Test
+    fun `a row's wait for a permit is recorded apart from its lookup`() =
+        runBlocking {
+            val startedAt = System.nanoTime()
+            val progress = CwLocalProgress(listOf("queued" to card("queuedSeed")))
+
+            cwLocalItemsIncrementally(
+                rows = listOf("queued"),
+                progress = progress,
+                deadlineAtMs = 2_000L,
+                nowMs = { elapsedMs(startedAt) },
+                keyOf = { row -> row },
+                publish = { },
+                enrich = { _, timing ->
+                    // The row stood in the permit queue before its lookup.
+                    delay(40)
+                    progress.notePermit(timing, elapsedMs(startedAt))
+                    progress.noteLookupSource(timing, "mem")
+                    card("queuedRich")
+                }
+            )
+
+            val summary = progress.summaryLine(rows = 1)
+            val waitMs =
+                Regex("permitWaitP95=(\\d+)ms").find(summary)
+                    ?.groupValues
+                    ?.get(1)
+                    ?.toLong()
+            assertTrue(
+                "the queue wait is recorded, and it is not the lookup: $summary",
+                waitMs != null && waitMs >= 20L
+            )
+            assertTrue(
+                "the lookup that followed is a cache hit, and no deadline fired: $summary",
+                summary.contains("cacheHits=1 net=0") &&
+                    summary.contains("deadlineFired=no")
             )
         }
 
@@ -165,20 +268,26 @@ class CwLocalIncrementalPublishContractTest {
                 )
             )
 
-        assertTrue("the first landing publishes on its own", progress.place("b", card("bRich")))
+        assertTrue(
+            "the first landing publishes on its own",
+            progress.place("b", card("bRich"), atMs = 10L)
+        )
         assertEquals(
             "the upgraded row keeps the position the seed gave it",
             listOf("aSeed", "bRich", "cSeed"),
             progress.cards().map { it.id }
         )
 
-        assertFalse("the second landing is inside the first batch", progress.place("a", card("aRich")))
+        assertFalse(
+            "the second landing is inside the first batch",
+            progress.place("a", card("aRich"), atMs = 20L)
+        )
         assertEquals(
             listOf("aRich", "bRich", "cSeed"),
             progress.cards().map { it.id }
         )
 
-        progress.remove("c")
+        progress.remove("c", atMs = 30L)
         assertEquals(
             "a dropped row does not sit on the rail with an un-upgraded seed card",
             listOf("aRich", "bRich"),
@@ -258,6 +367,29 @@ class CwLocalIncrementalPublishContractTest {
             "and so is the seed that shows first",
             pass.indexOf("seedUpNextFromHistory(history, source = \"seed\")") <
                 pass.indexOf("cwLocalItemsIncrementally(")
+        )
+
+        // F5b (2026-11-26): the diagnostic that says why the first publish is
+        // late. One summary per build, from the pass's own progress.
+        assertTrue(
+            "the pass emits its per-row summary once, when it ends",
+            pass.contains("localProgress.summaryLine(rows = history.size)")
+        )
+        assertTrue(
+            "timed from the build's clock, on the trace the paste already reads",
+            pass.contains("android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs,\n                            localProgress.summaryLine")
+        )
+        assertTrue(
+            "the permit wait is timed where the permit is taken",
+            pass.contains("localProgress.notePermit(")
+        )
+        assertTrue(
+            "and the detail lookup reports which cache answered it",
+            pass.contains("localProgress.noteLookupSource(rowClock, source)")
+        )
+        assertTrue(
+            "a row that kept its seed card is counted as a timeout",
+            pass.contains("localProgress.noteTimedOut(rowClock)")
         )
     }
 }

@@ -28,6 +28,67 @@ internal const val CW_LOCAL_PUBLISH_BATCH = 6
 internal fun cwLocalPublishDue(landed: Int, batch: Int = CW_LOCAL_PUBLISH_BATCH): Boolean =
     landed > 0 && (landed == 1 || batch <= 0 || landed % batch == 0)
 
+/** Where one row of the local pass ended up (spec 2026-11-26, CW load F5b). */
+internal enum class CwRowOutcome {
+    IN_FLIGHT,
+    ANSWERED,
+    TIMED_OUT,
+    DROPPED
+}
+
+/**
+ * One row's timeline inside one pass (spec 2026-11-26, CW load F5b).
+ *
+ * Every field is an offset from the build's start - the clock every `cwload:`
+ * line already uses - so `firstLand` can be compared with the `publish` lines
+ * directly. The point of the record is the F5b question: the first enriched
+ * publish is still slow, and the paste could not say whether the first ROW was
+ * slow, the row waited for a permit, or the publish gating fired late.
+ */
+internal class CwRowTiming(
+    /** The history row id this row answers for. */
+    val key: String,
+    /** When the row's coroutine began, in ms since the build started. */
+    val startedAtMs: Long
+) {
+
+    /** When the row got its six-permit semaphore permit, or -1 if it never did. */
+    var permitAcquiredAtMs: Long = -1L
+
+    /** `"mem"`, `"disk"`, `"shared"` or `"net"` - the detail lookup's own answer. */
+    var lookupSource: String? = null
+
+    var outcome: CwRowOutcome = CwRowOutcome.IN_FLIGHT
+
+    /** When the row's card landed in the slice, or -1. */
+    var landedAtMs: Long = -1L
+
+    /** When the row ended, landed or not. */
+    var closedAtMs: Long = -1L
+
+    /** How long the row stood in the permit queue, or -1 if it never got one. */
+    val permitWaitMs: Long
+        get() =
+            if (permitAcquiredAtMs < 0L) -1L
+            else (permitAcquiredAtMs - startedAtMs).coerceAtLeast(0L)
+
+    /**
+     * How long the row held its permit before its card landed, or -1.
+     *
+     * This is the number that separates "the lookups are slow" from "the rows
+     * are queued": a row that spent its time waiting has a long [permitWaitMs]
+     * and no lookup time at all.
+     */
+    val lookupMs: Long
+        get() =
+            if (permitAcquiredAtMs < 0L || landedAtMs < 0L) -1L
+            else (landedAtMs - permitAcquiredAtMs).coerceAtLeast(0L)
+
+    /** The row's whole life, ended or cut off by the pass deadline, or -1. */
+    val totalMs: Long
+        get() = if (closedAtMs < 0L) -1L else (closedAtMs - startedAtMs).coerceAtLeast(0L)
+}
+
 /**
  * The local half of Continue Watching as the pass is building it.
  *
@@ -37,6 +98,10 @@ internal fun cwLocalPublishDue(landed: Int, batch: Int = CW_LOCAL_PUBLISH_BATCH)
  * and growing back: the seed card is replaced by its enriched twin, at the
  * position the seed already had. A row the pass drops (the zombie card) is
  * removed so it does not sit there un-upgraded.
+ *
+ * It also holds this PASS's per-row timeline (F5b). The timings live and die
+ * with the progress object, exactly like the trace: nothing survives the build,
+ * and no line is emitted per row.
  *
  * Thread-safe: the rows of one pass run six at a time and each lands on its own
  * coroutine.
@@ -50,6 +115,12 @@ internal class CwLocalProgress(
 
     private var landed = 0
 
+    private val timings = ArrayList<CwRowTiming>()
+
+    private var deadlineFired = false
+
+    private var landedWhenDeadlineFired = 0
+
     private val lock = Any()
 
     init {
@@ -57,18 +128,86 @@ internal class CwLocalProgress(
     }
 
     /**
-     * The row [key] answered with [card]. Answers whether this landing is a
-     * publish point ([cwLocalPublishDue]).
+     * Starts timing a row at [atMs] (ms since the build started).
+     *
+     * The caller gets the record back because only it knows when the row got a
+     * permit and where its detail lookup was answered from.
      */
-    fun place(key: String, card: UpNextItem): Boolean = synchronized(lock) {
+    fun beginRow(key: String, atMs: Long): CwRowTiming = synchronized(lock) {
+        val timing = CwRowTiming(key = key, startedAtMs = atMs)
+        timings.add(timing)
+        timing
+    }
+
+    /** The row got its semaphore permit at [atMs]. */
+    fun notePermit(timing: CwRowTiming, atMs: Long) {
+        synchronized(lock) { timing.permitAcquiredAtMs = atMs }
+    }
+
+    /** The row's detail lookup answered from [source] ("mem", "disk", "shared", "net"). */
+    fun noteLookupSource(timing: CwRowTiming, source: String) {
+        synchronized(lock) { timing.lookupSource = source }
+    }
+
+    /**
+     * The row's enrichment did not answer in the F3 window, so it keeps its
+     * seed card: it still lands, and the summary counts it as a timeout.
+     */
+    fun noteTimedOut(timing: CwRowTiming) {
+        synchronized(lock) {
+            if (timing.outcome == CwRowOutcome.IN_FLIGHT) {
+                timing.outcome = CwRowOutcome.TIMED_OUT
+            }
+        }
+    }
+
+    /**
+     * The row [key] answered with [card] at [atMs]. Answers whether this
+     * landing is a publish point ([cwLocalPublishDue]).
+     */
+    fun place(key: String, card: UpNextItem, atMs: Long): Boolean = synchronized(lock) {
         placed[key] = card
+        timingFor(key)?.let { timing ->
+            // A row that kept its seed card after the F3 timeout still lands -
+            // its card is real - so it keeps the outcome the timeout gave it.
+            if (timing.outcome == CwRowOutcome.IN_FLIGHT) {
+                timing.outcome = CwRowOutcome.ANSWERED
+            }
+            timing.landedAtMs = atMs
+            timing.closedAtMs = atMs
+        }
         landed += 1
         cwLocalPublishDue(landed)
     }
 
-    /** The row [key] was dropped by this pass (the zombie card). */
-    fun remove(key: String) {
-        synchronized(lock) { placed.remove(key) }
+    /** The row [key] was dropped by this pass (the zombie card) at [atMs]. */
+    fun remove(key: String, atMs: Long) {
+        synchronized(lock) {
+            placed.remove(key)
+            timingFor(key)?.let { timing ->
+                timing.outcome = CwRowOutcome.DROPPED
+                timing.closedAtMs = atMs
+            }
+        }
+    }
+
+    /**
+     * The pass ended at its deadline with rows still out (F5's
+     * `UP_NEXT_PASS_DEADLINE_MS`). They are timed out - cut off by the pass,
+     * which is what the summary reports - and [landedAtDeadline] is how much of
+     * the rail had answered when it did.
+     */
+    fun noteDeadlineFired(atMs: Long) {
+        synchronized(lock) {
+            deadlineFired = true
+            landedWhenDeadlineFired = landed
+            timings.forEach { timing ->
+                if (timing.outcome == CwRowOutcome.IN_FLIGHT) {
+                    timing.outcome = CwRowOutcome.TIMED_OUT
+                    timing.closedAtMs = atMs
+                }
+            }
+        }
     }
 
     /** What to publish: every seed card, with the rows that answered upgraded. */
@@ -76,6 +215,80 @@ internal class CwLocalProgress(
 
     /** Rows that have answered so far (drops not counted). */
     fun landedCount(): Int = synchronized(lock) { landed }
+
+    /**
+     * The ONE `cwload:` line this pass adds (spec 2026-11-26, CW load F5b).
+     *
+     * Its whole job is to say why the first enriched publish is late, from
+     * `firstLand` (when the first row actually landed - the time the first
+     * publish should have followed) and the latency distribution around it:
+     *
+     *  - `firstLand` ~ the publish's own offset, `net` high: the lookups are
+     *    round trips and the cache is cold;
+     *  - `permitWaitP95` high with low `p50`: the rows are queued behind the
+     *    repository's other callers, not slow themselves;
+     *  - `p50` low with `p95`/`max` high and the same `slowest` titles:
+     *    a few titles, not the pass;
+     *  - `firstLand` early but the publish late: the gating, not the lookups;
+     *  - `deadlineFired=yes landedAtDeadline=0`: the pass ended with nothing
+     *    answered.
+     *
+     * `p50`/`p95`/`max` are row totals (start to landed, or to the deadline for
+     * a row the deadline cut off), `slowest` is by lookup time per the spec, and
+     * the percentiles are nearest-rank over what the pass actually recorded -
+     * no sample, no invented zero.
+     */
+    fun summaryLine(rows: Int): String {
+        val snapshot = synchronized(lock) { timings.toList() }
+        val landedNow = synchronized(lock) { landed }
+        val fired = synchronized(lock) { deadlineFired }
+        val landedThen = synchronized(lock) { landedWhenDeadlineFired }
+
+        val firstLand = snapshot
+            .map { it.landedAtMs }
+            .filter { it >= 0L }
+            .minOrNull()
+        val totals = snapshot.mapNotNull { it.totalMs.takeIf { ms -> ms >= 0L } }
+        val waits = snapshot.mapNotNull { it.permitWaitMs.takeIf { ms -> ms >= 0L } }
+        val slowest = snapshot
+            .filter { it.lookupMs >= 0L }
+            .sortedByDescending { it.lookupMs }
+            .take(3)
+            .joinToString(",") { timing -> "${timing.key}:${timing.lookupMs}ms" }
+        val cacheHits = snapshot.count { timing ->
+            timing.lookupSource == "mem" ||
+                timing.lookupSource == "disk" ||
+                timing.lookupSource == "shared"
+        }
+        val net = snapshot.count { it.lookupSource == "net" }
+        val timeouts = snapshot.count { it.outcome == CwRowOutcome.TIMED_OUT }
+
+        return "rows landed=$landedNow/$rows" +
+            " firstLand=" + (firstLand?.let { "+${it}ms" } ?: "-") +
+            " p50=${percentile(totals, 50)}ms" +
+            " p95=${percentile(totals, 95)}ms" +
+            " max=${totals.maxOrNull() ?: 0L}ms" +
+            " timeouts=$timeouts" +
+            " cacheHits=$cacheHits net=$net" +
+            " permitWaitP95=${percentile(waits, 95)}ms" +
+            " slowest=" + slowest.ifEmpty { "-" } +
+            " deadlineFired=" + (if (fired) "yes" else "no") +
+            " landedAtDeadline=$landedThen"
+    }
+
+    private fun timingFor(key: String): CwRowTiming? =
+        timings.lastOrNull { timing -> timing.key == key }
+
+    private companion object {
+
+        /** Nearest-rank over what was recorded; 0 only when nothing was. */
+        fun percentile(values: List<Long>, percent: Int): Long {
+            if (values.isEmpty()) return 0L
+            val sorted = values.sorted()
+            val index = ((sorted.size - 1) * percent / 100).coerceIn(0, sorted.size - 1)
+            return sorted[index]
+        }
+    }
 }
 
 /**
@@ -100,6 +313,10 @@ internal class CwLocalProgress(
  * slice rather than leaving its seed card behind. Every row still carries its
  * own 8s timeout (F3) inside [enrich]; this bound is the pass's.
  *
+ * [enrich] also receives the row's [CwRowTiming] (F5b): the row is the only
+ * place that knows when its permit arrived and which cache answered its lookup.
+ * The helper itself records the start, the landing and the deadline.
+ *
  * Every row runs concurrently and the semaphore inside [enrich] is what limits
  * the repository load - unchanged, because it is what protects TMDB.
  */
@@ -110,7 +327,7 @@ internal suspend fun <R> cwLocalItemsIncrementally(
     nowMs: () -> Long,
     keyOf: (R) -> String,
     publish: suspend (List<UpNextItem>) -> Unit,
-    enrich: suspend (R) -> UpNextItem?
+    enrich: suspend (R, CwRowTiming) -> UpNextItem?
 ): List<UpNextItem> {
     if (rows.isEmpty()) return emptyList()
 
@@ -124,13 +341,15 @@ internal suspend fun <R> cwLocalItemsIncrementally(
         coroutineScope {
             rows.map { row ->
                 async {
-                    val card = enrich(row)
+                    val key = keyOf(row)
+                    val timing = progress.beginRow(key, nowMs())
+                    val card = enrich(row, timing)
                     if (card == null) {
-                        progress.remove(keyOf(row))
+                        progress.remove(key, nowMs())
                         null
                     } else {
                         landed.add(card)
-                        if (progress.place(keyOf(row), card)) {
+                        if (progress.place(key, card, nowMs())) {
                             publish(progress.cards())
                         }
                         card
@@ -139,6 +358,9 @@ internal suspend fun <R> cwLocalItemsIncrementally(
             }.awaitAll().filterNotNull()
         }
     }
-    // The deadline took the rest: what answered is the pass's answer.
-    return completed ?: landed.toList()
+    if (completed == null) {
+        progress.noteDeadlineFired(nowMs())
+        return landed.toList()
+    }
+    return completed
 }

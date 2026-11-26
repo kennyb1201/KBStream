@@ -2880,7 +2880,14 @@ class TmdbRepository private constructor(context: Context) :
          * [fetchEnrichedMetaCached]). The answer is written back under this
          * same key, so a later cached read sees it.
          */
-        forceRefresh: Boolean = false
+        forceRefresh: Boolean = false,
+        /**
+         * Where the answer came from - `"mem"`, `"disk"`, `"shared"` or
+         * `"net"` - for a caller that has to say why it was slow (spec
+         * 2026-11-26, CW load F5b). Diagnostic only: no cache rule reads it,
+         * and a null callback costs one branch.
+         */
+        onSource: ((String) -> Unit)? = null
     ): TmdbDetailLookup {
         if (apiKey.isBlank()) return TmdbDetailLookup.Transient
 
@@ -2892,7 +2899,10 @@ class TmdbRepository private constructor(context: Context) :
         if (!forceRefresh) {
             val cached = detailCache[key]
             if (cached != null && now - cached.first < detailCacheTtlMs) {
-                cached.second?.let { return TmdbDetailLookup.Found(it) }
+                cached.second?.let { detail ->
+                    onSource?.invoke("mem")
+                    return TmdbDetailLookup.Found(detail)
+                }
             }
         }
 
@@ -2910,6 +2920,7 @@ class TmdbRepository private constructor(context: Context) :
             val parsed = parseDetailJson(diskCached.json)
             if (parsed != null) {
                 detailCache[key] = now to parsed
+                onSource?.invoke("disk")
                 return TmdbDetailLookup.Found(parsed)
             }
         }
@@ -2918,13 +2929,18 @@ class TmdbRepository private constructor(context: Context) :
         // of firing a duplicate request. putIfAbsent closes the window between
         // the check and the registration, so two callers that both missed the
         // cache cannot both start a fetch.
-        detailFetchInFlight[key]?.let { pending -> return pending.await() }
-
-        val deferred = CompletableDeferred<TmdbDetailLookup>()
-        detailFetchInFlight.putIfAbsent(key, deferred)?.let { pending ->
+        detailFetchInFlight[key]?.let { pending ->
+            onSource?.invoke("shared")
             return pending.await()
         }
 
+        val deferred = CompletableDeferred<TmdbDetailLookup>()
+        detailFetchInFlight.putIfAbsent(key, deferred)?.let { pending ->
+            onSource?.invoke("shared")
+            return pending.await()
+        }
+
+        onSource?.invoke("net")
         val result =
             try {
                 runCatchingCancellable {
@@ -2989,9 +3005,11 @@ class TmdbRepository private constructor(context: Context) :
         imdbId: String,
         type: String,
         /** See [fetchEnrichedMetaCached]'s parameter of the same name. */
-        forceRefresh: Boolean = false
+        forceRefresh: Boolean = false,
+        /** See [lookupDetailByTmdbId]'s parameter of the same name. */
+        onSource: ((String) -> Unit)? = null
     ): TmdbDetailLookup =
-        lookupDetailByExternalId(imdbId, "imdb_id", type, forceRefresh)
+        lookupDetailByExternalId(imdbId, "imdb_id", type, forceRefresh, onSource)
 
     /**
      * [lookupDetailByImdbId] for any external source TMDB's `/find` accepts
@@ -3024,7 +3042,9 @@ class TmdbRepository private constructor(context: Context) :
          * TMDB id does not answer an `tt`-filed read, and the write-back has to
          * land under the key the caller's own later read will use.
          */
-        forceRefresh: Boolean = false
+        forceRefresh: Boolean = false,
+        /** See [lookupDetailByTmdbId]'s parameter of the same name. */
+        onSource: ((String) -> Unit)? = null
     ): TmdbDetailLookup {
         val id = externalId.trim().substringBefore(':').trim()
         if (id.isBlank()) return TmdbDetailLookup.Unresolvable
@@ -3040,11 +3060,13 @@ class TmdbRepository private constructor(context: Context) :
         if (!forceRefresh) {
             detailCache[key]?.let { (cachedAt, detail) ->
                 if (detail != null && now - cachedAt < detailCacheTtlMs) {
+                    onSource?.invoke("mem")
                     return TmdbDetailLookup.Found(detail)
                 }
             }
             railDetailCache[key]?.let { (cachedAt, detail) ->
                 if (detail != null && now - cachedAt < detailCacheTtlMs) {
+                    onSource?.invoke("mem")
                     return TmdbDetailLookup.Found(detail)
                 }
             }
@@ -3064,6 +3086,7 @@ class TmdbRepository private constructor(context: Context) :
             val parsed = parseDetailJson(diskCached.json)
             if (parsed != null) {
                 detailCache[key] = now to parsed
+                onSource?.invoke("disk")
                 return TmdbDetailLookup.Found(parsed)
             }
         }
@@ -3080,10 +3103,12 @@ class TmdbRepository private constructor(context: Context) :
             if (parsed != null) {
                 detailCache[key] = now to parsed
                 railDetailCache[key] = now to parsed
+                onSource?.invoke("disk")
                 return TmdbDetailLookup.Found(parsed)
             }
         }
 
+        onSource?.invoke("net")
         val found =
             try {
                 api.find(id, apiKey, externalSource)
@@ -3144,7 +3169,9 @@ class TmdbRepository private constructor(context: Context) :
          * caller's ordinary read takes, so the fresh answer is filed under the
          * key that read will use.
          */
-        forceRefresh: Boolean = false
+        forceRefresh: Boolean = false,
+        /** See [lookupDetailByTmdbId]'s parameter of the same name. */
+        onSource: ((String) -> Unit)? = null
     ): TmdbDetailLookup {
         val trimmed = rawId.trim()
         if (trimmed.isBlank()) return TmdbDetailLookup.Unresolvable
@@ -3158,18 +3185,18 @@ class TmdbRepository private constructor(context: Context) :
                     .trim()
                     .toIntOrNull()
                     ?: return TmdbDetailLookup.Unresolvable
-                lookupDetailByTmdbId(tmdbId, type, forceRefresh)
+                lookupDetailByTmdbId(tmdbId, type, forceRefresh, onSource)
             }
 
             lower.startsWith("tt") ->
-                lookupDetailByImdbId(trimmed.substringBefore(':'), type, forceRefresh)
+                lookupDetailByImdbId(trimmed.substringBefore(':'), type, forceRefresh, onSource)
 
             lower.startsWith("tvdb:") -> {
                 val tvdbId = trimmed.substringAfter(':').substringBefore(':').trim()
                 if (tvdbId.isBlank()) {
                     TmdbDetailLookup.Unresolvable
                 } else {
-                    lookupDetailByExternalId(tvdbId, "tvdb_id", type, forceRefresh)
+                    lookupDetailByExternalId(tvdbId, "tvdb_id", type, forceRefresh, onSource)
                 }
             }
 
