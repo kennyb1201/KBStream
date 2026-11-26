@@ -318,20 +318,32 @@ internal fun SeasonPosterArt(
                 // cue with a still row (poster items scale via graphicsLayer and
                 // never move anything either).
                 //
-                // Round four widened the reservation: 6dp/3dp left a 2dp border
-                // sitting ~4dp from the glyphs horizontally and ~1dp vertically,
-                // which the 452 photo read as the ring touching (and nearly
-                // clipping) "SEASON 1". 12dp/6dp keeps the same unconditional
-                // space and leaves a visible gap in both states.
+                // Round four widened the reservation to 12dp/6dp, and the ring
+                // still hugged the glyphs (2026-11-25 photo, same poster-less
+                // show as the 452 one). Widening was not the problem: the
+                // padding was written BEFORE the border, and a chain applies
+                // outside-in, so the space landed outside the ring - a gap to
+                // the neighbouring season, never to the text.
                 .then(
                     if (posterUrl == null) {
                         Modifier
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                            // ORDER IS THE CUE. Border first (outermost of the
+                            // two), padding inside it: the 12dp/6dp now sits
+                            // between the glyphs and the ring, where the eye
+                            // reads it as breathing room. The stroke draws inside
+                            // its own bounds, so the visible gap is 10dp
+                            // horizontally and 4dp vertically.
+                            //
+                            // Both states still carry both modifiers - colour is
+                            // the only difference - so the item's size is
+                            // identical focused and unfocused and the row still
+                            // cannot move on focus (Detail L2).
                             .border(
                                 2.dp,
                                 if (focused) KBAccent else Color.Transparent,
                                 KBShapeSmall
                             )
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
                     } else {
                         Modifier
                     }
