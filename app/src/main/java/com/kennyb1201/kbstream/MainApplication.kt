@@ -17,6 +17,7 @@ import coil3.svg.SvgDecoder
 import coil3.request.allowHardware
 import coil3.request.allowRgb565
 import coil3.request.crossfade
+import com.kennyb1201.kbstream.data.memory.ImageCacheRelease
 import com.kennyb1201.kbstream.data.memory.ImageCacheTrim
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
@@ -27,6 +28,7 @@ import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.reporting.ImageLoadTrace
+import com.kennyb1201.kbstream.data.reporting.UiFrameTrace
 import com.kennyb1201.kbstream.data.reporting.CrashReporter
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.reporting.PlaybackDeathMarker
@@ -994,14 +996,24 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             // RUNNING_CRITICAL (15) is the only mid-scroll case, and only API 33
             // and older deliver it: there the graded LRU trim runs, keeping the
             // rail the viewer is actually looking at (see [trimImageMemoryCache]).
-            if (level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {
-                releaseImageMemoryCache(this)
-            } else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
-                // The smaller bite (round four F3c): this path runs with the
-                // rail on screen, so the art being given back is the art being
-                // looked at. The deeper reclaim belongs to the backgrounding
-                // clear above, which runs with nothing visible.
-                trimImageMemoryCache(this, ImageCacheTrim.SCROLL_FRACTION)
+            when (
+                ImageCacheTrim.releaseFor(
+                    backgrounded = level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND,
+                    critical = level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL,
+                    // 2026-11-26 (art-decode audit, trim eviction): a trim that
+                    // lands mid-walk evicts the cards the walk is about to read,
+                    // because they are the entries nothing has touched yet -
+                    // the paste showed `cardDiskDecodes` rising after the trim
+                    // tag. The rule defers it; see [ImageCacheTrim.releaseFor].
+                    inWalkWindow = UiFrameTrace.inWalkWindow(),
+                )
+            ) {
+                ImageCacheRelease.CLEAR -> releaseImageMemoryCache(this)
+                // The smaller bite (round four F3c): this path runs at rest, so
+                // the deeper reclaim belongs to the backgrounding clear above.
+                ImageCacheRelease.TRIM ->
+                    trimImageMemoryCache(this, ImageCacheTrim.SCROLL_FRACTION)
+                ImageCacheRelease.NONE -> Unit
             }
             if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
                 MemoryPressure.releaseBrowsingCaches()

@@ -109,14 +109,21 @@ class ScrollSmoothnessContractTest {
                 "screen to blank: $fullClear vs $background",
             fullClear > 0 && background > 0 && fullClear > background
         )
-        val foreground = trim
-            .substringAfter("} else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {")
-            .substringBefore("if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {")
+        // 2026-11-26 (art-decode audit): the response is a `when` over
+        // ImageCacheRelease now. The property this test keeps is unchanged - a
+        // foreground critical never clears - and it gains one: the clear arm is
+        // reachable only from the BACKGROUND mapping.
         assertTrue(
-            "and the CRITICAL branch itself trims, never clears: that is the rail " +
-                "being scrolled: $foreground",
-            foreground.contains("trimImageMemoryCache(this,") &&
-                !foreground.contains("releaseImageMemoryCache(this)")
+            "the clear sits in the BACKGROUND arm and the trim in the CRITICAL " +
+                "one: a foreground critical trims, never clears: $trim",
+            trim.contains("ImageCacheRelease.CLEAR -> releaseImageMemoryCache(this)") &&
+                trim.contains("ImageCacheRelease.TRIM ->") &&
+                trim.contains("trimImageMemoryCache(this, ImageCacheTrim.SCROLL_FRACTION)")
+        )
+        assertTrue(
+            "and a critical delivery during a metered walk is deferred (2026-11-26): " +
+                "it is the cards the walk is about to read that a trim would evict",
+            trim.contains("inWalkWindow = UiFrameTrace.inWalkWindow()")
         )
         assertTrue(
             "the level is still recorded, which is the evidence that a wipe " +

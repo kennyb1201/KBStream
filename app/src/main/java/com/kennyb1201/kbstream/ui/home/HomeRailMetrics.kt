@@ -1,5 +1,7 @@
 package com.kennyb1201.kbstream.ui.home
 
+import kotlin.math.roundToInt
+
 /**
  * The Home rail card sizes, in dp, spelled once (spec 2026-11-16, scrolling
  * round three F3).
@@ -29,4 +31,29 @@ internal object HomeRailMetrics {
 
     fun heightDp(landscapeCards: Boolean): Float =
         if (landscapeCards) LANDSCAPE_HEIGHT_DP else POSTER_HEIGHT_DP
+
+    /**
+     * The card's artwork box in PIXELS - the one size the warm and the card's
+     * own request must both use (2026-11-26, art-decode audit).
+     *
+     * The tile warm decodes a neighbour into the memory cache at this size, and
+     * Coil's memory cache is keyed by URL *and* size, so the card's request has
+     * to resolve to the same numbers or the warm writes an entry the card never
+     * reads - the audit's warm/cache size mismatch. Both callers therefore take
+     * the numbers from here: the ViewModel from the display metrics, the rail
+     * from the same display metrics (not Compose's density), so the two cannot
+     * round differently on a TV whose density is fractional.
+     *
+     * The card's request used to carry no explicit size, leaving Coil to resolve
+     * it from the laid-out constraints - the same dp box, but a second place for
+     * the arithmetic to drift. The card now asks for this size outright.
+     */
+    fun artSizePx(landscapeCards: Boolean, density: Float): RailArtPx {
+        val width = (widthDp(landscapeCards) * density).roundToInt().coerceAtLeast(1)
+        val height = (heightDp(landscapeCards) * density).roundToInt().coerceAtLeast(1)
+        return RailArtPx(width, height)
+    }
 }
+
+/** A rail card's artwork request size in decoded pixels (both dimensions > 0). */
+internal data class RailArtPx(val width: Int, val height: Int)

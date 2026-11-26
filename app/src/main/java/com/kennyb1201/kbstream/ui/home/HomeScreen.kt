@@ -254,6 +254,24 @@ private val HomePosterWidth = HomeRailMetrics.POSTER_WIDTH_DP.dp
 private val HomePosterHeight = HomeRailMetrics.POSTER_HEIGHT_DP.dp
 private val HomeLandscapeWidth = HomeRailMetrics.LANDSCAPE_WIDTH_DP.dp
 private val HomeLandscapeHeight = HomeRailMetrics.LANDSCAPE_HEIGHT_DP.dp
+
+/**
+ * The rail card's artwork request size, in pixels (2026-11-26, art-decode
+ * audit).
+ *
+ * From the SAME function the tile warm decodes at (HomeViewModel.warmRailTiles
+ * -> [HomeRailMetrics.artSizePx]), read from the same display density, so the
+ * warm's memory-cache entry and the card's request agree on URL *and* size.
+ * A drifted size writes a second entry the card never reads, which is the warm
+ * the audit's `asked at:`/`decoded at:` lines could not explain.
+ */
+@Composable
+private fun rememberRailArtPx(landscapeCards: Boolean): RailArtPx {
+    val density = LocalContext.current.resources.displayMetrics.density
+    return remember(landscapeCards, density) {
+        HomeRailMetrics.artSizePx(landscapeCards = landscapeCards, density = density)
+    }
+}
 private val HomeRailGap = 12.dp
 
 /**
@@ -4028,8 +4046,11 @@ private fun LibraryListHomeRail(
                             .padding(end = HomeRailGap),
                         contentAlignment = Alignment.Center
                     ) {
+                        val railArtPx = rememberRailArtPx(landscapeCards)
                         if (landscapeCards) {
                             LandscapeCard(
+                                requestWidthPx = railArtPx.width,
+                                requestHeightPx = railArtPx.height,
                                 // The card's backdrop: the viewer's chosen
                                 // still, else the row's own poster when it has
                                 // one, else the resolved backdrop for a rail
@@ -4059,6 +4080,8 @@ private fun LibraryListHomeRail(
                             )
                         } else {
                             PosterCard(
+                                requestWidthPx = railArtPx.width,
+                                requestHeightPx = railArtPx.height,
                                 posterUrl = imageOverridePosterUrl(
                                     paths = overridePaths,
                                     rawId = meta.id,
@@ -4277,8 +4300,11 @@ private fun BuiltinTopPicksRail(
                             { currentOnLongPress.value(meta, requester) }
                         }
 
+                        val railArtPx = rememberRailArtPx(landscapeCards)
                         if (landscapeCards) {
                             LandscapeCard(
+                                requestWidthPx = railArtPx.width,
+                                requestHeightPx = railArtPx.height,
                                 // Target: the resolved TMDB art, then the pick's
                                 // own TMDB backdrop, then its poster - the same
                                 // chain a catalog rail's card uses, including the
@@ -4307,6 +4333,8 @@ private fun BuiltinTopPicksRail(
                             )
                         } else {
                             PosterCard(
+                                requestWidthPx = railArtPx.width,
+                                requestHeightPx = railArtPx.height,
                                 posterUrl = meta.poster,
                                 contentDescription = meta.name,
                                 spotlightId = meta.id,
@@ -8395,8 +8423,11 @@ fun HomeScreen(
                                                             meta.landscapeArtKey()
                                                         ]
 
+                                                    val railArtPx = rememberRailArtPx(landscapeCards)
                                                     if (landscapeCards) {
                                                         LandscapeCard(
+                                                            requestWidthPx = railArtPx.width,
+                                                            requestHeightPx = railArtPx.height,
                                                             // Resolved TMDB art first, then the
                                                             // add-on's own background - and,
                                                             // last, the add-on's POSTER. Rails
@@ -8461,6 +8492,8 @@ fun HomeScreen(
                                                         )
                                                     } else {
                                                         PosterCard(
+                                                            requestWidthPx = railArtPx.width,
+                                                            requestHeightPx = railArtPx.height,
                                                             // One choice covers every surface this
                                                             // title's poster appears on.
                                                             posterUrl = imageOverridePosterUrl(

@@ -161,8 +161,12 @@ fun ProfilePickerScreenMobile(
             // Nothing here is focusable or asked for focus: the mark is
             // decorative (the wordmark is the name) and touch needs no ring,
             // so the profile tiles keep the screen's only landing point.
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
+            //
+            // Side by side, not stacked (2026-11-26), the same lockup the
+            // television picker draws: icon first, wordmark centred against
+            // it, an 8dp gap.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(bottom = 12.dp)
             ) {
                 Image(
@@ -175,7 +179,7 @@ fun ProfilePickerScreenMobile(
                     color = KBAccent,
                     style = MaterialTheme.typography.titleLarge.copy(letterSpacing = 6.sp),
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(top = 6.dp)
+                    modifier = Modifier.padding(start = 8.dp)
                 )
             }
 

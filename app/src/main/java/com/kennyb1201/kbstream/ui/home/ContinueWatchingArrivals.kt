@@ -52,7 +52,7 @@ internal enum class TrackerFeed {
  * dismissed title must not flash back when a tracker lands late.
  */
 internal class ContinueWatchingArrivals(
-    private val localCards: List<UpNextItem>,
+    private var localCards: List<UpNextItem>,
     private val resumeAuthority: ResumeAuthority,
     previousTrackerCards: List<UpNextItem>,
     private val locallyFinished: (List<UpNextItem>) -> List<UpNextItem>,
@@ -96,6 +96,23 @@ internal class ContinueWatchingArrivals(
     /** Publishes the local cards plus whatever trackers already answered. */
     suspend fun publishLocal() {
         arrivals.withLock { publish(snapshot()) }
+    }
+
+    /**
+     * Publishes the local slice AS IT STANDS (spec 2026-11-26, CW load F5).
+     *
+     * The pass hands over the cards that have answered so far, so the rail
+     * fills while the remaining rows are still being enriched instead of
+     * waiting for the slowest wave. Same lock, same snapshot, same merge and
+     * dismissals as [publishLocal] - only the list's length moved, so the
+     * contents are the merged publish's contents and every publish - not only
+     * the last - is gated and filtered.
+     */
+    suspend fun publishLocalCards(cards: List<UpNextItem>) {
+        arrivals.withLock {
+            localCards = cards
+            publish(snapshot())
+        }
     }
 
     /**

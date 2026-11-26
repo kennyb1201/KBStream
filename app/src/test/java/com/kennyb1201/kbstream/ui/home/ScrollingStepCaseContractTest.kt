@@ -117,10 +117,12 @@ class ScrollingStepCaseContractTest {
             warm.contains("async {") && warm.contains("awaitAll()")
         )
         assertTrue(
-            "at the card's own drawn size, from the one spelling of the metrics",
-            warm.contains("HomeRailMetrics.widthDp(landscape)") &&
-                warm.contains("HomeRailMetrics.heightDp(landscape)") &&
-                warm.contains("displayMetrics.density")
+            "at the card's own drawn size, from the one spelling of the metrics - " +
+                "since 2026-11-26 that is ONE function, HomeRailMetrics.artSizePx, " +
+                "which the card's own request reads too",
+            warm.contains("HomeRailMetrics.artSizePx(") &&
+                warm.contains("displayMetrics.density") &&
+                warm.contains("widthPx = artSize.width")
         )
         val tile = viewModel
             .substringAfter("private suspend fun warmRailTile(")

@@ -1183,9 +1183,15 @@ internal fun GuideGridView(
                             verticalAlignment = Alignment.Bottom
                         ) {
                             hourMarks(window, rememberUse24HourClock()).forEach { mark ->
+                                // Half-hour marks (2026-11-26): every mark is 30
+                                // minutes wide now, so the hours and the :30s tile
+                                // the window exactly as the hours alone used to -
+                                // same total width, same shared timeScroll, so a
+                                // :30 label still cannot drift from the cells
+                                // under it.
                                 Box(
                                     modifier = Modifier.width(
-                                        (GuideGrid.MINUTES_PER_HOUR * GRID_SCALE_DP_PER_MIN).dp
+                                        (GRID_RULER_MARK_MINUTES * GRID_SCALE_DP_PER_MIN).dp
                                     )
                                 ) {
                                     // Header-clip F1a: the day rides on the hour's
@@ -1209,7 +1215,14 @@ internal fun GuideGridView(
                                                 append(line)
                                             }
                                         },
-                                        color = KBTextLo,
+                                        // The hours stay the primary marks: a :30
+                                        // is the same type, dimmed, so the ruler
+                                        // does not read twice as loud.
+                                        color = if (mark.isHalfHour) {
+                                            KBTextLo.copy(alpha = 0.65f)
+                                        } else {
+                                            KBTextLo
+                                        },
                                         style = MaterialTheme.typography.labelMedium,
                                         maxLines = 1,
                                         softWrap = false,

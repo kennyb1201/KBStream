@@ -458,14 +458,29 @@ internal fun cellWidthDp(
     return maxOf(minWidthDp, minutes * pxPerMin)
 }
 
+/**
+ * Width of one ruler mark: 30 minutes at [GRID_SCALE_DP_PER_MIN] - 240dp.
+ *
+ * The marks used to be an hour wide, one per hour. A mark at :30 is half an
+ * hour, so every mark is now this wide and they tile the window exactly as
+ * before: the same total content width, the same scroll geometry, no drift.
+ */
+internal const val GRID_RULER_MARK_MINUTES = GuideGrid.MINUTES_PER_HOUR / 2
+
 /** One label in the sticky time header. */
 internal data class GridHourMark(
     /** Minutes from the window's left edge where this label sits. */
     val offsetMinutes: Int,
-    /** `6 PM`, `7 PM`… */
+    /** `6 PM`, `6:30 PM`… */
     val label: String,
     /** `Sat Nov 7` when this mark opens a new day, else null. */
     val dayLabel: String?,
+    /**
+     * A :30 mark (2026-11-26). The hours stay the primary marks, so the
+     * drawing sites style these down - dimmer than [GridHourMark]'s ordinary
+     * colour - without re-parsing [label].
+     */
+    val isHalfHour: Boolean = false,
 )
 
 /**
@@ -491,33 +506,58 @@ internal fun hourMarkLine(mark: GridHourMark): String =
  * the app, because both are in the same field of view.
  */
 internal fun hourMarks(window: GridWindow, use24Hour: Boolean): List<GridHourMark> {
-    val marks = ArrayList<GridHourMark>((window.durationMs / GuideGrid.HOUR_MS).toInt() + 1)
+    val marks = ArrayList<GridHourMark>((window.durationMs / GuideGrid.HOUR_MS).toInt() * 2 + 1)
+    val halfHourMs = GuideGrid.HOUR_MS / 2
     val cal = Calendar.getInstance()
     cal.timeInMillis = window.startUtcMillis
-    var lastDay: Int? = null
+    // A paged window can begin mid-hour. The ruler opens on the next :00 or
+    // :30 - a mark is never drawn before the window's own left edge.
+    val intoBoundary = (cal.get(Calendar.MINUTE) % 30) * 60_000L +
+        cal.get(Calendar.SECOND) * 1_000L + cal.get(Calendar.MILLISECOND)
+    if (intoBoundary != 0L) cal.timeInMillis += halfHourMs - intoBoundary
+    var labelledDay: Int? = null
     while (cal.timeInMillis < window.endUtcMillis) {
         val millis = cal.timeInMillis
+        val isHalfHour = cal.get(Calendar.MINUTE) >= 30
         val day = cal.get(Calendar.DAY_OF_YEAR) + cal.get(Calendar.YEAR) * 1_000
-        val opensDay = lastDay == null || day != lastDay
+        // The date rides on an HOUR mark that opens a day and never on a :30,
+        // which repeats nothing: `Sun Nov 8 · 3 PM`, then `3:30 PM`. When a
+        // window opens at :30 there is no hour mark to date, so the next hour
+        // takes it - the grid can be paged into tomorrow, and a bare "12 AM"
+        // does not say which day.
+        val opensDay = !isHalfHour && day != labelledDay
         marks += GridHourMark(
             offsetMinutes = window.offsetMinutesOf(millis),
-            label = hourLabel(cal.get(Calendar.HOUR_OF_DAY), use24Hour),
-            // The first label always carries the date: the grid can be paged
-            // into tomorrow, and a bare "12 AM" does not say which day.
+            label = hourLabel(
+                hourOfDay = cal.get(Calendar.HOUR_OF_DAY),
+                use24Hour = use24Hour,
+                minuteOfHour = cal.get(Calendar.MINUTE),
+            ),
             dayLabel = if (opensDay) DateFormats.time(millis, GRID_DAY_LABEL) else null,
+            isHalfHour = isHalfHour,
         )
-        lastDay = day
-        cal.add(Calendar.HOUR_OF_DAY, 1)
+        if (opensDay) labelledDay = day
+        cal.add(Calendar.MINUTE, GRID_RULER_MARK_MINUTES)
     }
     return marks
 }
 
-/** `12 AM`, `6 PM` - or `00:00`, `18:00` on a 24-hour clock. */
-internal fun hourLabel(hourOfDay: Int, use24Hour: Boolean): String {
+/**
+ * `12 AM`, `6 PM`, `3:30 PM` - or `00:00`, `18:00`, `15:30` on a 24-hour clock.
+ *
+ * The half-hours (2026-11-26) are the same clock, so the minutes ride through
+ * the same flag: a 24-hour guide must never show `3:30 PM` under cells that
+ * say `15:30`. A whole hour keeps the bare spelling the ruler always had.
+ */
+internal fun hourLabel(hourOfDay: Int, use24Hour: Boolean, minuteOfHour: Int = 0): String {
     val h = ((hourOfDay % 24) + 24) % 24
-    if (use24Hour) return "${h.toString().padStart(2, '0')}:00"
+    val m = ((minuteOfHour % 60) + 60) % 60
+    if (use24Hour) {
+        return "${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}"
+    }
     val h12 = if (h % 12 == 0) 12 else h % 12
-    return "$h12 ${if (h < 12) "AM" else "PM"}"
+    val minutes = if (m == 0) "" else ":${m.toString().padStart(2, '0')}"
+    return "$h12$minutes ${if (h < 12) "AM" else "PM"}"
 }
 
 /** Where a vertical press lands: a row index, and the cell inside it. */

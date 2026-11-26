@@ -34,7 +34,7 @@ class GuideGridFixedSpanContractTest {
     // ── T1: the cells keep the three-hour size ────────────────────────────
 
     @Test
-    fun `a half-hour cell is 240dp and an hour mark is 480dp`() {
+    fun `a half-hour cell and a ruler mark are both 240dp`() {
         val start = 1_700_000_000_000L
         assertEquals(
             "F1c: a 30-minute program is the same 240dp the 3h window drew",
@@ -42,24 +42,31 @@ class GuideGridFixedSpanContractTest {
             cellWidthDp(start, start + 30 * minute)
         )
         assertEquals(480, cellWidthDp(start, start + 60 * minute))
+        // 2026-11-26: a mark is half an hour of air time now, so an hour of the
+        // ruler is two marks - the same 480dp the hourly-only ruler drew it at.
         assertEquals(
-            "F1c: and an hour mark is 480dp",
-            480,
-            GuideGrid.MINUTES_PER_HOUR * GRID_SCALE_DP_PER_MIN
+            "F1c: a mark is 30 minutes at the scale: 240dp",
+            240,
+            GRID_RULER_MARK_MINUTES * GRID_SCALE_DP_PER_MIN
+        )
+        assertEquals(
+            "and the hour the marks tile is still 480dp",
+            GuideGrid.MINUTES_PER_HOUR * GRID_SCALE_DP_PER_MIN,
+            2 * GRID_RULER_MARK_MINUTES * GRID_SCALE_DP_PER_MIN
         )
         assertEquals("F1a: the scale is the 3h scale", 8, GRID_SCALE_DP_PER_MIN)
     }
 
     @Test
-    fun `both grids draw their hour marks at the fixed scale`() {
+    fun `both grids draw their ruler marks at the fixed scale`() {
         assertTrue(
-            "the television's time header: $tvGrid",
-            tvGrid.contains("(GuideGrid.MINUTES_PER_HOUR * GRID_SCALE_DP_PER_MIN).dp")
+            "the television's time header, one mark per half-hour: $tvGrid",
+            tvGrid.contains("(GRID_RULER_MARK_MINUTES * GRID_SCALE_DP_PER_MIN).dp")
         )
         assertTrue(
             "the phone's header reads its own scale, which is the same constant: $phoneGrid",
             phoneGrid.contains("val pxPerMin = GRID_SCALE_DP_PER_MIN") &&
-                phoneGrid.contains("(GuideGrid.MINUTES_PER_HOUR * pxPerMin).dp")
+                phoneGrid.contains("(GRID_RULER_MARK_MINUTES * pxPerMin).dp")
         )
     }
 

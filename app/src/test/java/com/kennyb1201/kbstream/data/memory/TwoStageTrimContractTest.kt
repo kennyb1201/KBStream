@@ -38,23 +38,31 @@ class TwoStageTrimContractTest {
     @Test
     fun `backgrounding clears and foreground pressure trims`() {
         val block = trimBlock()
-        val background = block.indexOf("level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND")
+        // 2026-11-26 (art-decode audit): the two levels are still mapped
+        // separately, but the response now comes from ImageCacheTrim.releaseFor
+        // - which is what makes the mid-walk deferral possible at all.
+        val background = block.indexOf("backgrounded = level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND")
         val critical = block.indexOf(
-            "else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL)"
+            "critical = level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL"
         )
-        val clear = block.indexOf("releaseImageMemoryCache(this)")
+        assertTrue(
+            "both levels are mapped onto the rule: $background/$critical",
+            background in 0 until critical
+        )
+        assertTrue(
+            "and the rule is the one that answers",
+            block.contains("ImageCacheTrim.releaseFor(")
+        )
+        val clearArm = block.indexOf("ImageCacheRelease.CLEAR -> releaseImageMemoryCache(this)")
+        val trimArm = block.indexOf("ImageCacheRelease.TRIM ->")
         val trim = block.indexOf("trimImageMemoryCache(this, ImageCacheTrim.SCROLL_FRACTION)")
         assertTrue(
-            "the BACKGROUND test comes first and clears: $background/$clear",
-            background in 0 until clear
+            "the clear is the BACKGROUND arm's, and nothing else reaches it: $clearArm",
+            clearArm > critical
         )
         assertTrue(
-            "the CRITICAL branch follows it and trims: $critical/$trim",
-            critical in 0 until trim
-        )
-        assertTrue(
-            "each call sits under its own guard, not both under one",
-            background < critical && clear < trim
+            "the trim is the CRITICAL arm's: $trimArm/$trim",
+            trimArm in 0 until trim
         )
     }
 

@@ -102,7 +102,16 @@ fun LandscapeCard(
      */
     spotlightExpandable: Boolean = true,
     /** The row's air date, when the card is an episode's (the panel's meta line). */
-    airDate: String? = null
+    airDate: String? = null,
+    /**
+     * The artwork request size in PIXELS, when the caller knows the drawn box
+     * exactly (2026-11-26, art-decode audit) - the same contract
+     * [PosterCard.requestWidthPx] carries, and the reason is the same: the tile
+     * warm and the card's request must agree on URL *and* size. Zero keeps the
+     * old behaviour (Coil resolves the size from the laid-out constraints).
+     */
+    requestWidthPx: Int = 0,
+    requestHeightPx: Int = 0
 ) {
     // Walk diagnostics: the landscape twin of PosterCard's count (see
     // ComposeChurn) - the rail's own card shape.
@@ -230,10 +239,15 @@ fun LandscapeCard(
 
             if (!effectiveUrl.isNullOrBlank() && !hasError) {
                 AsyncImage(
-                    model = remember(effectiveUrl) {
+                    model = remember(effectiveUrl, requestWidthPx, requestHeightPx) {
                         ImageRequest.Builder(context)
                             .data(effectiveUrl)
                             .crossfade(false)
+                            .apply {
+                                if (requestWidthPx > 0 && requestHeightPx > 0) {
+                                    size(requestWidthPx, requestHeightPx)
+                                }
+                            }
                             .build()
                     },
                     contentDescription = contentDescription,

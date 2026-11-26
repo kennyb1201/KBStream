@@ -199,21 +199,22 @@ class ScrollRoundTwoContractTest {
         // Dig four §3b/§3e (rank 2) made the response two-stage, so the round-two
         // pin is re-anchored on the branch it describes rather than on the whole
         // critical block.
+        // 2026-11-26 (art-decode audit): the branch is now a `when` over
+        // ImageCacheRelease, so the pin moves to the arms and keeps the same
+        // two rules - a foreground critical trims (not clears), at the smaller
+        // bite; a clear waits for the process having left the screen.
         assertTrue(
             "a foreground CRITICAL is a graded trim - and the smaller bite " +
                 "(round four F3c), because this is the only trim with a rail on screen",
-            app.contains(
-                "} else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {\n" +
-                    "                // The smaller bite (round four F3c): this path runs with the\n"
-            ) && app.contains("trimImageMemoryCache(this, ImageCacheTrim.SCROLL_FRACTION)")
+            app.contains("critical = level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL") &&
+                app.contains("ImageCacheRelease.TRIM ->") &&
+                app.contains("trimImageMemoryCache(this, ImageCacheTrim.SCROLL_FRACTION)")
         )
         assertTrue(
             "and a full clear waits for BACKGROUND and above, where nothing is on " +
                 "screen: that is what makes it free",
-            app.contains(
-                "if (level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {\n" +
-                    "                releaseImageMemoryCache(this)"
-            )
+            app.contains("backgrounded = level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND") &&
+                app.contains("ImageCacheRelease.CLEAR -> releaseImageMemoryCache(this)")
         )
         assertTrue(
             "onLowMemory still drops everything - that is the process dying",

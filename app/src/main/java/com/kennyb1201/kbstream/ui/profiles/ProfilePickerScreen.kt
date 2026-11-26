@@ -263,13 +263,17 @@ fun ProfilePickerScreen(
         // splash draws (ui/components/LaunchSplash.kt), smaller: this is a
         // header, not a splash.
         //
-        // The mark is decorative - the wordmark under it is the name, so a
+        // The mark is decorative - the wordmark beside it is the name, so a
         // screen reader must not stop on it - and neither the mark nor the
         // wordmark is focusable or asked for focus: the landing below still
         // aims at the first tile, and anything focusable up here would take a
         // D-pad press (and the initial ring) away from it.
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
+        //
+        // Side by side, not stacked (2026-11-26): the mark reads as the app's
+        // icon leading its name, the way a lockup is drawn, instead of as a
+        // logo sitting on top of a caption.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(bottom = 16.dp)
         ) {
             Image(
@@ -284,7 +288,7 @@ fun ProfilePickerScreen(
                 // tracking, so the two read as one brand.
                 style = MaterialTheme.typography.headlineSmall.copy(letterSpacing = 6.sp),
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 6.dp)
+                modifier = Modifier.padding(start = 8.dp)
             )
         }
 

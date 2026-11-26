@@ -53,6 +53,7 @@ import com.kennyb1201.kbstream.ui.components.WarmRowAhead
 import com.kennyb1201.kbstream.ui.iptv.GuideRowCellMemo
 import com.kennyb1201.kbstream.ui.iptv.GuideRowGuideState
 import com.kennyb1201.kbstream.ui.iptv.GuideScore
+import com.kennyb1201.kbstream.ui.iptv.GRID_RULER_MARK_MINUTES
 import com.kennyb1201.kbstream.ui.iptv.GRID_SCALE_DP_PER_MIN
 import com.kennyb1201.kbstream.ui.iptv.GRID_SPAN_HOURS
 import com.kennyb1201.kbstream.ui.iptv.autoFollowWindow
@@ -277,14 +278,25 @@ internal fun GuideGridMobileView(
             Box(modifier = Modifier.weight(1f).fillMaxHeight().clipToBounds()) {
                 Row(modifier = Modifier.horizontalScroll(timeScroll).height(26.dp)) {
                     hourMarks(window, rememberUse24HourClock()).forEach { mark ->
+                        // The same 30-minute tiling as the TV ruler (2026-11-26):
+                        // hours and :30s both 240dp, so the strip keeps its total
+                        // width and a :30 label cannot drift from the cells under
+                        // it.
                         Box(
                             modifier = Modifier.width(
-                                (GuideGrid.MINUTES_PER_HOUR * pxPerMin).dp
+                                (GRID_RULER_MARK_MINUTES * pxPerMin).dp
                             )
                         ) {
                             Text(
                                 text = mark.dayLabel?.let { "$it · ${mark.label}" } ?: mark.label,
-                                color = if (mark.dayLabel != null) KBAccent else KBTextLo,
+                                color = when {
+                                    // The date keeps the accent; a :30 is the
+                                    // same size, dimmed, so the hours stay the
+                                    // primary marks.
+                                    mark.dayLabel != null -> KBAccent
+                                    mark.isHalfHour -> KBTextLo.copy(alpha = 0.65f)
+                                    else -> KBTextLo
+                                },
                                 style = MaterialTheme.typography.labelSmall,
                                 maxLines = 1
                             )

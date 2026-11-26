@@ -63,4 +63,49 @@ object ImageCacheTrim {
         val share = targetFraction.coerceIn(0.0, 1.0)
         return (residentBytes * (1.0 - share)).toLong().coerceAtLeast(0L)
     }
+
+    /**
+     * What one `onTrimMemory` delivery should give back (2026-11-26, art-decode
+     * audit).
+     *
+     * The walk paste showed the remaining cost of a mid-walk trim: a graded trim
+     * still walks Coil's LRU order, and the rail the viewer is looking at is
+     * not the eldest entry - but the cards just ahead of the walk have not been
+     * touched yet, so they are, and `cardDiskDecodes` rises right after the trim
+     * tag. Protecting "the visible set" properly would need a pin API Coil does
+     * not expose, and re-warming after the trim pays the decode the trim was
+     * trying to reclaim.
+     *
+     * So the mid-walk trim is DEFERRED rather than approximated: while a metered
+     * gesture is open (or inside its short tail), a critical delivery gives back
+     * nothing. The cache is already capped at its own max size, the eviction a
+     * trim would perform is exactly what the next insert's LRU bound does for
+     * free, and the backgrounding clear - which runs with nothing on screen and
+     * is the deep reclaim that matters - is unaffected.
+     *
+     * Pure so the response table is testable without a Context: the caller maps
+     * the platform's level constants onto [backgrounded]/[critical].
+     */
+    internal fun releaseFor(
+        backgrounded: Boolean,
+        critical: Boolean,
+        inWalkWindow: Boolean,
+    ): ImageCacheRelease = when {
+        backgrounded -> ImageCacheRelease.CLEAR
+        !critical -> ImageCacheRelease.NONE
+        inWalkWindow -> ImageCacheRelease.NONE
+        else -> ImageCacheRelease.TRIM
+    }
+}
+
+/** What a memory-pressure delivery should give back. */
+internal enum class ImageCacheRelease {
+    /** Nothing: the delivery is a hint, or the viewer is mid-walk. */
+    NONE,
+
+    /** The graded LRU trim at the resting size ([ImageCacheTrim.SCROLL_FRACTION]). */
+    TRIM,
+
+    /** The whole decoded-bitmap cache - the process has left the screen. */
+    CLEAR,
 }

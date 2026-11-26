@@ -78,8 +78,9 @@ class GuideGridHourMarkContractTest {
                 hourMarkLine(zoomMarks[1])
             )
             assertEquals(
-                "F1a: at $hours h the whole window is covered by hour marks",
-                (hours).toInt(),
+                "F1a + 2026-11-26: at $hours h the window is covered by an hour " +
+                    "and a half-hour mark per hour",
+                hours * 2,
                 zoomMarks.size
             )
         }
@@ -135,7 +136,12 @@ class GuideGridHourMarkContractTest {
         assertTrue(
             "F1a: the day keeps the accent, the hour keeps the plain colour",
             marks.contains("withStyle(SpanStyle(color = KBAccent))") &&
-                marks.contains("color = KBTextLo,")
+                marks.contains("KBTextLo\n")
+        )
+        assertTrue(
+            "2026-11-26: and a :30 is the same type dimmed, so the hours stay primary",
+            marks.contains("color = if (mark.isHalfHour) {") &&
+                marks.contains("KBTextLo.copy(alpha = 0.65f)")
         )
         assertTrue(
             "F1a: the line itself comes from the rule, so the phone and the TV " +
@@ -172,8 +178,9 @@ class GuideGridHourMarkContractTest {
                 grid.contains("private val GRID_BAND_WITH_PREVIEW: Dp = 135.dp")
         )
         assertTrue(
-            "F2b: the date still appears only where the day turns",
-            rules.contains("val opensDay = lastDay == null || day != lastDay") &&
+            "F2b: the date still appears only where the day turns - and only on an " +
+                "hour mark, never on its :30 (2026-11-26)",
+            rules.contains("val opensDay = !isHalfHour && day != labelledDay") &&
                 rules.contains("dayLabel = if (opensDay) DateFormats.time(millis, GRID_DAY_LABEL) else null")
         )
         assertFalse(

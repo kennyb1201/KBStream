@@ -44,6 +44,7 @@ import com.kennyb1201.kbstream.data.notifications.NewEpisodeRules
 import com.kennyb1201.kbstream.data.player.rerootedEpisodeStreamId
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.reporting.ImageLoadTrace
+import com.kennyb1201.kbstream.data.reporting.UiFrameTrace
 import com.kennyb1201.kbstream.data.reporting.CwLoadTrace
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.reporting.SpotlightDiagTrace
@@ -3615,7 +3616,23 @@ Log.d(
 
         val next = forward.first()
         val nextKey = warmKeyOf(next)
-        val decodeNext = heroNextBitmapInFlight.add(nextKey)
+        // 2026-11-26 (art-decode audit, hero re-decode): do NOT decode the next
+        // card's 1280x720 bitmap inside a walk window - the metered gesture and
+        // the trace's own two-second tail, which is the same gate that scopes
+        // `scroll: heroDecodes`. This ran on every focus arrival, so the walk
+        // paid ~one hero-size decode per step for a card it mostly passed - the
+        // 6390 walk's 124 - and each 3.5MB entry pushed rail tiles out of the
+        // 48MB cache before anything drew it. The settled card is still warmed
+        // by [warmHeroLookahead] after its dwell, which is the only hero bitmap
+        // the walk goes on to draw; the URLs below still resolve, so that warm
+        // never waits on a lookup.
+        //
+        // Counted as `skippedWalk`: from the trace's side this is a hero warm the
+        // walk cancelled before it was spent, exactly like the settle warm's
+        // own debounce.
+        val walkOpen = UiFrameTrace.inWalkWindow()
+        if (walkOpen) ImageLoadTrace.noteHeroWarmSkippedWalk()
+        val decodeNext = !walkOpen && heroNextBitmapInFlight.add(nextKey)
 
         viewModelScope.launch {
             try {
@@ -3634,9 +3651,13 @@ Log.d(
                     }
                 }
                 // The rest of the window is URLs only. Parallel, bounded by the
-                // URL semaphore and the shared artwork cache.
+                // URL semaphore and the shared artwork cache. A skipped decode
+                // (the walk is open, or this card's warm is already running) puts
+                // the first card in this list too - resolved, just not decoded,
+                // so the settle warm still never waits on a lookup.
+                val urlOnly = if (decodeNext) forward.drop(1) else forward
                 coroutineScope {
-                    forward.drop(1).map { candidate ->
+                    urlOnly.map { candidate ->
                         async {
                             try {
                                 heroUrlWarmSemaphore.withPermit {
@@ -3823,10 +3844,14 @@ Log.d(
 
         val application = getApplication<Application>()
         val landscape = AppPreferences.homeLandscapeActive(application)
-        val density = application.resources.displayMetrics.density
-        val widthPx = (HomeRailMetrics.widthDp(landscape) * density).roundToInt()
-        val heightPx = (HomeRailMetrics.heightDp(landscape) * density).roundToInt()
-        if (widthPx <= 0 || heightPx <= 0) return
+        // 2026-11-26: ONE size, from the same function the card's own request
+        // uses (HomeRailMetrics.artSizePx). The warm is only worth anything if
+        // it writes the entry the card reads.
+        val artSize = HomeRailMetrics.artSizePx(
+            landscapeCards = landscape,
+            density = application.resources.displayMetrics.density,
+        )
+        if (artSize.width <= 0 || artSize.height <= 0) return
 
         viewModelScope.launch {
             neighbours.map { next ->
@@ -3838,8 +3863,8 @@ Log.d(
                             warmRailTile(
                                 item = next,
                                 landscape = landscape,
-                                widthPx = widthPx,
-                                heightPx = heightPx
+                                widthPx = artSize.width,
+                                heightPx = artSize.height
                             )
                         }
                     } catch (e: kotlinx.coroutines.CancellationException) {
@@ -8163,15 +8188,24 @@ Log.d(
         val buildId = cwBuildId
         if (buildId == 0L) return
         val withArt = cwCardsWithArt(items)
-        if (cwFirstPublishArt < 0) cwFirstPublishArt = withArt
+        // F5 (spec 2026-11-26): a build publishes SEVERAL times now - the first
+        // landing, then one per batch - so `home.cwPublish` must be the FIRST
+        // publish or the paste's headline would report the last batch and read
+        // as a pass that never improved. The first publish is the number the
+        // spec's acceptance asks for ("cwPublish (first enriched publish)
+        // within ~2s of the seed"); every later one is a `cwload:` line below.
+        val firstPublish = cwFirstPublishArt < 0
+        if (firstPublish) cwFirstPublishArt = withArt
         // The spec's own label, on the pinned `home.*` line as well: the paste's
         // headline for one load is `home.cwPublish` / `home.cwFirstPaint` /
         // `home.cwArtSettled`, and the `cwload:` lines below carry the per-build
         // detail the latest-value-per-label view cannot.
-        PerfTrace.record(
-            "home.cwPublish",
-            android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs
-        )
+        if (firstPublish) {
+            PerfTrace.record(
+                "home.cwPublish",
+                android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs
+            )
+        }
         PerfTrace.recordCount("home.cwCards", items.size.toLong())
         CwLoadTrace.note(
             buildId,
@@ -8414,12 +8448,105 @@ Log.d(
                     val lookupSemaphore =
                         Semaphore(MAX_CONCURRENT_UP_NEXT_LOOKUPS)
 
+                    // Shows this pass proves are finished locally, in the
+                    // rail's own identity vocabulary. Tracked so a tracker
+                    // card for one of them can be dropped below without
+                    // waiting on the tracker feed to catch up.
+                    //
+                    // Keyed by each of the show's keys and carrying the
+                    // furthest episode the pass proved watched (Slice B), so
+                    // the filter can tell "the card points at the episode
+                    // just finished" from "the card points at the new one".
+                    //
+                    // A synchronized wrapper rather than a concurrent map:
+                    // it is only written and emptiness-checked here - never
+                    // iterated while its concurrent writers are still
+                    // running - so the wrapper (API 1) is sufficient and
+                    // keeps a newer collection type out of the app.
+                    val locallyFinishedShows: MutableMap<String, LocallyFinishedShow> =
+                        java.util.Collections.synchronizedMap(
+                            HashMap<String, LocallyFinishedShow>()
+                        )
+
+                    fun withoutLocallyFinishedTrackerCards(
+                        items: List<UpNextItem>
+                    ): List<UpNextItem> =
+                        if (locallyFinishedShows.isEmpty()) {
+                            items
+                        } else {
+                            items.filterNot { item ->
+                                trackerCardLocallyFinished(
+                                    item,
+                                    locallyFinishedShows
+                                )
+                            }
+                        }
+
+                    // Read once per merge: the authority decides which source's
+                    // position wins a title, and a change made mid-merge must
+                    // not split one pass in two.
+                    //
+                    // Built BEFORE the local rows are enriched since
+                    // 2026-11-26 (CW load F5): the pass publishes through it
+                    // as each row answers, so it cannot wait for the last one.
+                    val resumeAuthority =
+                        AppPreferences.getResumeAuthority(getApplication())
+
+                    // ONE publisher for the whole rail: the local cards
+                    // first, then each tracker feed the moment it answers
+                    // (see ContinueWatchingArrivals). Every publish runs the
+                    // same locally-finished filter, merge and dismissals the
+                    // single merged publish used, so the contents are the
+                    // merged publish's contents - only the timing moved.
+                    val arrivals =
+                        ContinueWatchingArrivals(
+                            localCards = emptyList(),
+                            resumeAuthority = resumeAuthority,
+                            previousTrackerCards = previousSimklUpNextItems(),
+                            locallyFinished = ::withoutLocallyFinishedTrackerCards,
+                            dismiss = { items -> applyContinueWatchingDismissals(items) },
+                            publish = { items ->
+                                if (isLatestUpNextRequest(requestVersion)) {
+                                    publishUpNext(items)
+                                }
+                            }
+                        )
+
+                    // F5 (spec 2026-11-26): the local slice starts as the seed
+                    // - every history row's instant card, in history order - and
+                    // each row's enrichment upgrades its card IN PLACE as it
+                    // lands. So the rail fills instead of collapsing to the
+                    // first answer and growing back, and the seed cards of the
+                    // rows still in flight stay where they were.
+                    val localProgress =
+                        CwLocalProgress(
+                            seed = history.mapNotNull { entry ->
+                                instantContinueWatchingItem(entry)?.let { card ->
+                                    entry.id to card
+                                }
+                            }
+                        )
+
+                    // Local continue-watching rows are already unfinished resume
+                    // rows, including movies that were stopped before completion.
+                    //
+                    // F5: this is the pass's own bound (see
+                    // [cwLocalItemsIncrementally]). Each row still carries the
+                    // 8s F3 timeout inside; the deadline caps the pass, which is
+                    // what the 6390 paste's +153s was.
                     val localItems =
-    coroutineScope {
-    // Local continue-watching rows are already unfinished resume rows,
-    // including movies that were stopped before completion.
-    history.map { entry ->
-        async {
+                        cwLocalItemsIncrementally(
+                            rows = history,
+                            progress = localProgress,
+                            deadlineAtMs = cwBuildStartedAtMs + UP_NEXT_PASS_DEADLINE_MS,
+                            nowMs = { android.os.SystemClock.elapsedRealtime() },
+                            keyOf = { entry -> entry.id },
+                            publish = { cards ->
+                                if (isLatestUpNextRequest(requestVersion)) {
+                                    arrivals.publishLocalCards(cards)
+                                }
+                            },
+                        ) { entry ->
             // A row whose enrichment has not answered in
             // UP_NEXT_ROW_ENRICH_TIMEOUT_MS publishes the card it already IS
             // (spec 2026-11-24, F3). The collection below used to await every
@@ -8437,11 +8564,13 @@ Log.d(
             // asks again.
             //
             // A row this pass DROPS (the zombie card) or fails to name has to
-            // leave the async as null, but the row body now sits inside
+            // leave the row as null, but the row body now sits inside
             // withTimeoutOrNull + withPermit, and a labelled return cannot cross
             // a non-inline lambda. The drop is carried out as a flag and
-            // returned at the async's own level instead; `run row@` is the inline
-            // boundary the two `?: return@row null` sites leave through.
+            // returned at the lambda's own level instead; `run row@` is the inline
+            // boundary the two `?: return@row null` sites leave through. (The
+            // label is the build function's name - the implicit label of a
+            // lambda is the function it is passed to, not the parameter's name.)
             var zombieRow = false
             val enriched =
                 withTimeoutOrNull(UP_NEXT_ROW_ENRICH_TIMEOUT_MS) {
@@ -8925,7 +9054,7 @@ Log.d(
                 }
             }
                 }
-            if (zombieRow) return@async null
+            if (zombieRow) return@cwLocalItemsIncrementally null
             if (enriched == null) {
                 // Counted so the paste can say how many cards the rail got
                 // WITHOUT their enrichment, rather than leaving a thin card to
@@ -8933,43 +9062,7 @@ Log.d(
                 PerfTrace.recordCount("home.cwRowTimeout", 1)
             }
             enriched ?: instantContinueWatchingItem(entry)
-        }
-    }.awaitAll().filterNotNull()
-}
-
-                        // Shows this pass proves are finished locally, in the
-                        // rail's own identity vocabulary. Tracked so a tracker
-                        // card for one of them can be dropped below without
-                        // waiting on the tracker feed to catch up.
-                        //
-                        // Keyed by each of the show's keys and carrying the
-                        // furthest episode the pass proved watched (Slice B), so
-                        // the filter can tell "the card points at the episode
-                        // just finished" from "the card points at the new one".
-                        //
-                        // A synchronized wrapper rather than a concurrent map:
-                        // it is only written and emptiness-checked here - never
-                        // iterated while its concurrent writers are still
-                        // running - so the wrapper (API 1) is sufficient and
-                        // keeps a newer collection type out of the app.
-                        val locallyFinishedShows: MutableMap<String, LocallyFinishedShow> =
-                            java.util.Collections.synchronizedMap(
-                                HashMap<String, LocallyFinishedShow>()
-                            )
-
-                        fun withoutLocallyFinishedTrackerCards(
-                            items: List<UpNextItem>
-                        ): List<UpNextItem> =
-                            if (locallyFinishedShows.isEmpty()) {
-                                items
-                            } else {
-                                items.filterNot { item ->
-                                    trackerCardLocallyFinished(
-                                        item,
-                                        locallyFinishedShows
-                                    )
-                                }
-                            }
+                        }
 
                         // A series with watched episodes but no in-progress row
                         // still has unwatched aired episodes, so it belongs on the
@@ -8979,55 +9072,40 @@ Log.d(
                         // watch. Caught-up shows resolve to no next episode and are
                         // still kept off the rail - and their names are recorded
                         // so their tracker twins leave too.
+                        //
+                        // F5 (2026-11-26): the base is the PROGRESS slice, not
+                        // the landed rows alone. The pass is bounded now, so a
+                        // deadline that takes the remaining rows must not take
+                        // their cards with it: the seed cards of the rows that
+                        // never answered stay where the incremental publishes
+                        // put them, and a row this pass dropped (the zombie)
+                        // is already out of the slice. Only the series
+                        // extension below runs on the rows that answered,
+                        // because it costs a lookup per row.
                         val localCards =
-                            localItems +
+                            localProgress.cards() +
                                 loadLocalNextUpItems(
                                     localItems,
                                     locallyFinishedShows
                                 )
 
-                        // The publisher below carries the tracker cards already
-                        // on screen into the local-first publish instead of
+                        // The publisher carries the tracker cards already on
+                        // screen into the local-first publish instead of
                         // replacing the list — replacing it made every Simkl
                         // card vanish on each Home resume until the slow
-                        // re-merge finished. applyContinueWatchingDismissals
-                        // still filters anything the user removed, so a
-                        // removed title cannot linger through the carry-over.
-                        // A profile switch clears the rail and bumps the
-                        // request version, so a build that was already past
-                        // its last suspension when the switch landed can
-                        // still be holding the rows of the profile the user
-                        // just left (its history DB stays readable through
-                        // the retire grace period). Every publish is gated on
-                        // that version for exactly this reason.
-                        // Read once per merge: the authority decides which
-                        // source's position wins a title, and a change made
-                        // mid-merge must not split one pass in two.
-                        val resumeAuthority =
-                            AppPreferences.getResumeAuthority(getApplication())
-
-                        // ONE publisher for the whole rail: the local cards
-                        // first, then each tracker feed the moment it answers
-                        // (see ContinueWatchingArrivals). Every publish runs the
-                        // same locally-finished filter, merge and dismissals the
-                        // single merged publish used, so the contents are the
-                        // merged publish's contents - only the timing moved.
-                        val arrivals =
-                            ContinueWatchingArrivals(
-                                localCards = localCards,
-                                resumeAuthority = resumeAuthority,
-                                previousTrackerCards = previousSimklUpNextItems(),
-                                locallyFinished = ::withoutLocallyFinishedTrackerCards,
-                                dismiss = { items -> applyContinueWatchingDismissals(items) },
-                                publish = { items ->
-                                    if (isLatestUpNextRequest(requestVersion)) {
-                                        publishUpNext(items)
-                                    }
-                                }
-                            )
-
+                        // re-merge finished. A profile switch clears the rail
+                        // and bumps the request version, so a build that was
+                        // already past its last suspension when the switch
+                        // landed can still be holding the rows of the profile
+                        // the user just left; every publish is gated on that
+                        // version for exactly this reason.
+                        //
+                        // F5 (2026-11-26): the final publish of the local half,
+                        // now that every row that answered has landed and the
+                        // series extension below has run. The incremental
+                        // publishes before it carried the partial slice.
                         if (localCards.isNotEmpty()) {
-                            arrivals.publishLocal()
+                            arrivals.publishLocalCards(localCards)
                         }
 
                         // The feeds are read CONCURRENTLY and each publishes on
@@ -16326,6 +16404,22 @@ private suspend fun calculateEpisodesRemaining(
          * cached, so every surface retries on its own next pass.
          */
         private const val UP_NEXT_ROW_ENRICH_TIMEOUT_MS =
+            8_000L
+
+        /**
+         * How long one upNext PASS may spend enriching its local rows
+         * (spec 2026-11-26, CW load F5).
+         *
+         * The F3 per-row timeout bounds a row, not the pass: the rows run six
+         * at a time, so ~108 resume rows are ~18 waves, and on a cold TMDB
+         * cache sharing the repository with Home's own art lookups every wave
+         * can spend its whole 8s. That multiplication is the 6390 paste's
+         * `publish +153856ms`. The deadline is the same 8s as the row timeout
+         * and is measured from `beginCwBuild`, so the history read and the seed
+         * before the enrichment are inside it: after it the pass publishes what
+         * it has and the next pass asks the rest.
+         */
+        private const val UP_NEXT_PASS_DEADLINE_MS =
             8_000L
 
         /**

@@ -185,6 +185,18 @@ fun PosterCard(
      * tell a catalog card from a CW card ABOUT THE SAME SHOW.
      */
     spotlightExpandable: Boolean = true,
+    /**
+     * The artwork request size in PIXELS, when the caller knows the drawn box
+     * exactly (2026-11-26, art-decode audit).
+     *
+     * Home passes the rail card's own box here, from the same
+     * `HomeRailMetrics.artSizePx` the tile warm uses, so the warm's cache entry
+     * and this request agree on URL *and* size - the two fields Coil keys a
+     * memory entry by. Zero (the default) keeps the old behaviour: no explicit
+     * size, and Coil resolves it from the laid-out constraints.
+     */
+    requestWidthPx: Int = 0,
+    requestHeightPx: Int = 0,
     overlayContent: (@Composable BoxScope.() -> Unit)? = null
 ) {
     // Walk diagnostics: the number of CARD bodies a walk runs, which is what a
@@ -288,10 +300,15 @@ fun PosterCard(
                     // cost on a 1.7 GB box for a tile the user is about to
                     // scroll past. The hero (and the few full-screen art
                     // surfaces) opt back into crossfade on their own request.
-                    model = remember(posterUrl) {
+                    model = remember(posterUrl, requestWidthPx, requestHeightPx) {
                         ImageRequest.Builder(context)
                             .data(posterUrl)
                             .crossfade(false)
+                            .apply {
+                                if (requestWidthPx > 0 && requestHeightPx > 0) {
+                                    size(requestWidthPx, requestHeightPx)
+                                }
+                            }
                             .build()
                     },
                     contentDescription = contentDescription,

@@ -22,6 +22,11 @@ import org.junit.Test
  * copies are the drift. What is checked here is that both draw the same brand,
  * above the title, and that neither takes focus or a screen reader away from the
  * tiles below.
+ *
+ * The arrangement is a lockup (spec 2026-11-26): the mark to the LEFT of the
+ * wordmark, centred against it, and not stacked above it as the first version
+ * drew it - the icon read as a logo sitting on a caption rather than as the
+ * app's icon leading its name.
  */
 class ProfilePickerBrandHeaderContractTest {
 
@@ -83,6 +88,42 @@ class ProfilePickerBrandHeaderContractTest {
             "with the phone's gap to the title",
             region.contains("Modifier.padding(bottom = 12.dp)")
         )
+    }
+
+    @Test
+    fun `the mark sits beside the wordmark, not above it`() {
+        listOf(
+            "tv" to header(tv, "KBPageTitle(text = \"Who's watching?\")"),
+            "phone" to header(phone, "text = \"Who's watching?\"")
+        ).forEach { (surface, region) ->
+            assertTrue(
+                "$surface: the pair is a row, so the mark's end is left of the " +
+                    "wordmark's start: $region",
+                region.contains("Row(")
+            )
+            assertFalse(
+                "$surface: and no longer a column - that stacked the mark over " +
+                    "the name",
+                region.contains("Column(")
+            )
+            assertTrue(
+                "$surface: the wordmark is centred against the mark, not just " +
+                    "top-aligned with it",
+                region.contains("verticalAlignment = Alignment.CenterVertically")
+            )
+            assertTrue(
+                "$surface: the icon is drawn first, so it leads the name",
+                region.indexOf("Image(") in 0 until region.indexOf("text = \"KBSTREAM\"")
+            )
+            assertTrue(
+                "$surface: an 8dp gap replaces the old 6dp top padding",
+                region.contains("Modifier.padding(start = 8.dp)")
+            )
+            assertFalse(
+                "$surface: nothing is padded above the wordmark any more",
+                region.contains("Modifier.padding(top = 6.dp)")
+            )
+        }
     }
 
     @Test

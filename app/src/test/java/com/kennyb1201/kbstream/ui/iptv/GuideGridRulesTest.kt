@@ -345,9 +345,12 @@ class GuideGridRulesTest {
         val window = windowFrom(at(22))
         val marks = hourMarks(window, use24Hour = false)
 
-        assertEquals(6, marks.size)
+        // Every hour AND its half (2026-11-26): twelve marks over six hours.
+        assertEquals(12, marks.size)
         assertEquals(0, marks[0].offsetMinutes)
         assertEquals("10 PM", marks[0].label)
+        assertEquals("10:30 PM", marks[1].label)
+        assertEquals(30, marks[1].offsetMinutes)
         assertNotNull(marks[0].dayLabel)
 
         // Midnight opens a new day and says so.
