@@ -28,7 +28,9 @@ class BrowseReturnFocusWiringContractTest {
             file = "TagScreen.kt",
             keyBuilder = "tagBrowseScreenKey(",
             cardKey = "itemId = cardKey",
-            recordMarker = "onBeforeOpenDetail(cardKey, itemIndex)",
+            // Read through rememberUpdatedState since the perf item-4
+            // remainder made the card's click a remembered instance.
+            recordMarker = "currentOnBeforeOpenDetail.value(cardKey, itemIndex)",
             navigate = "viewModel.resolveAndNavigate("
         ),
         BrowseScreen(
@@ -37,7 +39,9 @@ class BrowseReturnFocusWiringContractTest {
             file = "StudioScreen.kt",
             keyBuilder = "studioBrowseScreenKey(",
             cardKey = "itemId = cardKey",
-            recordMarker = "onBeforeOpenDetail(cardKey, itemIndex)",
+            // Read through rememberUpdatedState since the perf item-4
+            // remainder made the card's click a remembered instance.
+            recordMarker = "currentOnBeforeOpenDetail.value(cardKey, itemIndex)",
             navigate = "viewModel.resolveAndNavigate("
         ),
         BrowseScreen(
@@ -47,7 +51,10 @@ class BrowseReturnFocusWiringContractTest {
             keyBuilder = "collectionBrowseScreenKey(",
             cardKey = "itemId = \"collection_part:\${part.id}\"",
             recordMarker = "BrowseReturnFocus.record(",
-            navigate = "onNavigateDetail("
+            // The click stayed inline here but now lives in a remembered
+            // instance, so it reaches the caller's handler through
+            // rememberUpdatedState (perf item-4 remainder).
+            navigate = "currentOnNavigateDetail.value("
         ),
         BrowseScreen(
             label = "the decade page",
@@ -55,7 +62,9 @@ class BrowseReturnFocusWiringContractTest {
             file = "DecadeScreen.kt",
             keyBuilder = "decadeBrowseScreenKey(",
             cardKey = "itemId = cardKey",
-            recordMarker = "onBeforeOpenDetail(cardKey, itemIndex)",
+            // Read through rememberUpdatedState since the perf item-4
+            // remainder made the card's click a remembered instance.
+            recordMarker = "currentOnBeforeOpenDetail.value(cardKey, itemIndex)",
             navigate = "viewModel.resolveAndNavigate("
         ),
         // The actor page is a browse page too, and the only one whose key

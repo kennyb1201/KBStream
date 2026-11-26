@@ -235,8 +235,10 @@ class ContinueWatchingHeadLandingContractTest {
             rail.contains("focusRequester = requester")
         )
         assertTrue(
-            "the long-press restore keeps pointing at the card's own requester",
-            rail.contains("onCardFocusRequester(requester)")
+            "the long-press restore keeps pointing at the card's own requester " +
+                "(read through rememberUpdatedState since the perf item-4 " +
+                "remainder made the callback a remembered instance)",
+            rail.contains("currentOnCardFocusRequester.value(requester)")
         )
     }
 
@@ -266,12 +268,12 @@ class ContinueWatchingHeadLandingContractTest {
         )
         assertTrue(
             "the hero still follows every card focus",
-            rail.contains("onSelectHero(hero, item)")
+            rail.contains("currentOnSelectHero.value(hero, item)")
         )
         assertEquals(
             "one hero callback per card: the wrapper is not a second call site",
             1,
-            rail.split("onSelectHero(hero, item)").size - 1
+            rail.split("currentOnSelectHero.value(hero, item)").size - 1
         )
     }
 

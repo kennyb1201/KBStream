@@ -33,6 +33,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -697,27 +698,41 @@ fun LibraryScreenMobile(
                         val isDownloaded =
                             candidates.any { key -> key in completedDownloadKeys } ||
                                 (navigationId != null && navigationId in completedDownloadKeys)
+                        // Stable per-tile handlers and chain (perf spec
+                        // 2026-11-22, item 4 remainder): the tile used to be
+                        // handed fresh closures and a rebuilt modifier on every
+                        // pass, and a paging grid recomposes its cells often.
+                        val currentOpenItem = rememberUpdatedState(openItem)
+                        val tileClick = remember(item, index) {
+                            { currentOpenItem.value(item, index) }
+                        }
+                        val tileLongClick = remember(item) { { menuItem = item } }
+                        val heroModifier = Modifier.heroSourceOnPress(
+                            item.mediaType,
+                            item.navigationId.orEmpty()
+                        )
+                        val tileModifier = remember(heroModifier) {
+                            Modifier
+                                // Removals and filter/sort changes stop
+                                // teleporting the grid: a tile fading out and
+                                // its neighbours closing the gap is the phone's
+                                // whole point here.
+                                .animateItem()
+                                // The phone's poster -> Detail flight: a press
+                                // is the source signal (a touch has no focus),
+                                // the same hand-off Home's cards make.
+                                .then(heroModifier)
+                        }
                         LibraryTile(
                             item = item,
                             isDownloaded = isDownloaded,
-                            // Removals and filter/sort changes stop teleporting
-                            // the grid: a tile fading out and its neighbours
-                            // closing the gap is the phone's whole point here.
-                            modifier = Modifier
-                                .animateItem()
-                                // The phone's poster -> Detail flight: a press is
-                                // the source signal (a touch has no focus), the
-                                // same hand-off Home's cards make.
-                                .heroSourceOnPress(
-                                    item.mediaType,
-                                    item.navigationId.orEmpty()
-                                ),
+                            modifier = tileModifier,
                             rating = state.ratings[LocalLibraryStore.dedupeKey(item)],
                             isWatched = candidates.any { key -> key in state.watchedKeys },
                             isPartiallyWatched =
                                 candidates.any { key -> key in state.partiallyWatchedKeys },
-                            onClick = { openItem(item, index) },
-                            onLongClick = { menuItem = item }
+                            onClick = tileClick,
+                            onLongClick = tileLongClick
                         )
                     }
                 }

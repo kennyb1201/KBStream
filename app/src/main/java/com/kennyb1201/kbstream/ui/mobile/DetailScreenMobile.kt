@@ -48,6 +48,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -2336,21 +2337,34 @@ fun DetailScreenMobile(
                                     season = seasonNumber,
                                     resolver = seasonPosterResolver
                                 )
+                                // Stable per-tile handlers (perf spec
+                                // 2026-11-22, item 4 remainder): the season
+                                // row used to rebuild both closures per pass,
+                                // so no tile could skip.
+                                val seasonClick = remember(seasonNumber) {
+                                    {
+                                        season = seasonNumber
+                                        viewModel.loadEpisodesForSeason(
+                                            seasonNumber
+                                        )
+                                    }
+                                }
+                                val seasonLongClick = remember(
+                                    seasonNumber,
+                                    seasonLabel
+                                ) {
+                                    {
+                                        seasonMenu = SeasonMenuTarget(
+                                            seasonNumber = seasonNumber,
+                                            seasonName = seasonLabel
+                                        )
+                                    }
+                                }
                                 Box(
                                     modifier = Modifier
                                         .combinedClickable(
-                                            onClick = {
-                                                season = seasonNumber
-                                                viewModel.loadEpisodesForSeason(
-                                                    seasonNumber
-                                                )
-                                            },
-                                            onLongClick = {
-                                                seasonMenu = SeasonMenuTarget(
-                                                    seasonNumber = seasonNumber,
-                                                    seasonName = seasonLabel
-                                                )
-                                            }
+                                            onClick = seasonClick,
+                                            onLongClick = seasonLongClick
                                         )
                                         .padding(vertical = 4.dp)
                                 ) {
@@ -2463,6 +2477,29 @@ fun DetailScreenMobile(
                                 }
                             ) { episode ->
                                 val visual = episodeVisual(episode)
+                                // Stable per-row handlers (perf spec
+                                // 2026-11-22, item 4 remainder): a season rail
+                                // hands its rows fresh closures otherwise, and
+                                // the callbacks are read at press time.
+                                val currentOpenEpisode =
+                                    rememberUpdatedState(openEpisode)
+                                val episodeClick = remember(episode, currentSeason) {
+                                    {
+                                        currentOpenEpisode.value(
+                                            episode,
+                                            currentSeason
+                                        )
+                                    }
+                                }
+                                val episodeLongClick =
+                                    remember(episode, currentSeason) {
+                                        {
+                                            episodeMenu = EpisodeMenuTarget(
+                                                episode,
+                                                currentSeason
+                                            )
+                                        }
+                                    }
                                 KBEpisodeRailCardTouch(
                                     episode = episode,
                                     hiddenTitle = visual.hiddenTitle,
@@ -2473,11 +2510,8 @@ fun DetailScreenMobile(
                                     // date reads the same on both screens.
                                     airDate = episode.airDate
                                         ?.let { formatEpisodeAirDate(it) },
-                                    onClick = { openEpisode(episode, currentSeason) },
-                                    onLongClick = {
-                                        episodeMenu =
-                                            EpisodeMenuTarget(episode, currentSeason)
-                                    }
+                                    onClick = episodeClick,
+                                    onLongClick = episodeLongClick
                                 )
                             }
                         }
@@ -2496,9 +2530,28 @@ fun DetailScreenMobile(
                             contentType = { "episode" }
                         ) { episode ->
                             val visual = episodeVisual(episode)
-                            // A season switch replaces the list; the
-                            // survivor rows fade in and step where they
-                            // belong instead of the page cutting.
+                            // Stable per-row handlers and modifier (perf spec
+                            // 2026-11-22, item 4 remainder).
+                            val currentOpenEpisode =
+                                rememberUpdatedState(openEpisode)
+                            val listEpisodeClick = remember(episode, currentSeason) {
+                                {
+                                    currentOpenEpisode.value(episode, currentSeason)
+                                }
+                            }
+                            val listEpisodeLongClick =
+                                remember(episode, currentSeason) {
+                                    {
+                                        episodeMenu = EpisodeMenuTarget(
+                                            episode,
+                                            currentSeason
+                                        )
+                                    }
+                                }
+                            // A season switch replaces the list; the survivor
+                            // rows fade in and step where they belong instead
+                            // of the page cutting.
+                            val listRowModifier = remember { Modifier.animateItem() }
                             EpisodeRow(
                                 episode = episode,
                                 listedSeason = currentSeason,
@@ -2506,11 +2559,11 @@ fun DetailScreenMobile(
                                 isWatched = visual.isWatched,
                                 unavailable = visual.unavailable,
                                 progress = visual.progress,
-                                onClick = { openEpisode(episode, currentSeason) },
-                                onLongClick = {
-                                    episodeMenu = EpisodeMenuTarget(episode, currentSeason)
-                                },
-                                modifier = Modifier.animateItem()
+                                // Stable per-row handlers, the same rule the
+                                // rail above follows.
+                                onClick = listEpisodeClick,
+                                onLongClick = listEpisodeLongClick,
+                                modifier = listRowModifier
                             )
                         }
                     }

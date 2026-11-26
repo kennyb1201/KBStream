@@ -39,6 +39,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -1537,17 +1538,15 @@ private fun ItemGrid(
                 returnTarget != null &&
                     index == returnTarget.position &&
                     cardKey == returnTarget.itemId
-            LibraryPosterCard(
-                item = item,
-                sourceLabel = sourceLabel(item),
-                rating = ratings[cardKey],
-                // Both id flavors the enrichment can file a row under: the
-                // IMDB one, then the raw `tmdb:<n>` one a row with no IMDB id
-                // (or no resolution) is watched under (see
-                // [LibraryItem.watchedKeyCandidates]).
-                isWatched = itemWatchedCandidates.any { it in watchedKeys },
-                isPartiallyWatched = itemWatchedCandidates.any { it in partiallyWatchedKeys },
-                onClick = {
+            // Stable per-card handlers (perf spec 2026-11-22, item 4
+            // remainder): a cell handed a fresh click, long press or modifier
+            // on every pass could never skip, and a D-pad step inside the grid
+            // is a recomposition pass. The handlers are read through
+            // rememberUpdatedState because the screen passes fresh closures.
+            val currentOnItemClick = rememberUpdatedState(onItemClick)
+            val currentOnItemLongClick = rememberUpdatedState(onItemLongClick)
+            val cardClick = remember(item, cardKey, index) {
+                {
                     val navigationId = item.navigationId
                     if (navigationId != null) {
                         // Remember this poster, so backing out of its Detail
@@ -1559,21 +1558,37 @@ private fun ItemGrid(
                                 position = index
                             )
                         )
-                        onItemClick(item.mediaType, navigationId)
+                        currentOnItemClick.value(item.mediaType, navigationId)
                     } else {
-                        // A tracker row can carry only a title and a poster —
-                        // no IMDB or TMDB id — so there is no detail page to
+                        // A tracker row can carry only a title and a poster -
+                        // no IMDB or TMDB id - so there is no detail page to
                         // open. The press used to do nothing at all, which
                         // reads as a frozen grid; say so instead of dropping
                         // it. The row is kept (rather than filtered) so its
                         // long-press menu can still remove it.
                         feedback.show("No details page for \"${item.title}\"")
                     }
-                },
-                onLongClick = onItemLongClick?.let { handler ->
-                    { handler(item, successorKey) }
-                },
-                modifier = Modifier
+                }
+            }
+            val cardLongClick: (() -> Unit)? =
+                if (onItemLongClick == null) {
+                    null
+                } else {
+                    remember(item, successorKey) {
+                        { currentOnItemLongClick.value?.invoke(item, successorKey) }
+                    }
+                }
+            // The cell's own modifier is remembered for the same reason: the
+            // card is the same cell for as long as the item, its requester and
+            // whether it is the return target are, and a chain rebuilt per pass
+            // is a changed parameter even with the lambdas above stable.
+            val cardModifier = remember(
+                cardKey,
+                cardRequester,
+                isReturnItem,
+                returnFocusRequester
+            ) {
+                Modifier
                     // A removal or a sort no longer teleports the grid: the
                     // cell fades out where it was and its neighbours close the
                     // gap by placement. The focus requester stays OUTSIDE this
@@ -1592,6 +1607,20 @@ private fun ItemGrid(
                             Modifier
                         }
                     )
+            }
+            LibraryPosterCard(
+                item = item,
+                sourceLabel = sourceLabel(item),
+                rating = ratings[cardKey],
+                // Both id flavors the enrichment can file a row under: the
+                // IMDB one, then the raw `tmdb:<n>` one a row with no IMDB id
+                // (or no resolution) is watched under (see
+                // [LibraryItem.watchedKeyCandidates]).
+                isWatched = itemWatchedCandidates.any { it in watchedKeys },
+                isPartiallyWatched = itemWatchedCandidates.any { it in partiallyWatchedKeys },
+                onClick = cardClick,
+                onLongClick = cardLongClick,
+                modifier = cardModifier
             )
         }
     }

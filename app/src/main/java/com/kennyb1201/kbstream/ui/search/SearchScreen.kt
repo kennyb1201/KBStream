@@ -20,6 +20,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -854,6 +855,40 @@ fun SearchScreen(
                                     }
                                 }
 
+                                // Stable per-tile handlers and modifier (perf
+                                // spec 2026-11-22, item 4 remainder): a rail
+                                // pass used to hand every tile a fresh click, so
+                                // no tile could skip. The handler, the rail's
+                                // list and the menu state are read through
+                                // rememberUpdatedState, so only the tile's own
+                                // values are keys.
+                                val currentOnItemClick = rememberUpdatedState(onItemClick)
+                                val currentResults = rememberUpdatedState(results)
+                                val tileClick = remember(result, tileKey, index) {
+                                    {
+                                        SearchReturnFocus.record(
+                                            SearchReturnTarget(
+                                                tileKey = tileKey,
+                                                railKey = TITLES_RAIL_FOCUS_KEY,
+                                                position = index
+                                            )
+                                        )
+                                        viewModel.onResultOpened(result)
+                                        currentOnItemClick.value(result.meta)
+                                    }
+                                }
+                                val tileLongClick = remember(result, requester, tileKey) {
+                                    {
+                                        lastPosterFocusRequester = requester
+                                        menuRailKey = TITLES_RAIL_FOCUS_KEY
+                                        menuRailResults = currentResults.value
+                                        menuResult = result
+                                    }
+                                }
+                                val tileModifier = remember(requester) {
+                                    Modifier.focusRequester(requester)
+                                }
+
                                 TitlePosterTile(
                                     result = result,
                                     watched = watchedTile(
@@ -868,26 +903,9 @@ fun SearchScreen(
                                         partialWatchedKeys = partialWatchedKeys,
                                         viewModel = viewModel
                                     ),
-                                    onClick = {
-                                        SearchReturnFocus.record(
-                                            SearchReturnTarget(
-                                                tileKey = tileKey,
-                                                railKey = TITLES_RAIL_FOCUS_KEY,
-                                                position = index
-                                            )
-                                        )
-                                        viewModel.onResultOpened(result)
-                                        onItemClick(result.meta)
-                                    },
-                                    onLongClick = {
-                                        lastPosterFocusRequester =
-                                            requester
-                                        menuRailKey = TITLES_RAIL_FOCUS_KEY
-                                        menuRailResults = results
-                                        menuResult = result
-                                    },
-                                    modifier = Modifier
-                                        .focusRequester(requester)
+                                    onClick = tileClick,
+                                    onLongClick = tileLongClick,
+                                    modifier = tileModifier
                                 )
                             }
 
@@ -1001,6 +1019,36 @@ fun SearchScreen(
                                     }
                                 }
 
+                                // Stable per-tile handlers and modifier (perf
+                                // spec 2026-11-22, item 4 remainder), the same
+                                // shape as the Titles rail above.
+                                val currentOnItemClick = rememberUpdatedState(onItemClick)
+                                val currentGroupResults = rememberUpdatedState(group.results)
+                                val tileClick = remember(result, tileKey, railKey, index) {
+                                    {
+                                        SearchReturnFocus.record(
+                                            SearchReturnTarget(
+                                                tileKey = tileKey,
+                                                railKey = railKey,
+                                                position = index
+                                            )
+                                        )
+                                        viewModel.onResultOpened(result)
+                                        currentOnItemClick.value(result.meta)
+                                    }
+                                }
+                                val tileLongClick = remember(result, requester, railKey) {
+                                    {
+                                        lastPosterFocusRequester = requester
+                                        menuRailKey = railKey
+                                        menuRailResults = currentGroupResults.value
+                                        menuResult = result
+                                    }
+                                }
+                                val tileModifier = remember(requester) {
+                                    Modifier.focusRequester(requester)
+                                }
+
                                 TitlePosterTile(
                                     result = result,
                                     watched = watchedTile(
@@ -1015,26 +1063,9 @@ fun SearchScreen(
                                         partialWatchedKeys = partialWatchedKeys,
                                         viewModel = viewModel
                                     ),
-                                    onClick = {
-                                        SearchReturnFocus.record(
-                                            SearchReturnTarget(
-                                                tileKey = tileKey,
-                                                railKey = railKey,
-                                                position = index
-                                            )
-                                        )
-                                        viewModel.onResultOpened(result)
-                                        onItemClick(result.meta)
-                                    },
-                                    onLongClick = {
-                                        lastPosterFocusRequester =
-                                            requester
-                                        menuRailKey = railKey
-                                        menuRailResults = group.results
-                                        menuResult = result
-                                    },
-                                    modifier = Modifier
-                                        .focusRequester(requester)
+                                    onClick = tileClick,
+                                    onLongClick = tileLongClick,
+                                    modifier = tileModifier
                                 )
                             }
                         }
@@ -1071,9 +1102,12 @@ fun SearchScreen(
                                     FocusRequester()
                                 }
                             }
-                            PersonResultCard(
-                                person = person,
-                                onClick = {
+                            // Stable per-card handlers and modifier (perf spec
+                            // 2026-11-22, item 4 remainder), the same shape as
+                            // the poster rails above.
+                            val currentOnPersonClick = rememberUpdatedState(onPersonClick)
+                            val tileClick = remember(person, tileKey, index) {
+                                {
                                     SearchReturnFocus.record(
                                         SearchReturnTarget(
                                             tileKey = tileKey,
@@ -1082,9 +1116,16 @@ fun SearchScreen(
                                         )
                                     )
                                     viewModel.onActorOpened(person)
-                                    onPersonClick?.invoke(person)
-                                },
-                                modifier = Modifier.focusRequester(requester)
+                                    currentOnPersonClick.value?.invoke(person)
+                                }
+                            }
+                            val tileModifier = remember(requester) {
+                                Modifier.focusRequester(requester)
+                            }
+                            PersonResultCard(
+                                person = person,
+                                onClick = tileClick,
+                                modifier = tileModifier
                             )
                         }
                     }
@@ -1120,9 +1161,10 @@ fun SearchScreen(
                                     FocusRequester()
                                 }
                             }
-                            StudioResultCard(
-                                studio = studio,
-                                onClick = {
+                            // Stable per-card handlers and modifier, as above.
+                            val currentOnStudioClick = rememberUpdatedState(onStudioClick)
+                            val tileClick = remember(studio, tileKey, index) {
+                                {
                                     SearchReturnFocus.record(
                                         SearchReturnTarget(
                                             tileKey = tileKey,
@@ -1131,9 +1173,16 @@ fun SearchScreen(
                                         )
                                     )
                                     viewModel.onStudioOpened(studio)
-                                    onStudioClick?.invoke(studio)
-                                },
-                                modifier = Modifier.focusRequester(requester)
+                                    currentOnStudioClick.value?.invoke(studio)
+                                }
+                            }
+                            val tileModifier = remember(requester) {
+                                Modifier.focusRequester(requester)
+                            }
+                            StudioResultCard(
+                                studio = studio,
+                                onClick = tileClick,
+                                modifier = tileModifier
                             )
                         }
                     }
@@ -1178,9 +1227,11 @@ fun SearchScreen(
                                     FocusRequester()
                                 }
                             }
-                            CollectionPosterTile(
-                                collection = collection,
-                                onClick = {
+                            // Stable per-tile handlers and modifier (perf spec
+                            // 2026-11-22, item 4 remainder).
+                            val currentOnCollectionClick = rememberUpdatedState(onCollectionClick)
+                            val tileClick = remember(collection, tileKey, index) {
+                                {
                                     SearchReturnFocus.record(
                                         SearchReturnTarget(
                                             tileKey = tileKey,
@@ -1189,9 +1240,16 @@ fun SearchScreen(
                                         )
                                     )
                                     viewModel.onCollectionOpened(collection)
-                                    onCollectionClick?.invoke(collection)
-                                },
-                                modifier = Modifier.focusRequester(requester)
+                                    currentOnCollectionClick.value?.invoke(collection)
+                                }
+                            }
+                            val tileModifier = remember(requester) {
+                                Modifier.focusRequester(requester)
+                            }
+                            CollectionPosterTile(
+                                collection = collection,
+                                onClick = tileClick,
+                                modifier = tileModifier
                             )
                         }
                     }

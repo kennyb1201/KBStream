@@ -89,10 +89,12 @@ class CatalogGridMenuFocusReturnContractTest {
     @Test
     fun `the long press remembers the tile it was opened on`() {
         val src = squash(grid())
+        // The click is a remembered instance since the perf item-4 remainder,
+        // so the long press is read from its own declaration.
         val longPress = window(
             src,
-            "onLongClick = {",
-            "},"
+            "val tileLongClick = remember(meta, cardKey, index) {",
+            "}"
         )
         assertTrue(
             "the pressed tile is recalled by key, not by index: the grid can " +

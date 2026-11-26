@@ -28,6 +28,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -334,6 +335,40 @@ fun KBFolderScreenMobile(
                                 // The card shape follows Settings' global
                                 // landscape switch, as it does for every other
                                 // KB surface.
+                                // Stable per-cell handlers and modifier (perf
+                                // spec 2026-11-22, item 4 remainder): a paging
+                                // grid used to hand every cell fresh closures.
+                                val currentOnItemClick =
+                                    rememberUpdatedState(onItemClick)
+                                val tileClick = remember(item, index) {
+                                    {
+                                        // Remember this card, so backing out of
+                                        // its Detail page reopens the folder ON
+                                        // it.
+                                        BrowseReturnFocus.record(
+                                            BrowseReturnTarget(
+                                                screenKey = returnKey,
+                                                itemId = kbFolderCardKey(item),
+                                                position = index
+                                            )
+                                        )
+                                        viewModel.resolveAndNavigate(item) {
+                                                type,
+                                                imdbId ->
+                                            currentOnItemClick.value(
+                                                type,
+                                                imdbId,
+                                                item.posterUrl,
+                                                item.backdropUrl,
+                                                item.title
+                                            )
+                                        }
+                                    }
+                                }
+                                val tileLongClick = remember(item) {
+                                    { menuTarget = item }
+                                }
+                                val tileModifier = remember { Modifier.fillMaxWidth() }
                                 TouchGlobalPosterTile(
                                     posterUrl = item.posterUrl,
                                     backdropUrl = item.backdropUrl,
@@ -345,29 +380,9 @@ fun KBFolderScreenMobile(
                                     isPartiallyWatched =
                                         mobileKbWatchedKeys(item, resolvedIds)
                                             .any { it in partialWatchedKeys },
-                                    onClick = {
-                                        // Remember this card, so backing out of
-                                        // its Detail page reopens the folder ON
-                                        // it.
-                                        BrowseReturnFocus.record(
-                                            BrowseReturnTarget(
-                                                screenKey = returnKey,
-                                                itemId = kbFolderCardKey(item),
-                                                position = index
-                                            )
-                                        )
-                                        viewModel.resolveAndNavigate(item) { type, imdbId ->
-                                            onItemClick(
-                                                type,
-                                                imdbId,
-                                                item.posterUrl,
-                                                item.backdropUrl,
-                                                item.title
-                                            )
-                                        }
-                                    },
-                                    onLongClick = { menuTarget = item },
-                                    modifier = Modifier.fillMaxWidth()
+                                    onClick = tileClick,
+                                    onLongClick = tileLongClick,
+                                    modifier = tileModifier
                                 )
                                 // The grid's captions honour the same three
                                 // Settings switches the TV grid's do - this

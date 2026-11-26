@@ -21,6 +21,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -437,6 +438,60 @@ fun CollectionScreen(
                                 } == true ||
                                     viewModel.watchedKey(tmdbKeyId, "movie") in watchedKeys
 
+                            // Stable per-card handlers and modifier (perf spec
+                            // 2026-11-22, item 4 remainder): the rail used to
+                            // hand every tile a fresh click, so no tile could
+                            // skip. The handler is read through
+                            // rememberUpdatedState, and this chain carries no
+                            // composable hero hook, so it remembers whole.
+                            val currentOnNavigateDetail = rememberUpdatedState(onNavigateDetail)
+                            val tileClick = remember(part, index) {
+                                {
+                                    // Remember this film, so backing out of its
+                                    // Detail page reopens the rail ON it.
+                                    BrowseReturnFocus.record(
+                                        BrowseReturnTarget(
+                                            screenKey = browseReturnKey,
+                                            itemId = "collection_part:${part.id}",
+                                            position = index
+                                        )
+                                    )
+                                    currentOnNavigateDetail.value(
+                                        "movie",
+                                        part.id.toString()
+                                    )
+                                }
+                            }
+                            val tileLongClick = remember(part, requester) {
+                                {
+                                    lastPartFocusRequester = requester
+                                    menuPart = part
+                                }
+                            }
+                            val tileModifier = remember(
+                                requester,
+                                isReturnItem,
+                                index,
+                                firstPartFocusRequester,
+                                returnFocusRequester
+                            ) {
+                                Modifier
+                                    .focusRequester(requester)
+                                    .then(
+                                        when {
+                                            isReturnItem -> Modifier.focusRequester(
+                                                returnFocusRequester
+                                            )
+                                            // Only reachable when no return is
+                                            // pending, so the two requesters can
+                                            // never be attached to one card.
+                                            index == 0 -> Modifier.focusRequester(
+                                                firstPartFocusRequester
+                                            )
+                                            else -> Modifier
+                                        }
+                                    )
+                            }
                             CollectionPosterTile(
                                 part = part,
                                 isWatched = watched,
@@ -456,42 +511,9 @@ fun CollectionScreen(
                                         } == true ||
                                             viewModel.watchedKey(tmdbKeyId, "movie") in partialWatchedKeys
                                         ),
-                                onClick = {
-                                    // Remember this film, so backing out of its
-                                    // Detail page reopens the rail ON it.
-                                    BrowseReturnFocus.record(
-                                        BrowseReturnTarget(
-                                            screenKey = browseReturnKey,
-                                            itemId = "collection_part:${part.id}",
-                                            position = index
-                                        )
-                                    )
-                                    onNavigateDetail(
-                                        "movie",
-                                        part.id.toString()
-                                    )
-                                },
-                                onLongClick = {
-                                    lastPartFocusRequester =
-                                        requester
-                                    menuPart = part
-                                },
-                                modifier = Modifier
-                                    .focusRequester(requester)
-                                    .then(
-                                        when {
-                                            isReturnItem -> Modifier.focusRequester(
-                                                returnFocusRequester
-                                            )
-                                            // Only reachable when no return is
-                                            // pending, so the two requesters can
-                                            // never be attached to one card.
-                                            index == 0 -> Modifier.focusRequester(
-                                                firstPartFocusRequester
-                                            )
-                                            else -> Modifier
-                                        }
-                                    )
+                                onClick = tileClick,
+                                onLongClick = tileLongClick,
+                                modifier = tileModifier
                             )
                         }
                     }

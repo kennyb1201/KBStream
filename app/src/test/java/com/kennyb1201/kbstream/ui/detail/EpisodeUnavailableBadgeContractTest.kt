@@ -90,8 +90,10 @@ class EpisodeUnavailableBadgeContractTest {
     fun `an unavailable episode is not playable`() {
         val card = episodeCardSlice()
         assertTrue(
-            "a click on an unreleased episode must not resolve streams",
-            card.contains("onClick = { if (!isUnavailable) onClick() }")
+            "a click on an unreleased episode must not resolve streams - the " +
+                "guard is remembered per card since the perf item-4 remainder",
+            card.contains("onClick = posterClick") &&
+                card.contains("if (!isUnavailable) currentOnClick.value()")
         )
         assertTrue(
             "nor may its long-press menu offer mark-watched",

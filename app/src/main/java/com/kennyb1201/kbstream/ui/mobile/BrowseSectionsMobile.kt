@@ -24,6 +24,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.mapSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -466,13 +467,19 @@ internal fun SectionsBrowseMobile(
                                             partialWatchedKeys
                                         )
 
-                                BrowseTile(
-                                    item = railItem,
-                                    width = tileWidth,
-                                    posterSize = posterSize,
-                                    isWatched = watched,
-                                    isPartiallyWatched = partial,
-                                    onClick = {
+                                // Stable per-card handlers (perf spec
+                                // 2026-11-22, item 4 remainder): a browse rail
+                                // used to rebuild both closures per tile per
+                                // pass, and the open is read at press time.
+                                val currentOnOpenItem =
+                                    rememberUpdatedState(onOpenItem)
+                                val tileClick = remember(
+                                    railItem,
+                                    railIndex,
+                                    position,
+                                    section.title
+                                ) {
+                                    {
                                         BrowseReturnFocus.record(
                                             record(
                                                 section.title,
@@ -481,9 +488,16 @@ internal fun SectionsBrowseMobile(
                                                 railItem
                                             )
                                         )
-                                        onOpenItem(railItem)
-                                    },
-                                    onLongClick = {
+                                        currentOnOpenItem.value(railItem)
+                                    }
+                                }
+                                val tileLongClick = remember(
+                                    railItem,
+                                    railIndex,
+                                    position,
+                                    section.title
+                                ) {
+                                    {
                                         menu = railItem to record(
                                             section.title,
                                             railIndex,
@@ -491,6 +505,15 @@ internal fun SectionsBrowseMobile(
                                             railItem
                                         )
                                     }
+                                }
+                                BrowseTile(
+                                    item = railItem,
+                                    width = tileWidth,
+                                    posterSize = posterSize,
+                                    isWatched = watched,
+                                    isPartiallyWatched = partial,
+                                    onClick = tileClick,
+                                    onLongClick = tileLongClick
                                 )
                             }
 

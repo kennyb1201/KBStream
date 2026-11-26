@@ -25,6 +25,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -936,6 +937,57 @@ private fun TagRailRow(
                 // The tile's own focus drives the caption marquee below.
                 var focused by remember { mutableStateOf(false) }
 
+                // Stable per-card handlers and modifier (perf spec 2026-11-22,
+                // item 4 remainder): remembered on the item, so a pass that
+                // changed nothing hands the card the same values and it can
+                // skip. The callbacks are read through rememberUpdatedState
+                // because the screen passes fresh closures down, and this
+                // chain carries no composable hero hook, so it remembers whole.
+                val currentOnBeforeOpenDetail = rememberUpdatedState(onBeforeOpenDetail)
+                val currentOnNavigateDetail = rememberUpdatedState(onNavigateDetail)
+                val currentOnOpenPosterMenu = rememberUpdatedState(onOpenPosterMenu)
+                val cardClick = remember(studioItem, cardKey, itemIndex, rawMediaType) {
+                    {
+                        // Remember this card, so backing out of its Detail page
+                        // reopens this rail ON it.
+                        currentOnBeforeOpenDetail.value(cardKey, itemIndex)
+                        viewModel.resolveAndNavigate(
+                            tmdbId = studioItem.item.id,
+                            mediaType = rawMediaType,
+                            onNavigateDetail = currentOnNavigateDetail.value
+                        )
+                    }
+                }
+                val cardLongClick = remember(studioItem, requester, cardKey, itemIndex) {
+                    {
+                        currentOnOpenPosterMenu.value(studioItem, requester, cardKey, itemIndex)
+                    }
+                }
+                val cardModifier = remember(
+                    requester,
+                    isFirstItem,
+                    isReturnItem,
+                    firstItemFocusRequester,
+                    returnFocusRequester
+                ) {
+                    Modifier
+                        .focusRequester(requester)
+                        .then(
+                            if (isFirstItem) {
+                                Modifier.focusRequester(firstItemFocusRequester)
+                            } else {
+                                Modifier
+                            }
+                        )
+                        .then(
+                            if (isReturnItem) {
+                                Modifier.focusRequester(returnFocusRequester)
+                            } else {
+                                Modifier
+                            }
+                        )
+                }
+
                 Column(
                     modifier = Modifier
                         .padding(end = 12.dp)
@@ -950,41 +1002,15 @@ private fun TagRailRow(
                             ?: studioItem.item.name,
                         isWatched = watched,
                         isPartiallyWatched = watchedPartially,
-                        onClick = {
-                            // Remember this card, so backing out of its Detail
-                            // page reopens this rail ON it.
-                            onBeforeOpenDetail(cardKey, itemIndex)
-                            viewModel.resolveAndNavigate(
-                                tmdbId = studioItem.item.id,
-                                mediaType = rawMediaType,
-                                onNavigateDetail = onNavigateDetail
-                            )
-                        },
-                        onLongClick = {
-                            onOpenPosterMenu(studioItem, requester, cardKey, itemIndex)
-                        },
+                        onClick = cardClick,
+                        onLongClick = cardLongClick,
                         posterWidth = posterSize.width,
                         posterHeight = posterSize.height,
                         // The discover item ships a backdrop; the resolver adds
                         // the corner clearlogo the landscape shape wants.
                         artId = studioItem.item.id.toString(),
                         artType = rawMediaType,
-                        modifier = Modifier
-                            .focusRequester(requester)
-                            .then(
-                                if (isFirstItem) {
-                                    Modifier.focusRequester(firstItemFocusRequester)
-                                } else {
-                                    Modifier
-                                }
-                            )
-                            .then(
-                                if (isReturnItem) {
-                                    Modifier.focusRequester(returnFocusRequester)
-                                } else {
-                                    Modifier
-                                }
-                            )
+                        modifier = cardModifier
                     )
 
                     PosterCaptions(

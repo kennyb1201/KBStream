@@ -62,7 +62,12 @@ class CatalogGridDeepDiveContractTest {
             assertTrue(
                 "$path: the flag is set BEFORE the navigation, so it is already " +
                     "true when the dispose runs",
-                src.contains("leftForDetail = true onItemClick(meta)") &&
+                (
+                    // The TV grid's click is a remembered instance since the
+                    // perf item-4 remainder; the phone's is still inline.
+                    src.contains("leftForDetail = true onItemClick(meta)") ||
+                        src.contains("leftForDetail = true currentOnItemClick.value(meta)")
+                    ) &&
                     src.contains("leftForDetail = true onItemClick(target)")
             )
         }

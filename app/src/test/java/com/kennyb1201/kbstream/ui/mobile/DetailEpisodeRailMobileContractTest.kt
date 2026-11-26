@@ -149,15 +149,18 @@ class DetailEpisodeRailMobileContractTest {
                         "hiddenTitle = visual.hiddenTitle"
                 )
         )
+        // Both layouts hand their rows remembered instances since the perf
+        // item-4 remainder, so each one names the same menu and the same call
+        // from inside its own closure.
         assertEquals(
             "the same long-press menu must be reachable from both layouts",
             2,
-            occurrences(mobile, "episodeMenu = EpisodeMenuTarget(episode, currentSeason)")
+            occurrences(mobile, "episodeMenu = EpisodeMenuTarget(")
         )
         assertEquals(
-            "and the same tap",
+            "and the same tap, read at press time",
             2,
-            occurrences(mobile, "onClick = { openEpisode(episode, currentSeason) }")
+            occurrences(mobile, "currentOpenEpisode.value(")
         )
     }
 

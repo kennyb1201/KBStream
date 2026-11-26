@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -228,12 +229,19 @@ fun ActorScreenMobile(
             partialWatchedKeys
     }
 
-    fun openCredit(credit: TmdbPersonCredit, target: BrowseReturnTarget) {
+    // The caller's navigation is a parameter rather than a capture, so a card's
+    // remembered click (perf spec 2026-11-22, item 4 remainder) can hand over
+    // the CURRENT one instead of the one that built the closure.
+    fun openCredit(
+        credit: TmdbPersonCredit,
+        target: BrowseReturnTarget,
+        onNavigate: (String, String) -> Unit
+    ) {
         BrowseReturnFocus.record(target)
         viewModel.resolveAndNavigate(
             credit.id,
             credit.mediaType ?: "movie",
-            onNavigateDetail
+            onNavigate
         )
     }
 
@@ -333,6 +341,36 @@ fun ActorScreenMobile(
                                 // rail's rule).
                                 contentType = { _, _ -> "actor-movie" }
                             ) { index, credit ->
+                                // Stable per-cell handlers (perf spec
+                                // 2026-11-22, item 4 remainder): a person's
+                                // credits can be dozens of cells, and every one
+                                // used to be rebuilt on each pass.
+                                val currentOnNavigateDetail =
+                                    rememberUpdatedState(onNavigateDetail)
+                                val creditClick = remember(credit, index) {
+                                    {
+                                        openCredit(
+                                            credit,
+                                            BrowseReturnTarget(
+                                                screenKey = screenKey,
+                                                itemId = viewModel.creditItemId(credit),
+                                                position = index,
+                                                railKey = ACTOR_MOVIES_RAIL
+                                            ),
+                                            currentOnNavigateDetail.value
+                                        )
+                                    }
+                                }
+                                val creditLongClick = remember(credit, index) {
+                                    {
+                                        menu = credit to BrowseReturnTarget(
+                                            screenKey = screenKey,
+                                            itemId = viewModel.creditItemId(credit),
+                                            position = index,
+                                            railKey = ACTOR_MOVIES_RAIL
+                                        )
+                                    }
+                                }
                                 CreditTile(
                                     // The two credit sections fill in as the
                                     // person loads; each cell fades into its
@@ -342,25 +380,8 @@ fun ActorScreenMobile(
                                     isWatched = creditWatched(credit, "movie"),
                                     isPartiallyWatched =
                                         creditPartiallyWatched(credit, "movie"),
-                                    onClick = {
-                                        openCredit(
-                                            credit,
-                                            BrowseReturnTarget(
-                                                screenKey = screenKey,
-                                                itemId = viewModel.creditItemId(credit),
-                                                position = index,
-                                                railKey = ACTOR_MOVIES_RAIL
-                                            )
-                                        )
-                                    },
-                                    onLongClick = {
-                                        menu = credit to BrowseReturnTarget(
-                                            screenKey = screenKey,
-                                            itemId = viewModel.creditItemId(credit),
-                                            position = index,
-                                            railKey = ACTOR_MOVIES_RAIL
-                                        )
-                                    }
+                                    onClick = creditClick,
+                                    onLongClick = creditLongClick
                                 )
                             }
                         }
@@ -376,13 +397,12 @@ fun ActorScreenMobile(
                                 },
                                 contentType = { _, _ -> "actor-series" }
                             ) { index, credit ->
-                                CreditTile(
-                                    modifier = Modifier.animateItem(),
-                                    credit = credit,
-                                    isWatched = creditWatched(credit, "series"),
-                                    isPartiallyWatched =
-                                        creditPartiallyWatched(credit, "series"),
-                                    onClick = {
+                                // Stable per-cell handlers, as in the movies
+                                // section above.
+                                val currentOnNavigateDetail =
+                                    rememberUpdatedState(onNavigateDetail)
+                                val creditClick = remember(credit, index) {
+                                    {
                                         openCredit(
                                             credit,
                                             BrowseReturnTarget(
@@ -390,10 +410,13 @@ fun ActorScreenMobile(
                                                 itemId = viewModel.creditItemId(credit),
                                                 position = index,
                                                 railKey = ACTOR_TV_RAIL
-                                            )
+                                            ),
+                                            currentOnNavigateDetail.value
                                         )
-                                    },
-                                    onLongClick = {
+                                    }
+                                }
+                                val creditLongClick = remember(credit, index) {
+                                    {
                                         menu = credit to BrowseReturnTarget(
                                             screenKey = screenKey,
                                             itemId = viewModel.creditItemId(credit),
@@ -401,6 +424,15 @@ fun ActorScreenMobile(
                                             railKey = ACTOR_TV_RAIL
                                         )
                                     }
+                                }
+                                CreditTile(
+                                    modifier = Modifier.animateItem(),
+                                    credit = credit,
+                                    isWatched = creditWatched(credit, "series"),
+                                    isPartiallyWatched =
+                                        creditPartiallyWatched(credit, "series"),
+                                    onClick = creditClick,
+                                    onLongClick = creditLongClick
                                 )
                             }
                         }
@@ -421,13 +453,12 @@ fun ActorScreenMobile(
                                 // badge type comes off the credit itself.
                                 val creditType =
                                     if (credit.mediaType == "tv") "series" else "movie"
-                                CreditTile(
-                                    modifier = Modifier.animateItem(),
-                                    credit = credit,
-                                    isWatched = creditWatched(credit, creditType),
-                                    isPartiallyWatched =
-                                        creditPartiallyWatched(credit, creditType),
-                                    onClick = {
+                                // Stable per-cell handlers, as in the two credit
+                                // sections above.
+                                val currentOnNavigateDetail =
+                                    rememberUpdatedState(onNavigateDetail)
+                                val creditClick = remember(credit, index) {
+                                    {
                                         openCredit(
                                             credit,
                                             BrowseReturnTarget(
@@ -435,10 +466,13 @@ fun ActorScreenMobile(
                                                 itemId = viewModel.creditItemId(credit),
                                                 position = index,
                                                 railKey = ACTOR_CREW_RAIL
-                                            )
+                                            ),
+                                            currentOnNavigateDetail.value
                                         )
-                                    },
-                                    onLongClick = {
+                                    }
+                                }
+                                val creditLongClick = remember(credit, index) {
+                                    {
                                         menu = credit to BrowseReturnTarget(
                                             screenKey = screenKey,
                                             itemId = viewModel.creditItemId(credit),
@@ -446,6 +480,15 @@ fun ActorScreenMobile(
                                             railKey = ACTOR_CREW_RAIL
                                         )
                                     }
+                                }
+                                CreditTile(
+                                    modifier = Modifier.animateItem(),
+                                    credit = credit,
+                                    isWatched = creditWatched(credit, creditType),
+                                    isPartiallyWatched =
+                                        creditPartiallyWatched(credit, creditType),
+                                    onClick = creditClick,
+                                    onLongClick = creditLongClick
                                 )
                             }
                         }

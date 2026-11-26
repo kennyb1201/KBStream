@@ -3941,27 +3941,85 @@ private fun LibraryListHomeRail(
                         addonBackdrop = carriedArt.effective
                     )
 
-                    val cardModifier = Modifier
-                        .heroSourceElement(meta.type, meta.id)
-                        .homeRailHeadLeftEdgeStop(index == 0)
-                        .focusRequester(requester)
-                        .width(cardWidth)
-                        .height(cardHeight)
-                        .onFocusChanged { focusState ->
-                            if (focusState.isFocused) {
-                                onFocusedCard(cardKey, requester)
-                                onSelectHero(meta)
+                    // The whole focus chain is remembered (perf spec
+                    // 2026-11-22, item 4 remainder). It could not be before:
+                    // its first link is the hero flight, which used to build a
+                    // fresh shared-element node on every pass. Both hooks and
+                    // the focus listener read their callbacks at the moment
+                    // they fire, so a remembered chain cannot go stale - and
+                    // each hook keeps its "absent when the caller has no
+                    // callback" shape, which is part of the keys.
+                    val currentOnFocusedCard =
+                        rememberUpdatedState(onFocusedCard)
+                    val currentOnSelectHero =
+                        rememberUpdatedState(onSelectHero)
+                    val currentOnUpPressed =
+                        rememberUpdatedState(onUpPressed)
+                    val currentOnHeadLeftPressed =
+                        rememberUpdatedState(onHeadLeftPressed)
+                    val hero = Modifier.heroSourceElement(meta.type, meta.id)
+                    val cardModifier = remember(
+                        hero,
+                        meta,
+                        cardKey,
+                        index,
+                        requester,
+                        cardWidth,
+                        cardHeight,
+                        onUpPressed != null,
+                        onHeadLeftPressed != null
+                    ) {
+                        Modifier
+                            .then(hero)
+                            .homeRailHeadLeftEdgeStop(index == 0)
+                            .focusRequester(requester)
+                            .width(cardWidth)
+                            .height(cardHeight)
+                            .onFocusChanged { focusState ->
+                                if (focusState.isFocused) {
+                                    currentOnFocusedCard.value(cardKey, requester)
+                                    currentOnSelectHero.value(meta)
+                                }
                             }
-                        }
-                        .then(Modifier.homeTopRailUpHook(requester, onUpPressed))
-                        // Left from the head card summons the top bar, on every
-                        // rail (see [homeRailHeadLeftTopBarHook]).
-                        .homeRailHeadLeftTopBarHook(
-                            isHeadCard = index == 0,
-                            requester = requester,
-                            openTopBar = onHeadLeftPressed
-                        )
+                            .then(
+                                Modifier.homeTopRailUpHook(
+                                    requester,
+                                    if (onUpPressed == null) {
+                                        null
+                                    } else {
+                                        { r -> currentOnUpPressed.value?.invoke(r) }
+                                    }
+                                )
+                            )
+                            // Left from the head card summons the top bar, on
+                            // every rail (see [homeRailHeadLeftTopBarHook]).
+                            .homeRailHeadLeftTopBarHook(
+                                isHeadCard = index == 0,
+                                requester = requester,
+                                openTopBar = if (onHeadLeftPressed == null) {
+                                    null
+                                } else {
+                                    { r -> currentOnHeadLeftPressed.value?.invoke(r) }
+                                }
+                            )
+                    }
 
+                    // Stable per-card handlers (perf spec 2026-11-22, item 4
+                    // remainder), the shape the catalog rail below already
+                    // uses: the card's identity does not change when the rail
+                    // republishes or a focus step runs, so a fresh
+                    // `{ onOpen(meta) }` here made every visible card
+                    // non-skippable. The handler is read through
+                    // rememberUpdatedState so a new closure from the caller does
+                    // not rebuild the card's own.
+                    val currentOnOpen = rememberUpdatedState(onOpen)
+                    val cardClick = remember(meta) { { currentOnOpen.value(meta) } }
+                    // The failure callback writes through the delegate of the
+                    // state it is remembered on, so it is keyed on that state's
+                    // own key: a stale delegate would arm a resolver that no
+                    // longer paints.
+                    val cardArtFailed: (Throwable?) -> Unit =
+                        remember(meta.poster) { { carriedArtFailed = true } }
                     Box(
                         modifier = Modifier
                             .width(cardWidth)
@@ -3985,7 +4043,7 @@ private fun LibraryListHomeRail(
                                         ?: resolvedPoster
                                 ),
                                 logoUrl = resolvedLandscapeArt.second,
-                                onBackdropError = { carriedArtFailed = true },
+                                onBackdropError = cardArtFailed,
                                 fallbackTitle = meta.name,
                                 contentDescription = meta.name,
                                 // The card's Detail identity, so the panel's
@@ -3995,7 +4053,7 @@ private fun LibraryListHomeRail(
                                 airDate = meta.releaseInfo,
                                 isWatched = isWatched(meta),
                                 isPartiallyWatched = isPartiallyWatched(meta),
-                                onClick = { onOpen(meta) },
+                                onClick = cardClick,
                                 modifier = cardModifier
                             )
                         } else {
@@ -4005,14 +4063,14 @@ private fun LibraryListHomeRail(
                                     rawId = meta.id,
                                     fallbackUrl = carriedArt.effective ?: resolvedPoster
                                 ),
-                                onPosterError = { carriedArtFailed = true },
+                                onPosterError = cardArtFailed,
                                 contentDescription = meta.name,
                                 spotlightId = meta.id,
                                 spotlightType = meta.type,
                                 isWatched = isWatched(meta),
                                 airDate = meta.releaseInfo,
                                 isPartiallyWatched = isPartiallyWatched(meta),
-                                onClick = { onOpen(meta) },
+                                onClick = cardClick,
                                 modifier = cardModifier
                             )
                         }
@@ -4136,26 +4194,68 @@ private fun BuiltinTopPicksRail(
                         if (landscapeCards) HomeLandscapeWidth else HomePosterWidth
                     val cardHeight =
                         if (landscapeCards) HomeLandscapeHeight else HomePosterHeight
-                    val cardModifier = Modifier
-                        .heroSourceElement(meta.type, meta.id)
-                        .homeRailHeadLeftEdgeStop(index == 0)
-                        .focusRequester(requester)
-                        .width(cardWidth)
-                        .height(cardHeight)
-                        .onFocusChanged { focusState ->
-                            if (focusState.isFocused) {
-                                onFocusedCard(cardKey, requester)
-                                onSelectHero(meta)
+                    // The whole focus chain is remembered (perf spec
+                    // 2026-11-22, item 4 remainder). It could not be before:
+                    // its first link is the hero flight, which used to build a
+                    // fresh shared-element node on every pass. Both hooks and
+                    // the focus listener read their callbacks at the moment
+                    // they fire, so a remembered chain cannot go stale - and
+                    // each hook keeps its "absent when the caller has no
+                    // callback" shape, which is part of the keys.
+                    val currentOnFocusedCard =
+                        rememberUpdatedState(onFocusedCard)
+                    val currentOnSelectHero =
+                        rememberUpdatedState(onSelectHero)
+                    val currentOnUpPressed =
+                        rememberUpdatedState(onUpPressed)
+                    val currentOnHeadLeftPressed =
+                        rememberUpdatedState(onHeadLeftPressed)
+                    val hero = Modifier.heroSourceElement(meta.type, meta.id)
+                    val cardModifier = remember(
+                        hero,
+                        meta,
+                        cardKey,
+                        index,
+                        requester,
+                        cardWidth,
+                        cardHeight,
+                        onUpPressed != null,
+                        onHeadLeftPressed != null
+                    ) {
+                        Modifier
+                            .then(hero)
+                            .homeRailHeadLeftEdgeStop(index == 0)
+                            .focusRequester(requester)
+                            .width(cardWidth)
+                            .height(cardHeight)
+                            .onFocusChanged { focusState ->
+                                if (focusState.isFocused) {
+                                    currentOnFocusedCard.value(cardKey, requester)
+                                    currentOnSelectHero.value(meta)
+                                }
                             }
-                        }
-                        .then(Modifier.homeTopRailUpHook(requester, onUpPressed))
-                        // Left from the head card summons the top bar, on every
-                        // rail (see [homeRailHeadLeftTopBarHook]).
-                        .homeRailHeadLeftTopBarHook(
-                            isHeadCard = index == 0,
-                            requester = requester,
-                            openTopBar = onHeadLeftPressed
-                        )
+                            .then(
+                                Modifier.homeTopRailUpHook(
+                                    requester,
+                                    if (onUpPressed == null) {
+                                        null
+                                    } else {
+                                        { r -> currentOnUpPressed.value?.invoke(r) }
+                                    }
+                                )
+                            )
+                            // Left from the head card summons the top bar, on
+                            // every rail (see [homeRailHeadLeftTopBarHook]).
+                            .homeRailHeadLeftTopBarHook(
+                                isHeadCard = index == 0,
+                                requester = requester,
+                                openTopBar = if (onHeadLeftPressed == null) {
+                                    null
+                                } else {
+                                    { r -> currentOnHeadLeftPressed.value?.invoke(r) }
+                                }
+                            )
+                    }
 
                     Box(
                         modifier = Modifier
@@ -4165,6 +4265,16 @@ private fun BuiltinTopPicksRail(
                         contentAlignment = Alignment.Center
                     ) {
                         val blendedArt = art[meta.landscapeArtKey()]
+                        // Stable per-card handlers (perf spec 2026-11-22, item
+                        // 4 remainder): remembered per item, with the handlers
+                        // read through rememberUpdatedState - a fresh closure
+                        // from the caller must not rebuild the card.
+                        val currentOnOpen = rememberUpdatedState(onOpen)
+                        val currentOnLongPress = rememberUpdatedState(onLongPress)
+                        val cardClick = remember(meta) { { currentOnOpen.value(meta) } }
+                        val cardLongClick = remember(meta, requester) {
+                            { currentOnLongPress.value(meta, requester) }
+                        }
 
                         if (landscapeCards) {
                             LandscapeCard(
@@ -4190,8 +4300,8 @@ private fun BuiltinTopPicksRail(
                                 airDate = meta.releaseInfo,
                                 isWatched = isWatched(meta),
                                 isPartiallyWatched = isPartiallyWatched(meta),
-                                onClick = { onOpen(meta) },
-                                onLongClick = { onLongPress(meta, requester) },
+                                onClick = cardClick,
+                                onLongClick = cardLongClick,
                                 modifier = cardModifier
                             )
                         } else {
@@ -4203,8 +4313,8 @@ private fun BuiltinTopPicksRail(
                                 isWatched = isWatched(meta),
                                 airDate = meta.releaseInfo,
                                 isPartiallyWatched = isPartiallyWatched(meta),
-                                onClick = { onOpen(meta) },
-                                onLongClick = { onLongPress(meta, requester) },
+                                onClick = cardClick,
+                                onLongClick = cardLongClick,
                                 modifier = cardModifier
                             )
                         }
@@ -4636,12 +4746,61 @@ private fun BuiltinContinueWatchingRail(
                         logo = item.clearLogo
                     )
 
-                    CompactUpNextCard(
-                        item = item,
-                        // A card that leaves this rail (marked watched, or
-                        // removed) fades where it was and the rest close the
-                        // gap instead of the rail teleporting under the D-pad.
-                        modifier = Modifier
+                    // Stable per-card handlers (perf spec 2026-11-22, item 4
+                    // remainder): the card's identity does not change when the
+                    // rail republishes or a focus step runs, so the fresh
+                    // closures that used to sit on the card made every visible
+                    // card non-skippable. The handlers are read through
+                    // rememberUpdatedState, and the rail's own
+                    // `viewerWalkedRail` state is keyless, so the remembered
+                    // focus callback can never write through a stale delegate.
+                    val currentOnOpenUpNext = rememberUpdatedState(onOpenUpNext)
+                    val currentOnLongPress = rememberUpdatedState(onLongPress)
+                    val currentOnCardFocusRequester =
+                        rememberUpdatedState(onCardFocusRequester)
+                    val currentOnFocusedCard = rememberUpdatedState(onFocusedCard)
+                    val currentOnSelectHero = rememberUpdatedState(onSelectHero)
+                    val cardClick = remember(item) { { currentOnOpenUpNext.value(item) } }
+                    val cardLongClick = remember(item, requester) {
+                        {
+                            currentOnCardFocusRequester.value(requester)
+                            currentOnLongPress.value(item)
+                        }
+                    }
+                    val cardFocus = remember(item, requester, hero, index, cardKey) {
+                        {
+                            currentOnFocusedCard.value(cardKey, requester)
+                            if (continueWatchingWalkedByFocus(index)) {
+                                // The viewer's own place in the rail, not the
+                                // landing's (which asks for index 0): from here
+                                // on no load moves focus again.
+                                viewerWalkedRail = true
+                            }
+                            currentOnSelectHero.value(hero, item)
+                        }
+                    }
+                    // The cell's modifier is remembered for the same reason
+                    // (perf spec 2026-11-22, item 4 remainder): a chain rebuilt
+                    // on every pass is a changed parameter even with stable
+                    // callbacks. This rail's chain carries no composable hero
+                    // hook, so it can be remembered whole; the head-left hook
+                    // reads its handler through rememberUpdatedState.
+                    val currentOnHeadLeftPressed = rememberUpdatedState(onHeadLeftPressed)
+                    val headLeftHook: ((FocusRequester) -> Unit)? =
+                        if (onHeadLeftPressed == null) {
+                            null
+                        } else {
+                            remember {
+                                { focusRequester: FocusRequester ->
+                                    currentOnHeadLeftPressed.value?.invoke(focusRequester)
+                                }
+                            }
+                        }
+                    val cardModifier = remember(index, requester, headLeftHook) {
+                        Modifier
+                            // A card that leaves this rail (marked watched, or
+                            // removed) fades where it was and the rest close the
+                            // gap instead of the rail teleporting under the D-pad.
                             .animateItem()
                             // Left from the rail's first card is nowhere, not a
                             // step down to the Upcoming header below it (see
@@ -4654,7 +4813,7 @@ private fun BuiltinContinueWatchingRail(
                             .homeRailHeadLeftTopBarHook(
                                 isHeadCard = index == CONTINUE_WATCHING_HEAD_INDEX,
                                 requester = requester,
-                                openTopBar = onHeadLeftPressed
+                                openTopBar = headLeftHook
                             )
                             .then(
                                 if (index == CONTINUE_WATCHING_HEAD_INDEX) {
@@ -4672,26 +4831,18 @@ private fun BuiltinContinueWatchingRail(
                                 } else {
                                     Modifier
                                 }
-                            ),
-                        onClick = { onOpenUpNext(item) },
-                        onLongClick = {
-                            // Remember this card's requester so dismissing the
-                            // menu restores focus to the card that opened it.
-                            onCardFocusRequester(requester)
-                            onLongPress(item)
-                        },
-                        onFocus = {
-                            // Where the viewer actually is: the bar's dismiss
-                            // comes back HERE (see focusedCardRequester).
-                            onFocusedCard(cardKey, requester)
-                            if (continueWatchingWalkedByFocus(index)) {
-                                // The viewer's own place in the rail, not the
-                                // landing's (which asks for index 0): from here
-                                // on no load moves focus again.
-                                viewerWalkedRail = true
-                            }
-                            onSelectHero(hero, item)
-                        },
+                            )
+                    }
+                    CompactUpNextCard(
+                        item = item,
+                        modifier = cardModifier,
+                        onClick = cardClick,
+                        // Remember this card's requester so dismissing the menu
+                        // restores focus to the card that opened it.
+                        onLongClick = cardLongClick,
+                        // Where the viewer actually is: the bar's dismiss comes
+                        // back HERE (see focusedCardRequester).
+                        onFocus = cardFocus,
                         onUpPressed = onUpPressed,
                         focusRequester = requester,
                         badgeColor = when {
@@ -4863,6 +5014,36 @@ private fun BuiltinUpcomingRail(
                         episodeTitle = upcoming.episodeTitle
                     )
 
+                    // Stable per-card handlers (perf spec 2026-11-22, item 4
+                    // remainder), the same shape the two rails above use:
+                    // remembered per item, handlers read through
+                    // rememberUpdatedState so a new closure from the caller
+                    // never rebuilds the card.
+                    val currentOnOpenDetails = rememberUpdatedState(onOpenDetails)
+                    val currentOnLongPress = rememberUpdatedState(onLongPress)
+                    val currentOnFocusedCard = rememberUpdatedState(onFocusedCard)
+                    val currentOnSelectHero = rememberUpdatedState(onSelectHero)
+                    val cardClick = remember(heroItem) { { currentOnOpenDetails.value(heroItem) } }
+                    val cardLongClick = remember(upcoming, requester) {
+                        { currentOnLongPress.value(upcoming, requester) }
+                    }
+                    val cardFocus = remember(cardKey, requester, heroItem, upcoming) {
+                        {
+                            // Where the viewer actually is (see
+                            // focusedCardRequester).
+                            currentOnFocusedCard.value(cardKey, requester)
+                            currentOnSelectHero.value(
+                                MetaPreview(
+                                    id = upcoming.parentId,
+                                    type = upcoming.parentType,
+                                    name = upcoming.title,
+                                    poster = upcoming.poster,
+                                    background = upcoming.backdrop
+                                ),
+                                heroItem
+                            )
+                        }
+                    }
                     Box(
                         modifier = Modifier
                             // The schedule reorders as episodes air and as the
@@ -4877,8 +5058,8 @@ private fun BuiltinUpcomingRail(
                     ) {
                         UpcomingEpisodeCard(
                             upcoming = upcoming,
-                            onClick = { onOpenDetails(heroItem) },
-                            onLongClick = { onLongPress(upcoming, requester) },
+                            onClick = cardClick,
+                            onLongClick = cardLongClick,
                             focusRequester = requester,
                             // The head card's left edge is the rail's edge (see
                             // [homeRailHeadLeftEdgeStop]). It is also the rail
@@ -4888,21 +5069,7 @@ private fun BuiltinUpcomingRail(
                             isHeadCard = index == CONTINUE_WATCHING_HEAD_INDEX,
                             onUpPressed = onUpPressed,
                             onHeadLeftPressed = onHeadLeftPressed,
-                            onFocus = {
-                                // Where the viewer actually is (see
-                                // focusedCardRequester).
-                                onFocusedCard(cardKey, requester)
-                                onSelectHero(
-                                    MetaPreview(
-                                        id = upcoming.parentId,
-                                        type = upcoming.parentType,
-                                        name = upcoming.title,
-                                        poster = upcoming.poster,
-                                        background = upcoming.backdrop
-                                    ),
-                                    heroItem
-                                )
-                            }
+                            onFocus = cardFocus
                         )
                     }
                 }
@@ -8081,7 +8248,27 @@ fun HomeScreen(
                                                         HomePosterHeight
                                                     }
 
-                                                val posterModifier = Modifier
+                                                // The whole chain is remembered
+                                                // (perf spec 2026-11-22, item 4
+                                                // remainder). It could not be
+                                                // before: its first link is the
+                                                // hero flight, which used to
+                                                // build a fresh shared-element
+                                                // node on every pass. Everything
+                                                // the lambdas read is read when
+                                                // they fire, and a hook is still
+                                                // absent when the caller has no
+                                                // callback to give it.
+                                                val currentSelectHero =
+                                                    rememberUpdatedState(selectHero)
+                                                val currentRailUpHook =
+                                                    rememberUpdatedState(railUpHook)
+                                                val currentHeadLeftHook =
+                                                    rememberUpdatedState(headLeftHook)
+                                                val catalogCardKey =
+                                                    catalogCardKeyPrefix +
+                                                        "${meta.type}:${meta.id}"
+                                                val hero = Modifier
                                                     // Outermost, so the
                                                     // shared bounds are
                                                     // what the flight
@@ -8090,54 +8277,91 @@ fun HomeScreen(
                                                         meta.type,
                                                         meta.id
                                                     )
-                                                    .offset(y = (-3).dp)
-                                                    // Left from the rail's first
-                                                    // card is nowhere (see
-                                                    // [homeRailHeadLeftEdgeStop]).
-                                                    .homeRailHeadLeftEdgeStop(
-                                                        index == 0
-                                                    )
-                                                    .focusRequester(requester)
-                                                    .width(cardWidth)
-                                                    .height(cardHeight)
-                                                    .onFocusChanged { focusState ->
-                                                        if (focusState.isFocused) {
-                                                            val cardKey =
-                                                                catalogCardKeyPrefix +
-                                                                    "${meta.type}:${meta.id}"
-                                                            // Remembered past this composable's
-                                                            // life too: the card the viewer left
-                                                            // Home on is what focus has to land on
-                                                            // when they come back from Detail (see
-                                                            // HomeViewModel.lastFocusedRailItemKey).
-                                                            viewModel.lastFocusedRailItemKey =
-                                                                cardKey
-                                                            // The card focus is
-                                                            // on (see
-                                                            // focusedCardRequester).
-                                                            focusedCardRequester = requester
-                                                            selectHero(meta)
-                                                        }
-                                                    }
-                                                    .then(
-                                                        // Only the rail drawn
-                                                        // first consumes D-pad Up
-                                                        // (see the merged-order
-                                                        // note above).
-                                                        Modifier.homeTopRailUpHook(
-                                                            requester,
-                                                            railUpHook
+                                                val posterModifier = remember(
+                                                    hero,
+                                                    meta,
+                                                    catalogCardKey,
+                                                    index,
+                                                    requester,
+                                                    cardWidth,
+                                                    cardHeight,
+                                                    railUpHook != null,
+                                                    headLeftHook != null
+                                                ) {
+                                                    Modifier
+                                                        .then(hero)
+                                                        .offset(y = (-3).dp)
+                                                        // Left from the rail's
+                                                        // first card is nowhere
+                                                        // (see
+                                                        // [homeRailHeadLeftEdgeStop]).
+                                                        .homeRailHeadLeftEdgeStop(
+                                                            index == 0
                                                         )
-                                                    )
-                                                    // Left from this rail's head
-                                                    // card summons the top bar
-                                                    // (see
-                                                    // [homeRailHeadLeftTopBarHook]).
-                                                    .homeRailHeadLeftTopBarHook(
-                                                        isHeadCard = index == 0,
-                                                        requester = requester,
-                                                        openTopBar = headLeftHook
-                                                    )
+                                                        .focusRequester(requester)
+                                                        .width(cardWidth)
+                                                        .height(cardHeight)
+                                                        .onFocusChanged { focusState ->
+                                                            if (focusState.isFocused) {
+                                                                // Remembered past
+                                                                // this composable's
+                                                                // life too: the card
+                                                                // the viewer left Home
+                                                                // on is what focus has
+                                                                // to land on when they
+                                                                // come back from
+                                                                // Detail (see
+                                                                // HomeViewModel.lastFocusedRailItemKey).
+                                                                viewModel
+                                                                    .lastFocusedRailItemKey =
+                                                                    catalogCardKey
+                                                                // The card focus
+                                                                // is on (see
+                                                                // focusedCardRequester).
+                                                                focusedCardRequester =
+                                                                    requester
+                                                                currentSelectHero
+                                                                    .value(meta)
+                                                            }
+                                                        }
+                                                        .then(
+                                                            // Only the rail drawn
+                                                            // first consumes D-pad
+                                                            // Up (see the
+                                                            // merged-order note
+                                                            // above).
+                                                            Modifier.homeTopRailUpHook(
+                                                                requester,
+                                                                if (railUpHook == null) {
+                                                                    null
+                                                                } else {
+                                                                    { r ->
+                                                                        currentRailUpHook
+                                                                            .value
+                                                                            ?.invoke(r)
+                                                                    }
+                                                                }
+                                                            )
+                                                        )
+                                                        // Left from this rail's head
+                                                        // card summons the top bar
+                                                        // (see
+                                                        // [homeRailHeadLeftTopBarHook]).
+                                                        .homeRailHeadLeftTopBarHook(
+                                                            isHeadCard = index == 0,
+                                                            requester = requester,
+                                                            openTopBar =
+                                                                if (headLeftHook == null) {
+                                                                    null
+                                                                } else {
+                                                                    { r ->
+                                                                        currentHeadLeftHook
+                                                                            .value
+                                                                            ?.invoke(r)
+                                                                    }
+                                                                }
+                                                        )
+                                                }
 
                                                 Box(
                                                     modifier = Modifier

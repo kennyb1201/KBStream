@@ -137,14 +137,20 @@ class PinnedRailCarriedArtContractTest {
     @Test
     fun `a load failure is what arms the fallback, from either card shape`() {
         listOf("tv" to tv, "phone" to phone).forEach { (name, screen) ->
+            // The TV rail remembers the callback per item since the perf
+            // item-4 remainder (a fresh lambda kept every card non-skippable),
+            // so the literal is one of two accepted shapes - both write the
+            // same state that arms the fallback.
             assertTrue(
                 "$name: a portrait tile reports its own load failure",
-                screen.contains("onPosterError = { carriedArtFailed = true }")
+                screen.contains("onPosterError = { carriedArtFailed = true }") ||
+                    screen.contains("onPosterError = cardArtFailed")
             )
             assertTrue(
                 "$name: and so does a landscape still, which is the shape a " +
                     "Trakt row is drawn in on TV",
-                screen.contains("onBackdropError = { carriedArtFailed = true }")
+                screen.contains("onBackdropError = { carriedArtFailed = true }") ||
+                    screen.contains("onBackdropError = cardArtFailed")
             )
         }
         assertTrue(

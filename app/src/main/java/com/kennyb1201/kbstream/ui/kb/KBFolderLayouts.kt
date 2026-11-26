@@ -29,6 +29,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -664,6 +665,33 @@ private fun FolderRailPageHandler(
                 railKey = "rail:${rail.sourceId}",
                 railIndex = railIndex
             )
+            // Stable per-card handlers (perf spec 2026-11-22, item 4
+            // remainder): the rail used to rebuild all three closures per card
+            // per pass, so no card could skip. Everything the closures read is
+            // read at press time through rememberUpdatedState - the rail's
+            // context and its list included, since the successor is resolved
+            // from the list as it stands then.
+            val currentContext = rememberUpdatedState(railContext)
+            val currentOnFocusItem = rememberUpdatedState(onFocusItem)
+            val currentRailItems = rememberUpdatedState(rail.items)
+            val cardClick = remember(item, target) {
+                { currentContext.value.onOpenItem(item, target) }
+            }
+            val cardLongClick = remember(item, target, itemIndex) {
+                {
+                    currentContext.value.onLongPressItem(
+                        item,
+                        successorIndexAfter(
+                            currentRailItems.value.size,
+                            itemIndex
+                        )?.let { at ->
+                            kbFolderCardKey(currentRailItems.value[at])
+                        },
+                        target
+                    )
+                }
+            }
+            val cardFocus = remember(item) { { currentOnFocusItem.value(item) } }
             FolderItemCard(
                 item = item,
                 isWatched = railContext.watchedLookup(item),
@@ -675,16 +703,9 @@ private fun FolderRailPageHandler(
                 art = railContext.landscapeArt[
                     landscapeArtKey(item.type, item.id)
                 ],
-                onClick = { railContext.onOpenItem(item, target) },
-                onLongClick = {
-                    railContext.onLongPressItem(
-                        item,
-                        successorIndexAfter(rail.items.size, itemIndex)
-                            ?.let { kbFolderCardKey(rail.items[it]) },
-                        target
-                    )
-                },
-                onFocus = { onFocusItem(item) },
+                onClick = cardClick,
+                onLongClick = cardLongClick,
+                onFocus = cardFocus,
                 cardKey = cardKey,
                 focusRegistry = railContext.focusRegistry,
                 isReturnItem = itemIndex == returnIndex,
@@ -1121,6 +1142,34 @@ private fun RowsLayout(
                                         railKey = "rail:${rail.sourceId}",
                                         railIndex = railIndex * 2 + 1
                                     )
+                                    // Stable per-card handlers (perf spec
+                                    // 2026-11-22, item 4 remainder), the same
+                                    // shape as the rows layout above.
+                                    val currentOnOpenItem =
+                                        rememberUpdatedState(onOpenItem)
+                                    val currentOnLongPressItem =
+                                        rememberUpdatedState(onLongPressItem)
+                                    val currentRailItems =
+                                        rememberUpdatedState(rail.items)
+                                    val cardClick = remember(item, target) {
+                                        { currentOnOpenItem.value(item, target) }
+                                    }
+                                    val cardLongClick = remember(item, target, itemIndex) {
+                                        {
+                                            currentOnLongPressItem.value(
+                                                item,
+                                                successorIndexAfter(
+                                                    currentRailItems.value.size,
+                                                    itemIndex
+                                                )?.let { at ->
+                                                    kbFolderCardKey(
+                                                        currentRailItems.value[at]
+                                                    )
+                                                },
+                                                target
+                                            )
+                                        }
+                                    }
                                     FolderItemCard(
                                         item = item,
                                         isWatched = itemWatched(item, watchedKeys, resolvedIds),
@@ -1134,17 +1183,8 @@ private fun RowsLayout(
                                         art = landscapeArt[
                                             landscapeArtKey(item.type, item.id)
                                         ],
-                                        onClick = { onOpenItem(item, target) },
-                                        onLongClick = {
-                                            onLongPressItem(
-                                                item,
-                                                successorIndexAfter(
-                                                    rail.items.size,
-                                                    itemIndex
-                                                )?.let { kbFolderCardKey(rail.items[it]) },
-                                                target
-                                            )
-                                        },
+                                        onClick = cardClick,
+                                        onLongClick = cardLongClick,
                                         cardKey = cardKey,
                                         focusRegistry = focusRegistry,
                                         isReturnItem = itemIndex == returnIndex,
@@ -1330,6 +1370,53 @@ private fun GridLayout(
                             itemId = cardKey,
                             position = itemIndex
                         )
+                        // Stable per-cell handlers and modifier (perf spec
+                        // 2026-11-22, item 4 remainder): a paging grid used to
+                        // hand every cell a fresh click, so no cell could skip.
+                        // Handlers are read through rememberUpdatedState and
+                        // the grid's list is read at press time, because the
+                        // successor is resolved from it as it stands then.
+                        val currentOnOpenItem = rememberUpdatedState(onOpenItem)
+                        val currentOnLongPressItem = rememberUpdatedState(onLongPressItem)
+                        val currentGridItems = rememberUpdatedState(gridItems)
+                        val itemClick = remember(item, target) {
+                            { currentOnOpenItem.value(item, target) }
+                        }
+                        val itemLongClick = remember(item, target, itemIndex) {
+                            {
+                                currentOnLongPressItem.value(
+                                    item,
+                                    successorIndexAfter(
+                                        currentGridItems.value.size,
+                                        itemIndex
+                                    )?.let { at ->
+                                        kbFolderCardKey(currentGridItems.value[at])
+                                    },
+                                    target
+                                )
+                            }
+                        }
+                        val itemModifier = remember(
+                            cardRequester,
+                            isReturnItem,
+                            isEntryItem,
+                            returnFocusRequester,
+                            entryFocusRequester
+                        ) {
+                            Modifier
+                                .focusRequester(cardRequester)
+                                .then(
+                                    when {
+                                        isReturnItem ->
+                                            Modifier.focusRequester(returnFocusRequester)
+
+                                        isEntryItem ->
+                                            Modifier.focusRequester(entryFocusRequester)
+
+                                        else -> Modifier
+                                    }
+                                )
+                        }
                         Column {
                             GlobalPosterCard(
                                 posterUrl = item.posterUrl,
@@ -1341,15 +1428,8 @@ private fun GridLayout(
                                     partialWatchedKeys,
                                     resolvedIds
                                 ),
-                                onClick = { onOpenItem(item, target) },
-                                onLongClick = {
-                                    onLongPressItem(
-                                        item,
-                                        successorIndexAfter(gridItems.size, itemIndex)
-                                            ?.let { kbFolderCardKey(gridItems[it]) },
-                                        target
-                                    )
-                                },
+                                onClick = itemClick,
+                                onLongClick = itemLongClick,
                                 posterWidth = FolderPosterWidth,
                                 posterHeight = FolderPosterHeight,
                                 // A folder item ships a backdrop but no logo;
@@ -1359,19 +1439,7 @@ private fun GridLayout(
                                 // Only the global setting reshapes the Grid;
                                 // the Home-rails toggle keeps it posters.
                                 landscape = gridLandscape,
-                                modifier = Modifier
-                                    .focusRequester(cardRequester)
-                                    .then(
-                                        when {
-                                            isReturnItem ->
-                                                Modifier.focusRequester(returnFocusRequester)
-
-                                            isEntryItem ->
-                                                Modifier.focusRequester(entryFocusRequester)
-
-                                            else -> Modifier
-                                        }
-                                    )
+                                modifier = itemModifier
                             )
                             // Grid always keeps regular posters, but its
                             // item captions honor the toggles like Rows.

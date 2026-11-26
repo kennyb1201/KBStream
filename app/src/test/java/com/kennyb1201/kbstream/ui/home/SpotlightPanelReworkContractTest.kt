@@ -101,7 +101,10 @@ class SpotlightPanelReworkContractTest {
             "the card's own click is untouched, and a catalog card's click opens " +
                 "Detail - which is now the whole of 'click the expanded card'",
             poster.contains("KBCard(\n        onClick = onClick,") &&
-                home.contains("onClick = { onOpen(meta) }")
+                // Remembered per item since the perf item-4 remainder, so the
+                // card can skip; the click still opens the same Detail.
+                home.contains("val cardClick = remember(meta) { { currentOnOpen.value(meta) } }") &&
+                home.contains("onClick = cardClick")
         )
         assertFalse(
             "and nothing in the panel starts playback: the old PLAY pill's " +

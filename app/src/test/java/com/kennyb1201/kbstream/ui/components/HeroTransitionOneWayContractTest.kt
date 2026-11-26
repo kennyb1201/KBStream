@@ -124,8 +124,11 @@ class HeroTransitionOneWayContractTest {
             hero.contains("placeholderSize = SharedTransitionScope.PlaceholderSize.ContentSize")
         )
         assertTrue(
-            "boundsTransform must stay matched to the screen transition",
-            hero.contains("boundsTransform = { _, _ -> tween(durationMs) }")
+            "boundsTransform must stay matched to the screen transition - and be " +
+                "ONE remembered instance, because it is part of the shared-element " +
+                "node's identity (perf item-4 remainder)",
+            hero.contains("val boundsTransform: BoundsTransform = remember(durationMs) {") &&
+                hero.contains("{ _, _ -> tween(durationMs) }")
         )
         assertTrue(
             "the two ends still pair by key",

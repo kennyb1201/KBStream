@@ -24,6 +24,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -975,6 +976,32 @@ private fun StudioRailRow(
                 // The tile's own focus drives the caption marquee below.
                 var focused by remember { mutableStateOf(false) }
 
+                // Stable per-card handlers (perf spec 2026-11-22, item 4
+                // remainder): remembered on the item, so a pass that changed
+                // nothing hands the card the same instances and it can skip.
+                // The callbacks are read through rememberUpdatedState because
+                // the screen passes fresh closures down.
+                val currentOnBeforeOpenDetail = rememberUpdatedState(onBeforeOpenDetail)
+                val currentOnNavigateDetail = rememberUpdatedState(onNavigateDetail)
+                val currentOnOpenPosterMenu = rememberUpdatedState(onOpenPosterMenu)
+                val cardClick = remember(studioItem, cardKey, itemIndex, rawMediaType) {
+                    {
+                        // Remember this card, so backing out of its Detail page
+                        // reopens this rail ON it.
+                        currentOnBeforeOpenDetail.value(cardKey, itemIndex)
+                        viewModel.resolveAndNavigate(
+                            tmdbId = studioItem.item.id,
+                            mediaType = rawMediaType,
+                            onNavigateDetail = currentOnNavigateDetail.value
+                        )
+                    }
+                }
+                val cardLongClick = remember(studioItem, requester, cardKey, itemIndex) {
+                    {
+                        currentOnOpenPosterMenu.value(studioItem, requester, cardKey, itemIndex)
+                    }
+                }
+
                 Column(
                     modifier = Modifier
                         .padding(end = 12.dp)
@@ -989,19 +1016,8 @@ private fun StudioRailRow(
                             ?: studioItem.item.name,
                         isWatched = watched,
                         isPartiallyWatched = watchedPartially,
-                        onClick = {
-                            // Remember this card, so backing out of its Detail
-                            // page reopens this rail ON it.
-                            onBeforeOpenDetail(cardKey, itemIndex)
-                            viewModel.resolveAndNavigate(
-                                tmdbId = studioItem.item.id,
-                                mediaType = rawMediaType,
-                                onNavigateDetail = onNavigateDetail
-                            )
-                        },
-                        onLongClick = {
-                            onOpenPosterMenu(studioItem, requester, cardKey, itemIndex)
-                        },
+                        onClick = cardClick,
+                        onLongClick = cardLongClick,
                         posterWidth = posterSize.width,
                         posterHeight = posterSize.height,
                         // The discover item ships a backdrop; the resolver adds

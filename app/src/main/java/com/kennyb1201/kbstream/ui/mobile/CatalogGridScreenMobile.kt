@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -494,6 +495,19 @@ fun CatalogGridScreenMobile(
                         val isPartiallyWatched =
                             viewModel.watchedKey(meta.id, meta.type) in partialWatchedKeys
 
+                        // Stable per-cell handlers (perf spec 2026-11-22, item
+                        // 4 remainder), read at press time.
+                        val currentOnItemClick = rememberUpdatedState(onItemClick)
+                        val tileClick = remember(meta) {
+                            {
+                                // A title page is a DETOUR, not an exit: see
+                                // the dispose effect, which keeps the pager
+                                // and the viewer's place for the trip back.
+                                leftForDetail = true
+                                currentOnItemClick.value(meta)
+                            }
+                        }
+                        val tileLongClick = remember(meta) { { menuTarget = meta } }
                         CatalogTile(
                             meta = meta,
                             // Paging grids only fade: the cells already re-flow
@@ -516,14 +530,8 @@ fun CatalogGridScreenMobile(
                             landscape = landscape,
                             isWatched = isWatched,
                             isPartiallyWatched = isPartiallyWatched,
-                            onClick = {
-                                // A title page is a DETOUR, not an exit: see
-                                // the dispose effect, which keeps the pager and
-                                // the viewer's place for the trip back.
-                                leftForDetail = true
-                                onItemClick(meta)
-                            },
-                            onLongClick = { menuTarget = meta }
+                            onClick = tileClick,
+                            onLongClick = tileLongClick
                         )
                     }
                 }

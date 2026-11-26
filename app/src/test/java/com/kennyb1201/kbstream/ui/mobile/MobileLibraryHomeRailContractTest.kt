@@ -141,9 +141,11 @@ class MobileLibraryHomeRailContractTest {
             .substringBefore("A Continue Watching card, in the television rail's own design.")
         assertTrue(
             "a tap must open the title's Detail through the phone's own callback " +
-                "and arm the hero flight, exactly as a catalog card does",
+                "and arm the hero flight, exactly as a catalog card does - read " +
+                "through rememberUpdatedState since the click is a remembered " +
+                "instance (perf item-4 remainder)",
             rail.contains("armHeroSource(meta.type, meta.id)") &&
-                rail.contains("onOpen(meta)")
+                rail.contains("currentOnOpen.value(meta)")
         )
         assertTrue(
             "the cards are the touch cards, in the viewer's shape",

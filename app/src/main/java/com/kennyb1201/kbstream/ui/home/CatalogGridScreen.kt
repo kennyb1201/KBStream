@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -599,6 +600,53 @@ fun CatalogGridScreen(
                         val cardRequester = remember(cardKey) { FocusRequester() }
                         cardFocusRequesters[cardKey] = cardRequester
 
+                        val currentOnItemClick = rememberUpdatedState(onItemClick)
+                        // Read at press time: the successor is resolved from
+                        // the pager as it stands then, not as it stood when the
+                        // cell composed.
+                        val currentItems = rememberUpdatedState(items)
+                        val tileClick = remember(meta, cardKey) {
+                            {
+                                // A title page is a DETOUR, not an exit:
+                                // recorded for the dispose effect below, which
+                                // keeps the pager and the viewer's place for the
+                                // trip back.
+                                leftForDetail = true
+                                currentOnItemClick.value(meta)
+                            }
+                        }
+                        // The tile's whole chain is remembered too (perf spec
+                        // 2026-11-22, item 4 remainder): the hero end is a
+                        // remembered element now, so the chain no longer
+                        // changes identity on every pass.
+                        val heroModifier =
+                            Modifier.heroSourceElement(meta.type, meta.id)
+                        val cardModifier = remember(cardRequester, heroModifier) {
+                            Modifier
+                                // The tile's own landing target for its
+                                // menu's hand-back (see closeMenu).
+                                .focusRequester(cardRequester)
+                                // Opts this tile into the poster -> Detail hero
+                                // flight (shared key is type:id, same as the
+                                // rail posters).
+                                .then(heroModifier)
+                        }
+                        val tileLongClick = remember(meta, cardKey, index) {
+                            {
+                                menuCardKey = cardKey
+                                // The tile that takes this one's place if Hide
+                                // is the row pressed, resolved from the pager
+                                // BEFORE the title is filtered out.
+                                menuSuccessorKey = successorIndexAfter(
+                                    currentItems.value.itemCount,
+                                    index
+                                )?.let { at ->
+                                    currentItems.value.peek(at)?.let { "${it.type}:${it.id}" }
+                                }
+                                menuTarget = meta
+                            }
+                        }
+
                         Column(
                             modifier = Modifier
                                 .width(tileWidth)
@@ -621,27 +669,14 @@ fun CatalogGridScreen(
                                 isPartiallyWatched =
                                     viewModel.watchedKey(meta.id, meta.type) in
                                         partialWatchedKeys,
-                                onClick = {
-                                    // A title page is a DETOUR, not an exit:
-                                    // recorded for the dispose effect below,
-                                    // which keeps the pager and the viewer's
-                                    // place for the trip back.
-                                    leftForDetail = true
-                                    onItemClick(meta)
-                                },
-                                onLongClick = {
-                                    menuCardKey = cardKey
-                                    // The tile that takes this one's place if
-                                    // Hide is the row pressed, resolved from the
-                                    // pager BEFORE the title is filtered out.
-                                    menuSuccessorKey = successorIndexAfter(
-                                        lazyItems.itemCount,
-                                        index
-                                    )?.let { at ->
-                                        lazyItems.peek(at)?.let { "${it.type}:${it.id}" }
-                                    }
-                                    menuTarget = meta
-                                },
+                                // Stable per-tile handlers (perf spec
+                                // 2026-11-22, item 4 remainder): the grid used
+                                // to hand every tile a fresh click, so no tile
+                                // could skip. Its modifier still carries the
+                                // composable hero hook, so it is the handlers
+                                // that are remembered here.
+                                onClick = tileClick,
+                                onLongClick = tileLongClick,
                                 posterWidth = posterSize.width,
                                 posterHeight = posterSize.height,
                                 // The add-on art above may be present; the
@@ -654,14 +689,7 @@ fun CatalogGridScreen(
                                 // has to reach it (the same value the cell was
                                 // sized from above).
                                 landscape = landscape,
-                                modifier = Modifier
-                                    // The tile's own landing target for its
-                                    // menu's hand-back (see closeMenu).
-                                    .focusRequester(cardRequester)
-                                    // Opts this tile into the poster ->
-                                    // Detail hero flight (shared key is
-                                    // type:id, same as the rail posters).
-                                    .heroSourceElement(meta.type, meta.id)
+                                modifier = cardModifier
                             )
                             // The shared caption block, so the "Poster Titles /
                             // Years / Star Ratings" toggles reach this grid like

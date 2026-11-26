@@ -41,7 +41,13 @@ class LibraryReturnFocusContractTest {
                     "itemId = cardKey, position = index ) )"
             )
         )
-        val navigate = source.indexOf("onItemClick(item.mediaType, navigationId)", record)
+        // The handler is read through rememberUpdatedState since the perf
+        // item-4 remainder made the card's click a remembered instance; the
+        // record still has to be raised before it runs.
+        val navigate = source.indexOf(
+            "currentOnItemClick.value(item.mediaType, navigationId)",
+            record
+        )
         assertTrue(
             "and it is raised BEFORE the navigation - a record written after " +
                 "the click would never be written, the screen is being left",

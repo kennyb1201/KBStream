@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,6 +34,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -304,11 +306,20 @@ fun SearchScreenMobile(
         // layouts, F5). The 600dp step that used to live here is now the Medium
         // boundary itself, so the phone and tablet-portrait numbers are the same
         // as before and only a new class gained a step.
-        val browseChipColumns =
-            MobileAdaptiveRules.searchChipColumns(rememberMobileWindowWidthClass())
+        val widthClass = rememberMobileWindowWidthClass()
+        val browseChipColumns = MobileAdaptiveRules.searchChipColumns(widthClass)
         val chipRows = remember(visibleEntries, browseChipColumns) {
             visibleEntries.chunked(browseChipColumns)
         }
+        // F9 of the same spec: Search's wide-window caps. Above Expanded the
+        // content column is the same 1200dp shelf Home uses - a chip grid and a
+        // result list running the full 1280dp of a landscape tablet is a wall -
+        // and the query field stops stretching with it at 640dp, so the field
+        // does not become a line of text a foot long. Both are the rule's own
+        // numbers and both are 0 below Expanded, so a phone's Search is
+        // untouched.
+        val contentMaxWidthDp = MobileAdaptiveRules.searchContentMaxWidthDp(widthClass)
+        val fieldMaxWidthDp = MobileAdaptiveRules.searchFieldMaxWidthDp(widthClass)
         // A failed search keeps the browser out of the way: the browser's
         // chips are the "nothing matched, try browsing" answer, and they are
         // the wrong answer when the query never reached the service.
@@ -322,7 +333,21 @@ fun SearchScreenMobile(
         ) {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    // Top-centre rather than the default, the same arrangement
+                    // as Home: on an expanded window the capped column is
+                    // centred, and below Expanded the cap is 0 and this is the
+                    // window either way.
+                    .align(Alignment.TopCenter)
+                    .fillMaxHeight()
+                    .then(
+                        if (contentMaxWidthDp > 0) {
+                            Modifier.widthIn(max = contentMaxWidthDp.dp)
+                        } else {
+                            Modifier
+                        }
+                    )
+                    .fillMaxWidth(),
                 contentPadding = PaddingValues(bottom = 28.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
@@ -340,7 +365,19 @@ fun SearchScreenMobile(
                                 onValueChange = viewModel::onQueryChanged,
                                 placeholder = "Search titles, people, collections…",
                                 focusRequester = fieldFocus,
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    // Wide windows only: the field stops at the
+                                    // rule's cap instead of growing with the
+                                    // column. Below Expanded the cap is 0 and it
+                                    // is as wide as the row gives it.
+                                    .then(
+                                        if (fieldMaxWidthDp > 0) {
+                                            Modifier.widthIn(max = fieldMaxWidthDp.dp)
+                                        } else {
+                                            Modifier
+                                        }
+                                    ),
                                 onDone = { viewModel.commitSearch() },
                                 onClear = {
                                     viewModel.onQueryChanged("")
@@ -839,17 +876,40 @@ fun SearchScreenMobile(
                                 },
                                 contentType = { "title" }
                             ) { result ->
-                                SearchTile(
-                                    // Results land one rail at a time; a tile
-                                    // that arrives or leaves fades where it
-                                    // was and the rail closes the gap.
-                                    modifier = Modifier
+                                // Stable per-tile handlers and chain (perf spec
+                                // 2026-11-22, item 4 remainder): the tile used
+                                // to be handed a fresh click and a rebuilt
+                                // modifier on every pass. The handler is read
+                                // through rememberUpdatedState, and the hero
+                                // source is a remembered element now.
+                                val currentOnItemClick =
+                                    rememberUpdatedState(onItemClick)
+                                val tileClick = remember(result) {
+                                    {
+                                        viewModel.onResultOpened(result)
+                                        currentOnItemClick.value(result.meta)
+                                    }
+                                }
+                                val tileLongClick = remember(result) {
+                                    { menuResult = result }
+                                }
+                                val heroModifier =
+                                    Modifier.heroSourceOnPress(result.type, result.id)
+                                val tileModifier = remember(heroModifier) {
+                                    Modifier
+                                        // Results land one rail at a time; a
+                                        // tile that arrives or leaves fades
+                                        // where it was and the rail closes the
+                                        // gap.
                                         .animateItem()
                                         // The phone's poster -> Detail flight:
                                         // a press IS the source signal here (a
                                         // touch has no D-pad focus), the same
                                         // hand-off Home's cards already make.
-                                        .heroSourceOnPress(result.type, result.id),
+                                        .then(heroModifier)
+                                }
+                                SearchTile(
+                                    modifier = tileModifier,
                                     result = result,
                                     watched = watchedTile(
                                         result = result,
@@ -863,11 +923,8 @@ fun SearchScreenMobile(
                                         partialWatchedKeys = partialWatchedKeys,
                                         viewModel = viewModel
                                     ),
-                                    onClick = {
-                                        viewModel.onResultOpened(result)
-                                        onItemClick(result.meta)
-                                    },
-                                    onLongClick = { menuResult = result }
+                                    onClick = tileClick,
+                                    onLongClick = tileLongClick
                                 )
                             }
 
@@ -970,13 +1027,22 @@ fun SearchScreenMobile(
                                 key = { person: TmdbSearchPersonResult -> "actor:${person.id}" },
                                 contentType = { "actor" }
                             ) { person ->
-                                PersonTile(
-                                    modifier = Modifier.animateItem(),
-                                    person = person,
-                                    onClick = {
+                                // Stable per-tile handler and modifier (perf
+                                // spec 2026-11-22, item 4 remainder), the same
+                                // shape as the titles rail above.
+                                val currentOnPersonClick =
+                                    rememberUpdatedState(onPersonClick)
+                                val tileClick = remember(person) {
+                                    {
                                         viewModel.onActorOpened(person)
-                                        onPersonClick?.invoke(person)
+                                        currentOnPersonClick.value?.invoke(person)
                                     }
+                                }
+                                val tileModifier = remember { Modifier.animateItem() }
+                                PersonTile(
+                                    modifier = tileModifier,
+                                    person = person,
+                                    onClick = tileClick
                                 )
                             }
                         }
@@ -994,13 +1060,19 @@ fun SearchScreenMobile(
                                 key = { studio: StudioSearchHit -> studio.key },
                                 contentType = { "studio" }
                             ) { studio ->
-                                StudioTile(
-                                    modifier = Modifier.animateItem(),
-                                    studio = studio,
-                                    onClick = {
+                                val currentOnStudioClick =
+                                    rememberUpdatedState(onStudioClick)
+                                val tileClick = remember(studio) {
+                                    {
                                         viewModel.onStudioOpened(studio)
-                                        onStudioClick?.invoke(studio)
+                                        currentOnStudioClick.value?.invoke(studio)
                                     }
+                                }
+                                val tileModifier = remember { Modifier.animateItem() }
+                                StudioTile(
+                                    modifier = tileModifier,
+                                    studio = studio,
+                                    onClick = tileClick
                                 )
                             }
                         }

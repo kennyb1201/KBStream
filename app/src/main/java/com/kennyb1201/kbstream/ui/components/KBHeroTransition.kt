@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.components
 
 import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.BoundsTransform
 import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
@@ -115,14 +116,35 @@ class KBHeroTransition(
     @Composable
     internal fun sourceModifierFor(key: String): Modifier = sharedElementModifier(key)
 
+    /**
+     * The shared-element node for [key], remembered on its inputs.
+     *
+     * The node used to be built from scratch on every composition, and a
+     * `boundsTransform` lambda with it, so every card in every rail was handed a
+     * modifier that compared unequal to the one it had last pass - which is what
+     * kept the hero-carrying cards' whole chains out of `remember` (perf spec
+     * 2026-11-22, item 4 remainder). Now the node is one instance per (screen,
+     * key, motion duration): a card that recomposes for a reason that is not its
+     * own is handed the same element again and can skip.
+     */
     @Composable
-    private fun sharedElementModifier(key: String): Modifier = with(sharedScope) {
-        Modifier.sharedElement(
-            sharedContentState = rememberSharedContentState(key = key),
-            animatedVisibilityScope = visibilityScope,
-            boundsTransform = { _, _ -> tween(durationMs) },
-            placeholderSize = SharedTransitionScope.PlaceholderSize.ContentSize
-        )
+    private fun sharedElementModifier(key: String): Modifier {
+        val sharedContentState = rememberSharedContentState(key = key)
+        // One transform per screen rather than one per card per pass: it is
+        // part of the node's identity.
+        val boundsTransform: BoundsTransform = remember(durationMs) {
+            { _, _ -> tween(durationMs) }
+        }
+        return remember(sharedContentState, visibilityScope, boundsTransform, key) {
+            with(sharedScope) {
+                Modifier.sharedElement(
+                    sharedContentState = sharedContentState,
+                    animatedVisibilityScope = visibilityScope,
+                    boundsTransform = boundsTransform,
+                    placeholderSize = SharedTransitionScope.PlaceholderSize.ContentSize
+                )
+            }
+        }
     }
 }
 
@@ -260,11 +282,21 @@ fun Modifier.heroSourceElement(type: String, id: String): Modifier {
             derivedStateOf { heroSourceKey.value == key }
         }
 
-    return this
-        .onFocusChanged { focusState ->
+    // Both halves are remembered, so a caller can remember its whole chain: the
+    // focus listener is one element per key (a fresh `onFocusChanged` made the
+    // chain unequal every pass), and the flight end - the transition's own
+    // remembered node - is attached or detached only when this card actually
+    // gains or loses the role, which is a real change and should invalidate.
+    val focusListener = remember(key) {
+        Modifier.onFocusChanged { focusState ->
             if (focusState.hasFocus) heroSourceKey.value = key
         }
-        .then(
-            if (isSource.value) transition.sourceModifierFor(key) else Modifier
-        )
+    }
+
+    val flight =
+        if (isSource.value) transition.sourceModifierFor(key) else Modifier
+
+    return this
+        .then(focusListener)
+        .then(flight)
 }

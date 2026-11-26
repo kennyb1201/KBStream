@@ -51,6 +51,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -10880,6 +10881,15 @@ private fun EpisodeCard(
         ep.name ?: ""
     }
 
+    // Stable per-card click (perf spec 2026-11-22, item 4 remainder): an
+    // episode row hands the card a fresh closure on every pass otherwise, and
+    // the handler is read through rememberUpdatedState so a new callback from
+    // the caller does not rebuild the card.
+    val currentOnClick = rememberUpdatedState(onClick)
+    val posterClick = remember(isUnavailable) {
+        { if (!isUnavailable) currentOnClick.value() }
+    }
+
     PosterCard(
         posterUrl = posterUrl,
         // Never the real name when hidden: a screen reader announcing "The
@@ -10894,7 +10904,7 @@ private fun EpisodeCard(
         // An unaired episode still draws the UNAVAILABLE badge; it must not
         // also be playable. Clicking it used to launch source resolution for an
         // episode that has not aired, which then failed with a source error.
-        onClick = { if (!isUnavailable) onClick() },
+        onClick = posterClick,
         onLongClick = if (isUnavailable) null else onLongClick,
         modifier = modifier
             .width(260.dp)

@@ -104,15 +104,18 @@ class HomeFocusedCardContractTest {
             .substringAfter(".onFocusChanged { focusState ->")
             .substringBefore(".then(")
         assertTrue(
-            "a catalog card reports itself on focus, not only on long press",
+            "a catalog card reports itself on focus, not only on long press - " +
+                "through rememberUpdatedState, since the chain is remembered now",
             home.contains("if (focusState.isFocused) {") &&
                 catalogFocusBlock.contains("focusedCardRequester = requester") &&
-                catalogFocusBlock.contains("selectHero(meta)")
+                catalogFocusBlock.contains("currentSelectHero") &&
+                catalogFocusBlock.contains(".value(meta)")
         )
         assertTrue(
             "and the card's key reaches the return-from-Detail restore, so the " +
                 "focus the viewer left Home with is one it can land on again",
-            catalogFocusBlock.contains("viewModel.lastFocusedRailItemKey")
+            catalogFocusBlock.contains(".lastFocusedRailItemKey =") &&
+                catalogFocusBlock.contains("catalogCardKey")
         )
         // ...and its REQUESTER is registered when the card composes, not when a
         // card happens to take focus. Home is disposed while its Detail page is
@@ -135,7 +138,9 @@ class HomeFocusedCardContractTest {
                 "with its KEY: the key is what the return-from-Detail restore " +
                 "looks up, and a rail that reported only a requester left the " +
                 "remembered place nameless",
-            home.contains("onFocusedCard(cardKey, requester)") &&
+            // Read through rememberUpdatedState since the perf item-4
+            // remainder made the whole focus chain a remembered instance.
+            home.contains("currentOnFocusedCard.value(cardKey, requester)") &&
                 home.contains("onFocusedCard = { cardKey, requester ->") &&
                 home.contains("viewModel.lastFocusedRailItemKey = cardKey")
         )

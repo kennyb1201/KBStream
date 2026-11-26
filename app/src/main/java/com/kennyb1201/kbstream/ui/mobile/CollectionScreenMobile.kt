@@ -24,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -304,6 +305,27 @@ fun CollectionScreenMobile(
                         key = { _, part -> "collection_part:${part.id}" },
                         contentType = { _, _ -> "collection-part" }
                     ) { index, part ->
+                        // Stable per-cell handlers (perf spec 2026-11-22, item 4
+                        // remainder): a collection can be dozens of parts, and
+                        // every one of them used to be rebuilt per pass.
+                        val currentOnNavigateDetail =
+                            rememberUpdatedState(onNavigateDetail)
+                        val partClick = remember(part, index) {
+                            {
+                                BrowseReturnFocus.record(
+                                    BrowseReturnTarget(
+                                        screenKey = screenKey,
+                                        itemId = "collection_part:${part.id}",
+                                        position = index
+                                    )
+                                )
+                                currentOnNavigateDetail.value(
+                                    "movie",
+                                    part.id.toString()
+                                )
+                            }
+                        }
+                        val partLongClick = remember(part) { { menuPart = part } }
                         CollectionPartTile(
                             // The parts land together but not in one frame -
                             // watched marks resolve against history, so a cell
@@ -312,17 +334,8 @@ fun CollectionScreenMobile(
                             part = part,
                             isWatched = isWatched(part),
                             isPartiallyWatched = isPartiallyWatched(part),
-                            onClick = {
-                                BrowseReturnFocus.record(
-                                    BrowseReturnTarget(
-                                        screenKey = screenKey,
-                                        itemId = "collection_part:${part.id}",
-                                        position = index
-                                    )
-                                )
-                                onNavigateDetail("movie", part.id.toString())
-                            },
-                            onLongClick = { menuPart = part }
+                            onClick = partClick,
+                            onLongClick = partLongClick
                         )
                     }
                 }
