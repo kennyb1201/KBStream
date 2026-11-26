@@ -165,7 +165,27 @@ class GuidePreviewCostContractTest {
         assertFalse(
             "and no per-frame position read, which would drive a state write every " +
                 "tick",
-            body.contains("currentPosition") || body.contains("LaunchedEffect")
+            body.contains("currentPosition")
+        )
+        // 2026-11-26: the preview owns exactly one effect now - the play gate that
+        // pauses it under a fullscreen player or behind the launcher. That is not
+        // per-frame work: it may only be keyed on the gate's inputs, never on a
+        // clock or a position, or it would re-enter this composition every tick
+        // and the grid with it.
+        val effects = Regex("LaunchedEffect\\(([^)]*)\\)")
+            .findAll(body)
+            .map { it.groupValues[1].trim() }
+            .toList()
+        effects.forEach { keys ->
+            assertTrue(
+                "the preview's one effect re-runs on the player and the gate only, " +
+                    "not a clock: $keys",
+                keys == "previewPlayer, canPlay"
+            )
+        }
+        assertTrue(
+            "and that is the only effect it has",
+            effects.size <= 1
         )
     }
 
