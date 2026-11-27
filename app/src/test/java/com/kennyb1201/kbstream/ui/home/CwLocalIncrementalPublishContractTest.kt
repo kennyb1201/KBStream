@@ -884,13 +884,19 @@ class CwLocalIncrementalPublishContractTest {
             "and hands them to the resolution that walks them",
             pass.contains("declaredSeasons = declaredSeasons")
         )
+        // F5f moved the walk onto the near window, so the seasons it walks are
+        // the caller's list narrowed to that window (see the pins below).
         assertTrue(
-            "the resolution walks only those seasons",
-            viewModel.contains("cwWalkSeasons(\n            declaredSeasons = declaredSeasons,")
+            "the resolution walks only the seasons it is handed",
+            viewModel.contains("cwWalkSeasons(\n            declaredSeasons = seasonsToWalk,")
         )
         assertTrue(
             "the totals walk record what the map holds, so a numbering gap is not the end",
-            viewModel.contains("for (season in seasonEpisodesBySeason.keys.sorted())")
+            viewModel.contains("for (season in seasonsToCount.keys.sorted())") &&
+                viewModel.contains(
+                    "val seasonsToCount: Map<Int, List<ResolvedEpisode>> =\n" +
+                        "        if (countingFromWalk) seasonEpisodesBySeason else emptyMap()"
+                )
         )
         assertTrue(
             "the remaining count is bounded by the declared last season too",
@@ -911,6 +917,143 @@ class CwLocalIncrementalPublishContractTest {
         assertTrue(
             "and each duration is taken on the pass's one clock",
             Regex("cwClockMs\\(\\) - (preload|resolve|episodes)StartedAtMs").findAll(pass).count() == 3
+        )
+    }
+
+    // ── The resolve call off the row's clock (F5f) ─────────────────────────
+
+    @Test
+    fun `the near window is the viewer's season and the two after it`() {
+        assertEquals(
+            "a show whose detail declares seasons 1..10 around a viewer in S3",
+            listOf(3, 4, 5),
+            cwNearSeasons(from = 3, declaredSeasons = (1..10).toList())
+        )
+        assertEquals(
+            "and the window stops at the show's last declared season",
+            listOf(8, 9),
+            cwNearSeasons(from = 8, declaredSeasons = (1..9).toList())
+        )
+        assertEquals(
+            "a tracker position past the declared end still probes itself - a" +
+                " stale detail is not a finished show",
+            listOf(12),
+            cwNearSeasons(from = 12, declaredSeasons = (1..9).toList())
+        )
+        assertEquals(
+            "a detail that named no seasons leaves the window as the seasons to ask for",
+            listOf(2, 3, 4),
+            cwNearSeasons(from = 2, declaredSeasons = null)
+        )
+        assertEquals(
+            "and a zero position (a row with no episode yet) starts at season 1",
+            listOf(1, 2, 3),
+            cwNearSeasons(from = 0, declaredSeasons = null)
+        )
+    }
+
+    @Test
+    fun `the furthest watched episode comes from the watched state, not a walk`() {
+        assertEquals(
+            "Simkl pairs and local keys are one set, furthest wins",
+            3 to 4,
+            cwFurthestWatchedEpisode(
+                parentId = "tt1",
+                simklWatchedEpisodes = setOf(1 to 1, 3 to 2),
+                watchedEpisodeKeys = setOf("tt1:3:4", "tt1:2:9")
+            )
+        )
+        assertEquals(
+            "keys anchored to the show's other id flavor are not this show's position",
+            2 to 1,
+            cwFurthestWatchedEpisode(
+                parentId = "tt1",
+                simklWatchedEpisodes = emptySet(),
+                watchedEpisodeKeys = setOf("tmdb:9:5:7", "tt1:2:1")
+            )
+        )
+        assertEquals(
+            "season 0 (specials) is not a position Continue Watching resumes from",
+            1 to 2,
+            cwFurthestWatchedEpisode(
+                parentId = "tt1",
+                simklWatchedEpisodes = emptySet(),
+                watchedEpisodeKeys = setOf("tt1:0:9", "tt1:1:2")
+            )
+        )
+        assertEquals(
+            "nothing watched is null, not season 1 episode 1",
+            null,
+            cwFurthestWatchedEpisode("tt1", emptySet(), emptySet())
+        )
+    }
+
+    @Test
+    fun `the local row resolves near its position and leaves the counts to a later pass`() {
+        val viewModel = source("com/kennyb1201/kbstream/ui/home/HomeViewModel.kt")
+        val start = viewModel.indexOf("private fun observeUpNext()")
+        assertTrue("the upNext pass is missing", start >= 0)
+        val end = viewModel.indexOf("private suspend fun dropSupersededResumeRows(", start)
+        assertTrue("the pass's end is missing", end > start)
+        val pass = viewModel.substring(start, end)
+
+        assertTrue(
+            "the row asks for the near-position resolve",
+            pass.contains("nearPositionOnly = true")
+        )
+        assertTrue(
+            "and a show without counts is remembered for the deferred walk",
+            pass.contains("deferredTotals[tmdbId] =") &&
+                pass.contains("PendingShowTotals(")
+        )
+        assertTrue(
+            "the deferred walk runs after the local slice was published",
+            pass.indexOf("arrivals.publishLocalCards(localCards)") <
+                pass.indexOf("resolveSeriesTargetFromSharedWatchedState(\n                                                parentId = pending.parentId")
+        )
+        assertTrue(
+            "the upgrade republishes the local slice through the same publisher",
+            pass.contains("arrivals.publishLocalCards(upgraded)")
+        )
+        assertTrue(
+            "and it only patches the cards, it does not rebuild them",
+            pass.contains("card.copy(") &&
+                pass.contains("episodesWatched =") &&
+                pass.contains("episodesTotal = resolved.episodesTotal")
+        )
+        assertTrue(
+            "a newer pass keeps its rail: the upgrade is gated on the request",
+            pass.contains("isLatestUpNextRequest(requestVersion)")
+        )
+
+        // The resolver's half: the window bounds the walk, the counts are
+        // skipped (they would be a partial "X of Y"), and a near walk never
+        // becomes the show's cached map.
+        assertTrue(
+            "the resolution takes the near-position mode",
+            viewModel.contains("nearPositionOnly: Boolean = false")
+        )
+        assertTrue(
+            "the walk is the near window in that mode",
+            viewModel.contains("cwNearSeasons(") &&
+                viewModel.contains("declaredSeasons = seasonsToWalk,")
+        )
+        assertTrue(
+            "the position comes from the watched state, before any walk",
+            viewModel.contains("cwFurthestWatchedEpisode(")
+        )
+        assertTrue(
+            "the totals walk does not count a near-only map",
+            viewModel.contains("if (countingFromWalk) seasonEpisodesBySeason else emptyMap()")
+        )
+        assertTrue(
+            "and a near-only map is never cached as the show's seasons",
+            viewModel.contains("!seasonWalkFailed && !nearPositionOnly")
+        )
+        assertTrue(
+            "the remaining count is left to the deferred pass",
+            viewModel.contains("if (!countingFromWalk) {") &&
+                viewModel.contains("if (countingFromWalk) 0 else null")
         )
     }
 

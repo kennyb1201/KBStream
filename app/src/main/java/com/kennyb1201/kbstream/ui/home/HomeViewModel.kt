@@ -8527,6 +8527,17 @@ Log.d(
                             }
                         )
 
+                    // F5f (spec 2026-11-27): shows whose "X of Y" this pass did
+                    // not count. The rows resolve near their own position now,
+                    // so a show with no cached totals lands as an enriched card
+                    // without counts; the background walk below fills them and
+                    // republishes the card once it has. Keyed by TMDB id, so two
+                    // rows of one show ask for one walk.
+                    val deferredTotals =
+                        java.util.Collections.synchronizedMap(
+                            LinkedHashMap<Int, PendingShowTotals>()
+                        )
+
                     // Local continue-watching rows are already unfinished resume
                     // rows, including movies that were stopped before completion.
                     //
@@ -8889,7 +8900,13 @@ Log.d(
                                 tmdbId = tmdbId,
                                 simklSeason = entry.season,
                                 simklEpisode = entry.episode,
-                                declaredSeasons = declaredSeasons
+                                declaredSeasons = declaredSeasons,
+                                // F5f: the continue point only, from the
+                                // seasons around this row's position. The
+                                // counts walk used to hold this card for ~1.9s
+                                // (`slowCall=resolve`); it runs below, after
+                                // the card has landed.
+                                nearPositionOnly = true
                             )
                         } else {
                             null
@@ -8922,6 +8939,14 @@ Log.d(
 
                     tmdbEpisodeTotals?.let { totals ->
                         showEpisodeTotalsCache[tmdbId] = totals
+                    }
+
+                    if (tmdbEpisodeTotals == null) {
+                        deferredTotals[tmdbId] =
+                            PendingShowTotals(
+                                parentId = parentId,
+                                declaredSeasons = declaredSeasons
+                            )
                     }
                 }
 
@@ -9218,6 +9243,76 @@ Log.d(
                         // publishes before it carried the partial slice.
                         if (localCards.isNotEmpty()) {
                             arrivals.publishLocalCards(localCards)
+                        }
+
+                        // F5f (spec 2026-11-27): the counts half, off the rows'
+                        // clock. Each row resolved its continue point from the
+                        // seasons around its own position; the full walk - every
+                        // declared season, for the hero's "X of Y" - runs here,
+                        // once per show, and upgrades the card through the same
+                        // incremental publish the rows use. Awaiting it inside a
+                        // row is exactly what held the first landing to 3.2s.
+                        if (deferredTotals.isNotEmpty() && localCards.isNotEmpty()) {
+                            viewModelScope.launch {
+                                val filled =
+                                    LinkedHashMap<Int, ResolvedHomeSeriesTarget>()
+
+                                deferredTotals.forEach { (showId, pending) ->
+                                    // Another row of this show, or an earlier
+                                    // pass, may have filled it already.
+                                    if (showEpisodeTotalsCache[showId] != null) {
+                                        return@forEach
+                                    }
+
+                                    val resolved =
+                                        try {
+                                            resolveSeriesTargetFromSharedWatchedState(
+                                                parentId = pending.parentId,
+                                                tmdbId = showId,
+                                                simklSeason = null,
+                                                simklEpisode = null,
+                                                declaredSeasons = pending.declaredSeasons
+                                            )
+                                        } catch (_: Exception) {
+                                            null
+                                        }
+
+                                    val watched = resolved?.episodesWatched
+                                    val total = resolved?.episodesTotal
+                                    if (resolved != null && watched != null && total != null) {
+                                        showEpisodeTotalsCache[showId] =
+                                            ShowEpisodeTotals(watched, total)
+                                        filled[showId] = resolved
+                                    }
+                                }
+
+                                // A newer pass owns the rail now: its rows will
+                                // read the cache this job just filled, and this
+                                // pass's cards are stale.
+                                if (
+                                    filled.isEmpty() ||
+                                    !isLatestUpNextRequest(requestVersion)
+                                ) {
+                                    return@launch
+                                }
+
+                                val upgraded =
+                                    localCards.map { card ->
+                                        val resolved =
+                                            card.tmdbId?.let { filled[it] }
+                                                ?: return@map card
+                                        card.copy(
+                                            episodesWatched =
+                                                resolved.episodesWatched
+                                                    ?.takeIf { it > 0 },
+                                            episodesTotal = resolved.episodesTotal,
+                                            episodesRemaining =
+                                                resolved.episodesRemaining
+                                                    ?: card.episodesRemaining
+                                        )
+                                    }
+                                arrivals.publishLocalCards(upgraded)
+                            }
                         }
 
                         // The feeds are read CONCURRENTLY and each publishes on
@@ -11761,6 +11856,19 @@ episodesTotal =
         
     }
 
+/**
+ * A show whose "X of Y" a Continue Watching row left to the deferred totals
+ * walk (spec 2026-11-27, CW load F5f).
+ *
+ * The row resolves only the continue point now, near where the viewer is, so a
+ * show with no cached totals lands without its counts and this pass records what
+ * the background walk needs to fill them and upgrade the card.
+ */
+private data class PendingShowTotals(
+    val parentId: String,
+    val declaredSeasons: List<Int>?
+)
+
 private suspend fun resolveSeriesTargetFromSharedWatchedState(
     parentId: String,
     tmdbId: Int,
@@ -11770,7 +11878,15 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     // Null means the detail named none and the walk keeps its old probe; the
     // Continue Watching row passes the detail it already holds, which is what
     // turned the walk's ~8 season requests per show into the seasons that exist.
-    declaredSeasons: List<Int>? = null
+    declaredSeasons: List<Int>? = null,
+    // F5f (spec 2026-11-27): resolve ONLY the continue point, from the seasons
+    // near where the viewer is. The full call walks every declared season to
+    // build the hero's "X of Y" counts, and that walk held the row's card for
+    // 1.9s (6409: `slowCall=resolve:1873ms` inside a 2.35s seasons step). With
+    // this set the walk is the window [cwNearSeasons] names, the counts are
+    // left null, and the caller publishes them from its totals cache or fills
+    // them in the background. See the Continue Watching row.
+    nearPositionOnly: Boolean = false
 ): ResolvedHomeSeriesTarget? {
 
     // Reading this show's watched state is only meaningful once the preload has
@@ -11819,6 +11935,21 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
             )
         }
 
+    // F5f: the near-position half takes the viewer's position from the watched
+    // state itself (season/episode pairs and keys), so it can bound the walk
+    // before paying for any season. Null in the full call: there the walk's own
+    // totals loop is what finds the furthest watched episode.
+    val nearPosition =
+        if (nearPositionOnly) {
+            cwFurthestWatchedEpisode(
+                parentId = parentId,
+                simklWatchedEpisodes = simklWatchedEpisodes,
+                watchedEpisodeKeys = watchedEpisodeKeys
+            )
+        } else {
+            null
+        }
+
     var totalAiredEpisodes = 0
     var watchedAiredEpisodes = 0
 
@@ -11828,6 +11959,11 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     // the user is on S3E15) cannot win over where the user actually is.
     var furthestWatchedSeason: Int? = null
     var furthestWatchedEpisode: Int = 0
+
+    if (nearPositionOnly) {
+        furthestWatchedSeason = nearPosition?.first
+        furthestWatchedEpisode = nearPosition?.second ?: 0
+    }
 
     /*
      * Calculate the full watched/total episode count for the show.
@@ -11859,6 +11995,23 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
         declaredSeasons
             ?.maxOrNull()
 
+    // F5f: the near-position half walks only the seasons around the viewer's
+    // position - the next unwatched episode cannot be past them, and a season
+    // the detail did not declare has no episode list to fetch anyway. A cached
+    // map is already the whole show, so the counts below can still be counted
+    // from it at no cost (the row then needs no deferred totals pass).
+    val seasonsToWalk =
+        if (nearPositionOnly) {
+            cwNearSeasons(
+                from = simklSeason ?: nearPosition?.first ?: 1,
+                declaredSeasons = declaredSeasons
+            )
+        } else {
+            declaredSeasons
+        }
+
+    val countingFromWalk = !nearPositionOnly || cachedSeasonEpisodesBySeason != null
+
     // Set when ANY season of this walk could not be fetched (see the null in
     // walk.failed). A walk with a hole in it is not evidence about the show.
     var seasonWalkFailed = false
@@ -11882,7 +12035,7 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     // out of the cache below.
     val walk: CwSeasonWalk<ResolvedEpisode> =
         cwWalkSeasons(
-            declaredSeasons = declaredSeasons,
+            declaredSeasons = seasonsToWalk,
             batchSize = UP_NEXT_SEASON_BATCH,
             probeThrough = 50
         ) { s ->
@@ -11916,7 +12069,10 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     // empty answer either - see seasonEpisodesAreAnAnswer.)
     val populatedSeasons =
         seasonEpisodesBySeason.filterValues { it.isNotEmpty() }
-    if (populatedSeasons.isNotEmpty() && !seasonWalkFailed) {
+    // F5f: a near-position walk holds only the seasons around the viewer, so it
+    // must never be published as the show's full map - the next resolve would
+    // read it as one and lose every season the window did not cover.
+    if (populatedSeasons.isNotEmpty() && !seasonWalkFailed && !nearPositionOnly) {
         showSeasonEpisodesCache[tmdbId] =
             System.currentTimeMillis() to populatedSeasons
         pruneShowSeasonEpisodesCache()
@@ -11927,7 +12083,13 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     // gap. The declared walk records exactly the seasons TMDB lists, so a show
     // with no season 3 (numbering gaps are real) would otherwise stop counting
     // at the gap and report a total short of the seasons after it.
-    for (season in seasonEpisodesBySeason.keys.sorted()) {
+    //
+    // F5f: and when this call walked only the near window, the map is not the
+    // show - counting it would report a partial "X of Y" as the whole truth.
+    val seasonsToCount: Map<Int, List<ResolvedEpisode>> =
+        if (countingFromWalk) seasonEpisodesBySeason else emptyMap()
+
+    for (season in seasonsToCount.keys.sorted()) {
 
         val seasonEpisodes =
             seasonEpisodesBySeason[season].orEmpty()
@@ -12398,16 +12560,23 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                 episodesTotal =
                     episodesTotal,
 
+                // F5f: the remaining count is its own season walk (see
+                // [calculateEpisodesRemaining]), so the near-position half
+                // leaves it to the deferred totals pass.
                 episodesRemaining =
-                    calculateEpisodesRemaining(
-                        parentId = parentId,
-                        tmdbId = tmdbId,
-                        startingSeason =
-                            resume.season,
-                        startingEpisode =
-                            resumeEpisode,
-                        lastDeclaredSeason = lastDeclaredSeason
-                    ),
+                    if (!countingFromWalk) {
+                        null
+                    } else {
+                        calculateEpisodesRemaining(
+                            parentId = parentId,
+                            tmdbId = tmdbId,
+                            startingSeason =
+                                resume.season,
+                            startingEpisode =
+                                resumeEpisode,
+                            lastDeclaredSeason = lastDeclaredSeason
+                        )
+                    },
 
                 isSeasonFinale =
                     seasonFinaleFor(
@@ -12580,16 +12749,20 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                 episodesTotal,
 
             episodesRemaining =
-                calculateEpisodesRemaining(
-                    parentId = parentId,
-                    tmdbId = tmdbId,
-                    startingSeason =
-                        startingSeason,
-                    startingEpisode =
-                        nextUnwatchedInSeason
-                            .episodeNumber,
-                    lastDeclaredSeason = lastDeclaredSeason
-                ),
+                if (!countingFromWalk) {
+                    null
+                } else {
+                    calculateEpisodesRemaining(
+                        parentId = parentId,
+                        tmdbId = tmdbId,
+                        startingSeason =
+                            startingSeason,
+                        startingEpisode =
+                            nextUnwatchedInSeason
+                                .episodeNumber,
+                        lastDeclaredSeason = lastDeclaredSeason
+                    )
+                },
 
                 isSeasonFinale =
                     seasonFinaleFor(
@@ -12642,13 +12815,21 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     // an answer) for a season that cannot exist. A tracker record naming a
     // later season than the detail does keeps the old ceiling: that is a stale
     // detail, not a finished show.
+    // F5f: the near-position half does not scan past the seasons it walked -
+    // the next unwatched episode is at most [CW_NEAR_SEASON_LOOKAHEAD] away
+    // from the viewer's position, and a scan to the end of a 20-season show is
+    // exactly the wait this call took off the row.
     val lastSeasonToCheck =
         minOf(
-            maxOf(
-                highestKnownSeason + 2,
-                startingSeason +
-                    MAX_FORWARD_SEASON_LOOKAHEAD
-            ),
+            if (nearPositionOnly) {
+                startingSeason + CW_NEAR_SEASON_LOOKAHEAD
+            } else {
+                maxOf(
+                    highestKnownSeason + 2,
+                    startingSeason +
+                        MAX_FORWARD_SEASON_LOOKAHEAD
+                )
+            },
             maxOf(lastDeclaredSeason ?: Int.MAX_VALUE, startingSeason)
         )
 
@@ -12740,16 +12921,20 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                     episodesTotal,
 
                 episodesRemaining =
-                    calculateEpisodesRemaining(
-                        parentId = parentId,
-                        tmdbId = tmdbId,
-                        startingSeason =
-                            futureSeason,
-                        startingEpisode =
-                            firstUnwatchedAired
-                                .episodeNumber,
-                        lastDeclaredSeason = lastDeclaredSeason
-                    ),
+                    if (!countingFromWalk) {
+                        null
+                    } else {
+                        calculateEpisodesRemaining(
+                            parentId = parentId,
+                            tmdbId = tmdbId,
+                            startingSeason =
+                                futureSeason,
+                            startingEpisode =
+                                firstUnwatchedAired
+                                    .episodeNumber,
+                            lastDeclaredSeason = lastDeclaredSeason
+                        )
+                    },
 
                 isSeasonFinale =
                     seasonFinaleFor(
@@ -12792,7 +12977,15 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
      * that failed to load must keep today's behavior rather than hide the
      * show.
      */
-    if (
+    if (nearPositionOnly) {
+        // F5f: the near window held no unwatched aired episode, and this call
+        // has no totals to prove the show finished - so it cannot say "there is
+        // something here" either. Null is the caught-up answer the counted walk
+        // gives a finished show, and the deferred totals pass publishes its
+        // counts if the full walk disagrees. A window with a hole in it is not
+        // evidence, so a failed season keeps the known pair below.
+        if (!seasonWalkFailed) return null
+    } else if (
         hasNothingLeftToWatch(
             simklSeason = simklSeason,
             simklEpisode = simklEpisode,
@@ -12823,7 +13016,7 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
             episodesTotal,
 
         episodesRemaining =
-            0
+            if (countingFromWalk) 0 else null
     )
 }
 

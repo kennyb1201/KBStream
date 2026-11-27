@@ -114,6 +114,81 @@ internal fun cwSeasonsToWalk(
 }
 
 /**
+ * How many seasons past the viewer's position the near-position resolve walks
+ * (spec 2026-11-27, CW load F5f).
+ *
+ * The next episode is the next unwatched aired one FROM where the viewer is, so
+ * it is in the season they are in or the one after it; a window of two spans the
+ * gap a lagging season listing leaves without turning the resolve back into a
+ * walk of the whole show.
+ */
+internal const val CW_NEAR_SEASON_LOOKAHEAD = 2
+
+/**
+ * The seasons the near-position resolution walks (spec 2026-11-27, CW load F5f).
+ *
+ * [declaredSeasons] is the list the show's detail named (see [cwSeasonsToWalk]).
+ * The window starts at the viewer's position - the row's own season, or the
+ * furthest episode watched - and holds only the seasons near it, so the rows no
+ * longer pay for the whole show's seasons before their card can land. A
+ * position past the declared end (a stale tracker record) still probes itself:
+ * that is a stale detail, not a finished show. Null means the detail named no
+ * seasons, and the window stands as the seasons to ask for.
+ */
+internal fun cwNearSeasons(from: Int, declaredSeasons: List<Int>?): List<Int> {
+    val start = from.coerceAtLeast(1)
+    val window = (start..start + CW_NEAR_SEASON_LOOKAHEAD).toList()
+    if (declaredSeasons == null) return window
+
+    val declared = declaredSeasons.toSet()
+    return window.filter { season -> season in declared }
+        .ifEmpty { listOf(start) }
+}
+
+/**
+ * The furthest episode the profile has watched, from the watched state alone
+ * (spec 2026-11-27, CW load F5f).
+ *
+ * The resolution used to learn this by walking every season and matching the
+ * watched set against each listing. That is the walk F5f takes off the row's
+ * clock, and it is not needed for the position: the watched state carries the
+ * episodes directly - Simkl as (season, episode) pairs, local history as the
+ * same `parentId:season:episode` keys [WatchedEpisodeState] builds - so the
+ * furthest point is a fold over the state, with no season fetch at all.
+ *
+ * Local keys are anchored to THIS [parentId], the same rule the per-season
+ * reader applies (see [WatchedEpisodeState.localWatchedEpisodesForSeason]), so
+ * a show opened under its other id flavor does not report a position it never
+ * reached.
+ */
+internal fun cwFurthestWatchedEpisode(
+    parentId: String,
+    simklWatchedEpisodes: Set<Pair<Int, Int>>,
+    watchedEpisodeKeys: Set<String>
+): Pair<Int, Int>? {
+    val localEpisodes =
+        watchedEpisodeKeys.mapNotNull { key ->
+            val parts = key.split(":")
+            if (parts.size < 3) return@mapNotNull null
+
+            val keyId = parts.dropLast(2).joinToString(":")
+            val season = parts[parts.size - 2].toIntOrNull()
+            val episode = parts[parts.size - 1].toIntOrNull()
+
+            if (keyId == parentId && season != null && season >= 1 && episode != null) {
+                season to episode
+            } else {
+                null
+            }
+        }
+
+    return (simklWatchedEpisodes + localEpisodes).maxWithOrNull(
+        compareBy<Pair<Int, Int>> { (season, _) -> season }
+            .thenBy { (_, episode) -> episode }
+    )
+}
+
+/**
  * What one walk fetched (spec 2026-11-27, CW load F5e).
  *
  * [requests] is the number of season lookups the walk issued - the number that
