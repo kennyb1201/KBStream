@@ -573,3 +573,69 @@ internal fun searchBackBelongsToKeyboard(
             windowLostAt != 0L && windowRefocusedAt - windowLostAt >= 0 &&
                 nowMs - windowRefocusedAt in 0 until refocusEchoMs
             )
+
+/**
+ * What one Back press does while the guide's search overlay is up.
+ *
+ * [searchBackBelongsToKeyboard] answers WHOSE press it was. This answers what
+ * following that answer must DO, and the two keyboard outcomes are not the same
+ * thing: a press that lands while the IME is still connected only closed the
+ * IME, while a press that lands after it has gone ends the field's session.
+ *
+ * Collapsing the two - ending the session on every keyboard press - is what
+ * left the search bar read-only with a live keyboard still attached (Fire
+ * Stick, 2026-11-27): Fire OS closes its keyboard AND hands the app the press,
+ * the session ended while the IME was still connected, and the box read blank
+ * with every letter landing nowhere until ENTER re-armed it.
+ */
+internal enum class SearchBackAction {
+    /** The press was the IME's and the IME is still connected: change nothing. */
+    KeepKeyboardSession,
+
+    /** The press was the IME's and the IME is gone: end the session, keep the query. */
+    EndKeyboardSession,
+
+    /** The viewer's press: close the overlay and clear the query. */
+    CloseSearch
+}
+
+/**
+ * What to do with a Back that reached the guide while the search overlay is up.
+ *
+ * [keyboardWindowUp] is the caller's read of "another window - on Fire TV the
+ * system keyboard - is in front of the overlay right now", i.e. the overlay's
+ * own window has held the focus and lost it. It is deliberately NOT the echo
+ * windows: those say a keyboard closed a moment ago, never that one is still
+ * open. Only this says the IME is still connected.
+ *
+ * Pure, so [GuideRulesTest] can pin every order the three signals can arrive in
+ * without a Compose harness.
+ */
+internal fun searchBackAction(
+    editing: Boolean,
+    sinceEditingChangeMs: Long,
+    windowLostAt: Long,
+    windowRefocusedAt: Long,
+    keyboardWindowUp: Boolean,
+    nowMs: Long = System.currentTimeMillis(),
+    echoMs: Long = SEARCH_IME_ECHO_MS,
+    refocusEchoMs: Long = SEARCH_REFOCUS_ECHO_MS
+): SearchBackAction = when {
+    // A keyboard is still IN FRONT of the overlay: this press only closed it.
+    // The session must survive, or the field goes read-only underneath a live
+    // IME - the blank bar that typing could not reach.
+    keyboardWindowUp -> SearchBackAction.KeepKeyboardSession
+    // The keyboard is gone but its trace is still warm: the press was its own
+    // (either order Fire OS delivers the close and the press in), so end the
+    // session and keep the query and the results.
+    searchBackBelongsToKeyboard(
+        editing = editing,
+        sinceEditingChangeMs = sinceEditingChangeMs,
+        windowLostAt = windowLostAt,
+        windowRefocusedAt = windowRefocusedAt,
+        echoMs = echoMs,
+        refocusEchoMs = refocusEchoMs,
+        nowMs = nowMs
+    ) -> SearchBackAction.EndKeyboardSession
+    else -> SearchBackAction.CloseSearch
+}

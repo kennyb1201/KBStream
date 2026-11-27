@@ -903,4 +903,80 @@ class GuideRulesTest {
             )
         )
     }
+
+    // ── what the press must DO, not just whose it is ──────────────────────────
+
+    @Test
+    fun `a Back delivered while the keyboard is still connected leaves the session alone`() {
+        // The pressing fact is that the IME is still attached: ending the
+        // session here is what made the bar blank and deaf to typing on Fire TV.
+        assertEquals(
+            SearchBackAction.KeepKeyboardSession,
+            searchBackAction(
+                editing = true,
+                sinceEditingChangeMs = 0L,
+                windowLostAt = 1_000L,
+                windowRefocusedAt = 0L,
+                keyboardWindowUp = true,
+                nowMs = 5_000L
+            )
+        )
+        // Even when the session has somehow already ended, the keyboard's press
+        // is still the keyboard's: it must not close the overlay.
+        assertEquals(
+            SearchBackAction.KeepKeyboardSession,
+            searchBackAction(
+                editing = false,
+                sinceEditingChangeMs = 30_000L,
+                windowLostAt = 1_000L,
+                windowRefocusedAt = 0L,
+                keyboardWindowUp = true,
+                nowMs = 60_000L
+            )
+        )
+    }
+
+    @Test
+    fun `a keyboard Back after the close ends the session and keeps the query`() {
+        // The keyboard has gone (no window in front) but its session outlived
+        // it: end the session, do not close the search.
+        assertEquals(
+            SearchBackAction.EndKeyboardSession,
+            searchBackAction(
+                editing = true,
+                sinceEditingChangeMs = 30_000L,
+                windowLostAt = 0L,
+                windowRefocusedAt = 0L,
+                keyboardWindowUp = false,
+                nowMs = 60_000L
+            )
+        )
+        // The echo window after the session ended covers the reversed order.
+        assertEquals(
+            SearchBackAction.EndKeyboardSession,
+            searchBackAction(
+                editing = false,
+                sinceEditingChangeMs = SEARCH_IME_ECHO_MS - 1,
+                windowLostAt = 0L,
+                windowRefocusedAt = 0L,
+                keyboardWindowUp = false,
+                nowMs = 60_000L
+            )
+        )
+    }
+
+    @Test
+    fun `a Back with the keyboard and its session gone closes the search`() {
+        assertEquals(
+            SearchBackAction.CloseSearch,
+            searchBackAction(
+                editing = false,
+                sinceEditingChangeMs = 30_000L,
+                windowLostAt = 1_000L,
+                windowRefocusedAt = 60_000L,
+                keyboardWindowUp = false,
+                nowMs = 60_000L + SEARCH_REFOCUS_ECHO_MS
+            )
+        )
+    }
 }

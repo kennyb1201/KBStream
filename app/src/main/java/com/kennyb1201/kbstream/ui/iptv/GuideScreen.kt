@@ -550,8 +550,11 @@ fun GuideScreen(
     // (the overlay would then need a second press to close - the same complaint
     // this fix answers, one second long instead of forever).
     var searchWindowHeld by remember(showSearch) { mutableStateOf(false) }
-    var windowLostAt by remember { mutableStateOf(0L) }      // 0 = never
-    var windowRefocusedAt by remember { mutableStateOf(0L) } // 0 = never
+    // Keyed on the overlay as well: the loss now SURVIVES the press that closed
+    // the keyboard (see handleSearchBack), so a loss left over from one session
+    // must not outlive it and eat the next session's first Back.
+    var windowLostAt by remember(showSearch) { mutableStateOf(0L) }      // 0 = never
+    var windowRefocusedAt by remember(showSearch) { mutableStateOf(0L) } // 0 = never
     LaunchedEffect(searchWindowFocused, showSearch) {
         if (!showSearch) return@LaunchedEffect
         val now = System.currentTimeMillis()
@@ -559,8 +562,25 @@ fun GuideScreen(
         when {
             !searchWindowFocused && searchWindowHeld && windowLostAt == 0L ->
                 windowLostAt = now
-            searchWindowFocused && windowLostAt != 0L ->
+            searchWindowFocused && windowLostAt != 0L -> {
                 windowRefocusedAt = now
+                // The keyboard window is gone, so the IME is no longer
+                // connected: this is the moment a session that outlived it can
+                // end. It must not end earlier - the Fire TV press that closes
+                // the keyboard arrives while the keyboard is still connected,
+                // and a read-only field under a live IME is a blank bar that
+                // swallows typing (reported 2026-11-27). Ending the session
+                // here is what keeps one Back to "close the keyboard" and the
+                // viewer's next press to "close the overlay".
+                //
+                // The stamps are cleared so this refocus cannot in turn be read
+                // as a keyboard echo by that next press.
+                if (searchInputEditing) {
+                    searchEndEditingSignal += 1
+                    windowLostAt = 0L
+                    windowRefocusedAt = 0L
+                }
+            }
         }
     }
 
@@ -937,39 +957,52 @@ fun GuideScreen(
     }
 
     /**
-     * Whose Back a press is while the search overlay is up.
+     * What a Back press does while the search overlay is up.
      *
-     * The keyboard's while its session is live or has just ended, or while the
-     * window's focus says a keyboard window just closed over the app - in which
-     * case the session is ended and the results stay up - and the overlay's
-     * only once the keyboard is genuinely gone. Shared by the two places a Back
-     * can arrive: the guide's own root handler (which sees the press when Fire
-     * OS does not give it to the keyboard) and the dialog's onDismissRequest.
+     * [searchBackAction] answers it, and the two keyboard outcomes are told
+     * apart on purpose: with the TV keyboard still connected the press only
+     * closes it and the session must survive (ending it there is what left the
+     * bar blank and deaf to typing, Fire Stick 2026-11-27), while a press with
+     * the keyboard gone ends the session and keeps the query and the results.
+     * Only once neither is true does the press close the overlay.
+     *
+     * Shared by the two places a Back can arrive: the guide's own root handler
+     * (which sees the press when Fire OS does not give it to the keyboard) and
+     * the dialog's onDismissRequest.
      */
     val handleSearchBack: () -> Unit = {
         val nowMs = System.currentTimeMillis()
-        val keyboards = searchBackBelongsToKeyboard(
-            editing = searchInputEditing,
-            sinceEditingChangeMs = nowMs - searchInputChangedAt,
-            windowLostAt = windowLostAt,
-            windowRefocusedAt = windowRefocusedAt,
-            nowMs = nowMs
-        ) ||
-            // The overlay's window held the focus and then lost it: another
-            // window is in front of it right now, which on this screen can only
-            // be the TV keyboard. It is deliberately not a bare "not focused":
-            // a device that never reports the dialog as focused would otherwise
-            // read every Back as the keyboard's, forever - the trap this fixes.
-            (!searchWindowFocused && searchWindowHeld)
-        if (keyboards) {
-            // The keyboard's Back: end the session, keep the results. Clearing
-            // the stamps disarms the echo, so a fast second Back - the viewer's
-            // exit - is not eaten as a second echo.
-            searchEndEditingSignal += 1
-            windowLostAt = 0L
-            windowRefocusedAt = 0L
-        } else {
-            dismissSearch()
+        when (
+            searchBackAction(
+                editing = searchInputEditing,
+                sinceEditingChangeMs = nowMs - searchInputChangedAt,
+                windowLostAt = windowLostAt,
+                windowRefocusedAt = windowRefocusedAt,
+                // The overlay's window held the focus and then lost it: another
+                // window is in front of it right now, which on this screen can
+                // only be the TV keyboard. Deliberately not a bare "not
+                // focused": a device that never reports the dialog as focused
+                // would otherwise read every Back as the keyboard's, forever -
+                // the trap this fixes.
+                keyboardWindowUp = !searchWindowFocused && searchWindowHeld,
+                nowMs = nowMs
+            )
+        ) {
+            // The keyboard's press, keyboard still connected: it closed the IME
+            // and nothing else. The session stays live so the field never goes
+            // read-only underneath it; the refocus effect above ends it once
+            // the close has actually landed.
+            SearchBackAction.KeepKeyboardSession -> Unit
+            // The keyboard's press with the keyboard gone: end the session,
+            // keep the results. Clearing the stamps disarms the echo, so a fast
+            // second Back - the viewer's exit - is not eaten as a second echo.
+            SearchBackAction.EndKeyboardSession -> {
+                searchEndEditingSignal += 1
+                windowLostAt = 0L
+                windowRefocusedAt = 0L
+            }
+            // The viewer's: close the overlay and clear the query.
+            SearchBackAction.CloseSearch -> dismissSearch()
         }
     }
 

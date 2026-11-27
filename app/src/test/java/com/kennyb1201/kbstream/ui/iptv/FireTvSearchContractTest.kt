@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.iptv
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -52,6 +53,7 @@ class FireTvSearchContractTest {
     private companion object {
         const val PACKAGE = "com/kennyb1201/kbstream/"
         const val GUIDE = PACKAGE + "ui/iptv/GuideScreen.kt"
+        const val RULES = PACKAGE + "ui/iptv/GuideRules.kt"
         const val SEARCH = PACKAGE + "ui/search/SearchScreenPart2.kt"
         const val FIELD = PACKAGE + "ui/components/KBTextField.kt"
         const val VOICE = PACKAGE + "ui/components/VoiceSearch.kt"
@@ -85,10 +87,14 @@ class FireTvSearchContractTest {
             guide.contains("val handleSearchBack: () -> Unit = {")
         )
         assertTrue(
-            "which asks the pure rule whose Back the press is: the editing echo first, then " +
-                "the window's refocus (a Fire TV keyboard is a window the app cannot see)",
-            guide.contains("searchBackBelongsToKeyboard(") &&
-                guide.contains("(!searchWindowFocused && searchWindowHeld)")
+            "which asks the pure rule whose Back the press is and what it must do",
+            guide.contains("searchBackAction(") &&
+                guide.contains("keyboardWindowUp = !searchWindowFocused && searchWindowHeld")
+        )
+        assertTrue(
+            "the rule is the one that asks the echo windows first, then the window's refocus " +
+                "(a Fire TV keyboard is a window the app cannot see)",
+            source(RULES).contains("searchBackBelongsToKeyboard(")
         )
         // The focus it consults is the OVERLAY's, not this activity's: the search
         // overlay is a Dialog (its own window), so the activity's window is
@@ -167,7 +173,7 @@ class FireTvSearchContractTest {
         assertTrue(
             "the keyboard arm requires the overlay's window to have held focus first, " +
                 "so a focus that never reports cannot pin the overlay open",
-            guide.contains("(!searchWindowFocused && searchWindowHeld)")
+            guide.contains("keyboardWindowUp = !searchWindowFocused && searchWindowHeld")
         )
         assertTrue(
             "and that history is only set by the overlay's own window reporting focus",
@@ -217,6 +223,147 @@ class FireTvSearchContractTest {
         )
     }
 
+    /**
+     * The Back that closes the Fire TV keyboard must not end the field's session.
+     *
+     * Field report (2026-11-27, Fire Stick): in guide search, Back with the
+     * keyboard up left the search bar blank and typing dead while the results
+     * were still on screen - so the query was never cleared, the FIELD was
+     * broken. Fire OS closes its keyboard AND hands the app the press, and the
+     * screen ended the session on that press, leaving a read-only field under a
+     * live IME: the box reads blank and every letter lands nowhere. The session
+     * now ends only once the close is observed (the overlay's window regaining
+     * focus), when no IME is attached any more.
+     */
+    @Test
+    fun `the Fire TV Back that closes the keyboard keeps the query, the field and the results`() {
+        val search = SearchOverlayModel()
+        assertTrue(search.fieldEditable)
+        assertTrue(search.resultsShown)
+
+        // The Back Fire OS delivers: it closes the keyboard AND reaches the app.
+        search.back()
+
+        assertEquals("the query was never the problem and must stay", "bbc news", search.query)
+        assertTrue("so the results stay on screen", search.resultsShown)
+        assertEquals("and the bar shows the query", "bbc news", search.fieldText)
+        assertTrue(
+            "and the field is still editable, not read-only behind a live IME",
+            search.fieldEditable
+        )
+        assertEquals(
+            "the session must not end while the IME is still connected",
+            0,
+            search.endEditingSignals
+        )
+        search.type("x")
+        assertEquals(
+            "letters from that keyboard must land in the field",
+            "bbc newsx",
+            search.query
+        )
+
+        // The close lands a beat later: the overlay's window gets focus back.
+        search.now += 120L
+        search.keyboardCloses()
+        assertEquals("the session ends once the keyboard is really gone", 1, search.endEditingSignals)
+        assertFalse(
+            "so the field is read-only again, which is what closeKeyboardOnBlur promises",
+            search.fieldEditable
+        )
+        assertEquals("but it still displays the query, never a blank bar", "bbc newsx", search.fieldText)
+        assertTrue("with the results still up", search.resultsShown)
+
+        // The viewer's second press, keyboard gone, closes the search.
+        search.now += 2_000L
+        search.back()
+        assertTrue("the second Back closes the overlay", search.closed)
+        assertEquals("and only now clears the query", "", search.query)
+    }
+
+    /**
+     * The session's end is deferred to the observed keyboard close.
+     *
+     * Neither the echo windows nor the field's blur rule is the fix: the first
+     * says a keyboard closed a moment ago (never that one is still open), and
+     * the second is what keeps the field read-only once the keyboard is gone.
+     */
+    @Test
+    fun `the keyboard's press only ends the session once the close is observed`() {
+        val guide = source(GUIDE)
+        assertTrue(
+            "the keyboard-up press is a decision of its own, not a session end",
+            guide.contains("SearchBackAction.KeepKeyboardSession -> Unit")
+        )
+        assertTrue(
+            "and only a press with the keyboard gone ends the session",
+            guide.contains("SearchBackAction.EndKeyboardSession -> {")
+        )
+        assertTrue(
+            "which the overlay window regaining focus does, now that the IME is gone",
+            guide.contains("if (searchInputEditing) {")
+        )
+        assertTrue(
+            "and it is guarded on a loss that was actually observed",
+            guide.contains("searchWindowFocused && windowLostAt != 0L ->")
+        )
+        // The timing guards and the read-only policy are unchanged by this fix.
+        val rules = source(RULES)
+        assertTrue(rules.contains("internal const val SEARCH_IME_ECHO_MS = 700L"))
+        assertTrue(rules.contains("internal const val SEARCH_REFOCUS_ECHO_MS = 1000L"))
+        assertTrue(
+            "the field still goes read-only once focus leaves it after the keyboard is gone",
+            source(FIELD).contains(
+                "if (!it.isFocused && !editingWhenLeft && windowInfo.isWindowFocused) {"
+            )
+        )
+        assertTrue(
+            "and the guide's field still declares that policy",
+            guide.contains("closeKeyboardOnBlur = true,")
+        )
+    }
+
+    /**
+     * The TCL / Google TV path is the regression control.
+     *
+     * There the leanback IME sits inside the app's own window and swallows
+     * Back, so the press that closes it never reaches this screen. The first
+     * press the app does see arrives with the keyboard gone and no session to
+     * end - and it must still close the search, exactly as before.
+     */
+    @Test
+    fun `the TCL path still closes the search on the one Back the app sees`() {
+        val search = SearchOverlayModel().apply {
+            windowFocused = true       // same window: no keyboard window over the overlay
+            editing = false             // the IME's close ended the session on its way out
+            changedAt = 1_000L
+            now = 30_000L
+        }
+        search.back()
+        assertTrue("one Back closes the overlay", search.closed)
+        assertEquals("and clears the query", "", search.query)
+        assertEquals("with no session left to end", 0, search.endEditingSignals)
+    }
+
+    /**
+     * The other order Fire OS can deliver the two halves in: the session has
+     * already ended and the press arrives at the overlay. It is still the
+     * keyboard's, so the results must survive it.
+     */
+    @Test
+    fun `a Back that trails the session's end still leaves the results up`() {
+        val search = SearchOverlayModel().apply {
+            editing = false
+            changedAt = 9_800L
+            now = 10_000L
+            windowFocused = true
+        }
+        search.back()
+        assertFalse("the overlay stays open", search.closed)
+        assertEquals("with the query intact", "bbc news", search.query)
+        assertEquals("and exactly the one session end it was", 1, search.endEditingSignals)
+    }
+
     @Test
     fun `the field reports its session and lets the screen end it`() {
         val field = source(FIELD)
@@ -238,5 +385,84 @@ class FireTvSearchContractTest {
         assertTrue(guide.contains("endEditingSignal: Int,"))
         assertTrue(guide.contains("onEditingChanged = onInputEditingChanged,"))
         assertTrue(guide.contains("endEditingSignal = endEditingSignal"))
+    }
+}
+
+/**
+ * The search overlay's state, reduced to what one Back press can change.
+ *
+ * It mirrors the state the screen keeps around `searchInputEditing`,
+ * `searchWindowFocused` / `windowLostAt` / `windowRefocusedAt` and applies the
+ * same production decision ([searchBackAction]), so the Fire TV sequence can be
+ * played out on the JVM - this module carries no Compose test harness.
+ */
+private class SearchOverlayModel {
+    var query = "bbc news"
+
+    /** KBTextField's session. The single-line field is `readOnly = !editing`. */
+    var editing = true
+
+    /** The overlay's OWN window. False while the TV keyboard window is in front. */
+    var windowFocused = false
+    var windowHeld = true
+    var windowLostAt = 1_000L
+    var windowRefocusedAt = 0L
+
+    /** When the field last reported its session changing (onEditingChanged). */
+    var changedAt = 2_000L
+    var now = 10_000L
+    var endEditingSignals = 0
+    var closed = false
+
+    /**
+     * What the viewer sees in the bar.
+     *
+     * A read-only field under a live IME is the reported blank bar (2026-11-27,
+     * Fire Stick): it reads blank and letters land nowhere, while the results -
+     * derived from the query, which was never cleared - stay on screen.
+     */
+    val fieldText: String get() = if (!editing && !windowFocused) "" else query
+    val fieldEditable: Boolean get() = editing
+    val resultsShown: Boolean get() = query.isNotBlank()
+
+    /** One Back, decided exactly as the guide decides it. */
+    fun back() {
+        when (
+            searchBackAction(
+                editing = editing,
+                sinceEditingChangeMs = now - changedAt,
+                windowLostAt = windowLostAt,
+                windowRefocusedAt = windowRefocusedAt,
+                keyboardWindowUp = !windowFocused && windowHeld,
+                nowMs = now
+            )
+        ) {
+            SearchBackAction.KeepKeyboardSession -> Unit
+            SearchBackAction.EndKeyboardSession -> endSession()
+            SearchBackAction.CloseSearch -> {
+                closed = true
+                query = ""
+            }
+        }
+    }
+
+    /** Letters from the still-connected keyboard: they only land in a live session. */
+    fun type(text: String) {
+        if (editing) query += text
+    }
+
+    /** The keyboard window closing: the overlay's window gets its focus back. */
+    fun keyboardCloses() {
+        windowFocused = true
+        windowRefocusedAt = now
+        if (editing) endSession()
+    }
+
+    private fun endSession() {
+        endEditingSignals += 1
+        editing = false
+        changedAt = now
+        windowLostAt = 0L
+        windowRefocusedAt = 0L
     }
 }
