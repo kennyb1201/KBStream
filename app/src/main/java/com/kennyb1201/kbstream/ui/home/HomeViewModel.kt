@@ -8530,15 +8530,40 @@ Log.d(
                     // Local continue-watching rows are already unfinished resume
                     // rows, including movies that were stopped before completion.
                     //
+                    // F5c (spec 2026-11-26): the row's own step clock, on the
+                    // build's clock like every other `cwload:` field.
+                    val rowStepAt: (CwRowTiming, CwRowStep) -> Unit = { timing, step ->
+                        localProgress.noteStep(
+                            timing,
+                            step,
+                            android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs
+                        )
+                    }
+
                     // F5: this is the pass's own bound (see
                     // [cwLocalItemsIncrementally]). Each row still carries the
                     // 8s F3 timeout inside; the deadline caps the pass, which is
                     // what the 6390 paste's +153s was.
+                    //
+                    // F5c: and it is measured from HERE - the enrichment
+                    // start, after the history read and the seed - not from
+                    // beginCwBuild, and it is longer than the row timeout by
+                    // UP_NEXT_PASS_DEADLINE_MARGIN_MS. The 6400 paste is why:
+                    // rows start ~1.3s in, so an 8s deadline from the build's
+                    // start arrived at 6.7s of row time, cancelled the whole
+                    // scope before any row's own 8s timeout fired, and the F3
+                    // fallback never ran (`landed=0/7 deadlineFired=yes
+                    // landedAtDeadline=0`). Ordered this way the row timeout
+                    // fires first, the row lands as its seed card, and the
+                    // deadline only stops a row whose tail never returns.
                     val localItems =
                         cwLocalItemsIncrementally(
                             rows = history,
                             progress = localProgress,
-                            deadlineAtMs = cwBuildStartedAtMs + UP_NEXT_PASS_DEADLINE_MS,
+                            deadlineAtMs =
+                                android.os.SystemClock.elapsedRealtime() +
+                                    UP_NEXT_ROW_ENRICH_TIMEOUT_MS +
+                                    UP_NEXT_PASS_DEADLINE_MARGIN_MS,
                             nowMs = { android.os.SystemClock.elapsedRealtime() },
                             keyOf = { entry -> entry.id },
                             publish = { cards ->
@@ -8582,6 +8607,11 @@ Log.d(
                     android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs
                 )
                 run row@ {
+
+        // F5c (spec 2026-11-26): the row's stages, so the summary can name
+        // the one a slow row stood in. The detail lookup is the first thing
+        // this lambda does for every row.
+        rowStepAt(rowClock, CwRowStep.DETAIL)
 
         val isEpisodePlayback =
             entry.season != null && entry.episode != null
@@ -8784,6 +8814,10 @@ Log.d(
                     return@row null
                 }
 
+                // F5c: the detail lookup and the drop verdict are done; what
+                // follows is the show's season/episode resolution.
+                rowStepAt(rowClock, CwRowStep.SEASONS)
+
                 // Capture the show's next aired episode for the Upcoming
                 // rail — the detail response is already in hand here.
                 capturedNextEpisodeAir = tmdbDetail?.nextEpisodeToAir
@@ -8900,6 +8934,10 @@ Log.d(
             }
         }
 
+        // F5c: the resolved totals are in hand; from here the row computes the
+        // watched counts and builds its card.
+        rowStepAt(rowClock, CwRowStep.WATCHED)
+
         val localWatchedCount =
             tmdbEpisodeTotals?.watched
                 ?: localCompletedForParent.size
@@ -8956,6 +8994,8 @@ Log.d(
         // disagree about whether the row is identifiable.
         val rowHasArt =
             !entry.poster.isNullOrBlank() || !backdropUrl.isNullOrBlank()
+
+        rowStepAt(rowClock, CwRowStep.NEXTUP)
 
         UpNextItem(
             id = buildString {
@@ -9071,8 +9111,12 @@ Log.d(
                 // be read as a TMDB miss.
                 PerfTrace.recordCount("home.cwRowTimeout", 1)
                 // And timed (F5b): the row still lands with its seed card, so
-                // its outcome has to be the timeout, not the landing.
-                localProgress.noteTimedOut(rowClock)
+                // its outcome has to be the timeout, not the landing. F5c:
+                // the stage it timed out in is closed with it.
+                localProgress.noteTimedOut(
+                    rowClock,
+                    android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs
+                )
             }
             enriched ?: instantContinueWatchingItem(entry)
                         }
@@ -16431,20 +16475,26 @@ private suspend fun calculateEpisodesRemaining(
             8_000L
 
         /**
-         * How long one upNext PASS may spend enriching its local rows
-         * (spec 2026-11-26, CW load F5).
+         * How long the upNext PASS may keep enriching after the F3 row timeout
+         * has had its say (spec 2026-11-26, CW load F5/F5c).
          *
          * The F3 per-row timeout bounds a row, not the pass: the rows run six
          * at a time, so ~108 resume rows are ~18 waves, and on a cold TMDB
          * cache sharing the repository with Home's own art lookups every wave
          * can spend its whole 8s. That multiplication is the 6390 paste's
-         * `publish +153856ms`. The deadline is the same 8s as the row timeout
-         * and is measured from `beginCwBuild`, so the history read and the seed
-         * before the enrichment are inside it: after it the pass publishes what
-         * it has and the next pass asks the rest.
+         * `publish +153856ms` - the pass deadline is what stops it.
+         *
+         * It is a MARGIN, not a total: the deadline is
+         * `enrichment start + UP_NEXT_ROW_ENRICH_TIMEOUT_MS + this`, so a row's
+         * own timeout always fires first and its seed card lands. F5 measured
+         * it from `beginCwBuild` at the same 8s as the row timeout, which put
+         * the pass's deadline ~1.3s BEFORE the rows' own timeouts (the history
+         * read and the seed) - the 6400 paste's all-timeout, nothing-landed
+         * pass. Two seconds keeps the deadline a real bound (it also covers a
+         * row whose fallback is slow) without ever pre-empting a row.
          */
-        private const val UP_NEXT_PASS_DEADLINE_MS =
-            8_000L
+        private const val UP_NEXT_PASS_DEADLINE_MARGIN_MS =
+            2_000L
 
         /**
          * How long the rail may stay short of art before the report says so

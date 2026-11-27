@@ -37,6 +37,24 @@ internal enum class CwRowOutcome {
 }
 
 /**
+ * The stages one row walks through inside `enrich` (spec 2026-11-26, CW load F5c).
+ *
+ * F5b's summary could say the rows were slow but not WHERE, because a row cut
+ * off before landing recorded no lookup time at all. These are the stages the
+ * enrich lambda already runs through, named so the summary can point at one:
+ * the row's TMDB detail lookup, the season/episode resolution, the watched-state
+ * reads and the next-up card computation.
+ *
+ * The labels are the summary's `slowStep=<label>` spelling.
+ */
+internal enum class CwRowStep(val label: String) {
+    DETAIL("detail"),
+    SEASONS("seasons"),
+    WATCHED("watched"),
+    NEXTUP("nextup")
+}
+
+/**
  * One row's timeline inside one pass (spec 2026-11-26, CW load F5b).
  *
  * Every field is an offset from the build's start - the clock every `cwload:`
@@ -87,6 +105,46 @@ internal class CwRowTiming(
     /** The row's whole life, ended or cut off by the pass deadline, or -1. */
     val totalMs: Long
         get() = if (closedAtMs < 0L) -1L else (closedAtMs - startedAtMs).coerceAtLeast(0L)
+
+    /**
+     * The stage the row is inside right now (F5c), or null before the first
+     * one. [stepStartedAtMs] is when it entered it, in ms since the build
+     * started.
+     */
+    var step: CwRowStep? = null
+        internal set
+
+    private var stepStartedAtMs: Long = -1L
+
+    /**
+     * How long the row spent in each stage, summed per stage (F5c).
+     *
+     * A stage is closed by the next one starting, or by the row ending - which
+     * is what makes a cut-off row's time visible: the F3 timeout or the pass
+     * deadline closes the stage the row was standing in, so the summary can say
+     * "the rows were in `seasons`", not just "the rows were slow".
+     */
+    val stepDurationsMs: MutableMap<CwRowStep, Long> = LinkedHashMap()
+
+    /** The stage the row was in when its own timeout or the pass deadline ended it. */
+    var cutOffStep: CwRowStep? = null
+        internal set
+
+    /** Enters [next], closing the stage the row was in at [atMs]. */
+    internal fun enterStep(next: CwRowStep, atMs: Long) {
+        closeStepAt(atMs)
+        step = next
+        stepStartedAtMs = atMs
+    }
+
+    /** Adds the stage the row is standing in, up to [atMs], to [stepDurationsMs]. */
+    internal fun closeStepAt(atMs: Long) {
+        val open = step ?: return
+        if (stepStartedAtMs < 0L) return
+        stepDurationsMs[open] =
+            (stepDurationsMs[open] ?: 0L) + (atMs - stepStartedAtMs).coerceAtLeast(0L)
+        stepStartedAtMs = -1L
+    }
 }
 
 /**
@@ -150,15 +208,27 @@ internal class CwLocalProgress(
     }
 
     /**
-     * The row's enrichment did not answer in the F3 window, so it keeps its
-     * seed card: it still lands, and the summary counts it as a timeout.
+     * The row's enrichment did not answer in the F3 window at [atMs], so it
+     * keeps its seed card: it still lands, and the summary counts it as a
+     * timeout. The stage it timed out in is closed here (F5c) - the row's own
+     * timeout is the only boundary the row has.
      */
-    fun noteTimedOut(timing: CwRowTiming) {
+    fun noteTimedOut(timing: CwRowTiming, atMs: Long) {
         synchronized(lock) {
             if (timing.outcome == CwRowOutcome.IN_FLIGHT) {
                 timing.outcome = CwRowOutcome.TIMED_OUT
+                timing.cutOffStep = timing.step
+                timing.closeStepAt(atMs)
             }
         }
+    }
+
+    /**
+     * The row entered [step] at [atMs] (F5c). The stage it left is closed, so
+     * the summary's `slowStep` is the stage's own time rather than the row's.
+     */
+    fun noteStep(timing: CwRowTiming, step: CwRowStep, atMs: Long) {
+        synchronized(lock) { timing.enterStep(step, atMs) }
     }
 
     /**
@@ -175,6 +245,7 @@ internal class CwLocalProgress(
             }
             timing.landedAtMs = atMs
             timing.closedAtMs = atMs
+            timing.closeStepAt(atMs)
         }
         landed += 1
         cwLocalPublishDue(landed)
@@ -187,15 +258,21 @@ internal class CwLocalProgress(
             timingFor(key)?.let { timing ->
                 timing.outcome = CwRowOutcome.DROPPED
                 timing.closedAtMs = atMs
+                timing.closeStepAt(atMs)
             }
         }
     }
 
     /**
-     * The pass ended at its deadline with rows still out (F5's
-     * `UP_NEXT_PASS_DEADLINE_MS`). They are timed out - cut off by the pass,
-     * which is what the summary reports - and [landedAtDeadline] is how much of
-     * the rail had answered when it did.
+     * The pass ended at its deadline with rows still out (F5's pass deadline,
+     * now row timeout + margin from the enrichment start - F5c). They are timed
+     * out - cut off by the pass, which is what the summary reports - and
+     * [landedAtDeadline] is how much of the rail had answered when it did.
+     *
+     * With the deadline ordered after the row timeout this should only cut rows
+     * that never reached their own timeout (a row whose tail does not return).
+     * A row that the pass cut off is never silent about the stage it stood in:
+     * [CwRowTiming.cutOffStep] names it for `slowStep`.
      */
     fun noteDeadlineFired(atMs: Long) {
         synchronized(lock) {
@@ -205,6 +282,8 @@ internal class CwLocalProgress(
                 if (timing.outcome == CwRowOutcome.IN_FLIGHT) {
                     timing.outcome = CwRowOutcome.TIMED_OUT
                     timing.closedAtMs = atMs
+                    timing.cutOffStep = timing.step
+                    timing.closeStepAt(atMs)
                 }
             }
         }
@@ -232,6 +311,12 @@ internal class CwLocalProgress(
      *  - `firstLand` early but the publish late: the gating, not the lookups;
      *  - `deadlineFired=yes landedAtDeadline=0`: the pass ended with nothing
      *    answered.
+     *
+     * F5c adds `slowStep`: the stage ([CwRowStep]) with the highest p50 across
+     * the rows, and `cutOff` - how many rows were still inside that stage when
+     * their own timeout or the pass deadline ended them. F5b could only say
+     * "the rows were slow"; this says which stage they were slow in, including
+     * for rows that never landed.
      *
      * `p50`/`p95`/`max` are row totals (start to landed, or to the deadline for
      * a row the deadline cut off), `slowest` is by lookup time per the spec, and
@@ -262,6 +347,7 @@ internal class CwLocalProgress(
         }
         val net = snapshot.count { it.lookupSource == "net" }
         val timeouts = snapshot.count { it.outcome == CwRowOutcome.TIMED_OUT }
+        val slowStep = slowestStep(snapshot)
 
         return "rows landed=$landedNow/$rows" +
             " firstLand=" + (firstLand?.let { "+${it}ms" } ?: "-") +
@@ -272,8 +358,29 @@ internal class CwLocalProgress(
             " cacheHits=$cacheHits net=$net" +
             " permitWaitP95=${percentile(waits, 95)}ms" +
             " slowest=" + slowest.ifEmpty { "-" } +
+            " slowStep=" + slowStep +
             " deadlineFired=" + (if (fired) "yes" else "no") +
             " landedAtDeadline=$landedThen"
+    }
+
+    /**
+     * The stage with the highest p50 across the rows, and how many rows were
+     * still inside it when they were cut off (F5c): `detail:6675ms cutOff=0`,
+     * or `- cutOff=0` when no row recorded a stage.
+     */
+    private fun slowestStep(snapshot: List<CwRowTiming>): String {
+        val perStep =
+            CwRowStep.entries.mapNotNull { step ->
+                val durations =
+                    snapshot.mapNotNull { timing ->
+                        timing.stepDurationsMs[step]?.takeIf { ms -> ms >= 0L }
+                    }
+                if (durations.isEmpty()) null else step to percentile(durations, 50)
+            }
+        val worst = perStep.maxByOrNull { (_, p50) -> p50 }
+            ?: return "- cutOff=0"
+        val cutOff = snapshot.count { timing -> timing.cutOffStep == worst.first }
+        return "${worst.first.label}:${worst.second}ms cutOff=$cutOff"
     }
 
     private fun timingFor(key: String): CwRowTiming? =
@@ -303,11 +410,23 @@ internal class CwLocalProgress(
  *  - a landing publishes the running slice through [publish] as it happens
  *    (throttled by [CwLocalProgress]'s batch rule), so the first answer is on
  *    the rail in the first row's latency;
- *  - the whole pass is capped at [deadlineAtMs] - a deadline taken from the
- *    pass's own clock, not from this call, because the history read and the
- *    seed before it are part of the pass. On expiry the remaining rows are
- *    cancelled and the call answers with what has landed; the rail keeps the
- *    last published slice, and the next pass asks again.
+ *  - the whole pass is capped at [deadlineAtMs] - a deadline the caller takes
+ *    from the ENRICHMENT start (spec 2026-11-26, CW load F5c), after the
+ *    history read and the seed, at the row timeout plus a margin. Measured
+ *    from `beginCwBuild` instead, as F5 did, the pass deadline at 8s arrived
+ *    before a row's own 8s timeout (rows start ~1.3s in), cancelled the whole
+ *    scope, and the F3 fallback never ran: the 6400 paste's `landed=0/7
+ *    deadlineFired=yes landedAtDeadline=0`. Ordered after the row timeout, the
+ *    row's timeout fires first, its seed card lands through the F3 fallback
+ *    and publishes the running slice, and this deadline is the hard stop for
+ *    the tail (a row whose fallback never returns) - with [progress]'s
+ *    `landedAtDeadline` saying what had landed when it did.
+ *
+ *    Honest limit: a row that times out lands as the seed card it already was
+ *    on the rail, so that landing does not make an enriched card appear - it
+ *    makes the row count, runs the F3 fallback, and lets the first publish
+ *    follow the first row's timeout instead of a later pass. The enriched
+ *    cards stay as slow as their stage until `slowStep` names it.
  *
  * [enrich] answers null for a row the pass DROPS, which removes it from the
  * slice rather than leaving its seed card behind. Every row still carries its
@@ -315,7 +434,8 @@ internal class CwLocalProgress(
  *
  * [enrich] also receives the row's [CwRowTiming] (F5b): the row is the only
  * place that knows when its permit arrived and which cache answered its lookup.
- * The helper itself records the start, the landing and the deadline.
+ * The helper itself records the start, the landing and the deadline, and the
+ * row's stages reach the summary through [CwLocalProgress.noteStep] (F5c).
  *
  * Every row runs concurrently and the semaphore inside [enrich] is what limits
  * the repository load - unchanged, because it is what protects TMDB.

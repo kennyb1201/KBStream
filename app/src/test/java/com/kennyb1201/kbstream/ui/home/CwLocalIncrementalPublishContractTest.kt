@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.home
 import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -255,6 +256,182 @@ class CwLocalIncrementalPublishContractTest {
             )
         }
 
+    // ── F5c: the row timeout fires before the pass deadline ───────────────
+
+    @Test
+    fun `a row that never answers lands as its seed card before the pass deadline`() =
+        runBlocking {
+            val startedAt = System.nanoTime()
+            val progress =
+                CwLocalProgress(
+                    listOf("a" to card("aSeed"), "b" to card("bSeed"))
+                )
+            val rowTimeoutMs = 100L
+
+            val result =
+                cwLocalItemsIncrementally(
+                    rows = listOf("a", "b"),
+                    progress = progress,
+                    // F5c's ordering: the pass deadline is taken from the
+                    // ENRICHMENT start, at the row timeout plus a margin. F5
+                    // took it from beginCwBuild at the row timeout itself, so
+                    // the pass cut the rows off before their own timeout could
+                    // land them (the 6400 paste: landed=0/7).
+                    deadlineAtMs = elapsedMs(startedAt) + rowTimeoutMs + 300L,
+                    nowMs = { elapsedMs(startedAt) },
+                    keyOf = { row -> row },
+                    publish = { },
+                    enrich = { row, timing ->
+                        progress.noteStep(timing, CwRowStep.DETAIL, elapsedMs(startedAt))
+                        // The F3 fallback, as the ViewModel's lambda runs it.
+                        val enriched =
+                            withTimeoutOrNull(rowTimeoutMs) {
+                                delay(5_000L)
+                                card("${row}Rich")
+                            }
+                        if (enriched == null) {
+                            progress.noteTimedOut(timing, elapsedMs(startedAt))
+                        }
+                        enriched ?: card("${row}Seed")
+                    }
+                )
+
+            val summary = progress.summaryLine(rows = 2)
+            assertEquals(
+                "a row that never answered still lands, as the seed card it was",
+                listOf("aSeed", "bSeed"),
+                result.map { it.id }
+            )
+            assertEquals("both rows are on the slice", 2, progress.landedCount())
+            assertTrue("rows landed, not cut off: $summary", summary.contains("rows landed=2/2"))
+            assertTrue("on their own timeouts: $summary", summary.contains("timeouts=2"))
+            assertTrue(
+                "and the pass deadline never had to cut them: $summary",
+                summary.contains("deadlineFired=no")
+            )
+        }
+
+    @Test
+    fun `a pass deadline that does fire reports the rows that had already landed`() =
+        runBlocking {
+            val startedAt = System.nanoTime()
+            val progress =
+                CwLocalProgress(
+                    listOf("a" to card("aSeed"), "b" to card("bSeed"))
+                )
+
+            cwLocalItemsIncrementally(
+                rows = listOf("a", "b"),
+                progress = progress,
+                deadlineAtMs = elapsedMs(startedAt) + 250L,
+                nowMs = { elapsedMs(startedAt) },
+                keyOf = { row -> row },
+                // The pass's tail is what is still out: both rows landed, and
+                // the deadline ends the pass around their publish.
+                publish = { delay(2_000L) },
+                enrich = { row, timing ->
+                    progress.noteStep(timing, CwRowStep.NEXTUP, elapsedMs(startedAt))
+                    card("${row}Rich")
+                }
+            )
+
+            val summary = progress.summaryLine(rows = 2)
+            assertTrue("both rows landed: $summary", summary.contains("rows landed=2/2"))
+            assertTrue("and the deadline did end the pass: $summary", summary.contains("deadlineFired=yes"))
+            assertTrue(
+                "with what had landed counted, not zero: $summary",
+                summary.contains("landedAtDeadline=2")
+            )
+        }
+
+    // ── F5c: which stage the row was slow in ───────────────────────────────
+
+    @Test
+    fun `the summary names the step a slow row was in`() =
+        runBlocking {
+            val startedAt = System.nanoTime()
+            val progress =
+                CwLocalProgress(
+                    listOf(
+                        "a" to card("aSeed"),
+                        "b" to card("bSeed"),
+                        "c" to card("cSeed")
+                    )
+                )
+
+            cwLocalItemsIncrementally(
+                rows = listOf("a", "b", "c"),
+                progress = progress,
+                deadlineAtMs = 2_000L,
+                nowMs = { elapsedMs(startedAt) },
+                keyOf = { row -> row },
+                publish = { },
+                enrich = { row, timing ->
+                    progress.noteStep(timing, CwRowStep.DETAIL, elapsedMs(startedAt))
+                    delay(if (row == "a") 120L else if (row == "b") 130L else 140L)
+                    progress.noteStep(timing, CwRowStep.NEXTUP, elapsedMs(startedAt))
+                    delay(1L)
+                    card("${row}Rich")
+                }
+            )
+
+            val summary = progress.summaryLine(rows = 3)
+            val stepP50 =
+                Regex("slowStep=detail:(\\d+)ms").find(summary)
+                    ?.groupValues
+                    ?.get(1)
+                    ?.toLong()
+            assertTrue(
+                "the stage the rows spent their time in is named, with its p50: $summary",
+                stepP50 != null && stepP50 >= 100L
+            )
+            assertTrue("and nothing was cut off in it: $summary", summary.contains("cutOff=0"))
+        }
+
+    @Test
+    fun `a row the deadline cut off still names the step it was standing in`() =
+        runBlocking {
+            val startedAt = System.nanoTime()
+            val progress =
+                CwLocalProgress(
+                    listOf(
+                        "a" to card("aSeed"),
+                        "b" to card("bSeed"),
+                        "c" to card("cSeed")
+                    )
+                )
+
+            cwLocalItemsIncrementally(
+                rows = listOf("a", "b", "c"),
+                progress = progress,
+                deadlineAtMs = elapsedMs(startedAt) + 200L,
+                nowMs = { elapsedMs(startedAt) },
+                keyOf = { row -> row },
+                publish = { },
+                enrich = { row, timing ->
+                    progress.noteStep(timing, CwRowStep.DETAIL, elapsedMs(startedAt))
+                    progress.noteStep(timing, CwRowStep.SEASONS, elapsedMs(startedAt))
+                    if (row == "c") {
+                        delay(20L)
+                    } else {
+                        delay(5_000L)
+                    }
+                    card("${row}Rich")
+                }
+            )
+
+            val summary = progress.summaryLine(rows = 3)
+            assertTrue(
+                "the cut-off rows' stage is named, not left as '-': $summary",
+                summary.contains("slowStep=seasons:")
+            )
+            assertTrue(
+                "with how many were in it when they were cut: $summary",
+                summary.contains("cutOff=2")
+            )
+            assertTrue("one row landed: $summary", summary.contains("rows landed=1/3"))
+        }
+
     // ── The publisher's shape ──────────────────────────────────────────────
 
     @Test
@@ -342,10 +519,24 @@ class CwLocalIncrementalPublishContractTest {
             "the local rows go through the incremental build",
             pass.contains("cwLocalItemsIncrementally(")
         )
+        // F5c: the deadline is taken from the ENRICHMENT start, at the row
+        // timeout plus a margin, so the row's own timeout fires first. Pinned
+        // as properties of the expression rather than its layout: against the
+        // old wiring (`cwBuildStartedAtMs + UP_NEXT_PASS_DEADLINE_MS`) the
+        // first and third of these fail.
+        val deadlineExpr =
+            pass.substringAfter("deadlineAtMs =").substringBefore("nowMs =")
         assertTrue(
-            "and the pass has a deadline taken from its own clock, not from the " +
-                "call after the history read",
-            pass.contains("deadlineAtMs = cwBuildStartedAtMs + UP_NEXT_PASS_DEADLINE_MS")
+            "the pass deadline is measured from the enrichment start, not the build: " +
+                deadlineExpr,
+            deadlineExpr.contains("android.os.SystemClock.elapsedRealtime()") &&
+                !deadlineExpr.contains("cwBuildStartedAtMs")
+        )
+        assertTrue(
+            "and it is the row timeout plus a margin, so the row timeout fires first: " +
+                deadlineExpr,
+            deadlineExpr.contains("UP_NEXT_ROW_ENRICH_TIMEOUT_MS") &&
+                deadlineExpr.contains("UP_NEXT_PASS_DEADLINE_MARGIN_MS")
         )
         assertTrue(
             "each landing publishes the slice it has",
@@ -389,7 +580,26 @@ class CwLocalIncrementalPublishContractTest {
         )
         assertTrue(
             "a row that kept its seed card is counted as a timeout",
-            pass.contains("localProgress.noteTimedOut(rowClock)")
+            pass.contains("localProgress.noteTimedOut(")
+        )
+
+        // F5c (2026-11-26): the stages a row walks through, recorded as it
+        // enters each one, so the summary can name the slow one.
+        assertTrue(
+            "the row's stages are recorded through the pass's own progress",
+            pass.contains("localProgress.noteStep(")
+        )
+        listOf(
+            "CwRowStep.DETAIL",
+            "CwRowStep.SEASONS",
+            "CwRowStep.WATCHED",
+            "CwRowStep.NEXTUP"
+        ).forEach { step ->
+            assertTrue("the pass records $step", pass.contains(step))
+        }
+        assertTrue(
+            "and the summary carries the stage it names",
+            pass.contains("localProgress.summaryLine(rows = history.size)")
         )
     }
 }
