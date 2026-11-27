@@ -437,6 +437,15 @@ internal class CwLocalProgress(
  * The helper itself records the start, the landing and the deadline, and the
  * row's stages reach the summary through [CwLocalProgress.noteStep] (F5c).
  *
+ * [nowMs] is the ONE clock the whole pass is timed on (spec 2026-11-26, CW load
+ * F5d): the helper stamps [deadlineAtMs], every row's start/landing/removal and
+ * the deadline with it, so the caller's step, permit and timeout stamps have to
+ * come from the same function. F5c did not: the helper got raw
+ * `elapsedRealtime()` while the call site passed build-relative offsets, so
+ * `firstLand` read as device uptime, `permitWaitMs` went negative and coerced
+ * to 0, and NEXTUP - the stage the helper closes - always won `slowest` at
+ * ~1.13e9 ms. The pass now defines that clock once and hands it in.
+ *
  * Every row runs concurrently and the semaphore inside [enrich] is what limits
  * the repository load - unchanged, because it is what protects TMDB.
  */

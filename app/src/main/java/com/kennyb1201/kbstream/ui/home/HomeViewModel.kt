@@ -8530,14 +8530,29 @@ Log.d(
                     // Local continue-watching rows are already unfinished resume
                     // rows, including movies that were stopped before completion.
                     //
+                    // F5d (spec 2026-11-26): ONE clock for the whole pass.
+                    //
+                    // The row timing used to be stamped from two bases - raw
+                    // `elapsedRealtime()` handed to the helper as `nowMs`, and
+                    // build-relative offsets computed here - so every field
+                    // that subtracts across them was wrong. The 6403 paste is
+                    // what that looks like: `firstLand` read as the device's
+                    // 13-day uptime, `permitWaitMs` came out negative and was
+                    // coerced to 0 (`permitWaitP95=0ms` was an artifact, not a
+                    // real wait), and NEXTUP - opened here, closed by the
+                    // helper - was always ~1.13e9 ms and always won `slowest`.
+                    //
+                    // This is the same anchor the `cwload:` `t=+...ms` offsets
+                    // use: ms since the build started. Every stamp in the pass
+                    // goes through it, so the bases cannot drift again.
+                    val cwClockMs: () -> Long = {
+                        android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs
+                    }
+
                     // F5c (spec 2026-11-26): the row's own step clock, on the
                     // build's clock like every other `cwload:` field.
                     val rowStepAt: (CwRowTiming, CwRowStep) -> Unit = { timing, step ->
-                        localProgress.noteStep(
-                            timing,
-                            step,
-                            android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs
-                        )
+                        localProgress.noteStep(timing, step, cwClockMs())
                     }
 
                     // F5: this is the pass's own bound (see
@@ -8561,10 +8576,10 @@ Log.d(
                             rows = history,
                             progress = localProgress,
                             deadlineAtMs =
-                                android.os.SystemClock.elapsedRealtime() +
+                                cwClockMs() +
                                     UP_NEXT_ROW_ENRICH_TIMEOUT_MS +
                                     UP_NEXT_PASS_DEADLINE_MARGIN_MS,
-                            nowMs = { android.os.SystemClock.elapsedRealtime() },
+                            nowMs = cwClockMs,
                             keyOf = { entry -> entry.id },
                             publish = { cards ->
                                 if (isLatestUpNextRequest(requestVersion)) {
@@ -8602,10 +8617,7 @@ Log.d(
             lookupSemaphore.withPermit {
                 // F5b (spec 2026-11-26): the permit is what the row waits
                 // for, so the wait is timed from here, not inferred.
-                localProgress.notePermit(
-                    rowClock,
-                    android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs
-                )
+                localProgress.notePermit(rowClock, cwClockMs())
                 run row@ {
 
         // F5c (spec 2026-11-26): the row's stages, so the summary can name
@@ -9113,10 +9125,7 @@ Log.d(
                 // And timed (F5b): the row still lands with its seed card, so
                 // its outcome has to be the timeout, not the landing. F5c:
                 // the stage it timed out in is closed with it.
-                localProgress.noteTimedOut(
-                    rowClock,
-                    android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs
-                )
+                localProgress.noteTimedOut(rowClock, cwClockMs())
             }
             enriched ?: instantContinueWatchingItem(entry)
                         }
@@ -9128,7 +9137,7 @@ Log.d(
                         // take the publish lines with them.
                         CwLoadTrace.note(
                             cwBuildId,
-                            android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs,
+                            cwClockMs(),
                             localProgress.summaryLine(rows = history.size)
                         )
 

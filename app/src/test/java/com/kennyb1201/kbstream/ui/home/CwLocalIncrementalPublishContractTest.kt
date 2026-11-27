@@ -432,6 +432,83 @@ class CwLocalIncrementalPublishContractTest {
             assertTrue("one row landed: $summary", summary.contains("rows landed=1/3"))
         }
 
+    // ── F5d: one clock for the row timing ─────────────────────────────────
+
+    @Test
+    fun `every row-timing field is an offset from the one clock`() =
+        runBlocking {
+            val startedAt = System.nanoTime()
+            val progress =
+                CwLocalProgress(
+                    listOf(
+                        "a" to card("aSeed"),
+                        "b" to card("bSeed")
+                    )
+                )
+            // The pass's clock: ms since the build started. The 6403 paste's
+            // fields were ~1.13e9 because the helper was handed raw device
+            // uptime while everything else was build-relative; a build-relative
+            // clock is what the summary has to be readable against.
+            val clock: () -> Long = { elapsedMs(startedAt) }
+
+            cwLocalItemsIncrementally(
+                rows = listOf("a", "b"),
+                progress = progress,
+                deadlineAtMs = clock() + 5_000L,
+                nowMs = clock,
+                keyOf = { row -> row },
+                publish = { },
+                enrich = { row, timing ->
+                    // The wait for a permit is a real wait, timed on the same
+                    // clock it is measured against.
+                    delay(40L)
+                    progress.notePermit(timing, clock())
+                    progress.noteStep(timing, CwRowStep.DETAIL, clock())
+                    delay(if (row == "a") 80L else 120L)
+                    progress.noteStep(timing, CwRowStep.NEXTUP, clock())
+                    delay(1L)
+                    card("${row}Rich")
+                }
+            )
+
+            val summary = progress.summaryLine(rows = 2)
+            val firstLand = summary.longAfter("firstLand=\\+")
+            assertTrue(
+                "firstLand is the first row's own landing delay, not the " +
+                    "device's uptime: $summary",
+                firstLand != null && firstLand in 60L..1_500L
+            )
+            val lookup =
+                Regex("slowest=[a-z]+:(\\d+)ms").find(summary)
+                    ?.groupValues
+                    ?.get(1)
+                    ?.toLong()
+            assertTrue(
+                "a lookup is small and non-negative when both ends share the clock: $summary",
+                lookup != null && lookup in 0L..1_500L
+            )
+            val wait =
+                summary.longAfter("permitWaitP95=")
+            assertTrue(
+                "the permit wait is the 40ms it really spent, not a coerced 0: $summary",
+                wait != null && wait >= 30L
+            )
+            val stepP50 =
+                Regex("slowStep=detail:(\\d+)ms").find(summary)
+                    ?.groupValues
+                    ?.get(1)
+                    ?.toLong()
+            assertTrue(
+                "and the slow stage's p50 is a real duration, not device uptime: $summary",
+                stepP50 != null && stepP50 in 60L..8_000L
+            )
+            val p50 = summary.longAfter("p50=")
+            assertTrue(
+                "the row totals stay real too - both ends were on that clock: $summary",
+                p50 != null && p50 in 60L..1_500L
+            )
+        }
+
     // ── The publisher's shape ──────────────────────────────────────────────
 
     @Test
@@ -523,14 +600,20 @@ class CwLocalIncrementalPublishContractTest {
         // timeout plus a margin, so the row's own timeout fires first. Pinned
         // as properties of the expression rather than its layout: against the
         // old wiring (`cwBuildStartedAtMs + UP_NEXT_PASS_DEADLINE_MS`) the
-        // first and third of these fail.
+        // first and third of these fail. F5d moved the expression onto the
+        // pass's one clock (`cwClockMs()`); the pin accepts either spelling of
+        // the enrichment-start clock so it keeps testing the F5c ordering, not
+        // the F5d shape - the clock's single definition is pinned below.
         val deadlineExpr =
             pass.substringAfter("deadlineAtMs =").substringBefore("nowMs =")
         assertTrue(
             "the pass deadline is measured from the enrichment start, not the build: " +
                 deadlineExpr,
-            deadlineExpr.contains("android.os.SystemClock.elapsedRealtime()") &&
-                !deadlineExpr.contains("cwBuildStartedAtMs")
+            !deadlineExpr.contains("cwBuildStartedAtMs") &&
+                (
+                    deadlineExpr.contains("cwClockMs()") ||
+                        deadlineExpr.contains("android.os.SystemClock.elapsedRealtime()")
+                    )
         )
         assertTrue(
             "and it is the row timeout plus a margin, so the row timeout fires first: " +
@@ -538,6 +621,37 @@ class CwLocalIncrementalPublishContractTest {
             deadlineExpr.contains("UP_NEXT_ROW_ENRICH_TIMEOUT_MS") &&
                 deadlineExpr.contains("UP_NEXT_PASS_DEADLINE_MARGIN_MS")
         )
+        // F5d (2026-11-26): ONE clock for the row timing. The pass used to hand
+        // the helper raw `elapsedRealtime()` as `nowMs` and stamp steps,
+        // permits and timeouts build-relative, so every field subtracting
+        // across the bases read as the device's 13-day uptime (firstLand,
+        // slowest, slowStep) or as a coerced 0 (permitWaitP95). Against that
+        // wiring the single-stamp pin below finds five, and each of the named
+        // stamps fails.
+        assertTrue(
+            "the pass defines its clock once, as an offset from the build's start",
+            pass.contains("val cwClockMs: () -> Long = {")
+        )
+        assertEquals(
+            "and every row-timing stamp goes through it, not a second base",
+            1,
+            Regex("android\\.os\\.SystemClock\\.elapsedRealtime\\(\\) - cwBuildStartedAtMs")
+                .findAll(pass)
+                .count()
+        )
+        assertTrue(
+            "the helper reads that clock, not raw uptime",
+            pass.contains("nowMs = cwClockMs,") &&
+                !pass.contains("nowMs = { android.os.SystemClock")
+        )
+        listOf(
+            "localProgress.notePermit(rowClock, cwClockMs())",
+            "localProgress.noteTimedOut(rowClock, cwClockMs())",
+            "localProgress.noteStep(timing, step, cwClockMs())"
+        ).forEach { stamp ->
+            assertTrue("the pass stamps through the clock: $stamp", pass.contains(stamp))
+        }
+
         assertTrue(
             "each landing publishes the slice it has",
             pass.contains("arrivals.publishLocalCards(cards)")
@@ -568,7 +682,10 @@ class CwLocalIncrementalPublishContractTest {
         )
         assertTrue(
             "timed from the build's clock, on the trace the paste already reads",
-            pass.contains("android.os.SystemClock.elapsedRealtime() - cwBuildStartedAtMs,\n                            localProgress.summaryLine")
+            Regex(
+                "CwLoadTrace\\.note\\(\\s*cwBuildId,\\s*cwClockMs\\(\\),\\s*" +
+                    "localProgress\\.summaryLine"
+            ).containsMatchIn(pass)
         )
         assertTrue(
             "the permit wait is timed where the permit is taken",
@@ -601,5 +718,10 @@ class CwLocalIncrementalPublishContractTest {
             "and the summary carries the stage it names",
             pass.contains("localProgress.summaryLine(rows = history.size)")
         )
+
     }
+
+    /** The number after [prefix], if the summary carries one. */
+    private fun String.longAfter(prefix: String): Long? =
+        Regex("$prefix(\\d+)").find(this)?.groupValues?.get(1)?.toLongOrNull()
 }
