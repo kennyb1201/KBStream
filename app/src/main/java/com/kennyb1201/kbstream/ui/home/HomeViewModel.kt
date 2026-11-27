@@ -8869,7 +8869,10 @@ Log.d(
                     val preloadStartedAtMs = cwClockMs()
                     preloadWatchedEpisodeStateForShow(
                         parentId = parentId,
-                        tmdbShowId = tmdbId
+                        tmdbShowId = tmdbId,
+                        // F5g: in-memory tracker state only. A cold snapshot is
+                        // no evidence, not an 8s wait on the row's clock.
+                        cacheOnlyTrackers = true
                     )
                     // F5e: the call-level half of the step's timing, so a paste
                     // that still shows `slowStep=seasons` names which call held
@@ -11580,7 +11583,17 @@ episodesTotal =
         // (the next-episode leg does). Null means "not asked" - every other
         // caller - so a profile that merely HAS BingeCat connected is never
         // marked incomplete by a read nobody made.
-        bingeCatHistory: BingeCatHistoryRead? = null
+        bingeCatHistory: BingeCatHistoryRead? = null,
+        // F5g (spec 2026-11-27): read the tracker sources from what is already
+        // in memory, and treat a cold cache as NO ANSWER instead of loading it.
+        // On a cold TV the ordinary reads fall through to a full Simkl library
+        // fetch (serialised for every row on one mutex), MDBList's whole
+        // watched history and Trakt's paged snapshot - 8.1s inside the seasons
+        // step, which pushed all 9 rows past the 8s row timeout (6415:
+        // `slowCall=preload:8137ms timeouts=9`). The rail must not wait on it:
+        // the tracker-arrival legs warm those caches with their own reads, and
+        // a later pass then resolves the row with the full state.
+        cacheOnlyTrackers: Boolean = false
     ) {
 
         while (true) {
@@ -11653,6 +11666,12 @@ episodesTotal =
             var localReadFailed = false
             var trackerReadFailed = false
 
+            // F5g: a tracker snapshot this path refused to load. The state is
+            // NOT written (below), so the show stays unloaded and the next pass
+            // - by then warmed by the arrival legs - reads it properly, instead
+            // of caching "no evidence" under the show's key for the session.
+            var trackerCacheCold = false
+
             val localCompletedEntries =
                 try {
 
@@ -11674,19 +11693,25 @@ episodesTotal =
 
                     try {
 
-                        simklRepository
-                            .getWatchedEpisodesForShowByImdb(
-                                imdbId =
-                                    parentId,
-
-                                tmdbId =
-                                    tmdbShowId
-                            )
+                        (if (cacheOnlyTrackers) {
+                            simklRepository
+                                .getWatchedEpisodesForShowByImdbCachedOnly(
+                                    imdbId = parentId,
+                                    tmdbId = tmdbShowId
+                                )
+                        } else {
+                            simklRepository
+                                .getWatchedEpisodesForShowByImdb(
+                                    imdbId = parentId,
+                                    tmdbId = tmdbShowId
+                                )
+                        })
                             // A null read did not answer (spec 2026-11-23, F1):
                             // this merge takes it as no evidence, the same as a
                             // failed read, rather than as an empty history.
                             ?: run {
                                 trackerReadFailed = true
+                                if (cacheOnlyTrackers) trackerCacheCold = true
                                 emptySet()
                             }
 
@@ -11714,16 +11739,22 @@ episodesTotal =
 
                     try {
 
-                        MdbListClient
-                            .watchedEpisodesForShow(
-                                context =
-                                    getApplication(),
-
-                                showKeys =
-                                    showParentIds
-                            )
+                        (if (cacheOnlyTrackers) {
+                            MdbListClient
+                                .watchedEpisodesForShowCachedOnly(
+                                    context = getApplication(),
+                                    showKeys = showParentIds
+                                )
+                        } else {
+                            MdbListClient
+                                .watchedEpisodesForShow(
+                                    context = getApplication(),
+                                    showKeys = showParentIds
+                                )
+                        })
                             ?: run {
                                 trackerReadFailed = true
+                                if (cacheOnlyTrackers) trackerCacheCold = true
                                 emptySet()
                             }
 
@@ -11751,12 +11782,20 @@ episodesTotal =
 
                     try {
 
-                        traktRepository
-                            .watchedEpisodesForShow(
-                                showKeys = showParentIds
-                            )
+                        (if (cacheOnlyTrackers) {
+                            traktRepository
+                                .watchedEpisodesForShowCachedOnly(
+                                    showKeys = showParentIds
+                                )
+                        } else {
+                            traktRepository
+                                .watchedEpisodesForShow(
+                                    showKeys = showParentIds
+                                )
+                        })
                             ?: run {
                                 trackerReadFailed = true
+                                if (cacheOnlyTrackers) trackerCacheCold = true
                                 emptySet()
                             }
 
@@ -11814,6 +11853,21 @@ episodesTotal =
                         simklCompletedEpisodes =
                             trackerCompletedEpisodes
                     )
+
+            // F5g: a cold tracker cache is not a watched state. Writing the
+            // partial union now would cache "no evidence" under this show for
+            // the rest of the session (the loaded check below skips the retry),
+            // so the state stays unwritten and the show is marked incomplete:
+            // the resolver then answers only the pair it actually knows instead
+            // of walking an empty map to an invented S1E1.
+            if (trackerCacheCold) {
+
+                watchedStateMutex.withLock {
+                    watchedStateIncompleteShows.add(parentId)
+                }
+
+                return
+            }
 
             watchedStateMutex.withLock {
 
@@ -11914,7 +11968,12 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     if (tmdbId > 0) {
         preloadWatchedEpisodeStateForShow(
             parentId = parentId,
-            tmdbShowId = tmdbId
+            tmdbShowId = tmdbId,
+            // F5g: the near-position resolve is the rail's path, and it must not
+            // wait on a cold tracker snapshot. Without this flag the resolver's
+            // own preload would load the very cache the row just declined to
+            // wait for, and put the 8s back on the row's clock.
+            cacheOnlyTrackers = nearPositionOnly
         )
     }
 

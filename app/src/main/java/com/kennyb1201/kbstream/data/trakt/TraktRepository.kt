@@ -1153,6 +1153,28 @@ class TraktRepository private constructor(private val context: Context?) {
         watchedSnapshotOrNull()?.watchedEpisodesFor(showKeys)
 
     /**
+     * [watchedEpisodesForShow] against the snapshot ALREADY IN MEMORY, or null
+     * when none is loaded (spec 2026-11-27, CW load F5g).
+     *
+     * The ordinary read seeds itself from disk and then walks the account's
+     * paged /sync/watched on a cold start, so the caller waits for the whole
+     * account. The Continue Watching row must not: a cold snapshot is "no answer
+     * yet", which the preload records as no evidence, and the next read - the
+     * badge and arrival legs' own - warms it. Nothing is read here, not even the
+     * disk cache, so a row's cost stays a lookup.
+     */
+    suspend fun watchedEpisodesForShowCachedOnly(
+        showKeys: List<String>
+    ): Set<Pair<Int, Int>>? {
+        if (!TraktConfig.isConfigured) return null
+        val token = validAccessToken() ?: return null
+        val cached =
+            cachedSnapshot?.takeIf { cachedSnapshotKey == token }
+                ?: return null
+        return cached.watchedEpisodesFor(showKeys)
+    }
+
+    /**
      * Another device's session was adopted (see
      * [com.kennyb1201.kbstream.data.sync.TraktAuthRules]). The snapshot belongs
      * to the OLD account, so it must not answer the next badge read; the local

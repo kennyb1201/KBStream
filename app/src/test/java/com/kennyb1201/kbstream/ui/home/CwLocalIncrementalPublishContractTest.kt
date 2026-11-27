@@ -1057,6 +1057,93 @@ class CwLocalIncrementalPublishContractTest {
         )
     }
 
+    // ── A cold TV start must not load tracker snapshots (F5g) ──────────────
+
+    @Test
+    fun `the row reads tracker state from memory and leaves a cold cache alone`() {
+        val viewModel = source("com/kennyb1201/kbstream/ui/home/HomeViewModel.kt")
+
+        // The row's preload, and the resolver's own (which would otherwise put
+        // the same load straight back on the row's clock).
+        val passStart = viewModel.indexOf("private fun observeUpNext()")
+        val passEnd = viewModel.indexOf("private suspend fun dropSupersededResumeRows(", passStart)
+        val pass = viewModel.substring(passStart, passEnd)
+        assertTrue(
+            "the row's preload is the in-memory read",
+            pass.contains("cacheOnlyTrackers = true")
+        )
+        assertTrue(
+            "and the near-position resolve's preload is too",
+            viewModel.contains("cacheOnlyTrackers = nearPositionOnly")
+        )
+
+        val preloadStart =
+            viewModel.indexOf("private suspend fun preloadWatchedEpisodeStateForShow(")
+        assertTrue("the preload is missing", preloadStart >= 0)
+        val preload =
+            viewModel.substring(
+                preloadStart,
+                viewModel.indexOf("\n    private", preloadStart + 1)
+            )
+        assertTrue(
+            "the preload can be asked for the in-memory read",
+            preload.contains("cacheOnlyTrackers: Boolean = false")
+        )
+        listOf(
+            "getWatchedEpisodesForShowByImdbCachedOnly(",
+            "watchedEpisodesForShowCachedOnly("
+        ).forEach { read ->
+            assertTrue("the preload reads through $read when asked", preload.contains(read))
+        }
+        assertTrue(
+            "the ordinary loads stay, for the callers that may wait",
+            preload.contains("getWatchedEpisodesForShowByImdb(") &&
+                preload.contains("watchedEpisodesForShow(")
+        )
+        assertTrue(
+            "a cold snapshot is recorded as cold, not as a failed read only",
+            preload.contains("trackerCacheCold = true")
+        )
+        assertTrue(
+            "and its state is not written under the show's key",
+            preload.contains("if (trackerCacheCold) {") &&
+                preload.contains("watchedStateIncompleteShows.add(parentId)")
+        )
+        assertTrue(
+            "so the resolver cannot walk an empty map to an invented S1E1",
+            preload.indexOf("if (trackerCacheCold) {") <
+                preload.indexOf("trackerWatchedEpisodesByShow[")
+        )
+
+        // The three sources have to offer that read for it to exist at all.
+        assertTrue(
+            "Simkl answers from its loaded library only",
+            source("com/kennyb1201/kbstream/data/simkl/SimklRepository.kt")
+                .contains("fun getWatchedEpisodesForShowByImdbCachedOnly(")
+        )
+        assertTrue(
+            "MDBList answers from its loaded snapshot only",
+            source("com/kennyb1201/kbstream/data/mdblist/MdbListClient.kt")
+                .contains("fun watchedEpisodesForShowCachedOnly(")
+        )
+        assertTrue(
+            "and Trakt from its own",
+            source("com/kennyb1201/kbstream/data/trakt/TraktRepository.kt")
+                .contains("fun watchedEpisodesForShowCachedOnly(")
+        )
+
+        // The contract this fix may not move: the row's own timeout and the
+        // row slots stay exactly what they were.
+        assertTrue(
+            "the row timeout is untouched",
+            pass.contains("withTimeoutOrNull(UP_NEXT_ROW_ENRICH_TIMEOUT_MS)")
+        )
+        assertTrue(
+            "and so are the six row slots",
+            pass.contains("Semaphore(MAX_CONCURRENT_UP_NEXT_LOOKUPS)")
+        )
+    }
+
     /** The number after [prefix], if the summary carries one. */
     private fun String.longAfter(prefix: String): Long? =
         Regex("$prefix(\\d+)").find(this)?.groupValues?.get(1)?.toLongOrNull()

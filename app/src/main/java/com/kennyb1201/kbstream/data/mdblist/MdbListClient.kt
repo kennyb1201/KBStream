@@ -2217,6 +2217,35 @@ object MdbListClient {
     }
 
     /**
+     * [watchedEpisodesForShow] against the snapshot ALREADY IN MEMORY, or null
+     * when none is loaded (spec 2026-11-27, CW load F5g).
+     *
+     * The ordinary read falls through to the disk blob and then to a paged
+     * download of the account's whole watched history, and a cold start pays
+     * all of it on the caller's clock. The Continue Watching row must not: a
+     * cold snapshot is "no answer yet" - the preload records it as no evidence
+     * and the badge/arrival legs warm the cache through their own reads. This
+     * path does no I/O and no parse, only a lookup in the index it caches per
+     * snapshot object.
+     */
+    fun watchedEpisodesForShowCachedOnly(
+        context: Context,
+        showKeys: List<String>
+    ): Set<Pair<Int, Int>>? {
+        if (showKeys.isEmpty()) return emptySet()
+
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank()) return null
+
+        val snapshot =
+            cachedSnapshot?.takeIf { cachedSnapshotKey == apiKey }
+                ?: return null
+        if (snapshot.isEmpty) return emptySet()
+
+        return watchedEpisodeIndexFor(snapshot).watchedEpisodesFor(showKeys)
+    }
+
+    /**
      * The snapshot's watched episodes indexed by show key, rebuilt only when
      * the snapshot OBJECT changes (every producer of a new snapshot replaces
      * it, and every invalidation nulls it - see [invalidateWatchedSnapshot]),

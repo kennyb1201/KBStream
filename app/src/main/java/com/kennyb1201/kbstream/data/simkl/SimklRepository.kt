@@ -2190,6 +2190,55 @@ class SimklRepository(
             )
                 ?: return null
 
+        return watchedEpisodesFromAllShows(
+            body = body,
+            imdbId = imdbId,
+            tmdbId = tmdbId
+        )
+    }
+
+    /**
+     * [getWatchedEpisodesForShowByImdb] against the snapshot ALREADY IN MEMORY,
+     * or null when none is loaded (spec 2026-11-27, CW load F5g).
+     *
+     * [getAllShowItemsCached] answers a cold start from disk and then from the
+     * network - the whole library, page by page, under `allShowItemsMutex` - and
+     * every caller of it waits. On a cold TV that wait was 8.1s inside the
+     * Continue Watching row's season preload (6415: `slowCall=preload:8137ms`,
+     * `timeouts=9`), while a warm phone paid 305ms for the same read.
+     *
+     * The rail must not wait for it: null here is "no answer yet", which the
+     * preload records as no evidence and the tracker-arrival legs fill in
+     * through their own reads. Nothing is fetched or parsed here, so a row's
+     * cost stays a map lookup.
+     */
+    suspend fun getWatchedEpisodesForShowByImdbCachedOnly(
+        imdbId: String,
+        tmdbId: Int? = null,
+        accessToken: String = requireAccessToken()
+    ): Set<Pair<Int, Int>>? {
+
+        if (imdbId.isBlank()) return null
+
+        val body =
+            cachedAllShowItems
+                ?.takeIf { cachedAllShowItemsToken == accessToken }
+                ?: return null
+
+        return watchedEpisodesFromAllShows(
+            body = body,
+            imdbId = imdbId,
+            tmdbId = tmdbId
+        )
+    }
+
+    /** The watched episodes one `/sync/all-items` body holds for a show. */
+    private fun watchedEpisodesFromAllShows(
+        body: SimklAllShowsResponse,
+        imdbId: String,
+        tmdbId: Int?
+    ): Set<Pair<Int, Int>> {
+
         val match =
             body.matchShow(
                 imdbId,
