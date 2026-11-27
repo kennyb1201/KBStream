@@ -974,7 +974,7 @@ object Diagnostics {
             localStampMs =
                 PrefsPayloadBuilder.homeOrderSyncedAt(
                     context,
-                    ProfileManager.activeProfileId(context)
+                    ProfileStorage.activeProfileId(context)
                 ),
             pushedUpdatedAtMs = SupabaseSync.lastPushedHomeOrderAt(context),
             lastPull = HomeOrderSyncTrace.lastPull()
