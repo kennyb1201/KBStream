@@ -1639,7 +1639,7 @@ class DetailViewModel @Inject constructor(
      * failure this rules out, and so is moving a tab the page cannot call yet.
      */
     private val _historyPresence = MutableStateFlow(DetailHistoryPresence.UNKNOWN)
-    val historyPresence: StateFlow<DetailHistoryPresence> = _historyPresence.asStateFlow()
+    internal val historyPresence: StateFlow<DetailHistoryPresence> = _historyPresence.asStateFlow()
 
     /** Whether this title's LOCAL watch state has been read (spec 2026-11-27). */
     private val _watchHistoryRead = MutableStateFlow(false)
