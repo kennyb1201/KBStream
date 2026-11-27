@@ -227,7 +227,7 @@ class SearchScreenMobileContractTest {
     @Test
     fun `the result rails are the tv rails, with the same badges and titles`() {
         val mobile = mobileSearch()
-        listOf("Titles", "Actors", "Studios", "Collections").forEach { rail ->
+        listOf("Titles", "Collections", "Keywords", "People", "Studios").forEach { rail ->
             assertTrue("the phone must keep the $rail rail", mobile.contains("\"$rail\""))
         }
         assertTrue(

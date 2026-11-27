@@ -1073,125 +1073,11 @@ fun SearchScreen(
                 }
             }
 
-            if (!isLoading && actorResults.isNotEmpty()) {
-                item(key = "actors_rail") {
-                    // Back from the person page puts this rail back on the
-                    // card that was opened, exactly as the titles/add-on rails
-                    // do (see SearchReturnFocus). This rail used to record
-                    // nothing, so Back landed the D-pad on the search field.
-                    val railReturn = SearchReturnFocus.peek()
-                    val actorsRailState = rememberIdleLazyListState(
-                        initialFirstVisibleItemIndex =
-                            if (railReturn?.railKey == ACTORS_RAIL_FOCUS_KEY) {
-                                railReturn.position
-                            } else {
-                                0
-                            }
-                    )
-                    SearchRail(title = "Actors", state = actorsRailState) {
-                        itemsIndexed(
-                            items = actorResults,
-                            key = { _, person: TmdbSearchPersonResult -> "actor:${person.id}" }
-                        ) { index, person ->
-                            val tileKey = searchTileFocusKey(
-                                ACTORS_RAIL_FOCUS_KEY,
-                                "actor:${person.id}"
-                            )
-                            val requester = remember(tileKey) {
-                                titleTileFocusRequesters.getOrPut(tileKey) {
-                                    FocusRequester()
-                                }
-                            }
-                            // Stable per-card handlers and modifier (perf spec
-                            // 2026-11-22, item 4 remainder), the same shape as
-                            // the poster rails above.
-                            val currentOnPersonClick = rememberUpdatedState(onPersonClick)
-                            // Typed as the click it is: the last statement is a
-                            // safe call (`Unit?`), which would otherwise make the
-                            // whole lambda return `Unit?`.
-                            val tileClick: () -> Unit = remember(person, tileKey, index) {
-                                {
-                                    SearchReturnFocus.record(
-                                        SearchReturnTarget(
-                                            tileKey = tileKey,
-                                            railKey = ACTORS_RAIL_FOCUS_KEY,
-                                            position = index
-                                        )
-                                    )
-                                    viewModel.onActorOpened(person)
-                                    currentOnPersonClick.value?.invoke(person)
-                                }
-                            }
-                            val tileModifier = remember(requester) {
-                                Modifier.focusRequester(requester)
-                            }
-                            PersonResultCard(
-                                person = person,
-                                onClick = tileClick,
-                                modifier = tileModifier
-                            )
-                        }
-                    }
-                }
-            }
-
-            if (!isLoading && studioResults.isNotEmpty()) {
-                item(key = "studios_rail") {
-                    // Same return target as the Actors rail above.
-                    val railReturn = SearchReturnFocus.peek()
-                    val studiosRailState = rememberIdleLazyListState(
-                        initialFirstVisibleItemIndex =
-                            if (railReturn?.railKey == STUDIOS_RAIL_FOCUS_KEY) {
-                                railReturn.position
-                            } else {
-                                0
-                            }
-                    )
-                    SearchRail(title = "Studios", state = studiosRailState) {
-                        itemsIndexed(
-                            items = studioResults,
-                            // The kind is part of the key: a company id and a
-                            // network id are different id spaces and collide
-                            // (see [StudioSearchHit.key]).
-                            key = { _, studio: StudioSearchHit -> studio.key }
-                        ) { index, studio ->
-                            val tileKey = searchTileFocusKey(
-                                STUDIOS_RAIL_FOCUS_KEY,
-                                studio.key
-                            )
-                            val requester = remember(tileKey) {
-                                titleTileFocusRequesters.getOrPut(tileKey) {
-                                    FocusRequester()
-                                }
-                            }
-                            // Stable per-card handlers and modifier, as above.
-                            val currentOnStudioClick = rememberUpdatedState(onStudioClick)
-                            val tileClick: () -> Unit = remember(studio, tileKey, index) {
-                                {
-                                    SearchReturnFocus.record(
-                                        SearchReturnTarget(
-                                            tileKey = tileKey,
-                                            railKey = STUDIOS_RAIL_FOCUS_KEY,
-                                            position = index
-                                        )
-                                    )
-                                    viewModel.onStudioOpened(studio)
-                                    currentOnStudioClick.value?.invoke(studio)
-                                }
-                            }
-                            val tileModifier = remember(requester) {
-                                Modifier.focusRequester(requester)
-                            }
-                            StudioResultCard(
-                                studio = studio,
-                                onClick = tileClick,
-                                modifier = tileModifier
-                            )
-                        }
-                    }
-                }
-            }
-
+            // The taxonomy rails follow the add-on rails, in ascending
+            // breadth: collections and keywords describe the query, people and
+            // studios name who made the results. The person rail is titled
+            // "People" because the search has no department filter - its cards
+            // carry directors and writers as well as actors.
             if (!isLoading && collectionResults.isNotEmpty()) {
                 item(key = "collections_rail") {
                     // And again for the collection page.
@@ -1304,6 +1190,125 @@ fun SearchScreen(
                                     viewModel.onKeywordOpened(keyword)
                                 },
                                 chipFocusRequester = requester
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (!isLoading && actorResults.isNotEmpty()) {
+                item(key = "actors_rail") {
+                    // Back from the person page puts this rail back on the
+                    // card that was opened, exactly as the titles/add-on rails
+                    // do (see SearchReturnFocus). This rail used to record
+                    // nothing, so Back landed the D-pad on the search field.
+                    val railReturn = SearchReturnFocus.peek()
+                    val actorsRailState = rememberIdleLazyListState(
+                        initialFirstVisibleItemIndex =
+                            if (railReturn?.railKey == ACTORS_RAIL_FOCUS_KEY) {
+                                railReturn.position
+                            } else {
+                                0
+                            }
+                    )
+                    SearchRail(title = "People", state = actorsRailState) {
+                        itemsIndexed(
+                            items = actorResults,
+                            key = { _, person: TmdbSearchPersonResult -> "actor:${person.id}" }
+                        ) { index, person ->
+                            val tileKey = searchTileFocusKey(
+                                ACTORS_RAIL_FOCUS_KEY,
+                                "actor:${person.id}"
+                            )
+                            val requester = remember(tileKey) {
+                                titleTileFocusRequesters.getOrPut(tileKey) {
+                                    FocusRequester()
+                                }
+                            }
+                            // Stable per-card handlers and modifier (perf spec
+                            // 2026-11-22, item 4 remainder), the same shape as
+                            // the poster rails above.
+                            val currentOnPersonClick = rememberUpdatedState(onPersonClick)
+                            // Typed as the click it is: the last statement is a
+                            // safe call (`Unit?`), which would otherwise make the
+                            // whole lambda return `Unit?`.
+                            val tileClick: () -> Unit = remember(person, tileKey, index) {
+                                {
+                                    SearchReturnFocus.record(
+                                        SearchReturnTarget(
+                                            tileKey = tileKey,
+                                            railKey = ACTORS_RAIL_FOCUS_KEY,
+                                            position = index
+                                        )
+                                    )
+                                    viewModel.onActorOpened(person)
+                                    currentOnPersonClick.value?.invoke(person)
+                                }
+                            }
+                            val tileModifier = remember(requester) {
+                                Modifier.focusRequester(requester)
+                            }
+                            PersonResultCard(
+                                person = person,
+                                onClick = tileClick,
+                                modifier = tileModifier
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (!isLoading && studioResults.isNotEmpty()) {
+                item(key = "studios_rail") {
+                    // Same return target as the People rail above.
+                    val railReturn = SearchReturnFocus.peek()
+                    val studiosRailState = rememberIdleLazyListState(
+                        initialFirstVisibleItemIndex =
+                            if (railReturn?.railKey == STUDIOS_RAIL_FOCUS_KEY) {
+                                railReturn.position
+                            } else {
+                                0
+                            }
+                    )
+                    SearchRail(title = "Studios", state = studiosRailState) {
+                        itemsIndexed(
+                            items = studioResults,
+                            // The kind is part of the key: a company id and a
+                            // network id are different id spaces and collide
+                            // (see [StudioSearchHit.key]).
+                            key = { _, studio: StudioSearchHit -> studio.key }
+                        ) { index, studio ->
+                            val tileKey = searchTileFocusKey(
+                                STUDIOS_RAIL_FOCUS_KEY,
+                                studio.key
+                            )
+                            val requester = remember(tileKey) {
+                                titleTileFocusRequesters.getOrPut(tileKey) {
+                                    FocusRequester()
+                                }
+                            }
+                            // Stable per-card handlers and modifier, as above.
+                            val currentOnStudioClick = rememberUpdatedState(onStudioClick)
+                            val tileClick: () -> Unit = remember(studio, tileKey, index) {
+                                {
+                                    SearchReturnFocus.record(
+                                        SearchReturnTarget(
+                                            tileKey = tileKey,
+                                            railKey = STUDIOS_RAIL_FOCUS_KEY,
+                                            position = index
+                                        )
+                                    )
+                                    viewModel.onStudioOpened(studio)
+                                    currentOnStudioClick.value?.invoke(studio)
+                                }
+                            }
+                            val tileModifier = remember(requester) {
+                                Modifier.focusRequester(requester)
+                            }
+                            StudioResultCard(
+                                studio = studio,
+                                onClick = tileClick,
+                                modifier = tileModifier
                             )
                         }
                     }

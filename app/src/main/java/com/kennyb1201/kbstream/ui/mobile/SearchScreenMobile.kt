@@ -139,8 +139,8 @@ import com.kennyb1201.kbstream.ui.theme.MobileTheme
  *    and Hide; a category tab's long press brings back the chips hidden under
  *    it;
  *  - **the results** are the TV's rails - Titles, one per add-on source
- *    (honouring the two synced rail-label toggles), Actors, Studios,
- *    Collections, Keywords - drawn as touch cards with the same
+ *    (honouring the two synced rail-label toggles), Collections, Keywords,
+ *    People, Studios - drawn as touch cards with the same
  *    watched/partial badges, except keywords, which are tag chips;
  *  - **the title long press** is the TV menu: Go to Details, watched toggle,
  *    Add to Library and Hide - with the same id pair the tile's badge uses.
@@ -1019,9 +1019,65 @@ fun SearchScreenMobile(
                     }
                 }
 
+                // The taxonomy rails follow the add-on rails, in ascending
+                // breadth: collections and keywords describe the query, people
+                // and studios name who made the results. A person rail titled
+                // "People" because the search has no department filter - its
+                // cards carry directors and writers as well as actors.
+                if (!isLoading && collectionResults.isNotEmpty()) {
+                    item(key = "collections_rail") {
+                        MobileSearchRail(
+                            title = "Collections",
+                            warm = com.kennyb1201.kbstream.ui.search.RailWarm(
+                                collectionResults.size
+                            ) { index ->
+                                collectionResults.getOrNull(index)?.posterPath
+                                    ?.let { "https://image.tmdb.org/t/p/w500$it" }
+                            }
+                        ) {
+                            items(
+                                collectionResults,
+                                key = { collection: TmdbSearchCollectionResult ->
+                                    "collection:${collection.id}"
+                                },
+                                contentType = { "collection" }
+                            ) { collection ->
+                                CollectionTile(
+                                    modifier = Modifier.animateItem(),
+                                    collection = collection,
+                                    onClick = {
+                                        viewModel.onCollectionOpened(collection)
+                                        onCollectionClick?.invoke(collection)
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (!isLoading && keywordResults.isNotEmpty()) {
+                    item(key = "keywords_rail") {
+                        MobileSearchRail(title = "Keywords") {
+                            items(
+                                keywordResults,
+                                key = { keyword: TmdbSearchKeywordResult ->
+                                    "keyword:${keyword.id}"
+                                },
+                                contentType = { "keyword" }
+                            ) { keyword ->
+                                KeywordTile(
+                                    modifier = Modifier.animateItem(),
+                                    keyword = keyword,
+                                    onClick = { viewModel.onKeywordOpened(keyword) }
+                                )
+                            }
+                        }
+                    }
+                }
+
                 if (!isLoading && actorResults.isNotEmpty()) {
                     item(key = "actors_rail") {
-                        MobileSearchRail(title = "Actors") {
+                        MobileSearchRail(title = "People") {
                             items(
                                 actorResults,
                                 key = { person: TmdbSearchPersonResult -> "actor:${person.id}" },
@@ -1076,57 +1132,6 @@ fun SearchScreenMobile(
                                     modifier = tileModifier,
                                     studio = studio,
                                     onClick = tileClick
-                                )
-                            }
-                        }
-                    }
-                }
-
-                if (!isLoading && collectionResults.isNotEmpty()) {
-                    item(key = "collections_rail") {
-                        MobileSearchRail(
-                            title = "Collections",
-                            warm = com.kennyb1201.kbstream.ui.search.RailWarm(
-                                collectionResults.size
-                            ) { index ->
-                                collectionResults.getOrNull(index)?.posterPath
-                                    ?.let { "https://image.tmdb.org/t/p/w500$it" }
-                            }
-                        ) {
-                            items(
-                                collectionResults,
-                                key = { collection: TmdbSearchCollectionResult ->
-                                    "collection:${collection.id}"
-                                },
-                                contentType = { "collection" }
-                            ) { collection ->
-                                CollectionTile(
-                                    modifier = Modifier.animateItem(),
-                                    collection = collection,
-                                    onClick = {
-                                        viewModel.onCollectionOpened(collection)
-                                        onCollectionClick?.invoke(collection)
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-
-                if (!isLoading && keywordResults.isNotEmpty()) {
-                    item(key = "keywords_rail") {
-                        MobileSearchRail(title = "Keywords") {
-                            items(
-                                keywordResults,
-                                key = { keyword: TmdbSearchKeywordResult ->
-                                    "keyword:${keyword.id}"
-                                },
-                                contentType = { "keyword" }
-                            ) { keyword ->
-                                KeywordTile(
-                                    modifier = Modifier.animateItem(),
-                                    keyword = keyword,
-                                    onClick = { viewModel.onKeywordOpened(keyword) }
                                 )
                             }
                         }

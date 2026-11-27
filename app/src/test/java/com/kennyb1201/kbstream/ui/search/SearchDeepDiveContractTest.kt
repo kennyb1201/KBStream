@@ -88,7 +88,9 @@ class SearchDeepDiveContractTest {
                 actors.contains(".focusRequester(requester)")
         )
 
-        val studios = slice(screen, "item(key = \"studios_rail\")", "item(key = \"collections_rail\")")
+        // The taxonomy rails follow the add-on rails since 2026-11-26: the
+        // person rail (shown as People) sits before Studios, which is last.
+        val studios = slice(screen, "item(key = \"studios_rail\")", "// A recent-search chip")
         assertTrue(
             "and so must the studio rail",
             studios.contains("SearchReturnFocus.record(") &&
@@ -97,7 +99,7 @@ class SearchDeepDiveContractTest {
                 studios.contains(".focusRequester(requester)")
         )
 
-        val collections = slice(screen, "item(key = \"collections_rail\")", "// Long-press context menu")
+        val collections = slice(screen, "item(key = \"collections_rail\")", "item(key = \"keywords_rail\")")
         assertTrue(
             "and the collection rail",
             collections.contains("SearchReturnFocus.record(") &&
@@ -111,8 +113,8 @@ class SearchDeepDiveContractTest {
     fun `the non-title rails seed their scroll from the return record`() {
         val screen = tv()
         val actors = slice(screen, "item(key = \"actors_rail\")", "item(key = \"studios_rail\")")
-        val studios = slice(screen, "item(key = \"studios_rail\")", "item(key = \"collections_rail\")")
-        val collections = slice(screen, "item(key = \"collections_rail\")", "// Long-press context menu")
+        val studios = slice(screen, "item(key = \"studios_rail\")", "// A recent-search chip")
+        val collections = slice(screen, "item(key = \"collections_rail\")", "item(key = \"keywords_rail\")")
 
         assertTrue(
             "a rail that re-composes at offset 0 cannot focus a card the viewer " +

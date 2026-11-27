@@ -76,7 +76,7 @@ class WarmCoverageWiringContractTest {
             "a Collections rail warms its posters",
             search.contains("warm = RailWarm(collectionResults.size) { index ->")
         )
-        listOf("Actors" to "actorsRailState", "Studios" to "studiosRailState", "Keywords" to "keywordsRailState")
+        listOf("People" to "actorsRailState", "Studios" to "studiosRailState", "Keywords" to "keywordsRailState")
             .forEach { (title, state) ->
                 assertTrue(
                     "$title: still declared without a warm, because its cards draw none",
@@ -113,7 +113,7 @@ class WarmCoverageWiringContractTest {
             "Titles, add-on and Collections rails pass it",
             mobileSearch.split("com.kennyb1201.kbstream.ui.search.RailWarm(").size - 1 >= 3
         )
-        listOf("Actors", "Studios", "Keywords").forEach { title ->
+        listOf("People", "Studios", "Keywords").forEach { title ->
             assertTrue(
                 "$title: cold, for the same reason the TV rail is",
                 mobileSearch.contains("MobileSearchRail(title = \"$title\") {")
