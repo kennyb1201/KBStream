@@ -8837,14 +8837,36 @@ Log.d(
 
                 val tmdbId = tmdbDetail?.id
 
+                // F5e: the seasons this show actually has, from the detail we
+                // already hold. Handing them to the resolution is what stops the
+                // walk probing past the end of every show (four 404s per batch,
+                // never cached) - see [cwSeasonsToWalk].
+                val declaredSeasons =
+                    cwSeasonsToWalk(
+                        seasons =
+                            tmdbDetail?.seasons?.map { season ->
+                                CwSeasonDecl(season.seasonNumber, season.episodeCount)
+                            },
+                        nextEpisodeSeason = tmdbDetail?.nextEpisodeToAir?.seasonNumber
+                    )
+
                 if (tmdbId != null && tmdbId > 0) {
                     // Count watched/total/remaining through the SAME shared-watched-state
                     // mechanism the SIMKL path uses (the one that correctly renders
                     // "X of Y episodes watched"), so local history stays consistent with
                     // SIMKL across the hero and the continue-watching cards.
+                    val preloadStartedAtMs = cwClockMs()
                     preloadWatchedEpisodeStateForShow(
                         parentId = parentId,
                         tmdbShowId = tmdbId
+                    )
+                    // F5e: the call-level half of the step's timing, so a paste
+                    // that still shows `slowStep=seasons` names which call held
+                    // the rows there (`slowCall=`).
+                    localProgress.noteSeasonCall(
+                        rowClock,
+                        CwSeasonCall.PRELOAD,
+                        cwClockMs() - preloadStartedAtMs
                     )
                     val cachedTotals = showEpisodeTotalsCache[tmdbId]
 
@@ -8859,17 +8881,24 @@ Log.d(
                     val needsResolvedEpisode =
                         namedRowEpisode == null || entry.season == null
 
+                    val resolveStartedAtMs = cwClockMs()
                     val target =
                         if (cachedTotals == null || needsResolvedEpisode) {
                             resolveSeriesTargetFromSharedWatchedState(
                                 parentId = parentId,
                                 tmdbId = tmdbId,
                                 simklSeason = entry.season,
-                                simklEpisode = entry.episode
+                                simklEpisode = entry.episode,
+                                declaredSeasons = declaredSeasons
                             )
                         } else {
                             null
                         }
+                    localProgress.noteSeasonCall(
+                        rowClock,
+                        CwSeasonCall.RESOLVE,
+                        cwClockMs() - resolveStartedAtMs
+                    )
 
                     if (target != null) {
                         resolvedSeriesTarget = target
@@ -8910,6 +8939,7 @@ Log.d(
                     // rating and its still image, instead of firing a
                     // second redundant getEpisodeRating call for the
                     // same season detail.
+                    val episodesStartedAtMs = cwClockMs()
                     val matchedEpisode =
                         tmdbRepository.getSeasonEpisodes(
                             tvId = tmdbId,
@@ -8918,6 +8948,11 @@ Log.d(
                         ).firstOrNull {
                             it.episodeNumber == namedRowEpisode
                         }
+                    localProgress.noteSeasonCall(
+                        rowClock,
+                        CwSeasonCall.EPISODES,
+                        cwClockMs() - episodesStartedAtMs
+                    )
 
                     episodeRating =
                         matchedEpisode
@@ -11730,7 +11765,12 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     parentId: String,
     tmdbId: Int,
     simklSeason: Int?,
-    simklEpisode: Int?
+    simklEpisode: Int?,
+    // F5e: the seasons the caller's show detail declares (see [cwSeasonsToWalk]).
+    // Null means the detail named none and the walk keeps its old probe; the
+    // Continue Watching row passes the detail it already holds, which is what
+    // turned the walk's ~8 season requests per show into the seasons that exist.
+    declaredSeasons: List<Int>? = null
 ): ResolvedHomeSeriesTarget? {
 
     // Reading this show's watched state is only meaningful once the preload has
@@ -11792,12 +11832,10 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     /*
      * Calculate the full watched/total episode count for the show.
      *
-     * This intentionally starts at season 1 rather than using
+     * This intentionally covers every season the walk holds rather than
      * MAX_FORWARD_SEASON_LOOKAHEAD, because this is for the hero's
      * "X of Y episodes watched" display.
      */
-    var season = 1
-
     // Reuse the full season map another row of the SAME show already walked
     // (local and Simkl paths share this cache by TMDB id): the resolver's
     // next-episode target, finale flags and "X of Y" totals all derive from
@@ -11814,63 +11852,56 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
         cachedSeasonEpisodesBySeason?.toMutableMap()
             ?: mutableMapOf()
 
+    // F5e: the last season the caller's detail declared, when it declared any.
+    // It bounds the forward scan and the remaining-episode count below as well
+    // as the walk itself: a season past it has no episode list to fetch.
+    val lastDeclaredSeason =
+        declaredSeasons
+            ?.maxOrNull()
+
     // Set when ANY season of this walk could not be fetched (see the null in
-    // batchResults). A walk with a hole in it is not evidence about the show.
+    // walk.failed). A walk with a hole in it is not evidence about the show.
     var seasonWalkFailed = false
 
+    // F5e: the walk asks for the seasons the detail declared, in small
+    // concurrent batches, and never probes past them. The old probe (1..50,
+    // stopping when a whole batch came back empty) spent four requests per
+    // batch past the end of every show on seasons that do not exist, which the
+    // 6407 paste charged to `slowStep=seasons` at a 7.4s p50. A season the
+    // detail did not declare has no episode list to fetch; the detail is the
+    // same source that names the show's next episode to air.
     if (cachedSeasonEpisodesBySeason == null) {
 
-    // Small concurrent batches instead of a 50-season serial walk: for long
-    // shows that loop used to do 30+ sequential TMDB lookups per row, which
-    // dominated Continue Watching load time. A whole empty batch means we're
-    // past the last aired season, so stop.
-    while (season <= 50) {
-        val batchEnd =
-            minOf(season + UP_NEXT_SEASON_BATCH - 1, 50)
-
-        // A SEASON THAT FAILED IS NOT A SEASON WITH NO EPISODES (spec audit
-        // 2026-11-18, Data H4). The catch used to fold a transient TMDB failure
-        // into `emptyList()`, which the walk then read as "the show has no more
-        // seasons" - and the map it built said "finished" for the whole TTL, so
-        // one blip at the wrong moment took the show out of Continue Watching
-        // and Upcoming for twelve hours. Null now means UNKNOWN: it breaks the
-        // walk (nothing beyond it can be judged either) and it keeps the walk
-        // out of the cache below.
-        val batchResults: List<Pair<Int, List<ResolvedEpisode>?>> =
-            coroutineScope {
-                (season..batchEnd).map { s ->
-                    async {
-                        s to (
-                            try {
-                                tmdbLookupSemaphore.withPermit {
-                                    tmdbRepository.getSeasonEpisodes(
-                                        tmdbId,
-                                        s,
-                                        parentId
-                                    )
-                                }
-                            } catch (_: Exception) {
-                                null
-                            }
-                            )
-                    }
-                }.awaitAll()
-            }
-
-        var anySeasonInBatch = false
-        for ((s, episodes) in batchResults) {
-            if (episodes == null) {
-                seasonWalkFailed = true
-                break
-            }
-            seasonEpisodesBySeason[s] = episodes
-            if (episodes.isNotEmpty()) {
-                anySeasonInBatch = true
+    // A SEASON THAT FAILED IS NOT A SEASON WITH NO EPISODES (spec audit
+    // 2026-11-18, Data H4). The catch used to fold a transient TMDB failure
+    // into `emptyList()`, which the walk then read as "the show has no more
+    // seasons" - and the map it built said "finished" for the whole TTL, so
+    // one blip at the wrong moment took the show out of Continue Watching
+    // and Upcoming for twelve hours. Null now means UNKNOWN: it breaks the
+    // walk (nothing beyond it can be judged either) and it keeps the walk
+    // out of the cache below.
+    val walk: CwSeasonWalk<ResolvedEpisode> =
+        cwWalkSeasons(
+            declaredSeasons = declaredSeasons,
+            batchSize = UP_NEXT_SEASON_BATCH,
+            probeThrough = 50
+        ) { s ->
+            try {
+                tmdbLookupSemaphore.withPermit {
+                    tmdbRepository.getSeasonEpisodes(
+                        tmdbId,
+                        s,
+                        parentId
+                    )
+                }
+            } catch (_: Exception) {
+                null
             }
         }
-        if (!anySeasonInBatch) break
-        season = batchEnd + 1
-    }
+
+    seasonEpisodesBySeason.putAll(walk.episodesBySeason)
+    seasonWalkFailed = walk.failed
+
 
     // Publish the walked season map for other rows of the same show. Only
     // self-walked maps get stored (a cache-seeded call must not re-store a map
@@ -11892,14 +11923,17 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     }
     }
 
-    season = 1
-    while (season <= 50) {
+    // F5e: walk the seasons the map HOLDS, in order, rather than 1..50 until a
+    // gap. The declared walk records exactly the seasons TMDB lists, so a show
+    // with no season 3 (numbering gaps are real) would otherwise stop counting
+    // at the gap and report a total short of the seasons after it.
+    for (season in seasonEpisodesBySeason.keys.sorted()) {
 
         val seasonEpisodes =
             seasonEpisodesBySeason[season].orEmpty()
 
         if (seasonEpisodes.isEmpty()) {
-            break
+            continue
         }
 
         val watchedEpisodesForSeason =
@@ -11941,8 +11975,6 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                 }
             }
         }
-
-        season++
     }
 
     // Episode runtime fallback: TMDB often leaves per-episode runtime empty
@@ -12373,7 +12405,8 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                         startingSeason =
                             resume.season,
                         startingEpisode =
-                            resumeEpisode
+                            resumeEpisode,
+                        lastDeclaredSeason = lastDeclaredSeason
                     ),
 
                 isSeasonFinale =
@@ -12554,7 +12587,8 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                         startingSeason,
                     startingEpisode =
                         nextUnwatchedInSeason
-                            .episodeNumber
+                            .episodeNumber,
+                    lastDeclaredSeason = lastDeclaredSeason
                 ),
 
                 isSeasonFinale =
@@ -12603,11 +12637,19 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                 ?: startingSeason
         )
 
+    // F5e: the scan stops at the last season TMDB declares. Probing past it
+    // was a 404 per row per pass (never cached, because an empty answer is not
+    // an answer) for a season that cannot exist. A tracker record naming a
+    // later season than the detail does keeps the old ceiling: that is a stale
+    // detail, not a finished show.
     val lastSeasonToCheck =
-        maxOf(
-            highestKnownSeason + 2,
-            startingSeason +
-                MAX_FORWARD_SEASON_LOOKAHEAD
+        minOf(
+            maxOf(
+                highestKnownSeason + 2,
+                startingSeason +
+                    MAX_FORWARD_SEASON_LOOKAHEAD
+            ),
+            maxOf(lastDeclaredSeason ?: Int.MAX_VALUE, startingSeason)
         )
 
     for (
@@ -12705,7 +12747,8 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                             futureSeason,
                         startingEpisode =
                             firstUnwatchedAired
-                                .episodeNumber
+                                .episodeNumber,
+                        lastDeclaredSeason = lastDeclaredSeason
                     ),
 
                 isSeasonFinale =
@@ -12790,7 +12833,11 @@ private suspend fun calculateEpisodesRemaining(
     // PROBE2
     tmdbId: Int,
     startingSeason: Int,
-    startingEpisode: Int
+    startingEpisode: Int,
+    // F5e: the last season the show's detail declares, when known. Without it
+    // this count probed up to MAX_FORWARD_SEASON_LOOKAHEAD seasons past the
+    // end of every show - a 404 each, on the row's own clock.
+    lastDeclaredSeason: Int? = null
 ): Int? {
 
     if (tmdbId <= 0) {
@@ -12810,8 +12857,14 @@ private suspend fun calculateEpisodesRemaining(
     var remaining = 0
 
     val lastSeasonToCheck =
-        startingSeason +
-            MAX_FORWARD_SEASON_LOOKAHEAD
+        minOf(
+            startingSeason +
+                MAX_FORWARD_SEASON_LOOKAHEAD,
+            // Never below the starting season: a tracker record beyond the
+            // declared list means the detail is stale, not that the season is
+            // missing, and the count must still walk forward from there.
+            maxOf(lastDeclaredSeason ?: Int.MAX_VALUE, startingSeason)
+        )
 
     for (
         season in

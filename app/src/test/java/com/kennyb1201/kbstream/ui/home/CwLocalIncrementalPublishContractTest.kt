@@ -509,6 +509,149 @@ class CwLocalIncrementalPublishContractTest {
             )
         }
 
+    // ── The seasons step's own cost (F5e) ──────────────────────────────────
+
+    @Test
+    fun `a cold one-season show costs one season request, not the probe's eight`() =
+        runBlocking {
+            val fetched = mutableListOf<Int>()
+            val fetch: suspend (Int) -> List<String>? = { season ->
+                fetched.add(season)
+                if (season == 1) listOf("s1e1") else emptyList()
+            }
+
+            // F5e: the row already holds TMDB's detail, which names the seasons
+            // the show has. The walk asks for those.
+            val declared =
+                cwWalkSeasons(
+                    declaredSeasons = cwSeasonsToWalk(listOf(CwSeasonDecl(number = 1, episodeCount = 10))),
+                    batchSize = 4,
+                    probeThrough = 50,
+                    fetch = fetch
+                )
+            assertEquals("one declared season is one lookup", listOf(1), fetched)
+            assertEquals(1, declared.requests)
+            assertEquals(setOf(1), declared.episodesBySeason.keys)
+            assertFalse(declared.failed)
+
+            // The old walk: the same show, no declaration, probed 1..50 - a whole
+            // empty batch past the end, four 404s per batch and eight requests
+            // for one real season. This is the count the 6407 paste paid per row.
+            fetched.clear()
+            val probe =
+                cwWalkSeasons(
+                    declaredSeasons = null,
+                    batchSize = 4,
+                    probeThrough = 50,
+                    fetch = fetch
+                )
+            assertEquals(
+                "the probe spends a second batch finding the end of a one-season show",
+                8,
+                probe.requests
+            )
+            assertEquals(8, fetched.size)
+        }
+
+    @Test
+    fun `a declared season whose listing lags is still fetched, and the walk goes on`() =
+        runBlocking {
+            val fetched = mutableListOf<Int>()
+            val walk =
+                cwWalkSeasons(
+                    declaredSeasons = listOf(1, 2),
+                    batchSize = 4,
+                    probeThrough = 50
+                ) { season ->
+                    fetched.add(season)
+                    if (season == 1) emptyList() else listOf("s2e1")
+                }
+
+            assertEquals("both declared seasons are asked for", listOf(1, 2), fetched.sorted())
+            assertFalse("an empty listing is not the end of a declared walk", walk.failed)
+            assertEquals(emptyList<String>(), walk.episodesBySeason[1])
+            assertEquals(listOf("s2e1"), walk.episodesBySeason[2])
+        }
+
+    @Test
+    fun `a season that did not answer is a hole, and stops the walk`() =
+        runBlocking {
+            val walk =
+                cwWalkSeasons(
+                    declaredSeasons = listOf(1, 2, 3),
+                    batchSize = 4,
+                    probeThrough = 50
+                ) { season -> if (season == 2) null else listOf("s${season}e1") }
+
+            assertTrue("a failed season makes the map a map with a hole in it", walk.failed)
+            assertEquals(setOf(1), walk.episodesBySeason.keys)
+        }
+
+    @Test
+    fun `the walk asks for the seasons the detail declares, and nothing else`() {
+        assertEquals(
+            listOf(1, 2),
+            cwSeasonsToWalk(
+                listOf(CwSeasonDecl(1, 8), CwSeasonDecl(2, 10))
+            )
+        )
+        assertEquals(
+            "specials are not a season of the show",
+            listOf(1),
+            cwSeasonsToWalk(listOf(CwSeasonDecl(0, 12), CwSeasonDecl(1, 8)))
+        )
+        assertEquals(
+            "a season TMDB declares with zero episodes is announced, not watchable",
+            listOf(1),
+            cwSeasonsToWalk(listOf(CwSeasonDecl(1, 8), CwSeasonDecl(2, 0)))
+        )
+        assertEquals(
+            "a season with no declared count is kept - unknown is not empty",
+            listOf(1, 2),
+            cwSeasonsToWalk(listOf(CwSeasonDecl(1, 8), CwSeasonDecl(2, null)))
+        )
+        assertEquals(
+            "the next episode to air can name a season the summary has not listed yet",
+            listOf(1, 2),
+            cwSeasonsToWalk(listOf(CwSeasonDecl(1, 8)), nextEpisodeSeason = 2)
+        )
+        assertEquals(
+            "declared out of order is walked in order",
+            listOf(1, 2),
+            cwSeasonsToWalk(listOf(CwSeasonDecl(2, 10), CwSeasonDecl(1, 8)))
+        )
+        assertTrue(
+            "no declaration keeps the old probe",
+            cwSeasonsToWalk(null) == null && cwSeasonsToWalk(emptyList()) == null
+        )
+    }
+
+    @Test
+    fun `the summary names the call inside the seasons step`() {
+        val progress = CwLocalProgress(listOf("a" to card("aSeed")))
+        val timing = progress.beginRow("a", atMs = 0L)
+        progress.noteStep(timing, CwRowStep.SEASONS, atMs = 0L)
+        progress.noteSeasonCall(timing, CwSeasonCall.PRELOAD, 120L)
+        progress.noteSeasonCall(timing, CwSeasonCall.RESOLVE, 7_409L)
+        progress.noteSeasonCall(timing, CwSeasonCall.EPISODES, 40L)
+        progress.place("a", card("aRich"), atMs = 7_600L)
+
+        val summary = progress.summaryLine(rows = 1)
+        assertTrue(
+            "the step's slowest call is named: $summary",
+            summary.contains("slowCall=resolve:7409ms")
+        )
+        assertTrue(
+            "and the step is still named beside it: $summary",
+            summary.contains("slowStep=seasons:7600ms")
+        )
+        assertTrue(
+            "a pass with no season call recorded says so rather than inventing one",
+            CwLocalProgress(listOf("a" to card("aSeed"))).summaryLine(rows = 1)
+                .contains("slowCall=-")
+        )
+    }
+
     // ── The publisher's shape ──────────────────────────────────────────────
 
     @Test
@@ -719,6 +862,56 @@ class CwLocalIncrementalPublishContractTest {
             pass.contains("localProgress.summaryLine(rows = history.size)")
         )
 
+    }
+
+    // ── The seasons step's wiring (F5e) ────────────────────────────────────
+
+    @Test
+    fun `the local row hands its show's declared seasons to the resolution`() {
+        val viewModel = source("com/kennyb1201/kbstream/ui/home/HomeViewModel.kt")
+        val start = viewModel.indexOf("private fun observeUpNext()")
+        assertTrue("the upNext pass is missing", start >= 0)
+        val end = viewModel.indexOf("private suspend fun dropSupersededResumeRows(", start)
+        assertTrue("the pass's end is missing", end > start)
+        val pass = viewModel.substring(start, end)
+
+        assertTrue(
+            "the pass reads the seasons off the detail it already holds",
+            pass.contains("cwSeasonsToWalk(") &&
+                pass.contains("nextEpisodeSeason = tmdbDetail?.nextEpisodeToAir?.seasonNumber")
+        )
+        assertTrue(
+            "and hands them to the resolution that walks them",
+            pass.contains("declaredSeasons = declaredSeasons")
+        )
+        assertTrue(
+            "the resolution walks only those seasons",
+            viewModel.contains("cwWalkSeasons(\n            declaredSeasons = declaredSeasons,")
+        )
+        assertTrue(
+            "the totals walk record what the map holds, so a numbering gap is not the end",
+            viewModel.contains("for (season in seasonEpisodesBySeason.keys.sorted())")
+        )
+        assertTrue(
+            "the remaining count is bounded by the declared last season too",
+            viewModel.contains("lastDeclaredSeason: Int? = null") &&
+                viewModel.contains("lastDeclaredSeason = lastDeclaredSeason")
+        )
+
+        // F5e's other half: the summary names the CALL inside the step, so a
+        // paste that still shows `slowStep=seasons` says which one.
+        listOf(
+            "localProgress.noteSeasonCall(",
+            "CwSeasonCall.PRELOAD",
+            "CwSeasonCall.RESOLVE",
+            "CwSeasonCall.EPISODES"
+        ).forEach { pin ->
+            assertTrue("the local row times its seasons calls: $pin", pass.contains(pin))
+        }
+        assertTrue(
+            "and each duration is taken on the pass's one clock",
+            Regex("cwClockMs\\(\\) - (preload|resolve|episodes)StartedAtMs").findAll(pass).count() == 3
+        )
     }
 
     /** The number after [prefix], if the summary carries one. */

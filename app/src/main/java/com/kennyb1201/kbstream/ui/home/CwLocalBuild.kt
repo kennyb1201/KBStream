@@ -55,6 +55,144 @@ internal enum class CwRowStep(val label: String) {
 }
 
 /**
+ * The three calls inside one row's SEASONS step (spec 2026-11-27, CW load F5e).
+ *
+ * F5c could say the rows were slow in `seasons` but not WHICH call inside the
+ * step held them there: the watched-state preload, the next-episode resolution
+ * (whose season walk is the step's only network work) or the one episode-list
+ * fetch for the card's rating and still. The labels are the summary's
+ * `slowCall=<label>` spelling.
+ */
+internal enum class CwSeasonCall(val label: String) {
+    PRELOAD("preload"),
+    RESOLVE("resolve"),
+    EPISODES("episodes")
+}
+
+/**
+ * One season TMDB's show detail declares (spec 2026-11-27, CW load F5e).
+ *
+ * A single field pair so the season set is a pure function of the detail the
+ * row already holds, testable without a repository.
+ */
+internal data class CwSeasonDecl(val number: Int, val episodeCount: Int?)
+
+/**
+ * The seasons a row's walk should fetch, from the show detail already in hand
+ * (spec 2026-11-27, CW load F5e). Null means "TMDB did not declare any", and
+ * the walk falls back to probing past the end.
+ *
+ * Why it exists: the walk used to probe season 1..50 in batches of four and
+ * stop only when a WHOLE batch came back empty, so a one-season show paid
+ * eight requests - four real seasons and four 404s past the end - and an
+ * eight-row pass paid ~64 such requests through a five-permit repository. The
+ * detail names the seasons that exist, so the walk asks for those and nothing
+ * else.
+ *
+ * [nextEpisodeSeason] is added when it is beyond the declared list: TMDB's
+ * `next_episode_to_air` can name a season the seasonal summary has not caught
+ * up with yet, and it costs no request to include one season we were told
+ * about. Season 0 (specials) is never walked, and a season TMDB has declared
+ * with ZERO episodes is announced-but-unreleased (the detail screen dims its
+ * chip) - it has nothing to count.
+ */
+internal fun cwSeasonsToWalk(
+    seasons: List<CwSeasonDecl>?,
+    nextEpisodeSeason: Int? = null
+): List<Int>? {
+    if (seasons.isNullOrEmpty()) return null
+
+    val numbers = seasons.asSequence()
+        .filter { it.number >= 1 }
+        .filter { (it.episodeCount ?: 1) > 0 }
+        .map { it.number }
+        .toMutableSet()
+
+    nextEpisodeSeason?.takeIf { it >= 1 }?.let { numbers.add(it) }
+
+    return numbers.sorted()
+}
+
+/**
+ * What one walk fetched (spec 2026-11-27, CW load F5e).
+ *
+ * [requests] is the number of season lookups the walk issued - the number that
+ * separates the old probe (indistinguishable from the show's length) from the
+ * declared walk (exactly the seasons that exist). [failed] means at least one
+ * season did not answer, which makes the map a map with a hole in it rather
+ * than evidence about the show.
+ */
+internal class CwSeasonWalk<E>(
+    val episodesBySeason: Map<Int, List<E>>,
+    val failed: Boolean,
+    val requests: Int
+)
+
+/**
+ * Fetches a show's seasons (spec 2026-11-27, CW load F5e) - [batchSize] at a
+ * time, because a long show's seasons are independent lookups.
+ *
+ * With [declaredSeasons] the walk asks for exactly those, in batches, and does
+ * NOT stop on an empty answer: TMDB's listing can lag a season it has already
+ * declared, and the seasons after it are still real. Without them it keeps the
+ * old probe - 1..[probeThrough], stopping once a whole batch is empty, which is
+ * how the end of a show was discovered before the detail was handed in.
+ *
+ * A null fetch answer is "did not answer" and stops the walk: nothing past a
+ * hole can be judged, and the caller must not cache a map with one in it.
+ */
+internal suspend fun <E> cwWalkSeasons(
+    declaredSeasons: List<Int>?,
+    batchSize: Int,
+    probeThrough: Int,
+    fetch: suspend (Int) -> List<E>?
+): CwSeasonWalk<E> {
+    val size = batchSize.coerceAtLeast(1)
+    val episodesBySeason = LinkedHashMap<Int, List<E>>()
+    var failed = false
+    var requests = 0
+
+    suspend fun fetchBatch(seasons: List<Int>): List<Pair<Int, List<E>?>> {
+        requests += seasons.size
+        return coroutineScope {
+            seasons.map { season -> async { season to fetch(season) } }.awaitAll()
+        }
+    }
+
+    if (!declaredSeasons.isNullOrEmpty()) {
+        for (batch in declaredSeasons.distinct().sorted().chunked(size)) {
+            for ((season, episodes) in fetchBatch(batch)) {
+                if (episodes == null) {
+                    failed = true
+                    break
+                }
+                episodesBySeason[season] = episodes
+            }
+            if (failed) break
+        }
+        return CwSeasonWalk(episodesBySeason, failed, requests)
+    }
+
+    var season = 1
+    while (season <= probeThrough) {
+        val batchEnd = minOf(season + size - 1, probeThrough)
+        var anySeasonInBatch = false
+        for ((number, episodes) in fetchBatch((season..batchEnd).toList())) {
+            if (episodes == null) {
+                failed = true
+                break
+            }
+            episodesBySeason[number] = episodes
+            if (episodes.isNotEmpty()) anySeasonInBatch = true
+        }
+        if (failed || !anySeasonInBatch) break
+        season = batchEnd + 1
+    }
+
+    return CwSeasonWalk(episodesBySeason, failed, requests)
+}
+
+/**
  * One row's timeline inside one pass (spec 2026-11-26, CW load F5b).
  *
  * Every field is an offset from the build's start - the clock every `cwload:`
@@ -129,6 +267,14 @@ internal class CwRowTiming(
     /** The stage the row was in when its own timeout or the pass deadline ended it. */
     var cutOffStep: CwRowStep? = null
         internal set
+
+    /**
+     * How long each SEASONS call took (F5e), keyed by call. Separate from
+     * [stepDurationsMs] because the step is one stage with three calls inside
+     * it: a row cut off mid-step records no duration for the step, while the
+     * calls that did finish are exactly what names the slow one.
+     */
+    val callDurationsMs: MutableMap<CwSeasonCall, Long> = LinkedHashMap()
 
     /** Enters [next], closing the stage the row was in at [atMs]. */
     internal fun enterStep(next: CwRowStep, atMs: Long) {
@@ -229,6 +375,18 @@ internal class CwLocalProgress(
      */
     fun noteStep(timing: CwRowTiming, step: CwRowStep, atMs: Long) {
         synchronized(lock) { timing.enterStep(step, atMs) }
+    }
+
+    /**
+     * The row's [call] inside its SEASONS step took [durationMs] (F5e). Only a
+     * call that finished is recorded: a row cut off inside the walk has no
+     * duration for it, and an invented zero would let the step hide the call.
+     */
+    fun noteSeasonCall(timing: CwRowTiming, call: CwSeasonCall, durationMs: Long) {
+        synchronized(lock) {
+            timing.callDurationsMs[call] =
+                (timing.callDurationsMs[call] ?: 0L) + durationMs.coerceAtLeast(0L)
+        }
     }
 
     /**
@@ -359,8 +517,28 @@ internal class CwLocalProgress(
             " permitWaitP95=${percentile(waits, 95)}ms" +
             " slowest=" + slowest.ifEmpty { "-" } +
             " slowStep=" + slowStep +
+            " slowCall=" + slowestCall(snapshot) +
             " deadlineFired=" + (if (fired) "yes" else "no") +
             " landedAtDeadline=$landedThen"
+    }
+
+    /**
+     * The SEASONS call with the highest p50 across the rows (F5e):
+     * `resolve:7021ms`, or `-` when no row finished one. One level deeper than
+     * `slowStep`, so a paste that still shows `slowStep=seasons` names the call
+     * inside it instead of leaving the next fix to guess.
+     */
+    private fun slowestCall(snapshot: List<CwRowTiming>): String {
+        val perCall =
+            CwSeasonCall.entries.mapNotNull { call ->
+                val durations =
+                    snapshot.mapNotNull { timing ->
+                        timing.callDurationsMs[call]?.takeIf { ms -> ms > 0L }
+                    }
+                if (durations.isEmpty()) null else call to percentile(durations, 50)
+            }
+        val worst = perCall.maxByOrNull { (_, p50) -> p50 } ?: return "-"
+        return "${worst.first.label}:${worst.second}ms"
     }
 
     /**
