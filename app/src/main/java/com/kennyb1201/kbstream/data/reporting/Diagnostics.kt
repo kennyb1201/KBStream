@@ -26,7 +26,10 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.memory.ImageCacheComposition
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.sync.AuthSyncTrace
+import com.kennyb1201.kbstream.data.sync.HomeOrderSyncTrace
+import com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder
 import com.kennyb1201.kbstream.data.sync.ProfileManager
+import com.kennyb1201.kbstream.data.sync.homeOrderSyncLine
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.format.DateFormats
@@ -161,6 +164,11 @@ object Diagnostics {
         // leg, so without this line a capture reads the same whether the row was
         // filtered out or the whole sync was broken (spec 2026-11-13, F6.2/F6.3).
         report.appendLine(authSyncLine())
+        // The home manager's arrangement, per key (spec 2026-11-27): a rail
+        // moved on the phone that never arrives on the TV used to read the same
+        // whether the push never queued or the guard rejected the pull. This is
+        // the one line that tells the two legs apart.
+        report.appendLine(homeOrderLine(app))
         report.appendLine(localLine(app))
         report.appendLine(storageLine(app))
         markerLines(app).forEach { report.appendLine(it) }
@@ -950,6 +958,27 @@ object Diagnostics {
         return "sync auth: published=${published.joinToString(",").ifEmpty { "none" }} " +
             "pulled=${pulled.joinToString(",").ifEmpty { "none" }}"
     }
+
+    /**
+     * The home order's own sync leg (spec 2026-11-27).
+     *
+     * Stamps from the durable prefs - the active profile's edit stamp and the
+     * stamp the last queued push carried - so a paste after a force-stop still
+     * answers; the pull decision comes from [HomeOrderSyncTrace], because a
+     * rejected pull is a moment rather than a stored fact. Representative of the
+     * ACTIVE profile's arrangement: a sibling profile's row is applied when that
+     * profile is switched to.
+     */
+    private fun homeOrderLine(context: Context): String =
+        homeOrderSyncLine(
+            localStampMs =
+                PrefsPayloadBuilder.homeOrderSyncedAt(
+                    context,
+                    ProfileManager.activeProfileId(context)
+                ),
+            pushedUpdatedAtMs = SupabaseSync.lastPushedHomeOrderAt(context),
+            lastPull = HomeOrderSyncTrace.lastPull()
+        ) { ms -> absoluteOrNever(ms) }
 
     /**
      * Where the app's bytes actually are.

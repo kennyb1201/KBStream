@@ -1542,8 +1542,46 @@ object SupabaseSync {
         }
         val row = OutboxItem(TABLE_PREFS, "pref_key", stored, payload)
         outbox.put(row)
+        // The home order's push leg (spec 2026-11-27): recorded HERE, where the
+        // row actually enters the outbox. A rail arrangement edited on the phone
+        // that never reaches the TV looks the same in every other line whether
+        // the push never queued or the TV rejected it; this record separates
+        // them, and it is the only place that can say a push was accepted.
+        // Stamps, the decision and the profile only - never the arrangement.
+        if (prefKey == PrefsPayloadBuilder.KEY_HOME_ORDER) {
+            val updatedAt =
+                (payload["updatedAt"] as? kotlinx.serialization.json.JsonPrimitive)
+                    ?.content
+                    ?.toLongOrNull()
+                    ?: 0L
+            HomeOrderSyncTrace.record(
+                side = HomeOrderSyncTrace.PUSH,
+                updatedAt = updatedAt,
+                localStamp = PrefsPayloadBuilder.homeOrderSyncedAt(context, profileId),
+                decision = HomeOrderSyncTrace.PUBLISHED,
+                profileId = profileId
+            )
+            // Durable for the diagnostics line only: the paste after a restart
+            // still has to say which stamp the last push carried. No sync
+            // decision reads it.
+            syncPrefs(context).edit()
+                .putLong(HOME_ORDER_LAST_PUSH_KEY, updatedAt)
+                .apply()
+        }
         scheduleFlush()
     }
+
+    /**
+     * The stamp the last home-order row this device queued carried, for the
+     * `sync home-order:` diagnostics line. 0 means this device never queued one.
+     *
+     * Durable on purpose: the line is pasted after a restart, when the in-memory
+     * trace is gone (spec 2026-11-27).
+     */
+    fun lastPushedHomeOrderAt(context: Context): Long =
+        syncPrefs(context.applicationContext).getLong(HOME_ORDER_LAST_PUSH_KEY, 0L)
+
+    private const val HOME_ORDER_LAST_PUSH_KEY = "home_order_last_push_at"
 
     // @Volatile: scheduleFlush()/startPeriodicFlush() run on the multi-threaded
     // IO scope, so the `?.isActive` check-then-act must see another thread's

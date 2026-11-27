@@ -976,6 +976,18 @@ object PrefsPayloadBuilder {
     }
 
     /**
+     * This device's durable home-order edit stamp for [profileId], for the
+     * `sync home-order:` diagnostics line (spec 2026-11-27).
+     *
+     * The pull guard reads this same key; this is the read accessor the
+     * diagnostics use, so a paste taken after a force-stop still reports the
+     * stamp the guard compared against.
+     */
+    fun homeOrderSyncedAt(context: Context, profileId: String?): Long =
+        profilePrefs(context, "kbstream_kb_home_order", profileId)
+            .getLong("home_order_synced_at", 0L)
+
+    /**
      * Browse chips mirrored to Home, as the store's own raw JSON blob plus the
      * local edit stamp. Opaque, exactly like the home order: the writer owns
      * the encoding, so the applier hands the string straight back and this
@@ -2417,14 +2429,37 @@ object PrefsPayloadApplier {
     }
 
     private fun applyHomeOrder(context: Context, payload: JsonObject, profileId: String?) {
-        val blob = (payload["home_order_json"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return
+        val prefs = profilePrefs(context, "kbstream_kb_home_order", profileId)
+        val localStamp = prefs.getLong("home_order_synced_at", 0L)
+        val remoteUpdated = payloadUpdatedAt(payload)
+        val rawBlob = (payload["home_order_json"] as? kotlinx.serialization.json.JsonPrimitive)?.content
         // A blank blob is "this device has no arrangement", never "erase
         // yours": adopting it would wipe a real rail order for everyone and
-        // read exactly like "it doesn't sync" from the receiving end.
-        if (blob.isBlank()) return
-        val prefs = profilePrefs(context, "kbstream_kb_home_order", profileId)
-        val remoteUpdated = payloadUpdatedAt(payload)
-        if (remoteUpdated != null && remoteUpdated < prefs.getLong("home_order_synced_at", 0L)) {
+        // read exactly like "it doesn't sync" from the receiving end. Recorded
+        // (spec 2026-11-27) because a pull that did nothing is a leg of its
+        // own, not an absent one.
+        if (rawBlob.isNullOrBlank()) {
+            HomeOrderSyncTrace.record(
+                side = HomeOrderSyncTrace.PULL,
+                updatedAt = remoteUpdated ?: 0L,
+                localStamp = localStamp,
+                decision = HomeOrderSyncTrace.BLANK_IGNORED,
+                profileId = profileId
+            )
+            return
+        }
+        val blob = rawBlob.orEmpty()
+        if (remoteUpdated != null && remoteUpdated < localStamp) {
+            // The pull decision (spec 2026-11-27): the two stamps here are what
+            // tell a genuinely newer local edit from clock skew, and neither
+            // this record nor the trace may change either one.
+            HomeOrderSyncTrace.record(
+                side = HomeOrderSyncTrace.PULL,
+                updatedAt = remoteUpdated,
+                localStamp = localStamp,
+                decision = HomeOrderSyncTrace.REJECTED_STALE,
+                profileId = profileId
+            )
             // The ORDER belongs to the newer copy and is dropped whole - but a
             // rail's NAME is one label on one row, and losing it because the
             // order lost a race is the "I renamed it and the other device never
@@ -2459,14 +2494,29 @@ object PrefsPayloadApplier {
             com.kennyb1201.kbstream.data.kb.mergeHomeOrderAdopted(localOrder, remoteOrder)
         }
         val encoded = com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.encodeBlob(merged)
-        val localSyncedAt = prefs.getLong("home_order_synced_at", 0L)
         // Never `now`: a merge is not an edit this device made. Publishing a
         // fresh stamp here would let the adoption win a race it never entered
         // and republish the merged copy over a sibling's real edit - the
         // `remapAddonKeys` lesson. Equal stamps still converge: shouldApply
         // adopts on `>=`, so the same remote re-merges idempotently.
-        val stamp = maxOf(localSyncedAt, remoteUpdated ?: localSyncedAt)
-        if (encoded == local && stamp == localSyncedAt) return
+        val stamp = maxOf(localStamp, remoteUpdated ?: localStamp)
+        // The adopt decision (spec 2026-11-27): `merged` is an adoption that
+        // kept rails only this device knows, `adopted` is the remote's
+        // arrangement as it stood. Recorded before the no-op return: a pull
+        // that changed nothing is still a pull this device answered.
+        HomeOrderSyncTrace.record(
+            side = HomeOrderSyncTrace.PULL,
+            updatedAt = remoteUpdated ?: 0L,
+            localStamp = localStamp,
+            decision =
+                if (merged == remoteOrder) {
+                    HomeOrderSyncTrace.ADOPTED
+                } else {
+                    HomeOrderSyncTrace.MERGED
+                },
+            profileId = profileId
+        )
+        if (encoded == local && stamp == localStamp) return
 
         prefs.edit()
             .putString("home_order_json", encoded)
