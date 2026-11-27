@@ -187,9 +187,14 @@ class StatePerfBatchContractTest {
             // The gate gained a second condition (spec audit 2026-11-18): a walk
             // that FAILED part-way is not stored either, because the seasons it
             // never reached are indistinguishable from seasons TMDB answered
-            // empty. Strictly stronger than the original, which is why it is
+            // empty. F5f added a third: a near-position walk holds only the
+            // seasons around the viewer (spec 2026-11-27), so storing it would
+            // make the next resolve read a window as the whole show. Both are
+            // strictly stronger than the original, which is why they are
             // accepted here rather than the pin loosened to a prefix.
-            home.contains("if (populatedSeasons.isNotEmpty() && !seasonWalkFailed) {") &&
+            home.contains(
+                "if (populatedSeasons.isNotEmpty() && !seasonWalkFailed && !nearPositionOnly) {"
+            ) &&
                 home.contains("to populatedSeasons")
         )
         assertTrue(
