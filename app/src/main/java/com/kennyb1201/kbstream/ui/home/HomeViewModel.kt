@@ -8670,6 +8670,7 @@ Log.d(
         // caller that only supplied a poster. Restore the artwork from the
         // cached TMDB metadata so resume cards keep their movie identity.
         if (!isEpisodePlayback && backdropUrl.isNullOrBlank()) {
+            val backdropStartedAtMs = cwClockMs()
             val restoredBackdrop = runCatchingCancellable {
                 tmdbRepository.fetchEnrichedMetaCached(
                     entry.parentId.trim().ifBlank { entry.id.trim() },
@@ -8678,6 +8679,13 @@ Log.d(
                     ?.takeIf { it.isNotBlank() }
                     ?.let { "https://image.tmdb.org/t/p/w780$it" }
             }.getOrNull()
+            // F5h (spec 2026-11-27): the detail step's calls are timed apart,
+            // so a paste that still shows `slowStep=detail` names the call.
+            localProgress.noteDetailCall(
+                rowClock,
+                CwDetailCall.BACKDROP,
+                cwClockMs() - backdropStartedAtMs
+            )
             if (!restoredBackdrop.isNullOrBlank()) {
                 historyDao.updateBackdropIfMissing(entry.id, restoredBackdrop)
             }
@@ -8743,9 +8751,22 @@ Log.d(
                 // black tile forever. [lookupDetailForRawId] also marks an id
                 // of no known shape Unresolvable, which is a droppable verdict
                 // of its own: nothing can ever resolve a title from it.
-                val tmdbDetail =
-                    when (
-                        val lookup = tmdbRepository.lookupDetailForRawId(
+                // F5h (spec 2026-11-27): the detail lookup is the step's only
+                // network call, and the step is what held the median row for
+                // 5.6s on the 6419 TV cold start (six of nine rows timed out).
+                // The row gets a budget of its own - shorter than its 8s
+                // timeout - so a cold or loaded TMDB cannot spend the row's
+                // whole life in one lookup: at the budget the row continues
+                // WITHOUT a detail (Transient, which never drops a card) and
+                // lands as the seed card it already is. Nothing is thrown away
+                // that another caller already holds (the fetch is shared, see
+                // [TmdbRepository.lookupDetailByExternalId]), and the next pass
+                // asks again - the instrument says whether this budget fired
+                // (`slowDetail=lookup:4000ms`).
+                val lookupStartedAtMs = cwClockMs()
+                val lookup =
+                    withTimeoutOrNull(CW_DETAIL_LOOKUP_BUDGET_MS) {
+                        tmdbRepository.lookupDetailForRawId(
                             parentId,
                             entry.type,
                             // F5b: which cache answered, for the pass's summary.
@@ -8753,7 +8774,15 @@ Log.d(
                                 localProgress.noteLookupSource(rowClock, source)
                             }
                         )
-                    ) {
+                    } ?: TmdbDetailLookup.Transient
+                localProgress.noteDetailCall(
+                    rowClock,
+                    CwDetailCall.LOOKUP,
+                    cwClockMs() - lookupStartedAtMs
+                )
+
+                val tmdbDetail =
+                    when (lookup) {
                         is TmdbDetailLookup.Found -> lookup.detail
                         else -> {
                             detailLookup = lookup
@@ -8761,6 +8790,7 @@ Log.d(
                         }
                     }
 
+                val historyStartedAtMs = cwClockMs()
                 localCompletedForParent =
                     try {
                         historyDao
@@ -8777,6 +8807,14 @@ Log.d(
                     } catch (_: Exception) {
                         emptySet()
                     }
+                // F5h: the read above also resolves the show's id twins (two
+                // TMDB /external_ids calls on a cold cache), so it is timed as
+                // one call - the history leg, twin work included.
+                localProgress.noteDetailCall(
+                    rowClock,
+                    CwDetailCall.HISTORY,
+                    cwClockMs() - historyStartedAtMs
+                )
 
                 // Only replace stored art with art that actually resolved: a
                 // failed detail lookup must not blank a card that already had a
@@ -16785,6 +16823,22 @@ private suspend fun calculateEpisodesRemaining(
          * rather than left awaiting a request that is not coming. A miss is not
          * cached, so every surface retries on its own next pass.
          */
+        /**
+         * How long one Continue Watching row may stand in its detail lookup
+         * (spec 2026-11-27, CW load F5h).
+         *
+         * Half the row's own timeout, so the lookup cannot spend the row's whole
+         * life: a cold or loaded TMDB path (6419 TV: `slowStep=detail:5670ms`,
+         * six of nine rows timed out) answers a row with the seed card instead
+         * of timing it out. The row is not dropped (a spent budget is
+         * Transient, never a 404), the same fetch is shared with any caller
+         * already waiting on it (see [TmdbRepository.lookupDetailByExternalId]),
+         * and the next pass asks again - the summary's
+         * `slowDetail=lookup:4000ms` says this budget fired.
+         */
+        private const val CW_DETAIL_LOOKUP_BUDGET_MS =
+            4_000L
+
         private const val UP_NEXT_ROW_ENRICH_TIMEOUT_MS =
             8_000L
 

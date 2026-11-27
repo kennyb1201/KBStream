@@ -1144,6 +1144,95 @@ class CwLocalIncrementalPublishContractTest {
         )
     }
 
+    // ── The detail step's calls (F5h) ──────────────────────────────────────
+
+    @Test
+    fun `the summary names the detail call as well as the detail step`() {
+        val progress = CwLocalProgress(emptyList())
+        val timing = progress.beginRow("a", 0L)
+        progress.noteStep(timing, CwRowStep.DETAIL, 0L)
+        progress.noteDetailCall(timing, CwDetailCall.LOOKUP, 3_000L)
+        progress.noteDetailCall(timing, CwDetailCall.HISTORY, 40L)
+        progress.noteStep(timing, CwRowStep.SEASONS, 3_040L)
+        progress.place("a", card("aRich"), 3_100L)
+
+        val summary = progress.summaryLine(rows = 1)
+        assertTrue(
+            "the step is still named: $summary",
+            summary.contains("slowStep=detail:3040ms")
+        )
+        assertTrue(
+            "and the call inside it, by its own p50: $summary",
+            summary.contains("slowDetail=lookup:3000ms")
+        )
+    }
+
+    @Test
+    fun `the detail lookup has a budget under the row timeout, and the zombie rule keeps`() {
+        val viewModel = source("com/kennyb1201/kbstream/ui/home/HomeViewModel.kt")
+        val start = viewModel.indexOf("private fun observeUpNext()")
+        assertTrue("the upNext pass is missing", start >= 0)
+        val end = viewModel.indexOf("private suspend fun dropSupersededResumeRows(", start)
+        assertTrue("the pass's end is missing", end > start)
+        val pass = viewModel.substring(start, end)
+
+        assertTrue(
+            "the row's detail lookup is bounded on its own clock",
+            pass.contains("withTimeoutOrNull(CW_DETAIL_LOOKUP_BUDGET_MS)") &&
+                pass.contains("tmdbRepository.lookupDetailForRawId(")
+        )
+        assertTrue(
+            "a spent budget is Transient - never a 404, so no card is dropped",
+            pass.contains("} ?: TmdbDetailLookup.Transient")
+        )
+        listOf(
+            "CwDetailCall.BACKDROP",
+            "CwDetailCall.LOOKUP",
+            "CwDetailCall.HISTORY"
+        ).forEach { call ->
+            assertTrue("the row times $call", pass.contains(call))
+        }
+        val budget = numberAfter(viewModel, "CW_DETAIL_LOOKUP_BUDGET_MS =")
+        val rowTimeout = numberAfter(viewModel, "UP_NEXT_ROW_ENRICH_TIMEOUT_MS =")
+        assertTrue(
+            "the budget exists and is shorter than the row timeout: " +
+                "budget=$budget timeout=$rowTimeout",
+            budget != null && rowTimeout != null && budget < rowTimeout
+        )
+        assertTrue(
+            "the row timeout itself is untouched",
+            pass.contains("withTimeoutOrNull(UP_NEXT_ROW_ENRICH_TIMEOUT_MS)") &&
+                rowTimeout == 8_000L
+        )
+        assertTrue(
+            "and so are the six row slots",
+            pass.contains("Semaphore(MAX_CONCURRENT_UP_NEXT_LOOKUPS)")
+        )
+
+        // The other half: one in-flight fetch per external id, so Home's own
+        // lookups and the rows cannot fetch the same title twice at once.
+        val tmdb = source("com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt")
+        val external = tmdb.substringAfter("suspend fun lookupDetailByExternalId(")
+        assertTrue(
+            "the external-id path shares one in-flight fetch",
+            external.contains("detailFetchInFlight[key]?.let { pending ->") &&
+                external.contains("detailFetchInFlight.putIfAbsent(key, deferred)")
+        )
+        assertTrue(
+            "and says so with the label the summary counts as a cache hit",
+            external.contains("onSource?.invoke(\"shared\")")
+        )
+    }
+
+    /** The first number after [marker], if the source carries one. */
+    private fun numberAfter(source: String, marker: String): Long? =
+        Regex(Regex.escape(marker) + "\\s*(\\d[\\d_]*)")
+            .find(source)
+            ?.groupValues
+            ?.get(1)
+            ?.replace("_", "")
+            ?.toLongOrNull()
+
     /** The number after [prefix], if the summary carries one. */
     private fun String.longAfter(prefix: String): Long? =
         Regex("$prefix(\\d+)").find(this)?.groupValues?.get(1)?.toLongOrNull()

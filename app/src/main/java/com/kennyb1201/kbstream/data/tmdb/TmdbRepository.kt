@@ -3108,7 +3108,65 @@ class TmdbRepository private constructor(context: Context) :
             }
         }
 
+        // F5h (spec 2026-11-27): share one in-flight fetch for this id, exactly
+        // as [lookupDetailByTmdbId] does for its key.
+        //
+        // This path had no such sharing, and it is the one Continue Watching's
+        // `tt...` rows take - two sequential round-trips (`/find`, then the
+        // detail) per miss. Two callers for one id each paid both, and on a cold
+        // TV the same titles were being fetched by the rail's own lookups at the
+        // same time (6419: `detailSrc=... net:984`, `slowStep=detail:5670ms`,
+        // six of nine rows timed out). One fetch now answers every caller of the
+        // key, and a shared answer is reported as `shared` - the label the row
+        // summary counts as a cache hit.
+        detailFetchInFlight[key]?.let { pending ->
+            onSource?.invoke("shared")
+            return pending.await()
+        }
+
+        val deferred = CompletableDeferred<TmdbDetailLookup>()
+        detailFetchInFlight.putIfAbsent(key, deferred)?.let { pending ->
+            onSource?.invoke("shared")
+            return pending.await()
+        }
+
         onSource?.invoke("net")
+        val result =
+            try {
+                fetchDetailByExternalId(id, externalSource, normalizedType)
+            } catch (cancellation: kotlinx.coroutines.CancellationException) {
+                detailFetchInFlight.remove(key)
+                // Unblock anyone sharing this fetch with "no answer" rather than
+                // a cancellation they did not ask for.
+                deferred.complete(TmdbDetailLookup.Transient)
+                throw cancellation
+            }
+
+        val detail = (result as? TmdbDetailLookup.Found)?.detail
+        if (detail != null) {
+            detailCache[key] = now to detail
+            railDetailCache[key] = now to detail.railProjection()
+            cacheJson(diskKey, serializeDetailJson(detail), now)
+        }
+        // Complete before dropping the in-flight marker, so a caller that
+        // arrives between the two sees the cache and never double-fetches.
+        deferred.complete(result)
+        detailFetchInFlight.remove(key)
+        return result
+    }
+
+    /**
+     * The two round-trips behind one external id: TMDB's `/find`, then the detail
+     * for the id it names (spec 2026-11-27, CW load F5h).
+     *
+     * Split out so the caller owns the in-flight registration around it - the
+     * sharing must span both requests, not only the detail one.
+     */
+    private suspend fun fetchDetailByExternalId(
+        id: String,
+        externalSource: String,
+        normalizedType: String
+    ): TmdbDetailLookup {
         val found =
             try {
                 api.find(id, apiKey, externalSource)
@@ -3139,9 +3197,6 @@ class TmdbRepository private constructor(context: Context) :
         val detail = fetchTmdbDetail(api, apiKey, tmdbId, normalizedType)
             ?: return TmdbDetailLookup.Transient
 
-        detailCache[key] = now to detail
-        railDetailCache[key] = now to detail.railProjection()
-        cacheJson(diskKey, serializeDetailJson(detail), now)
         return TmdbDetailLookup.Found(detail)
     }
 

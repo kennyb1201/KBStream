@@ -70,6 +70,21 @@ internal enum class CwSeasonCall(val label: String) {
 }
 
 /**
+ * The calls inside one row's DETAIL step (spec 2026-11-27, CW load F5h).
+ *
+ * F5c could say the rows were slow in `detail` but not WHICH call inside the
+ * step held them: the movie backdrop restore, the TMDB detail lookup (the step's
+ * only network call) or the local history read (which also resolves the show's
+ * id twins). The labels are the summary's `slowDetail=<label>` spelling - a
+ * field of its own, because `slowCall` already names the SEASONS step's calls.
+ */
+internal enum class CwDetailCall(val label: String) {
+    BACKDROP("backdrop"),
+    LOOKUP("lookup"),
+    HISTORY("history")
+}
+
+/**
  * One season TMDB's show detail declares (spec 2026-11-27, CW load F5e).
  *
  * A single field pair so the season set is a pure function of the detail the
@@ -351,6 +366,14 @@ internal class CwRowTiming(
      */
     val callDurationsMs: MutableMap<CwSeasonCall, Long> = LinkedHashMap()
 
+    /**
+     * How long each DETAIL call took (F5h), keyed by call. Same reason as
+     * [callDurationsMs]: the step is one stage with three calls inside it, and a
+     * row the F3 timeout cut off inside the step records no step duration - the
+     * calls that finished are what name it.
+     */
+    val detailCallDurationsMs: MutableMap<CwDetailCall, Long> = LinkedHashMap()
+
     /** Enters [next], closing the stage the row was in at [atMs]. */
     internal fun enterStep(next: CwRowStep, atMs: Long) {
         closeStepAt(atMs)
@@ -461,6 +484,18 @@ internal class CwLocalProgress(
         synchronized(lock) {
             timing.callDurationsMs[call] =
                 (timing.callDurationsMs[call] ?: 0L) + durationMs.coerceAtLeast(0L)
+        }
+    }
+
+    /**
+     * The row's [call] inside its DETAIL step took [durationMs] (F5h). Same rule
+     * as [noteSeasonCall]: only a call that finished is recorded, so a row cut
+     * off inside a lookup cannot hide it behind an invented zero.
+     */
+    fun noteDetailCall(timing: CwRowTiming, call: CwDetailCall, durationMs: Long) {
+        synchronized(lock) {
+            timing.detailCallDurationsMs[call] =
+                (timing.detailCallDurationsMs[call] ?: 0L) + durationMs.coerceAtLeast(0L)
         }
     }
 
@@ -593,6 +628,7 @@ internal class CwLocalProgress(
             " slowest=" + slowest.ifEmpty { "-" } +
             " slowStep=" + slowStep +
             " slowCall=" + slowestCall(snapshot) +
+            " slowDetail=" + slowestDetailCall(snapshot) +
             " deadlineFired=" + (if (fired) "yes" else "no") +
             " landedAtDeadline=$landedThen"
     }
@@ -609,6 +645,25 @@ internal class CwLocalProgress(
                 val durations =
                     snapshot.mapNotNull { timing ->
                         timing.callDurationsMs[call]?.takeIf { ms -> ms > 0L }
+                    }
+                if (durations.isEmpty()) null else call to percentile(durations, 50)
+            }
+        val worst = perCall.maxByOrNull { (_, p50) -> p50 } ?: return "-"
+        return "${worst.first.label}:${worst.second}ms"
+    }
+
+    /**
+     * The DETAIL call with the highest p50 across the rows (F5h):
+     * `lookup:5670ms`, or `-` when no row finished one. One level deeper than
+     * `slowStep=detail`, so a paste that still shows the detail step names the
+     * call inside it - and whether the lookup's own budget fired.
+     */
+    private fun slowestDetailCall(snapshot: List<CwRowTiming>): String {
+        val perCall =
+            CwDetailCall.entries.mapNotNull { call ->
+                val durations =
+                    snapshot.mapNotNull { timing ->
+                        timing.detailCallDurationsMs[call]?.takeIf { ms -> ms > 0L }
                     }
                 if (durations.isEmpty()) null else call to percentile(durations, 50)
             }
