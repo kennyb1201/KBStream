@@ -295,6 +295,97 @@ class DetailTabsTest {
     }
 
     @Test
+    fun `an unstarted series opens on Details, a watched one on Episodes`() {
+        // F6 (spec 2026-11-27): the default tab follows the watch history once
+        // it is known. A movie is Details either way, which is what makes the
+        // rule safe to apply after the first frame.
+        assertEquals(
+            "a series with no history opens on Details, not on an episode list " +
+                "for a show the viewer has not started",
+            DetailTab.DETAILS,
+            DetailTabChain.historyDefaultTab(isSeries = true, hasHistory = false)
+        )
+        assertEquals(
+            "a series with a watched episode or a resume point still opens on Episodes",
+            DetailTab.EPISODES,
+            DetailTabChain.historyDefaultTab(isSeries = true, hasHistory = true)
+        )
+        assertEquals(
+            "a movie opens on Details",
+            DetailTab.DETAILS,
+            DetailTabChain.historyDefaultTab(isSeries = false, hasHistory = false)
+        )
+        assertEquals(
+            "and stays on Details even with history - it has no Episodes pill",
+            DetailTab.DETAILS,
+            DetailTabChain.historyDefaultTab(isSeries = false, hasHistory = true)
+        )
+    }
+
+    @Test
+    fun `history presence is unknown until nothing watched can be claimed`() {
+        // F6 (spec 2026-11-27): the tab default must not act on a half-read
+        // state. One mark of history is enough to say SOME; NONE waits for the
+        // local read AND every configured tracker leg to have answered.
+        assertEquals(
+            DetailHistoryPresence.SOME,
+            detailHistoryPresence(
+                hasHistory = true,
+                localRead = false,
+                trackersComplete = false
+            )
+        )
+        assertEquals(
+            "a tracker that has not answered is unknown, not empty",
+            DetailHistoryPresence.UNKNOWN,
+            detailHistoryPresence(
+                hasHistory = false,
+                localRead = true,
+                trackersComplete = false
+            )
+        )
+        assertEquals(
+            "a local read still in flight is unknown too",
+            DetailHistoryPresence.UNKNOWN,
+            detailHistoryPresence(
+                hasHistory = false,
+                localRead = false,
+                trackersComplete = true
+            )
+        )
+        assertEquals(
+            DetailHistoryPresence.NONE,
+            detailHistoryPresence(
+                hasHistory = false,
+                localRead = true,
+                trackersComplete = true
+            )
+        )
+    }
+
+    @Test
+    fun `the history default still names only tabs the strip paints`() {
+        // The strip is unchanged (rule 3): the Episodes pill exists for every
+        // series, whether or not the page opens on it.
+        listOf(true, false).forEach { hasHistory ->
+            assertTrue(
+                "series, hasHistory=$hasHistory",
+                DetailTabChain.historyDefaultTab(isSeries = true, hasHistory = hasHistory) in
+                    DetailTabChain.stableTabs(isSeries = true)
+            )
+            assertTrue(
+                "movie, hasHistory=$hasHistory",
+                DetailTabChain.historyDefaultTab(isSeries = false, hasHistory = hasHistory) in
+                    DetailTabChain.stableTabs(isSeries = false)
+            )
+        }
+        assertTrue(
+            "and the Episodes pill is on every series strip",
+            DetailTab.EPISODES in DetailTabChain.stableTabs(isSeries = true)
+        )
+    }
+
+    @Test
     fun `stepping the stable strip never names a tab it does not paint`() {
         val movie = DetailTabChain.stableTabs(isSeries = false)
         assertEquals(

@@ -27,6 +27,45 @@ internal enum class DetailTab(val label: String) {
 }
 
 /**
+ * What a Detail page knows about a title's watch history (spec 2026-11-27).
+ *
+ * The tab a series opens on depends on it, and the three states exist because
+ * "not read yet" and "nothing watched" are NOT the same answer: a tracker that
+ * has not answered, or a local read still in flight, must not open a show the
+ * viewer is part-way through on Details. UNKNOWN leaves the title-only default
+ * where it is; NONE and SOME are decisions.
+ */
+internal enum class DetailHistoryPresence {
+    UNKNOWN,
+    NONE,
+    SOME
+}
+
+/**
+ * The presence a Detail page decides its default tab from (spec 2026-11-27).
+ *
+ * [hasHistory] is any source naming history: a local row, an in-progress row, a
+ * completed episode, a resume point or a tracker's watched set. One real mark is
+ * enough - the answer cannot become "no history" later - so SOME does not wait
+ * for anything.
+ *
+ * NONE is the answer that has to be earned: it needs the local read to have
+ * finished AND every configured tracker leg to have answered for this show. A
+ * tracker that has not answered is UNKNOWN, not empty, because treating it as
+ * empty would open a show the viewer watches elsewhere on Details.
+ */
+internal fun detailHistoryPresence(
+    hasHistory: Boolean,
+    localRead: Boolean,
+    trackersComplete: Boolean
+): DetailHistoryPresence =
+    when {
+        hasHistory -> DetailHistoryPresence.SOME
+        localRead && trackersComplete -> DetailHistoryPresence.NONE
+        else -> DetailHistoryPresence.UNKNOWN
+    }
+
+/**
  * Which tabs this page shows.
  *
  * Every field is the presence of the ROWS inside that tab (see
@@ -125,6 +164,25 @@ internal object DetailTabChain {
      */
     fun stableDefaultTab(isSeries: Boolean): DetailTab =
         if (isSeries) DetailTab.EPISODES else DetailTab.DETAILS
+
+    /**
+     * The tab a page opens on once the title's watch history is KNOWN (spec
+     * 2026-11-27).
+     *
+     * A series the viewer has not started opens on Details: the episode list is
+     * for a show they are watching, and a title with no history has nothing in
+     * it they have seen. A series with any history - a local row, a watched
+     * episode on a tracker, or a resume point - opens on Episodes, which is
+     * where they left off. Everything else keeps its title-only default.
+     *
+     * This is not the first-frame default: it needs the watched state read, so
+     * the screen applies it once, before the viewer has touched the strip, and
+     * keeps [stableDefaultTab] as the answer until then. A movie is Details in
+     * both, which is why the [isSeries] guard is what makes the rule safe to
+     * apply late.
+     */
+    fun historyDefaultTab(isSeries: Boolean, hasHistory: Boolean): DetailTab =
+        if (isSeries && hasHistory) DetailTab.EPISODES else DetailTab.DETAILS
 
     /**
      * The tab the page opens on: Episodes for a series that has them, Details

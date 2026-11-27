@@ -1217,6 +1217,12 @@ class DetailViewModel @Inject constructor(
         // a bar behind on an episode that is already done.
         startWatchProgressObserver(parentId, historyParentIds)
 
+        // F6 (spec 2026-11-27): the local half of the watch history is read, so
+        // the Detail tab's default can be decided (see
+        // [publishHistoryPresence]).
+        _watchHistoryRead.value = true
+        publishHistoryPresence(parentId)
+
         return localCompletedEntries
     }
 
@@ -1298,6 +1304,7 @@ class DetailViewModel @Inject constructor(
             simklKeysReadFor = parentId
         }
         logWatchedLeg("simkl", parentId, episodes, cause)
+        publishHistoryPresence(parentId)
     }
 
     private fun applyMdbListLeg(
@@ -1310,6 +1317,7 @@ class DetailViewModel @Inject constructor(
             mdbListKeysReadFor = parentId
         }
         logWatchedLeg("mdblist", parentId, episodes, cause)
+        publishHistoryPresence(parentId)
     }
 
     private fun applyTraktLeg(
@@ -1322,6 +1330,7 @@ class DetailViewModel @Inject constructor(
             traktKeysReadFor = parentId
         }
         logWatchedLeg("trakt", parentId, episodes, cause)
+        publishHistoryPresence(parentId)
     }
 
     /**
@@ -1620,6 +1629,53 @@ class DetailViewModel @Inject constructor(
      * because it has already answered for this show, or because it is not
      * configured at all.
      */
+    /**
+     * What this page knows about the title's watch history (spec 2026-11-27).
+     *
+     * The Detail tab's default is decided from it: a series with no history
+     * opens on Details, one with any history on Episodes. Tri-state on purpose -
+     * "not read yet" and "nothing watched" are different answers. Opening a
+     * half-watched show on Details because a tracker has not answered is the
+     * failure this rules out, and so is moving a tab the page cannot call yet.
+     */
+    private val _historyPresence = MutableStateFlow(DetailHistoryPresence.UNKNOWN)
+    val historyPresence: StateFlow<DetailHistoryPresence> = _historyPresence.asStateFlow()
+
+    /** Whether this title's LOCAL watch state has been read (spec 2026-11-27). */
+    private val _watchHistoryRead = MutableStateFlow(false)
+
+    /**
+     * Recomputes [historyPresence] for [parentId] after a read that could
+     * change it (spec 2026-11-27, the Detail tab default).
+     *
+     * SOME is certain the moment any source names a watched episode, an
+     * in-progress row or a resume point: one real mark is enough, and waiting
+     * for the other sources would delay a tab the page already knows.
+     *
+     * NONE needs the local read AND every configured tracker leg to have
+     * answered for this show. A tracker that has not answered is UNKNOWN, not
+     * empty - answering NONE early would open a show the viewer watches
+     * elsewhere on Details, which is the one case this rule must not get wrong.
+     */
+    private fun publishHistoryPresence(parentId: String) {
+        val some =
+            _resumeInfo.value?.positionMs?.let { it > 0L } == true ||
+                _inProgressByStreamId.value.isNotEmpty() ||
+                _completedEpisodeIds.value.isNotEmpty() ||
+                _watchedEpisodeKeys.value.isNotEmpty() ||
+                _simklWatchedEpisodes.value.isNotEmpty() ||
+                _simklSeriesWatched.value ||
+                mdbListWatchedEpisodes.isNotEmpty() ||
+                traktWatchedEpisodes.isNotEmpty()
+
+        _historyPresence.value =
+            detailHistoryPresence(
+                hasHistory = some,
+                localRead = _watchHistoryRead.value,
+                trackersComplete = trackerLegsComplete(parentId)
+            )
+    }
+
     private fun trackerLegsComplete(parentId: String): Boolean {
         if (
             simklRepository.isConfigured() &&
@@ -1654,6 +1710,11 @@ class DetailViewModel @Inject constructor(
         _simklWatchedEpisodes.value = emptySet()
         mdbListWatchedEpisodes = emptySet()
         traktWatchedEpisodes = emptySet()
+        // F6 (spec 2026-11-27): a different title's history is a different
+        // answer for the tab default - back to unknown until its own reads
+        // land, so the previous show's presence cannot open this one.
+        _watchHistoryRead.value = false
+        _historyPresence.value = DetailHistoryPresence.UNKNOWN
     }
 
     /** Records a local mark made while a rebuild may be in flight (F2). */

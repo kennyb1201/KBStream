@@ -1620,14 +1620,28 @@ fun DetailScreen(
     val overviewExpandedLines = remember(screenHeightDp) {
         DetailHeaderBudget.expandedLines(screenHeightDp)
     }
+    // F6 (spec 2026-11-27): the tab this viewer last picked for this title still
+    // wins over every default. Read once, before the state, because the
+    // history-derived default below must never override it.
+    val rememberedTab =
+        remember(detailKey, availableTabs) {
+            DetailTabMemory.read(detailKey)?.takeIf { it in availableTabs }
+        }
     var activeTab by remember(detailKey) {
         mutableStateOf(
             // A remembered tab is honoured only while it is still on this
             // title's strip; the fallback is the title's own default.
-            DetailTabMemory.read(detailKey)?.takeIf { it in availableTabs }
+            rememberedTab
                 ?: DetailTabChain.stableDefaultTab(isSeriesTitle)
         )
     }
+    // True once the viewer has used the strip. The history-derived default may
+    // move the tab only before that; after it, the tab is theirs.
+    var tabChosenByViewer by remember(detailKey) { mutableStateOf(false) }
+    // ...and only once per page: after the history has decided, a later arrival
+    // (a mark made in the player, a tracker answering late) cannot move it
+    // again.
+    var historyDefaultDecided by remember(detailKey) { mutableStateOf(false) }
     // One requester per pill: the strip is the row the chain lands on, and the
     // page asks for the SELECTED pill when a press arrives there from below.
     val tabFocusRequesters = remember {
@@ -2163,6 +2177,38 @@ fun DetailScreen(
     val watchedEpisodeKeys by viewModel.watchedEpisodeKeys.collectAsStateWithLifecycle()
     val simklWatchedEpisodes by viewModel.simklWatchedEpisodes.collectAsStateWithLifecycle()
     val simklSeriesWatched by viewModel.simklSeriesWatched.collectAsStateWithLifecycle()
+    // F6 (spec 2026-11-27): what the watch state says about this title. A
+    // series the viewer has not started opens on Details; one with history or
+    // a resume point opens on Episodes. The read lands after the first frame,
+    // so the default moves AT MOST ONCE, only while the viewer has not used the
+    // strip and never past a remembered tab. UNKNOWN (a read still in flight, a
+    // tracker not yet answered) leaves the title-only default alone.
+    val historyPresence by viewModel.historyPresence.collectAsStateWithLifecycle()
+    LaunchedEffect(detailKey, historyPresence, tabChosenByViewer) {
+        if (
+            rememberedTab != null ||
+            tabChosenByViewer ||
+            historyDefaultDecided ||
+            historyPresence == DetailHistoryPresence.UNKNOWN
+        ) {
+            return@LaunchedEffect
+        }
+        historyDefaultDecided = true
+        val derived =
+            DetailTabChain.historyDefaultTab(
+                isSeries = isSeriesTitle,
+                hasHistory = historyPresence == DetailHistoryPresence.SOME
+            )
+        if (derived == activeTab) return@LaunchedEffect
+        activeTab = derived
+        // The pills are stable nodes, so a selection change never recreates the
+        // focused one. If the viewer is standing on the strip, though, the
+        // focus belongs on the pill that is now selected - never left on the
+        // one the move just deselected.
+        if (focusedRowNow == DetailRow.TABS) {
+            runCatching { tabFocusRequesters[derived]?.requestFocus() }
+        }
+    }
     // The Simkl page for this title: the watched ticks this screen draws come
     // from the account's Simkl record, and Simkl's API rules ask for a link back
     // to that exact item wherever their data shows. See the season menu below.
@@ -7174,6 +7220,7 @@ fun DetailScreen(
                         selected = activeTab,
                         requesters = tabFocusRequesters,
                         onSelect = { tab ->
+                            tabChosenByViewer = true
                             activeTab = tab
                             DetailTabMemory.record(detailKey, tab)
                         },
@@ -7182,6 +7229,7 @@ fun DetailScreen(
                             // keyed strip the viewer is holding (see
                             // DetailTabChain.stableTabs).
                             val next = DetailTabChain.step(activeTab, delta, availableTabs)
+                            tabChosenByViewer = true
                             activeTab = next
                             DetailTabMemory.record(detailKey, next)
                             scope.launch {

@@ -60,10 +60,15 @@ class DetailOneOwnerContractTest {
         )
         assertTrue(
             "the default is applied before the first composition instead",
+            // F6 (spec 2026-11-27) split the remembered tab out of the
+            // initializer so the history-derived default can respect it; the
+            // default is still decided when the state is created.
             detail.contains(
-                "DetailTabMemory.read(detailKey)?.takeIf { it in availableTabs } " +
-                    "?: DetailTabChain.stableDefaultTab(isSeriesTitle)"
-            )
+                "DetailTabMemory.read(detailKey)?.takeIf { it in availableTabs }"
+            ) &&
+                detail.contains(
+                    "rememberedTab ?: DetailTabChain.stableDefaultTab(isSeriesTitle)"
+                )
         )
     }
 

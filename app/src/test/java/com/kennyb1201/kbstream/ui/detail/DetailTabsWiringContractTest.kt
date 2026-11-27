@@ -2,7 +2,6 @@ package com.kennyb1201.kbstream.ui.detail
 
 import java.io.File
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -75,19 +74,64 @@ class DetailTabsWiringContractTest {
                 "synchronously, so a return from the player rebuilds with the " +
                 "right tab's rows",
             screen.contains(
-                "DetailTabMemory.read(detailKey)?.takeIf { it in availableTabs } " +
-                    "?: DetailTabChain.stableDefaultTab(isSeriesTitle)"
-            )
+                "DetailTabMemory.read(detailKey)?.takeIf { it in availableTabs }"
+            ) &&
+                screen.contains(
+                    "rememberedTab ?: DetailTabChain.stableDefaultTab(isSeriesTitle)"
+                )
         )
         assertTrue(
             "and every deliberate change is recorded for that title",
             screen.contains("DetailTabMemory.record(detailKey, tab)") &&
                 screen.contains("DetailTabMemory.record(detailKey, next)")
         )
-        assertFalse(
-            "and nothing moves the tab on a data arrival: the default is the " +
-                "title's answer, known before the first frame (rule 2/3)",
-            screen.contains("LaunchedEffect(detailKey, availableTabs")
+    }
+
+    @Test
+    fun `only an unstarted series gets the history-derived Details default`() {
+        // F6 (spec 2026-11-27). The watched state lands after the first frame,
+        // so the rule may move the tab AT MOST ONCE - only while the viewer has
+        // not used the strip, and never past a remembered tab (pinned above).
+        assertTrue(
+            "the screen reads the ViewModel's presence instead of re-reading history",
+            screen.contains(
+                "val historyPresence by viewModel.historyPresence.collectAsStateWithLifecycle()"
+            )
+        )
+        assertTrue(
+            "the move is gated on not-remembered, not-chosen, not-already-decided " +
+                "and known",
+            screen.contains("rememberedTab != null || tabChosenByViewer ||") &&
+                screen.contains("historyDefaultDecided ||") &&
+                screen.contains("historyPresence == DetailHistoryPresence.UNKNOWN")
+        )
+        assertTrue(
+            "and it happens at most once: the first decision is final",
+            screen.contains("historyDefaultDecided = true")
+        )
+        assertTrue(
+            "and it is the rule function that decides the tab",
+            screen.contains("DetailTabChain.historyDefaultTab(") &&
+                screen.contains("hasHistory = historyPresence == DetailHistoryPresence.SOME")
+        )
+        assertTrue(
+            "the strip's own presses pin the tab before the move can run",
+            screen.contains("onSelect = { tab -> tabChosenByViewer = true") &&
+                screen.contains("tabChosenByViewer = true activeTab = next")
+        )
+        assertTrue(
+            "and a move while the viewer stands on the strip puts the focus on " +
+                "the pill it selected, not on the one it left",
+            screen.contains(
+                "if (focusedRowNow == DetailRow.TABS) { runCatching { tabFocusRequesters[derived]?.requestFocus() } }"
+            )
+        )
+        assertTrue(
+            "and the derived tab is always one the series strip paints: the rule " +
+                "answers only Details or Episodes, and a series strip always has " +
+                "Episodes",
+            DetailTabChain.historyDefaultTab(isSeries = true, hasHistory = true) in
+                DetailTabChain.stableTabs(isSeries = true)
         )
     }
 
