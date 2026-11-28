@@ -74,11 +74,43 @@ class XmltvImporter(
         )
     }
 
+    /** Imports one guide source over a known window, starting from scratch. */
     suspend fun import(
         sourceUrl: String,
         input: InputStream,
         windowStartMs: Long,
         windowEndMs: Long
+    ): GuideImportStats = import(
+        sourceUrl = sourceUrl,
+        input = input,
+        windowStartMs = windowStartMs,
+        windowEndMs = windowEndMs,
+        resume = null,
+        checkpoint = null
+    )
+
+    /**
+     * The same import, with the resume checkpoint this module's repository wires.
+     *
+     * [resume] is a [GuideImportCheckpoint] the caller has ALREADY validated
+     * (see [resumeCheckpoint]): the staged rows of a stopped attempt are kept and
+     * this parse skips the rows they already hold. [checkpoint] is where the
+     * attempt records what it has staged after every flush, so a stop leaves the
+     * next attempt something to resume from. Both null is the fresh import
+     * above, which behaves exactly as it always did - including sweeping a
+     * failed attempt's leftovers.
+     *
+     * `internal` because a [GuideImportCheckpoint] is: the resume is an import
+     * detail of this package, and the public surface stays "parse this stream
+     * over this window".
+     */
+    internal suspend fun import(
+        sourceUrl: String,
+        input: InputStream,
+        windowStartMs: Long,
+        windowEndMs: Long,
+        resume: GuideImportCheckpoint?,
+        checkpoint: GuideImportCheckpointSink?
     ): GuideImportStats = withContext(Dispatchers.Default) {
         // Every import serializes on one process-wide mutex, but the stall
         // watchdog measures only the SHARED progress counters - so a manual
@@ -96,7 +128,7 @@ class XmltvImporter(
             GuideImportProgress.endWaiting(sourceUrl)
         }
         try {
-            importInternal(sourceUrl, input, windowStartMs, windowEndMs)
+            importInternal(sourceUrl, input, windowStartMs, windowEndMs, resume, checkpoint)
         } finally {
             IMPORT_MUTEX.unlock()
         }
@@ -106,7 +138,9 @@ class XmltvImporter(
     sourceUrl: String,
     input: InputStream,
     windowStartMs: Long,
-    windowEndMs: Long
+    windowEndMs: Long,
+    resume: GuideImportCheckpoint?,
+    checkpoint: GuideImportCheckpointSink?
 ): GuideImportStats {
     var xmlInput: InputStream? = null
 
@@ -126,10 +160,17 @@ class XmltvImporter(
         Log.i(TAG, "IMPORT START source=${Redaction.url(sourceUrl)}")
         Log.i(TAG, "IMPORT WINDOW start=$windowStartMs end=$windowEndMs")
 
-        // Clear any stale rows left by a previously failed attempt, and
-        // remember whether the live guide still has rows at all (a first
+        // A resumed attempt KEEPS the rows the stopped one staged and skips them
+        // as the document is re-walked ([resumeRows]); only a fresh attempt
+        // sweeps, exactly as every attempt used to. The sweep stays unconditional
+        // on that side because a failed attempt with no checkpoint leaves rows
+        // nothing would ever claim.
+        val resumeRows = GuideImportResumeRows(resume)
+        if (!resumeRows.resumed) {
+            dao.clearGuideBySource(stagingUrl)
+        }
+        // Remember whether the live guide still has rows at all (a first
         // import has nothing to protect).
-        dao.clearGuideBySource(stagingUrl)
         val hadLiveGuide = dao.hasChannelsForSource(sourceUrl)
         // The EMPTY-FEED guard's evidence, read before this import writes
         // anything: how many programs the live guide holds inside the very
@@ -159,7 +200,8 @@ class XmltvImporter(
         }
         // Counts what the parser pulls, so the setup screen can show the guide
         // arriving rather than merely claiming it is (see GuideImportProgress).
-        xmlInput = CountingInputStream(decodedInput)
+        val counting = CountingInputStream(decodedInput)
+        xmlInput = counting
 
         val factory = XmlPullParserFactory.newInstance().apply {
             isNamespaceAware = false
@@ -192,6 +234,26 @@ class XmltvImporter(
         var keptPrograms = 0
         var skippedPrograms = 0
 
+        // How much is actually IN the staging table: the resumed attempt's rows
+        // plus every batch this attempt has flushed. The checkpoint is written
+        // from these, after each flush returns.
+        var flushedChannels = resume?.stagedChannels ?: 0
+        var flushedPrograms = resume?.stagedPrograms ?: 0
+
+        fun recordCheckpoint() {
+            checkpoint?.staged(flushedChannels, flushedPrograms, counting.totalBytes)
+        }
+
+        suspend fun flushChannelBatch() {
+            flushedChannels += flushChannels(channelBatch)
+            recordCheckpoint()
+        }
+
+        suspend fun flushProgramBatch() {
+            flushedPrograms += flushPrograms(programBatch)
+            recordCheckpoint()
+        }
+
         var eventType = parser.eventType
         while (eventType != XmlPullParser.END_DOCUMENT) {
             currentCoroutineContext().ensureActive()
@@ -200,7 +262,6 @@ class XmltvImporter(
                 when (parser.name) {
                     "channel" -> {
                         readChannel(parser, stagingSourceId)?.let { channel ->
-                            channelBatch.add(channel)
                             parsedChannels++
                             // Decided once per channel, from the ids and alias
                             // keys this file spells it with - the same two
@@ -211,10 +272,16 @@ class XmltvImporter(
                                     aliasKeys = channel.allDisplayNames.split('|'),
                                     playlistKeys = playlistMatchKeys
                                 )
+                            // Already staged by the attempt this one resumes: it
+                            // is in the table, so re-inserting it is the work
+                            // the resume exists to skip.
+                            if (!resumeRows.channelAlreadyStaged()) {
+                                channelBatch.add(channel)
+                            }
                         }
 
                         if (channelBatch.size >= CHANNEL_BATCH_SIZE) {
-                            flushChannels(channelBatch)
+                            flushChannelBatch()
                         }
 
                         if (parsedChannels > 0 && parsedChannels % CHANNEL_LOG_INTERVAL == 0) {
@@ -241,11 +308,16 @@ class XmltvImporter(
                                 windowStartMs = windowStartMs,
                                 windowEndMs = windowEndMs
                             )?.let { program ->
-                                programBatch.add(program)
+                                // Counted whether or not it is re-inserted: it is
+                                // part of what this import ends up holding, and
+                                // the empty-feed guard is about the document.
                                 keptPrograms++
+                                if (!resumeRows.programAlreadyStaged()) {
+                                    programBatch.add(program)
+                                }
 
                                 if (programBatch.size >= PROGRAM_BATCH_SIZE) {
-                                    flushPrograms(programBatch)
+                                    flushProgramBatch()
                                 }
                             }
                         }
@@ -260,8 +332,8 @@ class XmltvImporter(
             eventType = parser.next()
         }
 
-        flushChannels(channelBatch)
-        flushPrograms(programBatch)
+        flushChannelBatch()
+        flushProgramBatch()
 
         // Full document parsed: atomically swap the staged rows into the
         // live guide. @Transaction — the old guide is never briefly absent
@@ -322,7 +394,8 @@ class XmltvImporter(
                 parsedPrograms = parsedPrograms,
                 keptPrograms = keptPrograms,
                 skippedPrograms = skippedPrograms,
-                emptyFeedKeptLive = true
+                emptyFeedKeptLive = true,
+                resumed = resumeRows.resumed
             )
             logImportEnd(
                 sourceUrl = sourceUrl,
@@ -376,7 +449,8 @@ class XmltvImporter(
             parsedChannels = parsedChannels,
             parsedPrograms = parsedPrograms,
             keptPrograms = keptPrograms,
-            skippedPrograms = skippedPrograms
+            skippedPrograms = skippedPrograms,
+            resumed = resumeRows.resumed
         )
         logImportEnd(
             sourceUrl = sourceUrl,
@@ -442,8 +516,10 @@ class XmltvImporter(
         )
     }
 
-    private suspend fun flushChannels(batch: MutableList<EpgChannelEntity>) {
-    if (batch.isEmpty()) return
+    /** Inserts [batch] and answers how many rows it stored (0 for an empty batch). */
+    private suspend fun flushChannels(batch: MutableList<EpgChannelEntity>): Int {
+    if (batch.isEmpty()) return 0
+    val count = batch.size
     // Holding inside the flush also parks the parse loop above it, so a
     // running import stops pulling the (possibly 60 MB) guide off the
     // network while the player is up - not just the row write.
@@ -451,14 +527,17 @@ class XmltvImporter(
     dao.insertChannels(batch)
     batch.clear()
     currentCoroutineContext().ensureActive()
+    return count
 }
 
-private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
-    if (batch.isEmpty()) return
+private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>): Int {
+    if (batch.isEmpty()) return 0
+    val count = batch.size
     EpgWriteGate.holdWhilePlaying()
     dao.insertPrograms(batch)
     batch.clear()
     currentCoroutineContext().ensureActive()
+    return count
 }
 
     private fun logProgress(
@@ -503,6 +582,9 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
             }
 
         override fun available(): Int = delegate.available()
+
+        /** What this stream has produced so far, for the import's checkpoint. */
+        val totalBytes: Long get() = total
 
         override fun close() = delegate.close()
 
@@ -728,5 +810,14 @@ data class GuideImportStats(
      * guide with no rows in the window is precisely what a promote would make
      * permanent.
      */
-    val emptyFeedKeptLive: Boolean = false
+    val emptyFeedKeptLive: Boolean = false,
+
+    /**
+     * True when this attempt continued a stopped one instead of starting over:
+     * its staged rows were kept and the document's first rows were skipped.
+     *
+     * Reported so the pass's verdict can say `resumed` - the field test's whole
+     * question is whether the retry picked the import up or began it again.
+     */
+    val resumed: Boolean = false
 )

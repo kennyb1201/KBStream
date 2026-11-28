@@ -173,6 +173,22 @@ internal object WorkPolicies {
         if (sourceCount <= 1) GUIDE_SINGLE_SOURCE_BUDGET_MS else GUIDE_SOURCE_BUDGET_MS
 
     /**
+     * Whether a source has landed fresh enough that a STOP-RETRY need not
+     * download it again.
+     *
+     * The same age rule the pass-level gate uses ([EPG_MIN_AGE_MS]), applied to
+     * one source: a multi-source pass that was stopped after source A landed
+     * leaves A stamped now, and re-fetching A's multi-minute guide to store
+     * what is already stored is exactly the cost that made a stop wait for the
+     * 6h tick worth fixing in the first place.
+     *
+     * Only for the stop-retry: the periodic pass keeps its single global gate,
+     * and a source stamped 0 (never landed) is never skipped.
+     */
+    fun epgSourceAlreadyLanded(stampMs: Long, nowMs: Long): Boolean =
+        stampMs > 0L && nowMs - stampMs in 0 until EPG_MIN_AGE_MS
+
+    /**
      * The guide refresh's two pre-flight gates, in the order they matter.
      *
      * Freshness first: it is the answer that ends the attempt, and a guide

@@ -153,6 +153,16 @@ object IptvHttpClient {
     }
 }
 
+    /**
+     * Streams [url]'s body through [block], which also receives the RESPONSE's
+     * validators.
+     *
+     * The validators are handed to the block rather than only returned beside
+     * it because a resumed guide import has to decide BEFORE it parses whether
+     * the staged rows came from the file this response carries: a provider that
+     * regenerated its guide keeps the URL and changes its `ETag`, and skipping
+     * into a document that no longer lines up would stage the wrong rows.
+     */
     internal suspend fun <T> streamXmltvWithRetry(
     client: OkHttpClient,
     url: String,
@@ -160,7 +170,7 @@ object IptvHttpClient {
     maxAttempts: Int = 4,
     initialDelayMs: Long = 1_000,
     maxDelayMs: Long = 8_000,
-    block: suspend (InputStream) -> T
+    block: suspend (InputStream, GuideCacheValidators) -> T
 ): XmltvFetch<T> = withContext(Dispatchers.IO) {
     retryWithBackoff(maxAttempts, initialDelayMs, maxDelayMs) {
         val request = Request.Builder().url(url).get().apply {
@@ -200,11 +210,15 @@ object IptvHttpClient {
                 val stream: InputStream =
                     if (isGzip) GZIPInputStream(buffered, 64 * 1024) else buffered
 
-                val value = stream.use { input -> block(input) }
-                XmltvFetch.Streamed(
-                    value = value,
+                val responseValidators = GuideCacheValidators(
                     etag = response.header("ETag"),
                     lastModified = response.header("Last-Modified")
+                )
+                val value = stream.use { input -> block(input, responseValidators) }
+                XmltvFetch.Streamed(
+                    value = value,
+                    etag = responseValidators.etag,
+                    lastModified = responseValidators.lastModified
                 )
             }
         }

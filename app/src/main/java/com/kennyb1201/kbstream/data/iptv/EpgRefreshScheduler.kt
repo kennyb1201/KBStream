@@ -76,6 +76,36 @@ object EpgRefreshScheduler {
      */
     const val INPUT_CATCH_UP = "catch_up"
 
+    /**
+     * The one-time run a STOPPED pass leaves behind (2026-11-27).
+     *
+     * Under its own unique name rather than the catch-up's: a stop-triggered
+     * retry queued with `KEEP` on [CATCH_UP_WORK_NAME] while a playback-end
+     * catch-up is already pending would be silently dropped, and the import it
+     * was meant to continue would wait for the 6h tick - the field state this
+     * exists to end (`outcome=stopped mid-import aborts=2`).
+     *
+     * `REPLACE` on its own name, deliberately. `KEEP` would drop the continuation
+     * whenever a retry is already pending - and, worse, whenever the run being
+     * stopped IS the retry: the enqueue happens from inside that run, and `KEEP`
+     * would see it as unfinished and silently drop the only thing that keeps a
+     * long import going. `REPLACE` supersedes a pending copy with an equivalent
+     * request and preserves the chain; the abort-streak bound in
+     * [EpgRefreshWorker] is what stops the chain.
+     */
+    const val STOP_RETRY_WORK_NAME = "iptv_epg_refresh_stop_retry"
+
+    /**
+     * The input flag that tells [EpgRefreshWorker] this run is continuing a pass
+     * WorkManager stopped.
+     *
+     * It is what lets the run SKIP the sources the stopped pass already landed
+     * (their per-source stamps are fresh) instead of re-downloading them, and it
+     * is recorded as `stop-retry` in the verdict line so a paste can tell this
+     * run from a 6h tick and from a playback-end catch-up.
+     */
+    const val INPUT_STOP_RETRY = "stop_retry"
+
     fun schedule(context: Context) {
         val request = PeriodicWorkRequestBuilder<EpgRefreshWorker>(
             REFRESH_INTERVAL_HOURS,
@@ -107,6 +137,29 @@ object EpgRefreshScheduler {
         WorkManager.getInstance(context).enqueueUniqueWork(
             CATCH_UP_WORK_NAME,
             ExistingWorkPolicy.KEEP,
+            request
+        )
+    }
+
+    /**
+     * Enqueues the run that continues a pass WorkManager stopped ([INPUT_STOP_RETRY]).
+     *
+     * The same worker, the same gates, the same constraints: a guide that turned
+     * fresh in the meantime is a FRESH no-op, restarted playback defers it like
+     * the periodic run, and the sources the stopped pass already landed are
+     * skipped through their own stamps. [EpgRefreshWorker] decides whether the
+     * abort streak has reached the manual-recovery bound; this only asks for the
+     * work.
+     */
+    fun enqueueStopRetry(context: Context) {
+        val request = OneTimeWorkRequestBuilder<EpgRefreshWorker>()
+            .setConstraints(guideConstraints())
+            .setInputData(workDataOf(INPUT_STOP_RETRY to true))
+            .build()
+
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            STOP_RETRY_WORK_NAME,
+            ExistingWorkPolicy.REPLACE,
             request
         )
     }

@@ -77,7 +77,7 @@ class GuideFetchCancellationTest {
                 IptvHttpClient.streamXmltvWithRetry(
                     client,
                     "http://127.0.0.1:${server.localPort}/guide.xml"
-                ) { stream ->
+                ) { stream, _ ->
                     reading.complete(Unit)
                     // The provider has stopped sending: this blocks.
                     stream.readBytes()

@@ -590,6 +590,120 @@ class GuideImportRecoveryTest {
         )
     }
 
+    // ── a stopped import is continued, not restarted (2026-11-27) ──────
+
+    /**
+     * The field state this pins: the phone's import stops mid-import and every
+     * later attempt began at byte 0 with an empty staging table, so a feed
+     * longer than WorkManager's window could never finish. Now the stopped
+     * attempt's rows survive it, the retry resumes INTO them, and the rows it
+     * already holds are not inserted again.
+     *
+     * The proof that they are not re-inserted is the retry's own document: it
+     * renames every channel, so a row that kept the stopped attempt's name was
+     * skipped, and one that carries the retry's name was written now. (A
+     * re-insert would REPLACE the row and show the retry's name.)
+     */
+    @Test
+    fun `a stopped import keeps its staged rows and the retry inserts only the rest`() =
+        runBlocking {
+            val importer = XmltvImporter(daoProvider = { dao })
+            val now = System.currentTimeMillis()
+            val windowStart = now - EpgWindow.PAST_MS
+            val windowEnd = now + EpgWindow.FUTURE_MS
+            val stagingUrl = "$guideUrl@importing"
+
+            // 1,200 channels and a programme each: the channel batch flushes at
+            // 500, which is the flush the stop lands after.
+            var checkpoint: GuideImportCheckpoint? = null
+            var flushes = 0
+            val stoppingSink = GuideImportCheckpointSink { channels, programs, bytesRead ->
+                flushes++
+                checkpoint = GuideImportCheckpoint(
+                    createdAtMs = now,
+                    windowStartMs = windowStart,
+                    windowEndMs = windowEnd,
+                    stagedChannels = channels,
+                    stagedPrograms = programs,
+                    bytesRead = bytesRead,
+                    etag = "\"feed-1\"",
+                    lastModified = null,
+                    matchKeysFingerprint = "keys"
+                )
+                // WorkManager stopping the job: a cancellation, mid-import.
+                throw kotlinx.coroutines.CancellationException("stopped")
+            }
+
+            val stopped = runCatching {
+                importer.import(
+                    sourceUrl = guideUrl,
+                    input = manyChannelsXml(nowMs = now, channels = 1_200, namePrefix = "Channel")
+                        .byteInputStream(),
+                    windowStartMs = windowStart,
+                    windowEndMs = windowEnd,
+                    resume = null,
+                    checkpoint = stoppingSink
+                )
+            }
+            assertTrue(
+                "the stop reaches the caller as the cancellation it is",
+                stopped.exceptionOrNull() is kotlinx.coroutines.CancellationException
+            )
+            assertEquals("the first channel batch flushed once", 1, flushes)
+            assertEquals(
+                "and its rows are still staged: a stop no longer sweeps them away",
+                500,
+                dao.countChannelsForSource(stagingUrl)
+            )
+            assertEquals("nothing was promoted", 0, dao.countChannelsForSource(guideUrl))
+            val resume = checkpoint ?: throw AssertionError("no checkpoint was recorded")
+
+            val retry = importer.import(
+                sourceUrl = guideUrl,
+                input = manyChannelsXml(nowMs = now, channels = 1_200, namePrefix = "Retry")
+                    .byteInputStream(),
+                windowStartMs = resume.windowStartMs,
+                windowEndMs = resume.windowEndMs,
+                resume = resume,
+                checkpoint = GuideImportCheckpointSink { _, _, _ -> }
+            )
+
+            assertTrue(
+                "the retry says it continued the stopped attempt",
+                retry.resumed
+            )
+            assertEquals(
+                "the whole document is live: the staged rows were kept and the rest added",
+                1_200,
+                dao.countChannelsForSource(guideUrl)
+            )
+            assertEquals(
+                "and every programme of it is there exactly once",
+                1_200,
+                retry.keptPrograms
+            )
+            val names = dao.getChannelsBySource(guideUrl)
+                .associate { it.id to it.primaryDisplayName }
+            assertEquals(
+                "the staged rows keep the stopped attempt's names - they were skipped, " +
+                    "not re-inserted",
+                "Channel 0",
+                names["ch0"]
+            )
+            assertEquals("Channel 499", names["ch499"])
+            assertEquals(
+                "and everything after them is the retry's own work",
+                "Retry 500",
+                names["ch500"]
+            )
+            assertEquals("Retry 1199", names["ch1199"])
+            assertEquals(
+                "the promotion emptied the staging key",
+                0,
+                dao.countChannelsForSource(stagingUrl)
+            )
+        }
+
     // ── helpers ─────────────────────────────────────────────────────
 
     private fun outcomeLabel(outcome: GuideImportOutcome): String =
@@ -638,6 +752,23 @@ class GuideImportRecoveryTest {
 
     private fun xmltvDate(atMs: Long): String =
         XMLTV_UTC.format(Instant.ofEpochMilli(atMs))
+
+    /** A guide big enough to reach the importer's 500-channel batch flush. */
+    private fun manyChannelsXml(nowMs: Long, channels: Int, namePrefix: String): String =
+        buildString {
+            append("<?xml version=\"1.0\" encoding=\"UTF-8\"?><tv>")
+            repeat(channels) { index ->
+                append("<channel id=\"ch$index\">")
+                append("<display-name>$namePrefix $index</display-name></channel>")
+            }
+            repeat(channels) { index ->
+                val startsAt = xmltvDate(nowMs - 15 * 60_000L + index * 1_000L)
+                val endsAt = xmltvDate(nowMs + 45 * 60_000L + index * 1_000L)
+                append("<programme channel=\"ch$index\" start=\"$startsAt\" stop=\"$endsAt\">")
+                append("<title>Programme $index</title></programme>")
+            }
+            append("</tv>")
+        }
 
     private fun channels(sourceId: Long, count: Int): List<EpgChannelEntity> =
         (0 until count).map { index ->

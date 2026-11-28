@@ -69,7 +69,18 @@ internal object EpgRefreshDiagnostics {
         FAILED,
 
         /** WorkManager stopped the job while this source was importing. */
-        STOPPED
+        STOPPED,
+
+        /**
+         * A stop-retry found this source already landed in the stopped pass, so
+         * it was not downloaded again (see `EpgRefreshScheduler.INPUT_STOP_RETRY`).
+         *
+         * Neither a success nor a failure of THIS pass: the source's own stamp
+         * is recent, and re-downloading a multi-minute guide to store what is
+         * already stored is exactly the cost the per-source stamps exist to
+         * avoid.
+         */
+        SKIPPED
     }
 
     data class SourceResult(
@@ -102,7 +113,22 @@ internal object EpgRefreshDiagnostics {
          * refresh ran while I never opened the Guide" and "the tick finally got
          * through" are different answers to the same field question.
          */
-        val catchUp: Boolean = false
+        val catchUp: Boolean = false,
+
+        /**
+         * True when this run exists because WorkManager stopped an earlier pass
+         * (`EpgRefreshScheduler.INPUT_STOP_RETRY`). Prefixed onto the line so a
+         * paste can tell it from the 6h tick and from a playback-end catch-up.
+         */
+        val stopRetry: Boolean = false,
+
+        /**
+         * True when at least one source continued a stopped import instead of
+         * starting it over (its staged rows were kept). Prefixed onto the line:
+         * the field test's question is whether the retry picked the import up
+         * or began it again.
+         */
+        val resumed: Boolean = false
     )
 
     /** The token for a source, in the paste's short form: `1:landed`, `2:timeout`. */
@@ -112,6 +138,7 @@ internal object EpgRefreshDiagnostics {
             SourceOutcome.NOT_LANDED -> "no-new"
             SourceOutcome.TIMEOUT -> "timeout"
             SourceOutcome.STOPPED -> "stopped"
+            SourceOutcome.SKIPPED -> "fresh"
             SourceOutcome.FAILED -> "threw " + (result.errorClass ?: "unknown")
         }
         val detail = result.detail?.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
@@ -140,10 +167,17 @@ internal object EpgRefreshDiagnostics {
             }
             else -> bodyLine(verdict)
         }
-        // The catch-up marker is a PREFIX, so the rest of the grammar is
-        // untouched: `refresh: catch-up import 1:landed` reads as the line it
-        // always did, with the one fact this spec adds in front of it.
-        return if (verdict.catchUp) "catch-up $body" else body
+        // The markers are PREFIXES, so the rest of the grammar is untouched:
+        // `refresh: catch-up import 1:landed` reads as the line it always did,
+        // with the one fact this spec adds in front of it. A stop-retry that
+        // resumed reads `stop-retry resumed import 1:landed, landed=1` - the
+        // trigger, then whether the import continued or started over.
+        val prefixes = buildList {
+            if (verdict.catchUp) add("catch-up")
+            if (verdict.stopRetry) add("stop-retry")
+            if (verdict.resumed) add("resumed")
+        }
+        return (prefixes + body).joinToString(" ")
     }
 
     private fun bodyLine(verdict: PassVerdict): String = when (verdict.decision) {
@@ -162,6 +196,13 @@ internal object EpgRefreshDiagnostics {
      * is why a run of timeouts or stops read as healthy forever.
      */
     fun failingAfter(verdict: PassVerdict, previousStreak: Int): Pair<Int, Boolean> {
+        // A stop-retry that only met sources it had already landed did not fail
+        // at anything: every source it was given was fresh. Counting it would
+        // make the switch to `failing` - which stops the retries - depend on how
+        // many times the pass was continued rather than on the guide.
+        if (verdict.sources.isNotEmpty() && verdict.sources.all { it.outcome == SourceOutcome.SKIPPED }) {
+            return previousStreak to (previousStreak >= FAILING_STREAK)
+        }
         val importedNothing = !verdict.stopped &&
             verdict.decision == Decision.IMPORT &&
             verdict.imported == 0

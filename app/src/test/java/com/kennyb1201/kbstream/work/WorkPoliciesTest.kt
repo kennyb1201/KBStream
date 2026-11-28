@@ -281,6 +281,36 @@ class WorkPoliciesTest {
         )
     }
 
+    // ── a stop-retry's per-source gate ────────────────────────────────────
+
+    @Test
+    fun `a stop-retry skips a source the stopped pass already landed`() {
+        // The stopped pass stamped this source minutes before it died: fetching
+        // its multi-minute guide again would store exactly what is stored.
+        assertTrue(
+            WorkPolicies.epgSourceAlreadyLanded(
+                stampMs = now - 20 * 60_000L,
+                nowMs = now
+            )
+        )
+        assertFalse(
+            "at the freshness floor the source is re-imported, like the whole " +
+                "pass would be",
+            WorkPolicies.epgSourceAlreadyLanded(
+                stampMs = now - WorkPolicies.EPG_MIN_AGE_MS,
+                nowMs = now
+            )
+        )
+        assertFalse(
+            "a source that never landed is never skipped",
+            WorkPolicies.epgSourceAlreadyLanded(stampMs = 0L, nowMs = now)
+        )
+        assertFalse(
+            "nor is a stamp ahead of the clock (a clock that moved back)",
+            WorkPolicies.epgSourceAlreadyLanded(stampMs = now + 1L, nowMs = now)
+        )
+    }
+
     @Test
     fun `the fresh floor is one hour under the refresh cadence`() {
         // Asserted as values rather than read back from the constants: what is

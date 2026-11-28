@@ -17,8 +17,16 @@ import kotlinx.coroutines.flow.asStateFlow
  * viewer and the support capture actually need.
  */
 sealed interface GuideImportOutcome {
-    /** A body was parsed and promoted; [programs] is what the guide now holds. */
-    data class Imported(val programs: Int) : GuideImportOutcome
+    /**
+     * A body was parsed and promoted; [programs] is what the guide now holds.
+     *
+     * [resumed] says this attempt continued a stopped one (its staged rows were
+     * kept and the document's first rows skipped) rather than starting over. It
+     * is what lets the pass's verdict line say `resumed`, which is the field
+     * test's whole question: did the retry pick the import up, or begin it
+     * again.
+     */
+    data class Imported(val programs: Int, val resumed: Boolean = false) : GuideImportOutcome
 
     /**
      * The server said `304 Not Modified` and the stored guide could satisfy it.

@@ -426,10 +426,14 @@ class IptvRepository(
         }
 
         try {
+            // The playlist's matcher keys, read once: they are what the importer
+            // filters with AND what a resumed import's validity is keyed on.
+            val matchKeys = playlistGuideMatchKeys()
             val importer = xmltvImporterFor(
                 dbName = IptvDatabase.activeFileName(appContext),
-                playlistMatchKeys = playlistGuideMatchKeys()
+                playlistMatchKeys = matchKeys
             )
+            val matchKeysFingerprint = GuideImportCheckpointCodec.fingerprint(matchKeys)
             // Whether this call actually parsed a body. A `304 Not Modified`
             // leaves the rows exactly as they were, so it must not bump the
             // revision or drop the snapshot cache - doing so would tell every
@@ -455,6 +459,14 @@ class IptvRepository(
                 // validator would be inventing an ETag for bytes we generated.
                 // Kept inside this runCatching so it completes `waiter` and
                 // joins the same failure shape as every other source.
+                //
+                // SCOPE: this source is NOT resumable. Its XMLTV is generated
+                // page by page at fetch time, so no validator identifies the
+                // document a checkpoint's rows came from - and a checkpoint
+                // that cannot prove it matches is exactly the wrong guide the
+                // validity rule exists to refuse. A stopped Free TV import
+                // therefore starts from its first page again; what it keeps
+                // is Part 1's retry (it no longer waits for the 6h tick).
                 if (normalizedUrl == XumoGuide.SOURCE_KEY) {
                     val translator = XumoEpgTranslator { url ->
                         // Reuses the playlist/guide fetcher's retry and backoff,
@@ -484,12 +496,28 @@ class IptvRepository(
                 // sends none: see [forceFresh] on this function.
                 val validators =
                     if (forceFresh) null else GuideCacheHeaders.get(appContext, normalizedUrl)
+                // One window for the whole attempt, computed before the fetch:
+                // a resumed attempt reuses the STOPPED attempt's window instead,
+                // because its staged rows were filtered by it and the skip only
+                // lands on the right rows if the filter did not move.
+                val passNowMs = System.currentTimeMillis()
+                val passWindowStartMs = passNowMs - EpgWindow.PAST_MS
+                val passWindowEndMs = passNowMs + EpgWindow.FUTURE_MS
                 val fetch = IptvHttpClient.streamXmltvWithRetry(
                     client,
                     normalizedUrl,
                     validators
-                ) { stream ->
-                    importer.import(normalizedUrl, stream)
+                ) { stream, responseValidators ->
+                    importStreamedGuide(
+                        importer = importer,
+                        stream = stream,
+                        url = normalizedUrl,
+                        windowStartMs = passWindowStartMs,
+                        windowEndMs = passWindowEndMs,
+                        responseValidators = responseValidators,
+                        matchKeysFingerprint = matchKeysFingerprint,
+                        startedAtMs = passNowMs
+                    )
                 }
 
                 when (fetch) {
@@ -507,6 +535,10 @@ class IptvRepository(
                             fetch.lastModified
                         )
                         val streamed = streamedOutcome(fetch.value)
+                        // The attempt ran to the end of the document: it either
+                        // promoted (staged rows re-keyed) or refused (staged
+                        // rows cleared), so there is nothing left to resume.
+                        GuideImportCheckpointStore.clear(appContext, normalizedUrl)
                         // A refusal promoted nothing: the rows every live
                         // instance is holding are still current.
                         importedFresh = !fetch.value.emptyFeedKeptLive
@@ -535,6 +567,9 @@ class IptvRepository(
                             // sweep deletes it for not having been WRITTEN in a
                             // fortnight (a 304 writes nothing).
                             GuideStorage.touchActive(appContext)
+                            // The stored guide satisfies the unchanged file: no
+                            // stopped attempt is waiting to be resumed.
+                            GuideImportCheckpointStore.clear(appContext, normalizedUrl)
                             Log.d(
                                 TAG,
                                 "GUIDE NOT MODIFIED source=${Redaction.url(normalizedUrl)} " +
@@ -557,8 +592,17 @@ class IptvRepository(
                             val fresh = IptvHttpClient.streamXmltvWithRetry(
                                 client,
                                 normalizedUrl
-                            ) { stream ->
-                                importer.import(normalizedUrl, stream)
+                            ) { stream, responseValidators ->
+                                importStreamedGuide(
+                                    importer = importer,
+                                    stream = stream,
+                                    url = normalizedUrl,
+                                    windowStartMs = passWindowStartMs,
+                                    windowEndMs = passWindowEndMs,
+                                    responseValidators = responseValidators,
+                                    matchKeysFingerprint = matchKeysFingerprint,
+                                    startedAtMs = passNowMs
+                                )
                             }
                             if (fresh is IptvHttpClient.XmltvFetch.Streamed) {
                                 GuideCacheHeaders.put(
@@ -567,6 +611,7 @@ class IptvRepository(
                                     fresh.etag,
                                     fresh.lastModified
                                 )
+                                GuideImportCheckpointStore.clear(appContext, normalizedUrl)
                                 val refetched = streamedOutcome(fresh.value)
                                 importedFresh = !fresh.value.emptyFeedKeptLive
                                 refetched
@@ -618,6 +663,7 @@ class IptvRepository(
         dao.clearGuideBySource(key)
         dao.clearGuideBySource("$key@importing")
         GuideCacheHeaders.clear(appContext, key)
+        GuideImportCheckpointStore.clear(appContext, key)
         Log.i(TAG, "GUIDE SOURCE FORGOTTEN source=${Redaction.url(key)}")
     }
 
@@ -639,7 +685,61 @@ class IptvRepository(
             GuideStorage.touchActive(appContext)
             return GuideImportOutcome.EmptyFeedKeptLive
         }
-        return GuideImportOutcome.Imported(stats.keptPrograms)
+        return GuideImportOutcome.Imported(stats.keptPrograms, resumed = stats.resumed)
+    }
+
+    /**
+     * Imports the body [stream] carries, resuming a stopped attempt's staged
+     * rows when the response proves they came from this same feed.
+     *
+     * The window is the one the pass opened with, unless the attempt resumes:
+     * then it is the stopped attempt's own window and age, because the staged
+     * rows were filtered by that window and the skip counts rows of that
+     * filter. A resumed attempt re-walks the document from byte 0 (XML cannot
+     * be entered mid-stream) and drops the rows the staging table already
+     * holds, so what it saves is the batch inserts and the write-gate holds.
+     * The swap still re-keys everything that is staged, once.
+     *
+     * Nothing is cleared here: the caller clears the checkpoint once the
+     * attempt has actually reached the end of the document, and a cancelled or
+     * failed attempt leaves it exactly where its last flush put it.
+     */
+    private suspend fun importStreamedGuide(
+        importer: XmltvImporter,
+        stream: java.io.InputStream,
+        url: String,
+        windowStartMs: Long,
+        windowEndMs: Long,
+        responseValidators: GuideCacheValidators,
+        matchKeysFingerprint: String,
+        startedAtMs: Long
+    ): GuideImportStats {
+        val resume = resumeCheckpoint(
+            checkpoint = GuideImportCheckpointStore.get(appContext, url),
+            nowMs = System.currentTimeMillis(),
+            etag = responseValidators.etag,
+            lastModified = responseValidators.lastModified,
+            matchKeysFingerprint = matchKeysFingerprint
+        )
+        val importWindowStart = resume?.windowStartMs ?: windowStartMs
+        val importWindowEnd = resume?.windowEndMs ?: windowEndMs
+        return importer.import(
+            sourceUrl = url,
+            input = stream,
+            windowStartMs = importWindowStart,
+            windowEndMs = importWindowEnd,
+            resume = resume,
+            checkpoint = GuideImportCheckpointStore.sink(
+                context = appContext,
+                url = url,
+                windowStartMs = importWindowStart,
+                windowEndMs = importWindowEnd,
+                etag = responseValidators.etag,
+                lastModified = responseValidators.lastModified,
+                matchKeysFingerprint = matchKeysFingerprint,
+                createdAtMs = resume?.createdAtMs ?: startedAtMs
+            )
+        )
     }
 
     /**

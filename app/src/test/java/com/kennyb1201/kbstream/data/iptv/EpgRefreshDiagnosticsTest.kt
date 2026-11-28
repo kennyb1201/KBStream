@@ -235,4 +235,113 @@ class EpgRefreshDiagnosticsTest {
         assertFalse("sources are numbered, never named by URL", line.contains("http"))
         assertFalse(line.contains("/"))
     }
+
+    // ── the stop-retry's vocabulary (2026-11-27) ──────────────────────────────
+
+    @Test
+    fun `a source the retry did not need reads fresh, not failed`() {
+        assertEquals(
+            "1:fresh",
+            EpgRefreshDiagnostics.sourceToken(
+                source(1, EpgRefreshDiagnostics.SourceOutcome.SKIPPED)
+            )
+        )
+    }
+
+    @Test
+    fun `the line says what triggered the pass and whether it resumed`() {
+        val resumed = EpgRefreshDiagnostics.PassVerdict(
+            decision = EpgRefreshDiagnostics.Decision.IMPORT,
+            sources = listOf(source(1, EpgRefreshDiagnostics.SourceOutcome.LANDED)),
+            imported = 1,
+            stopRetry = true,
+            resumed = true
+        )
+        assertEquals(
+            "stop-retry resumed import 1:landed, landed=1",
+            EpgRefreshDiagnostics.verdictLine(resumed)
+        )
+        assertEquals(
+            "the markers stack, so a catch-up that continued a stopped import says both",
+            "catch-up stop-retry resumed import 1:landed, landed=1",
+            EpgRefreshDiagnostics.verdictLine(resumed.copy(catchUp = true))
+        )
+        assertEquals(
+            "and a plain tick keeps exactly the line it always had",
+            "import 1:landed, landed=1",
+            EpgRefreshDiagnostics.verdictLine(resumed.copy(stopRetry = false, resumed = false))
+        )
+    }
+
+    @Test
+    fun `a stop names the source it was cut in, with where it stopped`() {
+        // The old line said only that a pass was stopped: `stopped mid-import`
+        // cannot be told from "cut during the download" or "cut in the re-key".
+        val stopped = EpgRefreshDiagnostics.PassVerdict(
+            decision = EpgRefreshDiagnostics.Decision.IMPORT,
+            sources = listOf(
+                source(1, EpgRefreshDiagnostics.SourceOutcome.LANDED),
+                source(
+                    2,
+                    EpgRefreshDiagnostics.SourceOutcome.STOPPED,
+                    detail = "reading,41200 rows,63MB"
+                )
+            ),
+            imported = 1,
+            stopped = true,
+            stopRetry = true
+        )
+        assertEquals(
+            "stop-retry stopped mid-import after 1:landed,2:stopped (reading,41200 rows,63MB)",
+            EpgRefreshDiagnostics.verdictLine(stopped)
+        )
+    }
+
+    @Test
+    fun `a retry that only met fresh sources proves nothing about failing`() {
+        val allFresh = EpgRefreshDiagnostics.PassVerdict(
+            decision = EpgRefreshDiagnostics.Decision.IMPORT,
+            sources = listOf(
+                source(1, EpgRefreshDiagnostics.SourceOutcome.SKIPPED),
+                source(2, EpgRefreshDiagnostics.SourceOutcome.SKIPPED)
+            ),
+            imported = 0,
+            stopRetry = true
+        )
+        assertEquals(
+            "the streak does not move: nothing was attempted and nothing failed",
+            2 to false,
+            EpgRefreshDiagnostics.failingAfter(allFresh, previousStreak = 2)
+        )
+        assertEquals(
+            "an install already failing stays failing",
+            3 to true,
+            EpgRefreshDiagnostics.failingAfter(allFresh, previousStreak = 3)
+        )
+        // The two rules the field depends on are untouched: a stop that landed
+        // nothing still extends the streak, and one that landed something
+        // clears it.
+        assertEquals(
+            3 to true,
+            EpgRefreshDiagnostics.failingAfter(
+                EpgRefreshDiagnostics.PassVerdict(
+                    decision = EpgRefreshDiagnostics.Decision.IMPORT,
+                    imported = 0,
+                    stopped = true
+                ),
+                previousStreak = 2
+            )
+        )
+        assertEquals(
+            0 to false,
+            EpgRefreshDiagnostics.failingAfter(
+                EpgRefreshDiagnostics.PassVerdict(
+                    decision = EpgRefreshDiagnostics.Decision.IMPORT,
+                    imported = 1,
+                    stopped = true
+                ),
+                previousStreak = 4
+            )
+        )
+    }
 }

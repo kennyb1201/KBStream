@@ -34,6 +34,22 @@ class EpgRefreshWorker(
     private var stoppedImported: Int = 0
 
     /**
+     * The 1-based source this pass was importing when it was stopped, or 0.
+     *
+     * [stoppedSources] only holds the sources that FINISHED, so a stop used to
+     * name where it had got to without naming the source that was cut - the one
+     * fact a `stopped` token is missing. Filled in before each import and
+     * cleared after it, and turned into a `STOPPED` result by [recordStoppedPass]
+     * with the same cut detail a `TIMEOUT` carries.
+     */
+    @Volatile
+    private var inFlightIndex: Int = 0
+
+    /** Whether any source of this pass continued a stopped import (see `Imported.resumed`). */
+    @Volatile
+    private var resumedThisPass: Boolean = false
+
+    /**
      * Whether this run is the playback-end catch-up rather than a 6h tick (spec
      * 2026-11-16, F4).
      *
@@ -46,6 +62,18 @@ class EpgRefreshWorker(
         inputData.getBoolean(EpgRefreshScheduler.INPUT_CATCH_UP, false)
 
     /**
+     * Whether this run continues a pass WorkManager stopped (2026-11-27).
+     *
+     * The gates, budgets and stamping are identical; what it changes is that
+     * sources whose own stamp is fresh are SKIPPED (the stopped pass already
+     * landed them, and re-downloading a multi-minute guide to store what is
+     * stored is the cost the 6h wait was made of), and that the verdict says
+     * `stop-retry`.
+     */
+    private val stopRetry: Boolean =
+        inputData.getBoolean(EpgRefreshScheduler.INPUT_STOP_RETRY, false)
+
+    /**
      * Records a pass WorkManager stopped mid-import.
      *
      * This cannot be an `onStopped()` override: WorkManager 2.12 makes it final,
@@ -56,13 +84,26 @@ class EpgRefreshWorker(
      */
     private fun recordStoppedPass() {
         val decision = stoppedDecision ?: return
+        // The source that was mid-import when the job died, named with where its
+        // cut landed (`reading,41200 rows,63MB`) - the detail a TIMEOUT already
+        // carries. It is not in [stoppedSources] because that list only grows
+        // after a source RETURNS.
+        val inFlight = inFlightIndex.takeIf { it > 0 }?.let { index ->
+            EpgRefreshDiagnostics.SourceResult(
+                index,
+                EpgRefreshDiagnostics.SourceOutcome.STOPPED,
+                detail = guideCutDetail()
+            )
+        }
         recordPass(
             EpgRefreshDiagnostics.PassVerdict(
                 decision = decision,
-                sources = stoppedSources,
+                sources = if (inFlight != null) stoppedSources + inFlight else stoppedSources,
                 imported = stoppedImported,
                 stopped = true,
-                catchUp = catchUp
+                catchUp = catchUp,
+                stopRetry = stopRetry,
+                resumed = resumedThisPass
             )
         )
     }
@@ -102,8 +143,44 @@ class EpgRefreshWorker(
         // A timeout is a cut budget, not a stop: it has its own verdict (see
         // importWithinBudget) and must not be reported as WorkManager stopping
         // the pass.
-        if (cancelled !is TimeoutCancellationException) recordStoppedPass()
+        if (cancelled !is TimeoutCancellationException) {
+            recordStoppedPass()
+            // The pass ended where WorkManager cut it, not where its sources
+            // did. Without this the next chance is the 6h tick (or a playback
+            // catch-up, or a manual press), and every one of those used to
+            // restart the same multi-minute import from byte 0 - the loop the
+            // field paste `outcome=stopped mid-import aborts=2` is made of.
+            enqueueStopRetryIfBounded()
+        }
         throw cancelled
+    }
+
+    /**
+     * Asks for the one-time run that continues this pass, unless the abort
+     * streak has reached the manual-recovery bound.
+     *
+     * `Result.retry()` is NOT the mechanism: WorkManager discards the result of
+     * a worker it has already stopped, so a stop can only be answered by
+     * enqueueing work. The bound is [MAX_EMPTY_RUNS] consecutive no-import
+     * passes - the same rule that ends the empty-run case at "schedule kept,
+     * manual IMPORT GUIDE is the recovery" - so a source that can never land is
+     * not retried forever, while a long import that makes progress on each
+     * continuation keeps going.
+     */
+    private fun enqueueStopRetryIfBounded() {
+        runCatching {
+            val streak = iptvPrefs().getInt(EpgRefreshDiagnostics.KEY_ABORT_STREAK, 0)
+            if (streak >= MAX_EMPTY_RUNS) {
+                Log.w(
+                    TAG,
+                    "GUIDE REFRESH STOPPED repeatedly ($streak passes); no retry queued, " +
+                        "manual IMPORT GUIDE is the recovery"
+                )
+                return
+            }
+            EpgRefreshScheduler.enqueueStopRetry(applicationContext)
+            Log.i(TAG, "GUIDE REFRESH STOPPED; retry queued (abortStreak=$streak)")
+        }
     }
 
     /** One guide-refresh pass; [doWork] is its cancellation-safe shell. */
@@ -124,7 +201,8 @@ class EpgRefreshWorker(
             recordPass(
                 EpgRefreshDiagnostics.PassVerdict(
                     EpgRefreshDiagnostics.Decision.NO_SOURCES,
-                    catchUp = catchUp
+                    catchUp = catchUp,
+                    stopRetry = stopRetry
                 )
             )
             return Result.success()
@@ -182,7 +260,8 @@ class EpgRefreshWorker(
                 recordPass(
                     EpgRefreshDiagnostics.PassVerdict(
                         EpgRefreshDiagnostics.Decision.FRESH,
-                        catchUp = catchUp
+                        catchUp = catchUp,
+                        stopRetry = stopRetry
                     )
                 )
                 Log.i(TAG, "EPG refresh skipped: data fresh (age=${(now - lastImport) / 60_000}min)")
@@ -196,7 +275,8 @@ class EpgRefreshWorker(
                 recordPass(
                     EpgRefreshDiagnostics.PassVerdict(
                         EpgRefreshDiagnostics.Decision.DEFER,
-                        catchUp = catchUp
+                        catchUp = catchUp,
+                        stopRetry = stopRetry
                     )
                 )
                 Log.i(TAG, "EPG refresh deferred: playback active")
@@ -225,8 +305,33 @@ class EpgRefreshWorker(
         // WorkPolicies.guideSourceBudgetMs): this feed was cut at 8:00 on every
         // attempt for seventeen hours with nothing else in the pass to protect.
         val perSourceBudgetMs = WorkPolicies.guideSourceBudgetMs(epgUrls.size)
+        // What this pass does NOT need to redo. Read once: the loop's own
+        // stamping writes the live map, and the skip decision is about the map
+        // as the stopped pass left it.
+        val stampsAtStart = GuideSourceStamps.read(prefs)
         epgUrls.forEachIndexed { index, url ->
             val sourceIndex = index + 1
+            // A stop-retry only re-attempts what did not land. The stopped pass
+            // stamped every source it stored, so a fresh stamp is proof this
+            // run has nothing to gain from downloading it again.
+            if (
+                stopRetry && WorkPolicies.epgSourceAlreadyLanded(
+                    stampMs = stampsAtStart[url] ?: 0L,
+                    nowMs = now
+                )
+            ) {
+                results += EpgRefreshDiagnostics.SourceResult(
+                    sourceIndex,
+                    EpgRefreshDiagnostics.SourceOutcome.SKIPPED
+                )
+                stoppedSources = results.toList()
+                Log.i(
+                    TAG,
+                    "GUIDE REFRESH SKIPPED source=${Redaction.url(url)} (landed in the stopped pass)"
+                )
+                return@forEachIndexed
+            }
+            inFlightIndex = sourceIndex
             // Bounded per source, so one wedged source cannot spend the pass's
             // whole window on its own (see
             // WorkPolicies.GUIDE_SOURCE_BUDGET_MS). A source that runs out of
@@ -235,6 +340,9 @@ class EpgRefreshWorker(
             // either: the sources after it still import.
             runCatchingCancellable { importWithinBudget(repository, url, perSourceBudgetMs) }
                 .onSuccess { outcome ->
+                    if (outcome is GuideImportOutcome.Imported && outcome.resumed) {
+                        resumedThisPass = true
+                    }
                     // LANDED only: a `304`, a refused empty feed and a
                     // zero-program promote all complete without throwing, and
                     // treating them as an import is what stamped the guide
@@ -307,6 +415,7 @@ class EpgRefreshWorker(
             // reports the sources it finished rather than nothing.
             stoppedSources = results.toList()
             stoppedImported = imported
+            inFlightIndex = 0
         }
 
         recordPass(
@@ -314,7 +423,9 @@ class EpgRefreshWorker(
                 decision = EpgRefreshDiagnostics.Decision.IMPORT,
                 sources = results.toList(),
                 imported = imported,
-                catchUp = catchUp
+                catchUp = catchUp,
+                stopRetry = stopRetry,
+                resumed = resumedThisPass
             )
         )
 
@@ -322,6 +433,17 @@ class EpgRefreshWorker(
         // did import are stored, and retrying would re-download every one of
         // them (a multi-minute import) to re-attempt the broken one, which the
         // next periodic run covers anyway.
+        if (imported == 0 && results.isNotEmpty() && results.all {
+                it.outcome == EpgRefreshDiagnostics.SourceOutcome.SKIPPED
+            }
+        ) {
+            // Every source this retry was handed had already landed in the
+            // stopped pass: there was nothing left to import, and asking
+            // WorkManager to try again would only repeat that answer.
+            Log.i(TAG, "GUIDE REFRESH STOP-RETRY: every source already fresh")
+            return Result.success()
+        }
+
         if (imported == 0) {
             // A source list that is entirely dead (an expired playlist host, a
             // box that lost the network) must not hammer: the bound below is
