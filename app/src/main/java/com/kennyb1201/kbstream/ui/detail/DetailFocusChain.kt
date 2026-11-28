@@ -388,4 +388,37 @@ internal object DetailFocusMoveRules {
         inFlightDirection == press -> Decision.COALESCE
         else -> Decision.CANCEL_AND_LAUNCH
     }
+
+    /**
+     * The row a gain of [gain] just REVOKED, or null when the gain is a landing
+     * the page should accept.
+     *
+     * The page's one reclaim exists for the framework's restart-to-Play: a
+     * HEADER gain nobody asked for, taking a row the viewer had chosen. Every
+     * other HEADER gain is legitimate, and the distinction is whether a move is
+     * in flight - a press of the viewer's, so the landing belongs to it.
+     *
+     * A rule rather than an inline condition because the strip's UP press used
+     * to bypass it (spec 2026-11-27): that handler placed Play with its own raw
+     * launch, no move was in flight, and so the page's own deliberate landing was
+     * read as a theft and reclaimed - press UP, land on Play, be pulled back to
+     * the pill, press UP again. The strip's UP/DOWN are chain moves now (see
+     * [com.kennyb1201.kbstream.ui.detail.DetailScreen]'s `DetailTabStrip` call),
+     * which is the same treatment every other surface already had; this is what
+     * makes that treatment the reason the landing survives.
+     *
+     * @param gain the row that just gained the focus
+     * @param owned the row the chain last placed (`lastOwnedRow` on the page)
+     * @param chainMoveActive whether a D-pad move of the page's own is in flight
+     */
+    fun revokedRow(
+        gain: DetailRow,
+        owned: DetailRow?,
+        chainMoveActive: Boolean
+    ): DetailRow? = when {
+        gain != DetailRow.HEADER -> null
+        owned == null || owned == gain -> null
+        chainMoveActive -> null
+        else -> owned
+    }
 }

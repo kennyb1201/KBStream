@@ -1166,14 +1166,15 @@ fun DetailScreen(
                 // The framework's restart lands on the header (Play). A gain on
                 // any other row while no move is in flight is a hand-back, a
                 // drill-down return or another legitimate surface taking focus,
-                // so it becomes the owned row instead of a reclaim candidate.
-                if (
-                    row == DetailRow.HEADER &&
-                    owned != null &&
-                    owned != row &&
-                    !chainMoveActive
-                ) {
-                    pendingFocusReclaim = DetailFocusReclaim(owned, row)
+                // so it becomes the owned row instead of a reclaim candidate -
+                // and so does ANY gain while the page's own move is in flight,
+                // which is what keeps a deliberate press's landing (the strip's
+                // UP onto Play, spec 2026-11-27) from being read as a theft.
+                // The rule is shared with the tests rather than inlined, because
+                // the press that bypassed a move is exactly what broke.
+                val revoked = DetailFocusMoveRules.revokedRow(row, owned, chainMoveActive)
+                if (revoked != null) {
+                    pendingFocusReclaim = DetailFocusReclaim(revoked, row)
                     focusReclaimSerial++
                 } else {
                     lastOwnedRow = row
@@ -7239,7 +7240,36 @@ fun DetailScreen(
                             }
                         },
                         onUp = {
-                            scope.launch {
+                            // A CHAIN MOVE, not a raw launch (spec 2026-11-27).
+                            //
+                            // This handler lands on Play - by geometry, or
+                            // through focusTopOfPage's fallback - and a HEADER
+                            // gain with no move in flight is exactly what the
+                            // reclaim reads as a theft (see traceRowFocus). So
+                            // the strip's own deliberate landing used to file a
+                            // reclaim for TABS and yank the viewer straight back
+                            // onto the pill: press UP, land on Play, be returned
+                            // to the strip, press UP again. Every other surface's
+                            // UP/DOWN already runs through startFocusMove (HEADER,
+                            // EPISODES, OVERVIEW, MEDIA); the strip was the only
+                            // one that bypassed it, which is also why its presses
+                            // were invisible in the paste - the loop's moves
+                            // looked like disposals because no move was ever
+                            // traced.
+                            //
+                            // Through the move, the landing is the page's own
+                            // in-flight move: the gain arm sees chainMoveActive
+                            // and hands the row to the press instead of filing a
+                            // reclaim, the reclaim effect stays suppressed while
+                            // the landing retries, and a repeat press coalesces
+                            // (traced `via=coalesced`) instead of restarting the
+                            // move from nothing.
+                            //
+                            // No presence argument: the strip is painted while
+                            // the page's rows are still arriving, so the move (and
+                            // its coalesce line) reads the presence that actually
+                            // landed ([latestRowPresence]), not a stale capture.
+                            startFocusMove(DetailRow.TABS, DetailFocusDirection.UP) {
                                 // The genre chips are painted directly above
                                 // the strip; the search is the honest way to
                                 // reach whichever one is in the viewer's
@@ -7250,7 +7280,17 @@ fun DetailScreen(
                             }
                         },
                         onDown = {
-                            scope.launch { enterTabContent() }
+                            // The same move discipline, for the other two
+                            // reasons it exists: a repeat DOWN now coalesces into
+                            // an entry that is still retrying its tab's first row
+                            // instead of restarting it from nothing (the class of
+                            // bug COALESCE was added for), and the press is in the
+                            // trace. DOWN cannot produce the UP fight above -
+                            // enterTabContent only ever lands on a content row or
+                            // the content sink, never on HEADER.
+                            startFocusMove(DetailRow.TABS, DetailFocusDirection.DOWN) {
+                                enterTabContent()
+                            }
                         },
                         modifier = Modifier.then(traceRowFocus(DetailRow.TABS))
                     )

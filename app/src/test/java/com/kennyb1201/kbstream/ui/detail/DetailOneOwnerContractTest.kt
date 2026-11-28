@@ -254,7 +254,12 @@ class DetailOneOwnerContractTest {
             "the page remembers the row the chain last owned, not only the row " +
                 "that is focused right now",
             detail.contains("var lastOwnedRow by remember") &&
-                detail.contains("DetailFocusReclaim(owned, row)")
+                // The reclaim is filed with the row the shared revocation rule
+                // named (spec 2026-11-27: a landing behind the page's own move
+                // is not a revocation, so the rule, not the gain arm, decides
+                // whether there is a row to reclaim at all).
+                detail.contains("DetailFocusMoveRules.revokedRow(row, owned, chainMoveActive)") &&
+                detail.contains("DetailFocusReclaim(revoked, row)")
         )
         assertTrue(
             "the reclaim names the row and the row it was stolen by",
