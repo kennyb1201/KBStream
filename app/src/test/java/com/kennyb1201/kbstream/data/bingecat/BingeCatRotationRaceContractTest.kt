@@ -272,6 +272,23 @@ class BingeCatRotationRaceContractTest {
     }
 
     @Test
+    fun `the pull names the recovery it just performed`() {
+        // The contract's field test reads the paste, so the healing has to be
+        // visible there: a device that came back must not look like one that
+        // never had a fault.
+        val apply = functionBody(payload, "private fun applyBingeCatAuth(")
+        assertTrue(
+            "the refusal is read before the save retires it: $apply",
+            apply.contains("val wasRefused = store.needsReconnect()")
+        )
+        assertTrue(
+            "and a successful adoption over a refused pair is recorded: $apply",
+            apply.contains("if (saved && wasRefused)") &&
+                apply.contains("BingeCatTrace.recordError(BingeCatRefreshRecovery.RECOVERED)")
+        )
+    }
+
+    @Test
     fun `diagnostics read the mapping even when the session is refused`() {
         // F5: the incident paste read `mapped=unmapped` because the mapping was
         // only recorded behind the `usable` short-circuit.

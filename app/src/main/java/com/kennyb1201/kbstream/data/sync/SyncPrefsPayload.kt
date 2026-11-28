@@ -6,8 +6,10 @@ import com.kennyb1201.kbstream.data.anime.AniListTokenStore
 import com.kennyb1201.kbstream.data.simkl.SimklAuthV2Rules
 import com.kennyb1201.kbstream.data.badges.BadgePackSyncRules
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
+import com.kennyb1201.kbstream.data.bingecat.BingeCatRefreshRecovery
 import com.kennyb1201.kbstream.data.bingecat.BingeCatToken
 import com.kennyb1201.kbstream.data.bingecat.BingeCatTokenStore
+import com.kennyb1201.kbstream.data.bingecat.BingeCatTrace
 import com.kennyb1201.kbstream.data.kitsu.KitsuToken
 import com.kennyb1201.kbstream.data.kitsu.KitsuTokenStore
 import com.kennyb1201.kbstream.data.library.LibraryTombstones
@@ -3086,7 +3088,10 @@ object PrefsPayloadApplier {
             return
         }
 
-        runCatching {
+        // Read BEFORE the save, which retires it: this is the state the paste
+        // reports on, and it is what makes the healing visible below.
+        val wasRefused = store.needsReconnect()
+        val saved = runCatching {
             store.save(
                 BingeCatToken(
                     accessToken = access,
@@ -3096,6 +3101,15 @@ object PrefsPayloadApplier {
                     generation = nextGeneration
                 )
             )
+        }.isSuccess
+        if (saved && wasRefused) {
+            // The rotation race heals HERE (spec 2026-11-27): a sibling's newer
+            // pair replaced the one this device had flagged, with no QR and no
+            // further call. Naming it means the next paste shows a recovered
+            // session instead of reading like a device that never had a fault -
+            // which is the same string the in-place retry records
+            // ([BingeCatRefreshRecovery.RECOVERED]).
+            BingeCatTrace.recordError(BingeCatRefreshRecovery.RECOVERED)
         }
         if (live) resetBingeCatStateAfterSessionChange(context)
     }
