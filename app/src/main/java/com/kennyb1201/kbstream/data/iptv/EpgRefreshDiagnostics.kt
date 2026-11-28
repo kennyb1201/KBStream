@@ -123,8 +123,8 @@ internal object EpgRefreshDiagnostics {
         val stopRetry: Boolean = false,
 
         /**
-         * True when at least one source continued a stopped import instead of
-         * starting it over (its staged rows were kept). Prefixed onto the line:
+         * True when at least one source continued a stopped import rather than
+         * beginning it again (its staged rows were kept). Prefixed onto the line:
          * the field test's question is whether the retry picked the import up
          * or began it again.
          */

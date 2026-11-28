@@ -143,15 +143,15 @@ class EpgRefreshWorker(
         // A timeout is a cut budget, not a stop: it has its own verdict (see
         // importWithinBudget) and must not be reported as WorkManager stopping
         // the pass.
-        if (cancelled !is TimeoutCancellationException) {
-            recordStoppedPass()
-            // The pass ended where WorkManager cut it, not where its sources
-            // did. Without this the next chance is the 6h tick (or a playback
-            // catch-up, or a manual press), and every one of those used to
-            // restart the same multi-minute import from byte 0 - the loop the
-            // field paste `outcome=stopped mid-import aborts=2` is made of.
-            enqueueStopRetryIfBounded()
-        }
+        if (cancelled !is TimeoutCancellationException) recordStoppedPass()
+        // The pass ended where WorkManager cut it, not where its sources did.
+        // Without this the next chance is the 6h tick (or a playback catch-up,
+        // or a manual press), and every one of those used to restart the same
+        // multi-minute import from byte 0 - the loop the field paste
+        // `outcome=stopped mid-import aborts=2` is made of. A timeout is exempt
+        // for the same reason it is not a stop: the pass carries on to its next
+        // source, so there is nothing to continue.
+        if (cancelled !is TimeoutCancellationException) enqueueStopRetryIfBounded()
         throw cancelled
     }
 
