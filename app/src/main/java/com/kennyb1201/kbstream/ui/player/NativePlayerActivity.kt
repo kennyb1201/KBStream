@@ -9444,6 +9444,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 // is how a wedged decoder pool happens. The prime stays unspent
                 // (the process latch is not set), so the next P5 play still gets it.
                 if (errorContainer.visibility == View.VISIBLE || errorMessageStr != null) {
+                    // Abandon it rather than holding the splash over that card: the
+                    // session is the ladder's now, and the prime is not owed to a
+                    // session that never painted (no latch is set, so the next P5
+                    // play still gets it).
+                    p5PrimeRebuildPending = false
+                    hideSplash()
                     return@postDelayed
                 }
                 p5PrimeRebuildPending = false
