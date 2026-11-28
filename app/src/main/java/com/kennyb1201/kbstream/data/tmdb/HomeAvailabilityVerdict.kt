@@ -42,6 +42,14 @@ internal object HomeAvailabilityVerdict {
      * The cache holds `detail_en:` and `rail_en:` payloads keyed by title
      * ([TmdbRepository]'s own keys); a verdict is neither, so it gets its own
      * namespace rather than sharing a key with the payload that produced it.
+     *
+     * That namespace is PINNED against the cache's byte budget (see
+     * `PINNED_JSON_CACHE_PREFIXES`), and it has to be: the trim keeps the newest
+     * rows, a verdict is written once and never refreshed, and a payload is
+     * 27-81 KB against this row's dozen bytes - so an unpinned verdict row is the
+     * first thing a full cache spends, and the whole pass then re-derives on the
+     * next start. Pinning does not extend either clock above: the 30-day age
+     * prune still ends the row's life.
      */
     const val KEY_PREFIX = "homeavail:"
 

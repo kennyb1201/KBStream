@@ -27,8 +27,29 @@ internal data class JsonCacheEntry(
  * of requests, which is a far worse outcome than the space it would save.
  * Pinned rows still count against the budget, so a snapshot large enough to
  * fill it on its own would evict everything else rather than be evicted.
+ *
+ * `homeavail:` (see `HomeAvailabilityVerdict`) is pinned for the same reason,
+ * measured in the other direction: it was NOT, and the trim was eating it.
+ *
+ * A verdict row is a one-word answer — `{"available":false}` under
+ * `homeavail:tmdb:<n>`, tens of bytes against the 27-81 KB a rail payload
+ * costs — and it is written ONCE and never re-written, because a read does not
+ * refresh [JsonCacheEntry.updatedAt]. The retention rule here is oldest-first,
+ * so on a cache that has reached its budget every verdict row is the first
+ * thing evicted, ahead of the payloads it exists to make unnecessary. The
+ * consequence is not a smaller cache but a permanent one: the next cold Home
+ * finds no answer, derives all of them again, writes a few hundred payloads
+ * (which is what pushes the table back over the budget), and evicts its own
+ * answers on the way out. That is the 13s `home.catalogFilter` pass
+ * re-paying itself on every start, and it is why a table with room for tens of
+ * thousands of these rows has to reserve the space for them.
+ *
+ * Pinning only protects against SIZE eviction. The 30-day age prune is
+ * untouched, so "available" still expires on the schedule the verdict itself
+ * honours (and "not available" is day-scoped by its own read rule, not by the
+ * table).
  */
-internal val PINNED_JSON_CACHE_PREFIXES = listOf("mdblist:snapshot:")
+internal val PINNED_JSON_CACHE_PREFIXES = listOf("mdblist:snapshot:", "homeavail:")
 
 /**
  * Which rows [rows] must give up to fit [maxBytes] and [maxEntries].

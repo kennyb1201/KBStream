@@ -8,6 +8,8 @@ import com.kennyb1201.kbstream.data.art.ArtSourceAnswer
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.LongAdder
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.cache.ImdbResolutionEntity
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
@@ -3682,22 +3684,47 @@ class TmdbRepository private constructor(context: Context) :
         // are already on screen, so their verdicts are invisible work competing
         // with the viewer's own frames. Defaults to "never yield" so the
         // blocking callers (KB folders, add-on search) keep their latency.
-        yieldBetweenItems: () -> Boolean = { false }
+        yieldBetweenItems: () -> Boolean = { false },
+        /*
+         * What this pass actually did, once it is done ([AvailabilityPassStats]).
+         *
+         * Home's behind-the-row pass records only its total, which cannot tell
+         * a count problem from a queue problem from a slow read - and those
+         * want opposite fixes. Optional and defaulted so the blocking callers
+         * (KB folders, add-on search) compile and behave unchanged, and cheap
+         * when supplied: a handful of counters, added once per item.
+         */
+        onStats: ((AvailabilityPassStats) -> Unit)? = null
     ): List<T> {
 
         if (items.isEmpty() || !isDigitalFilterEnabled()) return items
 
         val today = LocalDate.now()
 
+        // The pass's split, counted where the decisions are made (see
+        // [AvailabilityPassStats]). Atomics rather than locals because every
+        // item runs on its own coroutine, and LongAdder for the summed time
+        // because that is what it is for - a cold Home can add a few hundred
+        // of them at once and the counters must not become the cost.
+        val movies = AtomicInteger(0)
+        val yearSkipped = AtomicInteger(0)
+        val storeAnswered = AtomicInteger(0)
+        val fetched = AtomicInteger(0)
+        val netFetches = AtomicInteger(0)
+        val fetchTotalMs = LongAdder()
+        val fetchMaxMs = AtomicLong(0L)
+
         return coroutineScope {
 
-            items.map { item ->
+            val kept = items.map { item ->
 
                 async {
 
                     if (!type(item).equals("movie", ignoreCase = true)) {
                         return@async item
                     }
+
+                    movies.incrementAndGet()
 
                     // The year answers it for most of a Home screen (see
                     // [ReleaseAgeGate]): a movie released in an earlier calendar
@@ -3708,6 +3735,7 @@ class TmdbRepository private constructor(context: Context) :
                     // deferral behind the row did not, it only moved them into
                     // the pinned batch's window.
                     if (ReleaseAgeGate.isDefinitelyReleased(releasedYear(item), today.year)) {
+                        yearSkipped.incrementAndGet()
                         return@async item
                     }
 
@@ -3730,6 +3758,7 @@ class TmdbRepository private constructor(context: Context) :
                         canonicalVerdictKey(id(item), "movie") ?: id(item)
 
                     knownHomeAvailabilityVerdict(verdictKey, today)?.let { known ->
+                        storeAnswered.incrementAndGet()
                         return@async if (known) item else null
                     }
 
@@ -3773,17 +3802,35 @@ class TmdbRepository private constructor(context: Context) :
 
                     val permits =
                         if (pinnedLeg) pinnedAvailabilitySemaphore else availabilitySemaphore
+                    // Monotonic, not wall-clock: these durations are read as "is
+                    // the pass waiting on the queue", and an NTP step mid-pass
+                    // would report a negative read.
+                    val fetchStartedAtMs = android.os.SystemClock.elapsedRealtime()
                     val detail = permits.withPermit {
 
                         runCatchingCancellable {
 
                             fetchEnrichedMetaCached(
                                 imdbId = id(item),
-                                type = "movie"
+                                type = "movie",
+                                // "net"/"shared" are the reads that cost a
+                                // request; "mem"/"disk" are the detail cache
+                                // answering under the permit. That difference
+                                // is the whole reason the leg is counted
+                                // separately from the call total.
+                                onSource = { source ->
+                                    if (source == "net" || source == "shared") {
+                                        netFetches.incrementAndGet()
+                                    }
+                                }
                             )
 
                         }.getOrNull()
                     }
+                    val fetchMs = android.os.SystemClock.elapsedRealtime() - fetchStartedAtMs
+                    fetched.incrementAndGet()
+                    fetchTotalMs.add(fetchMs)
+                    fetchMaxMs.accumulateAndGet(fetchMs) { seen, next -> maxOf(seen, next) }
                     val verdict = detail?.isAvailableAtHome(today)
 
                     if (verdict != null) {
@@ -3815,6 +3862,22 @@ class TmdbRepository private constructor(context: Context) :
                     }
                 }
             }.awaitAll().filterNotNull()
+
+            // Reported once, after every item: the caller records it against
+            // its own leg label (see HomeViewModel.recordVerdictPassStats).
+            onStats?.invoke(
+                AvailabilityPassStats(
+                    movies = movies.get(),
+                    yearSkipped = yearSkipped.get(),
+                    storeAnswered = storeAnswered.get(),
+                    fetched = fetched.get(),
+                    netFetches = netFetches.get(),
+                    fetchTotalMs = fetchTotalMs.sum(),
+                    fetchMaxMs = fetchMaxMs.get()
+                )
+            )
+
+            kept
         }
     }
 
