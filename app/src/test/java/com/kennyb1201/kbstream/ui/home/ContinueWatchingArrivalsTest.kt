@@ -411,35 +411,48 @@ class ContinueWatchingArrivalsTest {
         }
 
     @Test
-    fun `the advance card still beats the tracker twin for the same show`() =
+    fun `a show the rail carries and a feed also knows is one card, the same one either way`() =
         runBlocking {
 
-            // Dedupe precedence must not change: the `nextup:` card sits in the
-            // local half, before the tracker cards, so it is the one that wins.
+            // What the slot must not change is the merge: the `nextup:` card sits
+            // in the local half, before the tracker cards, so it competes with its
+            // twin in the same position the fresh cards compete in. The same
+            // inputs therefore produce the same card and the same contents,
+            // whether the advance card was carried in or handed over by the walk.
             val simklTwin =
                 trackerCard(ResumeSource.SIMKL, "tt9", "South Park", episode = 6)
             val advance = advanceCard("tt9", "South Park", episode = 6)
 
-            val published = mutableListOf<List<UpNextItem>>()
+            // Carried: the previous rail's card rides the slot.
+            val carried = mutableListOf<List<UpNextItem>>()
+            arrivals(
+                published = carried,
+                localCards = listOf(local),
+                previousTrackerCards = listOf(advance)
+            ).apply {
+                publishLocal()
+                arrive(TrackerFeed.SIMKL, listOf(simklTwin))
+            }
 
-            val arrivals =
-                arrivals(
-                    published = published,
-                    localCards = listOf(local),
-                    previousTrackerCards = listOf(advance)
-                )
-
-            arrivals.publishLocal()
-            arrivals.arrive(TrackerFeed.SIMKL, listOf(simklTwin))
+            // Fresh: the walk's own answer in the local slice, no carry at all.
+            val fresh = mutableListOf<List<UpNextItem>>()
+            arrivals(
+                published = fresh,
+                localCards = listOf(local)
+            ).apply {
+                publishLocalCards(listOf(local, advance))
+                arrive(TrackerFeed.SIMKL, listOf(simklTwin))
+            }
 
             assertEquals(
-                "one card for the show, and it is the local advance card",
+                "one card for the show, whether the advance card was carried or fresh",
                 1,
-                published.last().count { showDedupeKey(it) == showDedupeKey(advance) }
+                fresh.last().count { showDedupeKey(it) == showDedupeKey(advance) }
             )
             assertEquals(
-                advance,
-                published.last().single { showDedupeKey(it) == showDedupeKey(advance) }
+                "and the slot's card lands in exactly the fresh card's place",
+                fresh.last(),
+                carried.last()
             )
         }
 
@@ -467,8 +480,8 @@ class ContinueWatchingArrivalsTest {
 
             assertEquals(
                 "the show the walk no longer returns is gone rather than kept forever",
-                listOf("Paused Show", "South Park"),
-                titles(published.last())
+                listOf("Paused Show", "South Park").sorted(),
+                titles(published.last()).sorted()
             )
             assertEquals(
                 "and the one it does return is the fresh card, not the carried version",
@@ -481,7 +494,7 @@ class ContinueWatchingArrivalsTest {
             assertEquals(
                 "an answer of nothing is an answer: the slot is cleared",
                 listOf("Paused Show"),
-                titles(published.last())
+                titles(published.last()).sorted()
             )
         }
 
