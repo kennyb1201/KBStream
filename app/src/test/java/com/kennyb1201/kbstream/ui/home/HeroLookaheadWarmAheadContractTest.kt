@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.home
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -163,9 +164,10 @@ class HeroLookaheadWarmAheadContractTest {
     @Test
     fun `the wait sits inside the dwell and belongs to the walk`() {
         assertTrue(
-            "250ms, well inside the 600ms of stillness the hero needs before it " +
-                "publishes - the rest of the dwell is the lead the hit comes from",
-            vm.contains("private const val HERO_WARM_AFTER_ART_MS = 250L") &&
+            "80ms, inside the 600ms of stillness the hero needs before it publishes, " +
+                "and short enough that the measured decode fits what it leaves " +
+                "(see the budget below)",
+            vm.contains("private const val HERO_WARM_AFTER_ART_MS = 80L") &&
                 vm.contains("private const val HERO_ART_DWELL_MS = 600L")
         )
         val lookahead = lookaheadBlock()
@@ -187,6 +189,64 @@ class HeroLookaheadWarmAheadContractTest {
             vm.substringAfter("fun warmHeroFocus(")
                 .substringBefore("private var heroLookaheadJob")
                 .contains("HERO_WARM_AFTER_ART_MS")
+        )
+    }
+
+    // ── 2026-11-27: the lead the warm is given ───────────────────────────
+
+    /**
+     * The 6395 walk drew 7 heroes and hit 1 (14%) with `skippedWalk=162`: the
+     * settle warm ran for every draw and lost every race but one. Its work is
+     * what the delay is spent against - `warmP50=499ms` on the 6390 walk - so
+     * delay plus decode has to fit the dwell the hero publishes after. It did
+     * not: 250 + 499 = 749ms against a 600ms draw.
+     */
+    @Test
+    fun `the settle warm's delay leaves the dwell enough for its own decode`() {
+        val delayMs = constant("HERO_WARM_AFTER_ART_MS")
+        val dwellMs = constant("HERO_ART_DWELL_MS")
+        val decodeMs = 499L // warmP50, the 6390 walk
+        assertEquals("the dwell is the hero's publish gate, not a warm knob", 600L, dwellMs)
+        assertTrue(
+            "$delayMs + ${decodeMs}ms decode must fit the ${dwellMs}ms dwell: at 250 " +
+                "the warm landed at +749ms, after the draw, and 6395 hit 1 draw of 7",
+            delayMs + decodeMs <= dwellMs
+        )
+        assertTrue(
+            "and it still has to be a SETTLE window, not an inline decode: the " +
+                "6395 walk's 169 arrivals over 216 frames is a ~21ms step",
+            delayMs >= 60L
+        )
+    }
+
+    /**
+     * The other half of Mechanism 2: the lookup. The settle candidate's own url
+     * is resolved ON THE ARRIVAL (in the walk-ahead), so the delay gates only
+     * the decode - a cold resolve averages 883ms (p95 2.4s) and no delay inside
+     * a 600ms dwell survives it.
+     */
+    @Test
+    fun `the settled card's url resolves at the arrival, not inside the delay`() {
+        val walk = walkAheadBlock()
+        assertTrue(
+            "the focused card joins the arrival's URL-only warm",
+            walk.contains("(listOf(item) + urlOnly)")
+        )
+        assertTrue(
+            "through the same cache-first resolver the walk-ahead already uses",
+            walk.contains("resolveHeroArtworkForPrefetch(candidate)")
+        )
+        assertTrue(
+            "and the URL warm is still URL only: one bitmap decode in the whole " +
+                "walk-ahead (see HeroUrlAheadContractTest)",
+            walk.split("warmHeroArtBitmap(").size - 1 == 1
+        )
+        val lookahead = lookaheadBlock()
+        assertTrue(
+            "so the only work left behind the settle delay is the decode",
+            lookahead.contains("delay(HERO_WARM_AFTER_ART_MS)") &&
+                lookahead.indexOf("delay(HERO_WARM_AFTER_ART_MS)") <
+                lookahead.indexOf("warmHeroArtBitmap(")
         )
     }
 
@@ -221,6 +281,17 @@ class HeroLookaheadWarmAheadContractTest {
     private fun lookaheadBlock(): String =
         vm.substringAfter("private fun warmHeroLookahead(")
             .substringBefore("private fun warmRailTiles(")
+
+    private fun walkAheadBlock(): String =
+        vm.substringAfter("private fun warmHeroWalkAhead(")
+            .substringBefore("/**\n     * Warms the HERO bitmap of the card focus settled on")
+
+    /** The value of a `private const val NAME = 80L` in the ViewModel. */
+    private fun constant(name: String): Long {
+        val match = Regex("const val $name = (\\d+)L").find(vm)
+        assertTrue("constant $name missing from the ViewModel", match != null)
+        return match!!.groupValues[1].toLong()
+    }
 
     private fun source(relative: String): String {
         var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile

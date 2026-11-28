@@ -57,6 +57,7 @@ import com.kennyb1201.kbstream.data.trakt.TraktPlaybackSession
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.trakt.TraktShowWatch
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
+import com.kennyb1201.kbstream.data.tmdb.AvailabilityPassStats
 import com.kennyb1201.kbstream.data.tmdb.HeroArtwork
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetailLookup
@@ -3598,7 +3599,9 @@ Log.d(
      * card's hero bitmap. The rest of the window is URL resolution - a cache-first
      * JSON read, no bitmap memory - so a rail-warmed title costs no extra network
      * and the 48MB cache is not refilled with art the walk never draws (churn
-     * F1).
+     * F1). The focused card's OWN url is resolved here as well (2026-11-27):
+     * the settle warm's delay has to gate only its decode, and a card reached by
+     * a vertical move is not in any previous arrival's forward window.
      *
      * The settled card's decode is still [warmHeroLookahead]'s job. This runs at
      * the focus event so the next card has the whole step plus its own dwell to
@@ -3656,20 +3659,30 @@ Log.d(
                 // the first card in this list too - resolved, just not decoded,
                 // so the settle warm still never waits on a lookup.
                 val urlOnly = if (decodeNext) forward.drop(1) else forward
+                // The settle candidate's OWN url, resolved here - at the ARRIVAL
+                // (2026-11-27, home lookahead hit rate). A forward walk already
+                // gets it from the previous arrival's window, but the first card
+                // after a vertical move - or any card reached deeper than
+                // [HERO_URL_RAIL_WINDOW] - arrives with a cold lookup, and the
+                // settle warm's entire lead was then spent asking TMDB which url
+                // to decode (883ms average, 2.4s p95). Resolved here, the delay
+                // gates only the decode.
                 coroutineScope {
-                    urlOnly.map { candidate ->
-                        async {
-                            try {
-                                heroUrlWarmSemaphore.withPermit {
-                                    resolveHeroArtworkForPrefetch(candidate)
+                    (listOf(item) + urlOnly)
+                        .distinctBy { candidate -> warmKeyOf(candidate) }
+                        .map { candidate ->
+                            async {
+                                try {
+                                    heroUrlWarmSemaphore.withPermit {
+                                        resolveHeroArtworkForPrefetch(candidate)
+                                    }
+                                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                    throw cancelled
+                                } catch (_: Exception) {
+                                    // Best-effort.
                                 }
-                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                                throw cancelled
-                            } catch (_: Exception) {
-                                // Best-effort.
                             }
-                        }
-                    }.awaitAll()
+                        }.awaitAll()
                 }
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
@@ -3698,8 +3711,10 @@ Log.d(
      * warm and restarts the delay, and the only card that survives is the one the
      * walk stopped on - which is also the only card the hero will publish, after
      * [HERO_ART_DWELL_MS] of stillness. [HERO_WARM_AFTER_ART_MS] of the dwell is
-     * enough for the resolve and a decode, and leaves the warm about a third of
-     * a second of lead on the draw it is for. A cancelled warm is not a lost one:
+     * all the warm is given up front, and since 2026-11-27 that is short enough
+     * for the measured decode to fit the lead the dwell leaves it - the card's
+     * url is resolved at the arrival, so the delay gates only the decode. A
+     * cancelled warm is not a lost one:
      * the next settle asks again, and the cancelled job's own `finally` releases
      * [heroArtPrefetchInFlight] so a card is never left wedged in it.
      *
@@ -3754,10 +3769,12 @@ Log.d(
                 } else {
                     heroArtPrefetchSemaphore.withPermit {
                         // Timed from here (settle over, permit held) to the
-                        // finished bitmap. The dwell gives this ~350 ms before
-                        // the hero draws, and the 0.9.431 walk's 45% hit rate
-                        // cannot say whether the misses are "no warm" or "warm
-                        // arrived late" - this sample is the answer.
+                        // finished bitmap. The dwell gives this ~520 ms before
+                        // the hero draws - 600 minus the 80 ms delay - and the
+                        // 0.9.431 walk's 45% hit rate could not say whether the
+                        // misses were "no warm" or "warm arrived late". This
+                        // sample is the answer, and it is the number the delay
+                        // is set against (see [HERO_WARM_AFTER_ART_MS]).
                         val warmStartedAtMs = android.os.SystemClock.elapsedRealtime()
                         val decoded = warmHeroArtBitmap(artwork)
                         if (decoded) {
@@ -3770,6 +3787,12 @@ Log.d(
                     }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
+                // A step that arrives while the warm is resolving or decoding
+                // is the same thing as one arriving during the delay: a warm
+                // the walk did not spend. Counted here too, or `skippedWalk`
+                // quietly stops meaning that once the delay is short enough
+                // that most cancellations land mid-work (2026-11-27).
+                ImageLoadTrace.noteHeroWarmSkippedWalk()
                 throw e
             } catch (_: Exception) {
                 // Best-effort: the focus path resolves it properly.
@@ -13431,7 +13454,12 @@ private suspend fun calculateEpisodesRemaining(
      */
     private suspend fun applyDigitalAvailabilityFilter(
         metas: List<MetaPreview>,
-        pinnedLeg: Boolean = false
+        pinnedLeg: Boolean = false,
+        // What the pass did, for the paste ([AvailabilityPassStats]). Only Home
+        // supplies it: its rows are already on screen, so the split is the one
+        // thing that can say whether the behind-pass is waiting on the count,
+        // the store or the queue.
+        onStats: ((AvailabilityPassStats) -> Unit)? = null
     ): List<MetaPreview> =
         // One implementation with the KB folders and add-on search
         // (TmdbRepository.filterByHomeAvailabilityById), so an un-released movie
@@ -13459,8 +13487,61 @@ private suspend fun calculateEpisodesRemaining(
             // and the latency it expects.
             yieldBetweenItems = {
                 com.kennyb1201.kbstream.data.reporting.UiFrameTrace.inWalkWindow()
-            }
+            },
+            onStats = onStats
         )
+
+    /** Per-leg running totals for [recordVerdictPassStats]: label → summed stats. */
+    private val verdictPassTotals =
+        java.util.concurrent.ConcurrentHashMap<String, AvailabilityPassStats>()
+
+    /**
+     * The build epoch [verdictPassTotals] belongs to. A new build (or a profile
+     * switch, which is a new epoch) starts the totals over, so a paste never
+     * reads two profiles' passes as one.
+     */
+    @Volatile
+    private var verdictPassTotalsEpoch = Long.MIN_VALUE
+
+    /**
+     * Records one availability pass's split, per leg and as a running total.
+     *
+     * `home.catalogFilter` is ONE rail's pass and a cold Home runs one per
+     * catalog - six or more behind six shared permits - so the per-leg figure
+     * alone cannot say what the whole screen cost. The totals are what the paste
+     * reads for that: `home.catalogFilter.all.fetched` is every payload the cold
+     * start read, `.all.net` how many of them went to TMDB, and `.all.fetchAvg`
+     * the read latency that `all.fetched / permits` multiplies out. Labels are a
+     * fixed set (two legs × seven), so the pinned `home.*` map stays bounded.
+     *
+     * Counts go through [PerfTrace.recordCount], not [PerfTrace.record]: a
+     * 4,000-title count is not a 4-second stall and must not be forwarded as one.
+     */
+    private fun recordVerdictPassStats(
+        label: String,
+        stats: AvailabilityPassStats,
+        buildEpoch: Long
+    ) {
+        val totals = synchronized(verdictPassTotals) {
+            if (verdictPassTotalsEpoch != buildEpoch) {
+                verdictPassTotals.clear()
+                verdictPassTotalsEpoch = buildEpoch
+            }
+            (verdictPassTotals[label] ?: AvailabilityPassStats.Zero)
+                .plus(stats)
+                .also { summed -> verdictPassTotals[label] = summed }
+        }
+
+        listOf("$label.all" to totals, label to stats).forEach { (prefix, legs) ->
+            PerfTrace.recordCount("$prefix.movies", legs.movies.toLong())
+            PerfTrace.recordCount("$prefix.yearSkipped", legs.yearSkipped.toLong())
+            PerfTrace.recordCount("$prefix.store", legs.storeAnswered.toLong())
+            PerfTrace.recordCount("$prefix.fetched", legs.fetched.toLong())
+            PerfTrace.recordCount("$prefix.net", legs.netFetches.toLong())
+            PerfTrace.record("$prefix.fetchAvg", legs.fetchAvgMs)
+            PerfTrace.record("$prefix.fetchMax", legs.fetchMaxMs)
+        }
+    }
 
     /**
      * Remaining auto-retries for an all-failed cold-start rail build (see the
@@ -14873,7 +14954,10 @@ private suspend fun calculateEpisodesRemaining(
                     tmdbRepository.kidsFilterMetas(
                         applyDigitalAvailabilityFilter(
                             filterUpcoming(metas),
-                            pinnedLeg = pinnedLeg
+                            pinnedLeg = pinnedLeg,
+                            onStats = { stats ->
+                                recordVerdictPassStats(label, stats, buildEpoch)
+                            }
                         )
                     )
                 } else {
@@ -16502,20 +16586,25 @@ private suspend fun calculateEpisodesRemaining(
 
         /**
          * How long the hero-size warm waits after a focus step before it decodes
-         * anything (spec 2026-11-19 churn F2, re-aimed 0.9.400).
+         * anything (spec 2026-11-19 churn F2, re-aimed 0.9.400, 2026-11-27).
          *
-         * Two jobs in one number. It gives the step's own work - the meta
-         * resolve and the rail's tiles - the box first, which is why it is not
+         * Two jobs in one number. It gives the step's own work - the rail's
+         * tiles, then the meta resolve - the box first, which is why it is not
          * fired inline. And because every further step CANCELS this timer, it is
          * also the walk's settle window: only the card the viewer stopped on is
-         * still owed a warm 250ms later.
+         * still owed a warm 80ms later.
          *
-         * It has to sit well inside [HERO_ART_DWELL_MS], because the lead it
-         * leaves is the point: the hero publishes its art (and draws) after 600ms
-         * of stillness, so 250ms here leaves roughly a third of a second for a
-         * resolve and a decode to be done before the draw asks for the bitmap.
+         * The upper bound is the arithmetic the hit rate is made of, and it is
+         * tight: the hero publishes its art (and draws) after
+         * [HERO_ART_DWELL_MS] of stillness, and the warm's decode alone measured
+         * `warmP50=499ms` on the 6390 walk. At 250ms that left ~350ms for a
+         * 499ms decode - every settle warm landed after its draw, which is the
+         * 6395 walk's `hits=1 misses=6 rate=14%`. So the delay can be at most
+         * ~100ms; 80 leaves a frame or two of margin and is still several times
+         * the measured step cadence (169 arrivals over 216 frames), so a walk
+         * that is still moving cancels the timer before it ever decodes.
          */
-        private const val HERO_WARM_AFTER_ART_MS = 250L
+        private const val HERO_WARM_AFTER_ART_MS = 80L
 
         /**
          * The head card of the row above and of the row below: the card a

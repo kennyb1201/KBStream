@@ -155,12 +155,14 @@ internal object ImageLoadTrace {
     // The warm's own LATENCY (2026-11-21, the 45% hit rate). `heroWarms` says a
     // warm ran; it cannot say whether it finished before the hero drew, and the
     // lead it gets is fixed by two constants: the warm starts
-    // `HERO_WARM_AFTER_ART_MS` (250 ms) after focus and the hero publishes after
-    // `HERO_ART_DWELL_MS` (600 ms) of stillness. That leaves ~350 ms for a
-    // 1280x720 decode on a box whose 640x360 decode p50 read 316 ms - so the
-    // warm may be losing a race it was never given time to win, and no hit-rate
-    // change would fix that. These samples are the only way to tell the two
-    // apart. A ring, not a histogram: the paste wants p50 and max.
+    // `HERO_WARM_AFTER_ART_MS` after focus and the hero publishes after
+    // `HERO_ART_DWELL_MS` (600 ms) of stillness. That arithmetic is what the
+    // 6395 walk's `rate=14%` was made of: a 250 ms delay left ~350 ms for a
+    // 1280x720 decode whose own p50 read 499 ms, so the warm was losing a race
+    // it had never been given time to win. The delay is 80 ms since 2026-11-27
+    // (and the card's url resolves at the arrival), so these samples are read
+    // against a ~520 ms lead. A ring, not a histogram: the paste wants p50 and
+    // max.
     private val heroWarmMs = IntArray(32)
     private var heroWarmCount = 0
 
@@ -366,7 +368,7 @@ internal object ImageLoadTrace {
 
     /**
      * One hero warm, timed from the end of its settle delay to the finished
-     * bitmap - the number to read against the ~350 ms the dwell leaves it.
+     * bitmap - the number to read against the ~520 ms the dwell leaves it.
      */
     fun noteHeroWarmMs(ms: Int) {
         synchronized(lock) {
