@@ -1797,6 +1797,32 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     // that happens before the first frame, rebuild once so the GLES/FFmpeg
     // color path engages from the start.
     private var p5ReroutePending = false
+
+    /**
+     * True when the in-band sniff proved this session's track carries a Profile
+     * 5 RPU although the container declared plain `hvc1` (F3, spec 2026-11-27).
+     *
+     * Per SOURCE, not per attempt: the sniff re-reads the same first sample on
+     * every rebuild, and a rebuilt session that forgot this would strip the P5
+     * track with no GPU colour path — which is the green picture the sniff branch
+     * exists to prevent. Reset in [switchToSource] with the rest of the DV
+     * identity, because the next title is a different file.
+     */
+    private var p5SniffedP5ForSession = false
+
+    /**
+     * F2: this attempt is the cold first P5 passthrough play of this process and
+     * owes its one bounded re-init (see [P5AutoRecovery.needsFirstPlayPrime]).
+     *
+     * Armed in [createPlayer], spent in [markFirstFrameRendered]: the first
+     * frame's splash is held while it is set, so the viewer never sees the
+     * attempt the field says renders washed-out, and the rebuild that follows is
+     * the "replay it from the beginning" the retest proved engages Dolby Vision.
+     */
+    private var p5PrimeRebuildPending = false
+
+    /** Guards the pending prime from arming twice off one attempt's frames. */
+    private var p5PrimeRebuildStarted = false
     // Original declared DV codec (e.g. "dvhe.07.06") of the current video
     // track when the DV → HDR10 strip rewrote it; null for everything else.
     // Surfaced in the codec badge so the exact DV profile stays visible
@@ -7034,7 +7060,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             AppPreferences.getConvertP5To81(this)
         val convertTo81 = convertP7To81 || convertP5To81
         dvTo81Session = convertTo81 // badge: "DV P7 → 8.1"
-        val p5Content = currentCodecs?.let { DolbyVisionCompat.isP5Profile(it) } ?: false
+        // P5 content for this session: the DECLARED codec (the rewriter keeps it
+        // on the label, which is how it is known at all), or the in-band sniff
+        // having proved it on a track whose container declared plain hvc1 (F3).
+        val p5Content =
+            (currentCodecs?.let { DolbyVisionCompat.isP5Profile(it) } ?: false) ||
+                p5SniffedP5ForSession
         // P5 (single-layer ICtCp) content needs color conversion for correct
         // colors. The raw-plane GLES path is the only path that actually
         // works: the hardware Surface path applies an automatic dataspace
@@ -7085,6 +7116,39 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 "PLAYER_DV",
                 "P5 content present — playing natively as Dolby Vision " +
                     "(no conversion active: mode=$dvCompatMode nativeDv=$nativeDvSupported)"
+            )
+        }
+        // F2 (spec 2026-11-27, revised after the field retest): the cold first P5
+        // passthrough play of this process is the one the platform fails to
+        // engage Dolby Vision on — the frames render, and they render green.
+        //
+        // There is no engagement signal to gate on: no decoder output-format
+        // hook on the passthrough path, and no display DV-mode callback (a
+        // display's HDR capabilities are a static read, identical before and after
+        // the panel latches). So this implements the spec's mandated fallback
+        // rather than a pixel-green detector: one bounded re-init, spent here and
+        // taken in [markFirstFrameRendered] — after the first frame, because the
+        // evidence is that a REPLAY engages it, and a replay works only because
+        // the first play put frames through the panel. Rebuilding before any
+        // frame would be the same cold attempt again. [P5AutoRecovery] carries
+        // the long version.
+        p5PrimeRebuildStarted = false
+        // VOD only: a live channel's own recovery ladder and its zap timing are
+        // not worth a re-init for a profile live streams do not carry.
+        p5PrimeRebuildPending = !isLiveChannel && P5AutoRecovery.needsFirstPlayPrime(
+            autoMode = dvCompatMode == AppPreferences.DV_COMPAT_AUTO,
+            nativeDvPassthrough = dvPassthroughActive,
+            displaySupportsDv = displaySupportsDv,
+            p5Content = p5Content,
+            glesPathWanted = p5GlesPathWanted(),
+            primedThisProcess = p5NativePrimeDoneInProcess
+        )
+        if (p5PrimeRebuildPending) {
+            Log.i(
+                "PLAYER_DV",
+                "P5 first play in this process — arming the one bounded re-init " +
+                    "(no Dolby Vision engagement signal exists to gate on; " +
+                    "rebuilding once after the first frame)"
             )
         }
         // Audio extension mode follows the independent audio decoder priority
@@ -7168,7 +7232,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     // fact itself: a DV decoder on a non-DV display is the
                     // combination the keep-DV strip exists for, and the factory
                     // is not allowed to infer it from an AUTO-mode flag.
-                    displaySupportsDv = displaySupportsDv
+                    displaySupportsDv = displaySupportsDv,
+                    // F3: a sniffed P5 is stripped whatever this box can do
+                    // natively (the container declared no Dolby Vision, so the
+                    // platform pipeline never sees it) — and the strip needs the
+                    // raw-plane colour path, which only the player can turn on.
+                    onSniffedDvProfile = ::onSniffedDvProfileFound
                 )
             }
         // Which arm this session is on, resolved from the exact inputs the
@@ -8511,6 +8580,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 // is required to be false to reach here -- this is a DV decoder
                 // refusing the FORMAT, not the box running dry. A resource
                 // failure is handled below and clears the verdict instead.
+                // F4 (spec 2026-11-27): this is profile-agnostic on purpose, and
+                // P5 needs it to be. The observed P5 failure emits no error — it
+                // renders green — so this record can only ever catch a decoder that
+                // REFUSES the stream; when it does, the record plus F1's strip gate
+                // is what takes P5 off the vendor decoder for the next 14 days
+                // (`P5AutoRecovery.stripP5ForGpuPath` reads the suppression through
+                // `nativeDvSupported`, which this verdict clears), with the GPU
+                // colour path engaged because the same verdict forbids passthrough.
+                // It is defense in depth, not the fix: F2's prime is what the
+                // no-error case relies on.
                 AppPreferences.setDvPassthroughFailedAt(
                     this@NativePlayerActivity,
                     System.currentTimeMillis()
@@ -8519,7 +8598,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 Log.w(
                     "PLAYER_DV",
                     "Dolby Vision decoder failure (${streamDeclaredDvCodec ?: streamCodec}) — " +
-                        "retrying once with Dolby Vision stripped to HDR10"
+                        "retrying once with Dolby Vision stripped to HDR10 " +
+                        "(P5 included: strip + GPU colour path)"
                 )
                 // A DV verdict is the one decoder failure the app REMEMBERS for
                 // 14 days, so the report has to show it happened and to which
@@ -9289,7 +9369,15 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // both fire BEFORE the decoder paints, so they must not dismiss the
         // splash — that is what exposed a black screen + yellow spinner in
         // the READY-to-first-frame gap.
-        if (splashContainer.visibility == View.VISIBLE) {
+        //
+        // Except on the cold first P5 passthrough play (F2): that frame is the
+        // one the field says renders washed-out green, and the priming rebuild
+        // is about to replay the session. Holding the splash keeps the wrong
+        // picture behind it rather than presenting it for the priming window;
+        // the rebuilt session's own first frame dismisses it.
+        if (p5PrimeRebuildPending) {
+            scheduleP5PrimeRebuild()
+        } else if (splashContainer.visibility == View.VISIBLE) {
             hideSplash()
         }
         // The second of MPV's three repaints: the first frame is when the splash
@@ -9326,6 +9414,88 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     /**
+     * F2: spends the cold first P5 passthrough play's one bounded re-init.
+     *
+     * Reached from [markFirstFrameRendered] on the attempt armed by
+     * [createPlayer]. The delay is not a guess about decode time — it is the
+     * window the priming attempt is left running so the panel actually latches
+     * its Dolby Vision mode, which is the state the replay inherits. The splash
+     * is still covering the picture for all of it, so the viewer sees one longer
+     * load instead of a green flash followed by a restart.
+     *
+     * Sets the process-wide latch BEFORE rebuilding: that is what keeps the
+     * rebuilt session from arming a second prime, so the recovery is one re-init
+     * per process and can never loop.
+     */
+    private fun scheduleP5PrimeRebuild() {
+        if (p5PrimeRebuildStarted) return
+        p5PrimeRebuildStarted = true
+        Log.i(
+            "PLAYER_DV",
+            "P5 first play: frames are through the panel — rebuilding once so " +
+                "Dolby Vision engages (prime, ${P5AutoRecovery.PRIME_GRACE_AFTER_FIRST_FRAME_MS}ms after frame 1)"
+        )
+        handler.postDelayed(
+            {
+                if (isFinishing || isDestroyed) return@postDelayed
+                if (!p5PrimeRebuildPending) return@postDelayed
+                // The error card owns the session from here: its own ladder is
+                // already rebuilding for a reason, and a second rebuild racing it
+                // is how a wedged decoder pool happens. The prime stays unspent
+                // (the process latch is not set), so the next P5 play still gets it.
+                if (errorContainer.visibility == View.VISIBLE || errorMessageStr != null) {
+                    return@postDelayed
+                }
+                p5PrimeRebuildPending = false
+                p5NativePrimeDoneInProcess = true
+                recreatePlayer()
+            },
+            P5AutoRecovery.PRIME_GRACE_AFTER_FIRST_FRAME_MS
+        )
+    }
+
+    /**
+     * F3 (spec 2026-11-27): the extractor's in-band sniff read a Profile 5 RPU
+     * out of a track whose container declared plain `hvc1`.
+     *
+     * The extractor strips it — a declared-HEVC track never goes through the
+     * platform's Dolby Vision pipeline, so there is nothing native to preserve —
+     * and the ICtCp planes it leaves behind are only renderable correctly by the
+     * raw-plane shader. The flag makes [p5GlesPathWanted] say so, and the same
+     * one-shot reroute a declared P5 uses runs once before the first frame so the
+     * player is REBUILT with the plane renderer in its list (the renderer list is
+     * fixed at build time, which is why this is a rebuild and not a flag).
+     *
+     * Called from the extractor's thread; everything below happens on the main
+     * thread, and the flag is what makes it once per source.
+     */
+    private fun onSniffedDvProfileFound(profile: Int) {
+        if (profile != 5) return
+        handler.post {
+            if (p5SniffedP5ForSession) return@post
+            p5SniffedP5ForSession = true
+            Log.i(
+                "PLAYER_DV",
+                "In-band P5 confirmed by the sniff (container declared no Dolby " +
+                    "Vision) — engaging the raw-plane colour path"
+            )
+            if (!p5GlesActive && !firstFrameRendered && !p5ReroutePending) {
+                p5ReroutePending = true
+                recreatePlayer()
+            } else {
+                // The picture is already up (or the path is already on): a rebuild
+                // now would restart a playing file for a colour path that cannot
+                // be added mid-session anyway. Logged so the paste shows why.
+                Log.i(
+                    "PLAYER_DV",
+                    "In-band P5 arrived after the first frame (gles=$p5GlesActive) — " +
+                        "no rebuild; the remux must be replayed to get the colour path"
+                )
+            }
+        }
+    }
+
+    /**
      * Effective state of the P5 raw-plane GLES color path, independent of
      * whether P5 content is currently detected:
      *  - Strip All: the one automatic engagement — stripping the RPU is
@@ -9337,13 +9507,20 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      *    nothing stripped to convert whenever P5 was left as Dolby Vision.
      */
     private fun p5GlesPathWanted(): Boolean {
-        if (!P5ColorShader.hasGles3()) return false
-        // The watchdog's session override forces "Strip All", which auto-
-        // enables the GLES color path for P5 content — mirror that here so
-        // the stripped-P5 session gets correct colors, not raw ICtCp.
-        if (forceDvStripForSession) return true
-        return AppPreferences.getDvCompatMode(this) == AppPreferences.DV_COMPAT_ALL ||
-            AppPreferences.getP5GlesCorrection(this)
+        val mode = AppPreferences.getDvCompatMode(this)
+        // The rule itself lives in [P5AutoRecovery] so the four ways P5 reaches
+        // this path — the watchdog's session override, Strip All, the toggle, a
+        // sniffed P5, and F1's no-passthrough strip — are readable (and testable)
+        // as one decision instead of a chain of `||` here.
+        return P5AutoRecovery.glesPathWantedForP5(
+            hasGles3 = P5ColorShader.hasGles3(),
+            forceStripForSession = forceDvStripForSession,
+            stripAllMode = mode == AppPreferences.DV_COMPAT_ALL,
+            p5Toggle = AppPreferences.getP5GlesCorrection(this),
+            sniffedP5 = p5SniffedP5ForSession,
+            nativeDvPassthrough = dvPassthroughActive,
+            dvModeOff = mode == AppPreferences.DV_COMPAT_OFF
+        )
     }
 
     private fun armStartupWatchdog() {
@@ -17599,6 +17776,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // callback re-establishes it.
         currentCodecs = null
         streamDeclaredDvCodec = null
+        // ...and so does a sniffed P5 (F3): it is the same stale-identity bug —
+        // a P5 remux followed by any other title would keep the raw-plane path
+        // "on" and the shader would apply ICtCp math to that title's pixels.
+        p5SniffedP5ForSession = false
+        p5PrimeRebuildPending = false
+        p5PrimeRebuildStarted = false
         // The keep-DV annotation is per track too: a P8 title's fallback label
         // surviving into the next source is the same stale-identity class of
         // bug the two lines above exist for.
@@ -18280,6 +18463,19 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     companion object {
 
         private val sessionSequence = java.util.concurrent.atomic.AtomicInteger(0)
+
+        /**
+         * Whether a P5 play has already been primed in this PROCESS (F2).
+         *
+         * Process-wide and never reset: the field failure is the cold first P5
+         * play of a process, and the retest showed the engaged state holds for
+         * every later play — so the second P5 title (and every replay) takes the
+         * ordinary passthrough path with no extra rebuild and no extra splash
+         * time. An activity recreation is not a new process, so a configuration
+         * change does not re-pay it either.
+         */
+        @Volatile
+        private var p5NativePrimeDoneInProcess = false
 
         private fun isLikelyRetryable(error: PlaybackException): Boolean = when (error.errorCode) {
             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,

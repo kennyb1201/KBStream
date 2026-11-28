@@ -164,7 +164,22 @@ internal class DolbyVisionCompatExtractorsFactory(
      * mode-3 keep-DV arm can never be taken on an assumption — see
      * [selectHdr10BaseHandling].
      */
-    private val displaySupportsDv: Boolean? = null
+    private val displaySupportsDv: Boolean? = null,
+    /**
+     * The Dolby Vision profile the in-band sniff read out of the first RPU, when
+     * the container itself declared none (F3, spec 2026-11-27).
+     *
+     * The one thing this file cannot do for a remux is engage the player's GPU
+     * colour path, and that is what a sniffed P5 needs: a track declared `hvc1`
+     * never reaches the platform's Dolby Vision pipeline, so it is stripped to
+     * plain HEVC here whatever the box can do natively — and stripped ICtCp with
+     * no conversion is the same green picture. The player turns this into one
+     * bounded rebuild with the raw-plane renderer in place, exactly as it already
+     * does for a declared P5 (see `p5ReroutePending`).
+     *
+     * Called once per sniffed profile, on the extractor's thread.
+     */
+    private val onSniffedDvProfile: ((Int) -> Unit)? = null
 ) : ExtractorsFactory {
 
     override fun createExtractors(): Array<Extractor> {
@@ -207,7 +222,7 @@ internal class DolbyVisionCompatExtractorsFactory(
         return VideoCompatExtractor(
             extractor, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
             convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
-            displaySupportsDv
+            displaySupportsDv, onSniffedDvProfile
         )
     }
 }
@@ -226,7 +241,8 @@ private class VideoCompatExtractor(
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
     private val nonDvDisplayOnDvDevice: Boolean,
-    private val displaySupportsDv: Boolean?
+    private val displaySupportsDv: Boolean?,
+    private val onSniffedDvProfile: ((Int) -> Unit)?
 ) : Extractor {
 
     override fun init(output: ExtractorOutput) {
@@ -235,7 +251,7 @@ private class VideoCompatExtractor(
             VideoCompatExtractorOutput(
                 output, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
                 convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
-                displaySupportsDv
+                displaySupportsDv, onSniffedDvProfile
             )
         )
     }
@@ -262,7 +278,8 @@ private class VideoCompatExtractorOutput(
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
     private val nonDvDisplayOnDvDevice: Boolean,
-    private val displaySupportsDv: Boolean?
+    private val displaySupportsDv: Boolean?,
+    private val onSniffedDvProfile: ((Int) -> Unit)?
 ) : ExtractorOutput {
 
     override fun track(id: Int, type: Int): TrackOutput {
@@ -271,7 +288,7 @@ private class VideoCompatExtractorOutput(
             VideoCompatTrackOutput(
                 track, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
                 convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
-                displaySupportsDv
+                displaySupportsDv, onSniffedDvProfile
             )
         } else {
             track
@@ -298,7 +315,9 @@ private class VideoCompatTrackOutput(
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
     private val nonDvDisplayOnDvDevice: Boolean,
-    private val displaySupportsDv: Boolean?
+    private val displaySupportsDv: Boolean?,
+    /** See [DolbyVisionCompatExtractorsFactory.onSniffedDvProfile]. */
+    private val onSniffedDvProfile: ((Int) -> Unit)? = null
 ) : TrackOutput {
 
     /** True when either per-profile 8.1 conversion (P5/P7) is active. */
@@ -658,8 +677,23 @@ private class VideoCompatTrackOutput(
         // produces for P5, and the color path engages alongside this toggle (see
         // p5GlesPathWanted in the player). The declared codec stays on the
         // format label so the player still recognizes the source as P5.
+        // F1 (spec 2026-11-27, revised): the toggle is no longer the only way
+        // P5 reaches this arm. With no native passthrough this session — a
+        // recorded decoder refusal, a box with no DV decoder, or a DV decoder
+        // driving a non-DV display — P5 has no path to the vendor decoder that
+        // can produce colours, so it takes the same strip + GPU colour route
+        // the toggle takes. While passthrough IS available the track is not
+        // touched: native Dolby Vision is the preferred path, and Auto must not
+        // strip a profile the display can show (see P5AutoRecovery, and its
+        // note on why there is no decoder blocklist here).
         val p5Conversion =
-            convertP5To81 && !convertAllProfiles && DolbyVisionCompat.isP5Profile(format.codecs)
+            P5AutoRecovery.stripP5ForGpuPath(
+                declaredP5 = DolbyVisionCompat.isP5Profile(format.codecs),
+                convertAllProfiles = convertAllProfiles,
+                dvRewriteEnabled = dvRewriteEnabled,
+                convertP5To81 = convertP5To81,
+                nativeDvPassthrough = nativeDvSupported
+            )
         val dvRewrite = when {
             p5Conversion -> DolbyVisionCompat.HDR10_CODEC
             dvRewriteEnabled -> DolbyVisionCompat.hdr10Codec(format.codecs, convertAllProfiles)
@@ -1305,17 +1339,44 @@ private class VideoCompatTrackOutput(
                 // output format on every frame (black screen with audio). The
                 // rewrite below (single-layer VPS/SPS + metadata dropped) is
                 // what keeps such a track decodable.
+                // What the RPU actually is decides the transform, not just the
+                // log line it lands on (F3, spec 2026-11-27). A remux can declare
+                // `hvc1` and carry a P5 RPU: P5 is single-layer ICtCp, so the 8.1
+                // relabel is the green picture by construction (ICtCp interpreted
+                // as Rec.2020 PQ) — it must be STRIPPED and colour-corrected on
+                // the GPU instead. Until this read existed the sniff applied the
+                // session's 8.1 transform to whatever it found, so a P5 remux took
+                // the one route P5 must never take, with no GPU path engaged and
+                // no line saying why.
+                val libdoviProfile = DolbyVisionCompat.sampleDvProfileFromLibdovi(pendingBuf, sampleEnd)
+                val sniffedP5 = libdoviProfile == 5
                 mode = Mode.STRIPPING
-                strippingTo81 = convertTo81
-                val action = if (convertTo81) "converting to Profile 8.1" else "stripping to HDR10"
+                strippingTo81 = convertTo81 && !sniffedP5
+                if (sniffedP5) {
+                    // The track IS Profile 5 from here on, exactly as a declared
+                    // one is — so the flag the strip arm sets from the codec is set
+                    // from the sniff instead, and every later decision in this
+                    // file reads one fact either way.
+                    isP5Content = true
+                    // The player turns this into one bounded rebuild with the
+                    // raw-plane renderer in place (see onSniffedDvProfile).
+                    onSniffedDvProfile?.invoke(libdoviProfile)
+                }
+                val action = when {
+                    sniffedP5 -> "stripping to HDR10 (P5: no 8.1 relabel, GPU colour path)"
+                    convertTo81 -> "converting to Profile 8.1"
+                    else -> "stripping to HDR10"
+                }
                 // What the RPU actually is, according to the library that will
                 // convert it. The sniff above only reads the NAL type byte, so a
                 // report of "P7 -> 8.1 didn't render" needs this line to say
                 // whether the file really is profile 7 (and so whether the
                 // conversion, rather than the detection, is what to look at).
                 // One JNI call, on the first sample of a track that is already
-                // being rewritten; every later sample reuses the locked mode.
-                val libdoviProfile = DolbyVisionCompat.sampleDvProfileFromLibdovi(pendingBuf, sampleEnd)
+                // being rewritten; every later sample reuses the locked mode —
+                // and since F3 that same read picks the transform above, so a
+                // paste that shows "libdovi reads P5" here on a stripped track
+                // is the remux branch with the GPU colour path engaged.
                 val libdoviNote = when {
                     !DoviBridge.available -> "libdovi not in this build"
                     libdoviProfile > 0 -> "libdovi reads P$libdoviProfile"
