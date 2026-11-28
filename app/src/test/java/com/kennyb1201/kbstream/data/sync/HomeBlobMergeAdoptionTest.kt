@@ -53,6 +53,7 @@ class HomeBlobMergeAdoptionTest {
         orderPrefs().edit().clear().commit()
         railsPrefs().edit().clear().commit()
         libraryPrefs().edit().clear().commit()
+        HomeOrderSyncTrace.reset()
     }
 
     private fun prefs(baseName: String) =
@@ -114,8 +115,17 @@ class HomeBlobMergeAdoptionTest {
         )
     }
 
+    /**
+     * An older blob no longer replaces what this device placed (it used to be
+     * rejected whole - which also meant it could not carry a newer decision for
+     * ONE rail, the reported phone-hide/TV-move case).
+     *
+     * The rail this device placed keeps its place; the rail it has never placed
+     * still arrives where the older blob had it, because that blob is the only
+     * copy that knows about it at all.
+     */
     @Test
-    fun `an older stamped order is still rejected whole`() {
+    fun `an older order blob cannot replace a rail this device placed`() {
         KBHomeOrderPrefs.save(
             context,
             KBHomeOrder(order = listOf(KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING))
@@ -131,10 +141,17 @@ class HomeBlobMergeAdoptionTest {
         )
 
         assertEquals(
-            listOf(KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING),
+            listOf(
+                KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING,
+                KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE
+            ),
             KBHomeOrderPrefs.get(context).order
         )
-        assertEquals(localStamp, orderPrefs().getLong("home_order_synced_at", 0L))
+        assertEquals(
+            "and the store's stamp never moves backwards to the older blob",
+            localStamp,
+            orderPrefs().getLong("home_order_synced_at", 0L)
+        )
     }
 
     @Test
@@ -186,6 +203,232 @@ class HomeBlobMergeAdoptionTest {
                 (PrefsPayloadBuilder.buildHomeOrder(context)["home_order_json"]
                     as kotlinx.serialization.json.JsonPrimitive).content
             )
+        )
+    }
+
+    /**
+     * Seeds this device's arrangement EXACTLY, stamps included - the state a
+     * real device is in after its own edits, without going through save() (which
+     * stamps `now`).
+     */
+    private fun seedOrder(blob: KBHomeOrder, stamp: Long) {
+        orderPrefs().edit()
+            .putString("home_order_json", KBHomeOrderPrefs.encodeBlob(blob))
+            .putLong("home_order_synced_at", stamp)
+            .commit()
+    }
+
+    /**
+     * The 6419 report, at the applier's own entry point: a phone hides one rail,
+     * the TV moves a DIFFERENT rail, and the TV pulls the phone's older blob.
+     *
+     * It used to be dropped whole for being older, so the hide never arrived.
+     */
+    @Test
+    fun `a phone hide and a TV move on different rails both land from an older blob`() {
+        seedOrder(
+            KBHomeOrder(
+                order = listOf(
+                    KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU,
+                    KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING,
+                    "kb:x"
+                ),
+                editedAt = mapOf(KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU to 2_000L)
+            ),
+            stamp = 2_000L
+        )
+
+        apply(
+            PrefsPayloadBuilder.KEY_HOME_ORDER,
+            orderPayload(
+                KBHomeOrder(
+                    order = listOf(
+                        KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING,
+                        KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU
+                    ),
+                    hidden = listOf("kb:x"),
+                    editedAt = mapOf("kb:x" to 1_000L)
+                ),
+                updatedAt = 1_000L
+            )
+        )
+
+        val stored = KBHomeOrderPrefs.get(context)
+        assertEquals("the phone's hide is newer than anything the TV has for X", listOf("kb:x"), stored.hidden)
+        assertEquals(
+            "and the TV's own move of the other rail is kept",
+            listOf(
+                KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU,
+                KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING
+            ),
+            stored.order
+        )
+        assertEquals(
+            "the store's stamp stays the newer local one, never now",
+            2_000L,
+            orderPrefs().getLong("home_order_synced_at", 0L)
+        )
+        val pull = HomeOrderSyncTrace.lastPull()
+        assertEquals(
+            "the trace names it a merge, with the remote stamp older than the local one",
+            HomeOrderSyncTrace.MERGED,
+            pull?.decision
+        )
+        assertEquals(1_000L, pull?.updatedAt)
+        assertEquals(2_000L, pull?.localStamp)
+        // The acceptance instrument, on the same event: a paste from this TV
+        // shows a merge and both stamps, so "merged from an older blob" is
+        // distinguishable from a plain adopt without a new decision string.
+        val line = homeOrderSyncLine(
+            localStampMs = 2_000L,
+            pushedUpdatedAtMs = 2_000L,
+            lastPull = pull,
+            time = { "t$it" }
+        )
+        assertTrue(
+            "the diagnostics line names the merge and both stamps: $line",
+            line.contains("pulled=merged remote=t1000 local=t2000")
+        )
+    }
+
+    /**
+     * The reported case from the OTHER side: the phone pulls the TV's newer
+     * blob, and its hide must not be un-hidden by a `hidden` list the TV never
+     * decided about.
+     */
+    @Test
+    fun `a phone hide survives the phone pulling the TV's newer blob`() {
+        seedOrder(
+            KBHomeOrder(
+                order = listOf(
+                    KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING,
+                    KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU
+                ),
+                hidden = listOf("kb:x"),
+                editedAt = mapOf("kb:x" to 1_000L)
+            ),
+            stamp = 1_000L
+        )
+
+        apply(
+            PrefsPayloadBuilder.KEY_HOME_ORDER,
+            orderPayload(
+                KBHomeOrder(
+                    order = listOf(
+                        KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU,
+                        KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING,
+                        "kb:x"
+                    ),
+                    editedAt = mapOf(KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU to 2_000L)
+                ),
+                updatedAt = 2_000L
+            )
+        )
+
+        val stored = KBHomeOrderPrefs.get(context)
+        assertEquals(
+            "a `hidden` list that never decided X cannot un-hide it",
+            listOf("kb:x"),
+            stored.hidden
+        )
+        assertEquals(
+            "while the TV's move of Y is taken",
+            listOf(
+                KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU,
+                KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING
+            ),
+            stored.order
+        )
+        assertEquals(2_000L, orderPrefs().getLong("home_order_synced_at", 0L))
+        assertEquals(HomeOrderSyncTrace.MERGED, HomeOrderSyncTrace.lastPull()?.decision)
+    }
+
+    @Test
+    fun `an older order blob with no newer rail records rejected-stale and writes nothing`() {
+        seedOrder(
+            KBHomeOrder(
+                order = listOf(
+                    KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING,
+                    KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU
+                ),
+                editedAt = mapOf(
+                    KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING to 2_000L,
+                    KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU to 2_000L
+                )
+            ),
+            stamp = 2_000L
+        )
+
+        apply(
+            PrefsPayloadBuilder.KEY_HOME_ORDER,
+            orderPayload(
+                KBHomeOrder(
+                    order = listOf(
+                        KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU,
+                        KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING
+                    ),
+                    editedAt = mapOf(
+                        KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING to 1_000L,
+                        KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU to 1_000L
+                    )
+                ),
+                updatedAt = 1_000L
+            )
+        )
+
+        assertEquals(
+            listOf(
+                KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING,
+                KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU
+            ),
+            KBHomeOrderPrefs.get(context).order
+        )
+        assertEquals(2_000L, orderPrefs().getLong("home_order_synced_at", 0L))
+        assertEquals(HomeOrderSyncTrace.REJECTED_STALE, HomeOrderSyncTrace.lastPull()?.decision)
+    }
+
+    @Test
+    fun `a rename only the remote has survives a pull of an older order blob`() {
+        seedOrder(
+            KBHomeOrder(
+                order = listOf(
+                    KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING,
+                    KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU
+                ),
+                renames = mapOf(KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING to "Mine"),
+                editedAt = mapOf(KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING to 2_000L)
+            ),
+            stamp = 2_000L
+        )
+
+        apply(
+            PrefsPayloadBuilder.KEY_HOME_ORDER,
+            orderPayload(
+                KBHomeOrder(
+                    order = listOf(
+                        KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING,
+                        KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU
+                    ),
+                    renames = mapOf(
+                        KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU to "Theirs",
+                        KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING to "Old name"
+                    ),
+                    editedAt = mapOf(KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU to 1_000L)
+                ),
+                updatedAt = 1_000L
+            )
+        )
+
+        val stored = KBHomeOrderPrefs.get(context)
+        assertEquals(
+            "a name only the older blob has is salvaged (add-only)",
+            "Theirs",
+            stored.renames[KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU]
+        )
+        assertEquals(
+            "and an existing local name is never overwritten",
+            "Mine",
+            stored.renames[KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING]
         )
     }
 

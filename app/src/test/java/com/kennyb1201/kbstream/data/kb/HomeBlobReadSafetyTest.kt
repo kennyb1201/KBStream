@@ -206,6 +206,112 @@ class HomeBlobReadSafetyTest {
         )
     }
 
+    /**
+     * A viewer edit stamps only the rail it acted on.
+     *
+     * A move shifts its neighbours' indices as a side effect; they were not
+     * edited, and stamping them would make them beat a sibling's real decision
+     * about those rails on the next pull.
+     */
+    @Test
+    fun `save stamps only the rail the edit placed`() {
+        KBHomeOrderPrefs.save(
+            context,
+            KBHomeOrder(order = listOf("X", "Y", "Z"), editedAt = mapOf("X" to 111L)),
+            setOf("Y")
+        )
+
+        val stamps = KBHomeOrderPrefs.get(context).editedAt
+        assertEquals("an untouched rail keeps its own time", 111L, stamps["X"])
+        assertTrue("the acted-on rail carries this edit's time", (stamps["Y"] ?: 0L) > 111L)
+        assertEquals(
+            "and the rail whose index merely shifted is not stamped",
+            setOf("X", "Y"),
+            stamps.keys
+        )
+    }
+
+    /**
+     * A blob written before the per-key map existed must still parse.
+     *
+     * The map is an optional field with a default, so a build that predates it
+     * ignores it and an old blob reads with no entries - the merge then treats
+     * every rail it places as placed at the blob's own stamp, which is the best
+     * per-key time such a blob can offer (see `mergeHomeOrderAdopted`).
+     */
+    @Test
+    fun `a blob written before the per-key map parses with its arrangement intact`() {
+        val oldShape =
+            """{"order":["A","B"],"pinned":["kb:p"],"hidden":["builtin:top"],"renames":{"A":"Alpha"}}"""
+
+        val parsed = KBHomeOrderPrefs.parseBlob(oldShape)
+
+        assertEquals(listOf("A", "B"), parsed?.order)
+        assertEquals(listOf("kb:p"), parsed?.pinned)
+        assertEquals(listOf("builtin:top"), parsed?.hidden)
+        assertEquals(mapOf("A" to "Alpha"), parsed?.renames)
+        assertTrue("no map, not a broken one", parsed?.editedAt?.isEmpty() == true)
+    }
+
+    /**
+     * An old build re-encoding the blob drops the per-key map and keeps the
+     * arrangement, which is why the merge must degrade to the blob stamp rather
+     * than to corruption.
+     */
+    @Test
+    fun `an old build's re-encode loses the map without losing the arrangement`() {
+        val original = KBHomeOrder(
+            order = listOf("A", "B"),
+            hidden = listOf("C"),
+            renames = mapOf("A" to "Alpha"),
+            editedAt = mapOf("A" to 1_700_000_000_000L)
+        )
+        // What a build that predates the map writes back: the four fields it
+        // knows, decoded from the same arrangement.
+        val oldBuildReEncode =
+            """{"order":["A","B"],"pinned":[],"hidden":["C"],"renames":{"A":"Alpha"}}"""
+
+        val reread = KBHomeOrderPrefs.parseBlob(oldBuildReEncode)
+
+        assertEquals(original.order, reread?.order)
+        assertEquals(original.pinned, reread?.pinned)
+        assertEquals(original.hidden, reread?.hidden)
+        assertEquals(original.renames, reread?.renames)
+        assertTrue("the per-key times are gone", reread?.editedAt?.isEmpty() == true)
+    }
+
+    /**
+     * A manifest refresh that renames a catalog's key carries that rail's
+     * placement time to the new key - otherwise the next pull would see the new
+     * key as never placed here and could move a rail the viewer arranged. The
+     * write still must not claim an edit (the check above).
+     */
+    @Test
+    fun `an addon-id remap carries the rail's placement time to the new key`() {
+        val oldKey = KBHomeOrderPrefs.addonKeyFromManifest(
+            "https://example.test/manifest.json",
+            "movie",
+            "top"
+        )
+        val newKey = KBHomeOrderPrefs.addonKeyFromManifest(
+            "https://example.test/manifest.json",
+            "movie",
+            "top-v2"
+        )
+        KBHomeOrderPrefs.save(
+            context,
+            KBHomeOrder(order = listOf(oldKey), editedAt = mapOf(oldKey to 777_000L))
+        )
+
+        assertTrue(KBHomeOrderPrefs.remapAddonKeys(context, mapOf(oldKey to newKey)))
+
+        assertEquals(
+            "the placement time follows the key",
+            mapOf(newKey to 777_000L),
+            KBHomeOrderPrefs.get(context).editedAt
+        )
+    }
+
     @Test
     fun `a readable store still writes normally`() {
         // The guard must not be a permanent lock: a clean store is a store.

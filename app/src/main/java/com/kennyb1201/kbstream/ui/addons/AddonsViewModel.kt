@@ -411,7 +411,7 @@ class AddonsViewModel @Inject constructor(
         // key into the pinned block, unpinning puts it back at the head of the
         // order block — rather than leaving it in neither list, which reads as
         // never-arranged and hides the rail.
-        persistHomeOrder { prefs -> toggleCollectionPin(prefs, key) }
+        persistHomeOrder(setOf(key)) { prefs -> toggleCollectionPin(prefs, key) }
     }
 
     fun toggleCollectionHidden(key: String) {
@@ -428,7 +428,7 @@ class AddonsViewModel @Inject constructor(
         val currentlyHidden = _collections.value.collections
             .firstOrNull { it.key == key }?.isHidden
             ?: KBHomeOrderPrefs.get(getApplication<Application>()).hiddenSet.contains(key)
-        persistHomeOrder { prefs ->
+        persistHomeOrder(setOf(key)) { prefs ->
             if (currentlyHidden) {
                 // SHOW: clear the hidden flag AND arrange the rail. A
                 // never-arranged collection only counts as arranged once it
@@ -506,7 +506,7 @@ class AddonsViewModel @Inject constructor(
      * the mere existence of this method (HD-P2-4).
      */
     fun toggleBuiltinRailHidden(key: String) {
-        persistHomeOrder { prefs -> KBHomeOrderPrefs.toggleBuiltinHidden(prefs, key) }
+        persistHomeOrder(setOf(key)) { prefs -> KBHomeOrderPrefs.toggleBuiltinHidden(prefs, key) }
     }
 
     /**
@@ -556,7 +556,7 @@ class AddonsViewModel @Inject constructor(
      *    column, below the pinned Library lists too.
      */
     private fun moveRailInArrangement(key: String, delta: Int) {
-        persistHomeOrder { prefs ->
+        persistHomeOrder(setOf(key)) { prefs ->
             moveRailInHomeColumn(prefs, homeRailDefaults(), key, delta)
         }
     }
@@ -633,12 +633,28 @@ class AddonsViewModel @Inject constructor(
             browseKeys + customKeys + addonKeys + collectionKeys + libraryKeys
     }
 
+    /**
+     * Applies one viewer edit to the arrangement.
+     *
+     * [touched] is the rail the press ACTED ON, passed through to the store so
+     * the edit carries that rail's own placement time (see
+     * `KBHomeOrderPrefs.save`). A rename passes nothing: a name is not a
+     * placement.
+     *
+     * A transform that returns the arrangement unchanged - an arrow at the end
+     * of the list, a pin toggle on a rail with no pin control - writes nothing.
+     * Writing it would stamp this device as the newest arrangement, and claim a
+     * placement time for the rail, for a press the viewer saw do nothing.
+     */
     private fun persistHomeOrder(
+        touched: Set<String> = emptySet(),
         transform: (KBHomeOrder) -> KBHomeOrder
     ) {
         val context = getApplication<Application>()
-        val updated = transform(KBHomeOrderPrefs.get(context))
-        KBHomeOrderPrefs.save(context, updated)
+        val current = KBHomeOrderPrefs.get(context)
+        val updated = transform(current)
+        if (updated == current) return
+        KBHomeOrderPrefs.save(context, updated, touched)
         _homeOrderVersion.value += 1
         refresh()
     }

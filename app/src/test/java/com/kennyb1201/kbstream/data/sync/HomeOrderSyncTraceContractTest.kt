@@ -182,8 +182,19 @@ class HomeOrderSyncTraceContractTest {
             assertTrue("the pull records $decision", applier.contains(decision))
         }
         assertTrue(
-            "the guard's decision is unchanged - the record sits beside it",
-            applier.contains("remoteUpdated < localStamp")
+            "the pull is decided by the shared per-key rule, not by an older copy being dropped whole",
+            applier.contains("pullHomeOrder(") &&
+                applier.contains("when (pull.outcome)")
+        )
+        // The whole-blob guard - is the remote older than this device? - still
+        // exists, but it now only decides the add-only rename salvage; the
+        // per-key rule does the merging. One implementation of the comparison.
+        assertTrue(
+            "the older-blob comparison lives in one place",
+            File(root, "com/kennyb1201/kbstream/data/kb/KBHomeOrderMerge.kt")
+                .readText()
+                .contains("remoteUpdated != null && remoteUpdated < localStamp") &&
+                applier.contains("homeOrderBlobIsOlder(remoteUpdated, localStamp)")
         )
         assertTrue(
             "the diagnostics carry the line",

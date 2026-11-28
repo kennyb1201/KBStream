@@ -291,7 +291,10 @@ class CatalogBuilderViewModel @Inject constructor(
             KBHomeOrderPrefs.get(context),
             key
         )
-        KBHomeOrderPrefs.save(context, updated)
+        // The rail this press placed, so the edit carries its own placement
+        // time (see `KBHomeOrderPrefs.save`): the builder's switch and the
+        // manager's hide toggle are the same edit, merged rail by rail.
+        KBHomeOrderPrefs.save(context, updated, setOf(key))
         _state.value = _state.value.copy(hiddenKeys = updated.hiddenSet)
     }
 

@@ -61,7 +61,31 @@ data class KBHomeOrder(
      * the map, never stored as an empty string, so "is this rail renamed?" is
      * just a lookup.
      */
-    val renames: Map<String, String> = emptyMap()
+    val renames: Map<String, String> = emptyMap(),
+    /**
+     * Rail key -> when a viewer on this device last PLACED that key (its field
+     * membership or its position within it).
+     *
+     * The blob's own stamp ([KBHomeOrderPrefs.SYNCED_AT_KEY]) answers "which
+     * side edited its whole arrangement last"; this answers the same question
+     * per rail, so a hide on one device and a move on ANOTHER rail on the other
+     * can both land. Without it the guard had to pick one side's whole
+     * arrangement, and the losing side's hide/move was dropped (the 6419 phone
+     * hide + TV move report). See `mergeHomeOrderAdopted`.
+     *
+     * It lives in the blob rather than in a parallel pref so [KBHomeOrderPrefs.reset]
+     * clears it with the arrangement, the codec carries it, and the push needs
+     * no change: the arrangement is published as this encoded JSON, so the map
+     * travels inside it.
+     *
+     * Absent means "this build never recorded one" (a blob written before this
+     * existed); the merge then treats every key the blob places as stamped at
+     * the blob's own [KBHomeOrderPrefs.SYNCED_AT_KEY], which is the best
+     * per-key time such a blob can offer. A key that stops being arranged at
+     * all keeps its stamp: the stamp records the last placement DECISION,
+     * whatever field the key landed in.
+     */
+    val editedAt: Map<String, Long> = emptyMap()
 ) {
     val hiddenSet: Set<String> get() = hidden.toSet()
 }
@@ -417,10 +441,26 @@ internal fun remapAddonOrderKeys(
     fun swap(key: String): String = remap[key] ?: key
     // distinct(): if both the old and new key were somehow present, the
     // rewrite would otherwise leave the same rail twice in one list.
+    // The per-key stamps travel WITH the key: a placement decision does not
+    // stop being this device's because a manifest refresh renamed the rail,
+    // and leaving the stamp on the old key would drop it on the next pull.
+    // (The write still goes through writeBlob(stampAsEdit = false): a refresh
+    // is not a viewer edit - see [KBHomeOrderPrefs.remapAddonKeys].)
+    val stamps = if (value.editedAt.isEmpty()) {
+        value.editedAt
+    } else {
+        buildMap {
+            value.editedAt.forEach { (key, at) ->
+                val moved = swap(key)
+                put(moved, maxOf(get(moved) ?: 0L, at))
+            }
+        }
+    }
     val rewritten = value.copy(
         order = value.order.map(::swap).distinct(),
         pinned = value.pinned.map(::swap).distinct(),
-        hidden = value.hidden.map(::swap).distinct()
+        hidden = value.hidden.map(::swap).distinct(),
+        editedAt = stamps
     )
     return normalizeHomeOrder(rewritten)
 }
@@ -977,12 +1017,25 @@ object KBHomeOrderPrefs {
      * A VIEWER edit: writes the arrangement, stamps it as changed just now, and
      * publishes it.
      *
-     * Everything here is what the pull's last-write-wins guard reads, so anything
-     * that is not the viewer arranging rails has to go through [writeBlob]
-     * instead - see [remapAddonKeys].
+     * Everything here is what the pull's guards read, so anything that is not
+     * the viewer arranging rails has to go through [writeBlob] instead - see
+     * [remapAddonKeys].
+     *
+     * [touched] is the rail key(s) this edit PLACED - a move, a pin, a hide or
+     * a show. They get their own [KBHomeOrder.editedAt] stamp, so a pull from a
+     * device that edited the whole arrangement at a different time can still
+     * merge rail by rail (see `mergeHomeOrderAdopted`). Only the acted-on key
+     * is passed: a move shifts its neighbours' indices as a side effect, and
+     * they were not edited. A rename passes nothing - a name is not a
+     * placement. An empty set stamps nothing new.
      */
-    fun save(context: Context, value: KBHomeOrder) {
-        if (!writeBlob(context, value, stampAsEdit = true)) return
+    fun save(
+        context: Context,
+        value: KBHomeOrder,
+        touched: Set<String> = emptySet()
+    ) {
+        val stamped = stampRailEdits(value, touched, System.currentTimeMillis())
+        if (!writeBlob(context, stamped, stampAsEdit = true)) return
         publish(context)
     }
 

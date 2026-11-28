@@ -2449,78 +2449,69 @@ object PrefsPayloadApplier {
             return
         }
         val blob = rawBlob.orEmpty()
-        if (remoteUpdated != null && remoteUpdated < localStamp) {
-            // The pull decision (spec 2026-11-27): the two stamps here are what
-            // tell a genuinely newer local edit from clock skew, and neither
-            // this record nor the trace may change either one.
-            HomeOrderSyncTrace.record(
-                side = HomeOrderSyncTrace.PULL,
-                updatedAt = remoteUpdated,
-                localStamp = localStamp,
-                decision = HomeOrderSyncTrace.REJECTED_STALE,
-                profileId = profileId
-            )
-            // The ORDER belongs to the newer copy and is dropped whole - but a
-            // rail's NAME is one label on one row, and losing it because the
-            // order lost a race is the "I renamed it and the other device never
-            // saw the name" report (see KBHomeOrderPrefs.mergeRenames). Only for
-            // the active profile: that helper writes the store the ACTIVE profile
-            // resolves to, and a sibling profile's row is applied when it is next
-            // switched to.
-            if (profileId == ProfileStorage.activeProfileId(context)) {
-                com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
-                    .mergeRenames(context, blob)
-            }
-            return
-        }
-
-        // ADOPT, then MERGE - not replace. The decision to adopt is the guard
-        // above (an older stamped copy was rejected whole, a blank blob never
-        // gets here); what the adoption WRITES is the remote's arrangement with
-        // every rail only this device knows kept where it sat. A pulled blob
-        // that never knew a rail cannot delete its placement, which is the
-        // arranged BingeCat rail that moved to the end of Home (see
-        // mergeHomeOrderAdopted).
-        val local = prefs.getString("home_order_json", null).orEmpty()
         val remoteOrder = com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
             .parseBlob(blob) ?: return
-        val localOrder = com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
-            .parseBlob(local)
-        val merged = if (localOrder == null) {
-            // Nothing readable here (first sign-in, or a blob this build cannot
-            // parse): the remote IS the arrangement, as it always was.
-            remoteOrder
-        } else {
-            com.kennyb1201.kbstream.data.kb.mergeHomeOrderAdopted(localOrder, remoteOrder)
+        val older = com.kennyb1201.kbstream.data.kb
+            .homeOrderBlobIsOlder(remoteUpdated, localStamp)
+        // A rail's NAME is one label on one row, and losing it because the
+        // ORDER lost a race is the "I renamed it and the other device never saw
+        // the name" report. A pull of an older blob still salvages the names
+        // only this device is missing - add-only, never overwriting a local
+        // name (see KBHomeOrderPrefs.mergeRenames). Only for the active
+        // profile: that helper writes the store the ACTIVE profile resolves
+        // to, and a sibling profile's row is applied when it is next switched
+        // to. A newer blob's names win their conflicts inside the merge below.
+        if (older && profileId == ProfileStorage.activeProfileId(context)) {
+            com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+                .mergeRenames(context, blob)
         }
-        val encoded = com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.encodeBlob(merged)
-        // Never `now`: a merge is not an edit this device made. Publishing a
-        // fresh stamp here would let the adoption win a race it never entered
-        // and republish the merged copy over a sibling's real edit - the
-        // `remapAddonKeys` lesson. Equal stamps still converge: shouldApply
-        // adopts on `>=`, so the same remote re-merges idempotently.
-        val stamp = maxOf(localStamp, remoteUpdated ?: localStamp)
-        // The adopt decision (spec 2026-11-27): `merged` is an adoption that
-        // kept rails only this device knows, `adopted` is the remote's
-        // arrangement as it stood. Recorded before the no-op return: a pull
-        // that changed nothing is still a pull this device answered.
+
+        // MERGE PER RAIL, whatever the blob's own stamp says. An older blob is
+        // no longer dropped whole: it can still carry the newer decision for a
+        // rail this device has not touched since, which is how a phone's hide
+        // and a TV's move on different rails both land (6419 report). The same
+        // rule keeps every rail only this device knows, so a pulled blob that
+        // never mentioned the arranged BingeCat rail cannot delete its
+        // placement. See `pullHomeOrder`.
+        val local = com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+            .parseBlob(prefs.getString("home_order_json", null).orEmpty())
+        val pull = com.kennyb1201.kbstream.data.kb.pullHomeOrder(
+            local = local,
+            remote = remoteOrder,
+            localStamp = localStamp,
+            remoteUpdated = remoteUpdated
+        )
+        // The pull decision (spec 2026-11-27): an adoption of the remote's
+        // arrangement, a per-key merge, or an older blob that had nothing newer
+        // to say. Recorded before the no-op return: a pull that changed nothing
+        // is still a pull this device answered.
         HomeOrderSyncTrace.record(
             side = HomeOrderSyncTrace.PULL,
             updatedAt = remoteUpdated ?: 0L,
             localStamp = localStamp,
-            decision =
-                if (merged == remoteOrder) {
+            decision = when (pull.outcome) {
+                com.kennyb1201.kbstream.data.kb.HomeOrderPullOutcome.ADOPTED ->
                     HomeOrderSyncTrace.ADOPTED
-                } else {
+                com.kennyb1201.kbstream.data.kb.HomeOrderPullOutcome.MERGED ->
                     HomeOrderSyncTrace.MERGED
-                },
+                com.kennyb1201.kbstream.data.kb.HomeOrderPullOutcome.REJECTED_STALE ->
+                    HomeOrderSyncTrace.REJECTED_STALE
+            },
             profileId = profileId
         )
-        if (encoded == local && stamp == localStamp) return
-
+        if (!pull.changed) return
+        // `pull.stamp` is maxOf(local, remote), never `now`: a merge is not an
+        // edit this device made. Publishing a fresh stamp here would let the
+        // adoption win a race it never entered and republish the merged copy
+        // over a sibling's real edit - the `remapAddonKeys` lesson. Equal
+        // stamps still converge, because the same remote re-merges
+        // idempotently.
         prefs.edit()
-            .putString("home_order_json", encoded)
-            .putLong("home_order_synced_at", stamp)
+            .putString(
+                "home_order_json",
+                com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.encodeBlob(pull.order)
+            )
+            .putLong("home_order_synced_at", pull.stamp)
             .apply()
     }
 

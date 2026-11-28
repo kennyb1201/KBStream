@@ -486,8 +486,8 @@ class CatalogBuilderContractTest {
             vm.contains("KBHomeOrderPrefs.toggleRailHidden(")
         )
         assertTrue(
-            "and it saves through the arrangement store",
-            vm.contains("KBHomeOrderPrefs.save(context, updated)")
+            "and it saves through the arrangement store, naming the rail it placed",
+            vm.contains("KBHomeOrderPrefs.save(context, updated, setOf(key))")
         )
     }
 
