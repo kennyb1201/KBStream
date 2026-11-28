@@ -180,10 +180,18 @@ class DeletedProfilePrefsPurgeContractTest {
         val payloads = readSource(PAYLOADS)
         val body = functionBody("fun localPrefKeysForProfile(", payloads)
         assertTrue(
-            "F1: the three sessions use the same publish rules the push uses",
+            "F1: the two sessions that can be enumerated use the same publish rules " +
+                "the push uses",
             body.contains("SimklAuthRules.shouldPublish(") &&
-                body.contains("TraktAuthRules.shouldPublish(") &&
-                body.contains("BingeCatAuthRules.shouldPublish(")
+                body.contains("TraktAuthRules.shouldPublish(")
+        )
+        assertTrue(
+            "F1: BingeCat asks the PURGE's question instead - does this profile own a " +
+                "row? - because a pair the publish rule refuses is exactly the row a " +
+                "deleted profile is most likely to leave behind, and it has to be " +
+                "retired anyway (spec 2026-11-27, F1)",
+            body.contains("!bingecatSession?.accessToken.isNullOrBlank()") &&
+                !body.contains("BingeCatAuthRules.shouldPublish(")
         )
         assertTrue(
             "F1: and are read for the DELETED profile, not the active one",

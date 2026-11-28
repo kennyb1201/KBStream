@@ -55,6 +55,13 @@ internal class BingeCatTokenStore(
         const val KEY_SCOPE = "scope"
 
         /**
+         * The pair's ordering, carried beside it and through the sync row
+         * ([BingeCatToken.generation]). Absent on a pair stored by an older
+         * build, which reads as 0.
+         */
+        const val KEY_GENERATION = "generation"
+
+        /**
          * Tombstone for a DELIBERATE disconnect. Only this marker may end a
          * live session on another device; a merely empty store (a profile that
          * never connected) must never do it.
@@ -140,6 +147,7 @@ internal class BingeCatTokenStore(
             .putString(KEY_REFRESH_TOKEN, token.refreshToken)
             .putLong(KEY_EXPIRES_AT, token.expiresAtEpochMillis)
             .putString(KEY_SCOPE, token.scope)
+            .putLong(KEY_GENERATION, token.generation)
             .putBoolean(KEY_SIGNED_OUT, false)
             // A live pair retires a refused one: connect, a successful refresh
             // and an adopted account session all land here, and the first three
@@ -282,7 +290,8 @@ internal class BingeCatTokenStore(
             accessToken = access,
             refreshToken = prefs?.getString(KEY_REFRESH_TOKEN, null),
             expiresAtEpochMillis = prefs?.getLong(KEY_EXPIRES_AT, 0L) ?: 0L,
-            scope = prefs?.getString(KEY_SCOPE, null)
+            scope = prefs?.getString(KEY_SCOPE, null),
+            generation = prefs?.getLong(KEY_GENERATION, 0L) ?: 0L
         )
     }
 
@@ -335,12 +344,27 @@ internal class BingeCatTokenStore(
      * single profile's clear and is dropped only by a disconnect with no mapping
      * left ([BingeCatAccountRules.shouldClearAccountToken]).
      */
+    /**
+     * The generation the next mint should take: one past everything this device
+     * can see.
+     *
+     * The ACCOUNT copy is included because it is the newest pair on the device
+     * whenever a sibling refreshed last: a connect that merely used the local
+     * copy's generation could mint a pair that looks OLDER than the one in the
+     * cloud row and then refuse to adopt its own grant back.
+     */
+    fun nextGeneration(): Long = maxOf(
+        readLocal()?.generation ?: 0L,
+        account.read()?.generation ?: 0L
+    ) + 1L
+
     fun clear() {
         prefs?.edit()
             ?.remove(KEY_ACCESS_TOKEN)
             ?.remove(KEY_REFRESH_TOKEN)
             ?.remove(KEY_EXPIRES_AT)
             ?.remove(KEY_SCOPE)
+            ?.remove(KEY_GENERATION)
             ?.remove(KEY_NEEDS_RECONNECT)
             ?.remove(KEY_REFUSED_ACCESS)
             ?.apply()

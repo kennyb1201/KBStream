@@ -62,6 +62,13 @@ internal object BingeCatRefreshRecovery {
         signedOut -> null
         account == null -> null
         held != null && samePair(held, account) -> null
+        // A rotation always moves FORWARD (F3, 2026-11-27). An account copy with
+        // an older generation is not the sibling's newer pair - it is a pair this
+        // device has already replaced (a profile save that succeeded while the
+        // account write failed), and adopting it would undo its own refresh.
+        // Rows from older builds are generation 0 on both sides, so they keep
+        // the previous behaviour.
+        held != null && account.generation < held.generation -> null
         held != null -> account
         // Nothing held: the marker names the refused access token, so the account
         // copy is only worth adopting when it is a different one.

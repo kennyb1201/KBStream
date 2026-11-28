@@ -220,17 +220,64 @@ internal object TraktAuthRules {
  * One rule is deliberately NOT Trakt's: there is no account identity to
  * compare. BingeCat's `scope` describes what the grant was allowed, not which
  * account it belongs to, so a "different account must always win" test cannot
- * be written - an expired remote session is refused when the local one is still
- * live (`TraktAuthRules.shouldAdopt`'s third rule), and a reconnect to another
- * account is adopted on its first pull because it is live.
+ * be written - an expired remote session is never adopted (spec 2026-11-27, F2),
+ * and a reconnect to another account is adopted on its first pull because it is
+ * live and minted a newer generation.
+ *
+ * And one rule BingeCat has that the other legs do not need: its pair ROTATES on
+ * every refresh, so the row's ordering has to be explicit. [BingeCatToken.generation]
+ * is what makes "newer" a fact rather than an inference from expiry - see
+ * [shouldAdopt] and [shouldPublish], the two ends of the cascade that took three
+ * devices down together.
  */
 internal object BingeCatAuthRules {
 
     /** Payload field marking a blank session as a deliberate sign-out. */
     const val SIGNED_OUT_FIELD = "signed_out"
 
-    fun shouldPublish(accessToken: String?, signedOut: Boolean): Boolean =
-        !accessToken.isNullOrBlank() || signedOut
+    /**
+     * Whether this device may publish its session row at all (F1, 2026-11-27).
+     *
+     * The row is account-wide and last-write-wins, so publishing is not a
+     * statement about this device's state - it OVERWRITES every sibling's
+     * session. Three shapes therefore never publish:
+     *
+     *  - **A pair the server refused.** [needsReconnect] is set exactly when a
+     *    401/`invalid_grant` said this pair is dead (or the refresh token it
+     *    came with has been consumed by a winning rotation), and the store keeps
+     *    it deliberately. Publishing it wrote the dead pair over the winner's
+     *    live one with a FRESH `updatedAt`, and that is the cascade that took all
+     *    three devices down at once: the loser was passive for calls but still
+     *    the loudest publisher in the account.
+     *  - **An expired pair this device has not refreshed.** It carries nothing a
+     *    sibling cannot derive from its own pair, and writing it over a live row
+     *    is how a merely-expired session becomes everyone's dead one. The first
+     *    device to USE BingeCat refreshes and publishes a live pair, so nothing
+     *    is lost by staying quiet here.
+     *  - **A blank store with no tombstone** (a profile that never connected),
+     *    which is the original rule.
+     *
+     * A deliberate disconnect still publishes: its token is blank and its
+     * tombstone is the whole message, and this is the one shape that must reach
+     * every device.
+     *
+     * An expiry this device cannot read (0 = absent, an older build's row) is
+     * published: refusing that would drop a login the row exists to share.
+     */
+    fun shouldPublish(
+        accessToken: String?,
+        signedOut: Boolean,
+        needsReconnect: Boolean,
+        expiresAtEpochMillis: Long,
+        nowMs: Long
+    ): Boolean = when {
+        // The tombstone: a blank token plus the marker. A token AND the marker
+        // is not a disconnect (save() retires the marker), so it falls through.
+        signedOut && accessToken.isNullOrBlank() -> true
+        accessToken.isNullOrBlank() -> false
+        needsReconnect -> false
+        else -> expiresAtEpochMillis <= 0L || expiresAtEpochMillis > nowMs
+    }
 
     fun clearsSession(accessToken: String?, signedOut: Boolean): Boolean =
         accessToken.isNullOrBlank() && signedOut
@@ -240,15 +287,32 @@ internal object BingeCatAuthRules {
      *
      * Same access token: yes - a refresh on the other device rotated the pair
      * and pushed the new expiry, and this device needs it.
-     * Otherwise adopt unless the incoming session has already expired and the
-     * local one has not: that is the stale-overwrite race, and an expired
-     * remote carries nothing this device can use.
+     *
+     * Otherwise a pair is adopted only when it is genuinely NEWER than this
+     * device's, and there are two tests for that, in order:
+     *
+     *  - **Generation** ([BingeCatToken.generation]), which is the explicit one:
+     *    a strictly newer pair is the sibling's rotation; a strictly older one is
+     *    an echo of a pair this device has already replaced (or a loser's
+     *    consumed one) and is refused whatever its timestamps say.
+     *  - **Liveness**, for rows written before the counter existed (both sides
+     *    generation 0) and for a tie. Same generation and the incoming pair
+     *    LIVE is a reconnect or a first row, so it wins; an EXPIRED incoming pair
+     *    is refused outright.
+     *
+     * That last clause used to read `incomingLive || !localLive`, which adopted
+     * an expired incoming pair whenever the local one had also expired - the
+     * exact window the cascade used. "Local expired too" is not a reason to take
+     * someone else's dead pair: the local refresh token is either still valid
+     * (refresh it) or dead (the incoming one is no better, and adopting it only
+     * destroys the local copy).
      */
     fun shouldAdopt(
         incomingAccess: String?,
         incomingExpiresAt: Long,
+        incomingGeneration: Long,
         localAccess: String?,
-        localExpiresAt: Long,
+        localGeneration: Long,
         nowMs: Long
     ): Boolean {
         if (incomingAccess.isNullOrBlank()) return false
@@ -264,9 +328,9 @@ internal object BingeCatAuthRules {
             return incomingExpiresAt <= 0L || incomingExpiresAt > nowMs
         }
         if (localAccess == incomingAccess) return true
-        val incomingLive = incomingExpiresAt > nowMs
-        val localLive = localExpiresAt > nowMs
-        return incomingLive || !localLive
+        if (incomingGeneration > localGeneration) return true
+        if (incomingGeneration < localGeneration) return false
+        return incomingExpiresAt > nowMs
     }
 
     /**
@@ -289,10 +353,17 @@ internal object BingeCatAuthRules {
         incomingExpiresAt: Long,
         localAccess: String?,
         localRefresh: String?,
-        localExpiresAt: Long
+        localExpiresAt: Long,
+        incomingGeneration: Long = 0L,
+        localGeneration: Long = 0L
     ): String? = when {
         incomingRefresh.isNullOrBlank() -> localRefresh
         localAccess == null -> incomingRefresh
+        // Generation first (F3): a strictly newer pair's refresh token is the
+        // one that works, even when the incoming access token is the one this
+        // device is already holding (it was just refreshed over the same row).
+        incomingGeneration > localGeneration -> incomingRefresh
+        incomingGeneration < localGeneration -> localRefresh
         localAccess == incomingAccess && incomingExpiresAt < localExpiresAt -> localRefresh
         else -> incomingRefresh
     }

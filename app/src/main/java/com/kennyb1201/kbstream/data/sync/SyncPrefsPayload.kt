@@ -719,7 +719,16 @@ object PrefsPayloadBuilder {
      *
      * All of it travels - access token, refresh token, expiry, scope - because
      * a refresh can rotate the pair and an access token alone would be a
-     * session that works until it expires and then strands the sibling.
+     * session that works until it expires and then strands the sibling. The
+     * GENERATION travels with it (spec 2026-11-27, F3): it is the row's ordering,
+     * so a sibling can tell a rotation from a stale echo without inferring it
+     * from two expiry stamps.
+     *
+     * Whether this device has any business publishing at all is
+     * [BingeCatAuthRules.shouldPublish]'s question, asked by every caller before
+     * this runs (see [hasBingeCatAuthToPublish] and the repository's immediate
+     * publish): a refused or expired pair must never reach the cloud row, and an
+     * `updatedAt` is exactly what makes one look newest.
      */
     fun buildBingeCatAuth(context: Context): JsonObject {
         val store = bingecatAuthStore(context)
@@ -734,6 +743,7 @@ object PrefsPayloadBuilder {
             put(BingeCatTokenStore.KEY_REFRESH_TOKEN, session?.refreshToken.orEmpty())
             put(BingeCatTokenStore.KEY_EXPIRES_AT, session?.expiresAtEpochMillis ?: 0L)
             put(BingeCatTokenStore.KEY_SCOPE, session?.scope.orEmpty())
+            put(BingeCatTokenStore.KEY_GENERATION, session?.generation ?: 0L)
             put(BingeCatAuthRules.SIGNED_OUT_FIELD, signedOut)
         }
     }
@@ -749,12 +759,23 @@ object PrefsPayloadBuilder {
 
     /**
      * True when this profile has something to say about its BingeCat session: a
-     * token to share, or a deliberate disconnect to propagate. A profile that
-     * never connected publishes nothing - see [BingeCatAuthRules].
+     * LIVE pair to share, or a deliberate disconnect to propagate.
+     *
+     * A profile that never connected publishes nothing, and neither does one
+     * whose pair the server refused or whose pair has expired without this
+     * device refreshing it - see [BingeCatAuthRules.shouldPublish] for why those
+     * two shapes must stay out of the account's row (spec 2026-11-27, F1).
      */
     fun hasBingeCatAuthToPublish(context: Context): Boolean {
         val store = bingecatAuthStore(context)
-        return BingeCatAuthRules.shouldPublish(store.accessToken(), store.isSignedOut())
+        val session = store.read()
+        return BingeCatAuthRules.shouldPublish(
+            accessToken = session?.accessToken,
+            signedOut = session == null && store.isSignedOut(),
+            needsReconnect = store.needsReconnect(),
+            expiresAtEpochMillis = session?.expiresAtEpochMillis ?: 0L,
+            nowMs = System.currentTimeMillis()
+        )
     }
 
     /**
@@ -1734,10 +1755,15 @@ object PrefsPayloadBuilder {
 
         val bingecat = bingecatAuthStore(context, profileId)
         val bingecatSession = bingecat.read()
-        if (BingeCatAuthRules.shouldPublish(
-                bingecatSession?.accessToken,
-                bingecatSession == null && bingecat.isSignedOut()
-            )
+        // Deliberately NOT [BingeCatAuthRules.shouldPublish]: this is the
+        // DELETED-profile purge's question (which rows does this profile own and
+        // leave behind?), not the publisher's (may this pair be shared?). A
+        // refused pair is the row a deleted profile is most likely to be holding,
+        // and it is precisely the one the publish rule refuses - retiring it must
+        // still happen, or a dead session outlives the profile that held it.
+        if (
+            !bingecatSession?.accessToken.isNullOrBlank() ||
+            (bingecatSession == null && bingecat.isSignedOut())
         ) {
             keys += KEY_BINGECAT_AUTH
         }
@@ -2999,6 +3025,10 @@ object PrefsPayloadApplier {
         val refresh = text(BingeCatTokenStore.KEY_REFRESH_TOKEN)
         val expiresAt = text(BingeCatTokenStore.KEY_EXPIRES_AT).toLongOrNull() ?: 0L
         val scope = text(BingeCatTokenStore.KEY_SCOPE)
+        // A row written before the counter existed is generation 0, which is
+        // also what this device's own old pair reads as - so two old rows fall
+        // back to the liveness test, exactly as they did before.
+        val generation = text(BingeCatTokenStore.KEY_GENERATION).toLongOrNull() ?: 0L
         val signedOut = text(BingeCatAuthRules.SIGNED_OUT_FIELD) == "true"
 
         val store = bingecatAuthStore(context, profileId)
@@ -3017,8 +3047,9 @@ object PrefsPayloadApplier {
         val adopt = BingeCatAuthRules.shouldAdopt(
             incomingAccess = access,
             incomingExpiresAt = expiresAt,
+            incomingGeneration = generation,
             localAccess = local?.accessToken,
-            localExpiresAt = local?.expiresAtEpochMillis ?: 0L,
+            localGeneration = local?.generation ?: 0L,
             nowMs = System.currentTimeMillis()
         )
         if (!adopt) return
@@ -3033,13 +3064,21 @@ object PrefsPayloadApplier {
             incomingExpiresAt = expiresAt,
             localAccess = local?.accessToken,
             localRefresh = local?.refreshToken,
-            localExpiresAt = local?.expiresAtEpochMillis ?: 0L
+            localExpiresAt = local?.expiresAtEpochMillis ?: 0L,
+            incomingGeneration = generation,
+            localGeneration = local?.generation ?: 0L
         )
         val nextScope = scope.takeIf { it.isNotBlank() } ?: local?.scope
+        // Adopting a pair adopts its PLACE in the rotation: the next mint on
+        // this device has to be strictly past the one it just took, or the
+        // pair it mints would look older than the row it came from and be
+        // refused on the way back.
+        val nextGeneration = maxOf(generation, local?.generation ?: 0L)
         val unchanged = local?.accessToken == access &&
             local.refreshToken == nextRefresh &&
             local.expiresAtEpochMillis == expiresAt &&
-            local.scope == nextScope
+            local.scope == nextScope &&
+            local.generation == nextGeneration
         if (unchanged) {
             // Same session: just retire a lingering disconnect marker so it
             // cannot be republished over the live token on the next push.
@@ -3053,7 +3092,8 @@ object PrefsPayloadApplier {
                     accessToken = access,
                     refreshToken = nextRefresh,
                     expiresAtEpochMillis = expiresAt,
-                    scope = nextScope
+                    scope = nextScope,
+                    generation = nextGeneration
                 )
             )
         }

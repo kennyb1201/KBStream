@@ -98,8 +98,18 @@ class BingeCatAuthSyncWiringContractTest {
         )
         val gate = functionBody(payload, "fun hasBingeCatAuthToPublish(context: Context)")
         assertTrue(
-            "and it asks the rule with both halves: $gate",
-            gate.contains("BingeCatAuthRules.shouldPublish(store.accessToken(), store.isSignedOut())")
+            "and it asks the rule with every half: the pair, the tombstone, the " +
+                "refusal marker and the expiry: $gate",
+            gate.contains("BingeCatAuthRules.shouldPublish(") &&
+                gate.contains("needsReconnect = store.needsReconnect()") &&
+                gate.contains("expiresAtEpochMillis = session?.expiresAtEpochMillis ?: 0L")
+        )
+        assertTrue(
+            "and the immediate publish asks the same question before it writes: " +
+                "a refused pair must never overwrite the winner's live one",
+            squash(repository).contains(
+                "if (!PrefsPayloadBuilder.hasBingeCatAuthToPublish(appContext)) return"
+            )
         )
     }
 

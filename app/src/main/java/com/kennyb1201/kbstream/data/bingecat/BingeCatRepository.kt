@@ -11,6 +11,7 @@ import com.kennyb1201.kbstream.data.library.LibraryListRename
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import retrofit2.Response
@@ -209,6 +210,21 @@ class BingeCatRepository private constructor(private val context: Context?) {
         /** Refresh this long before the token actually expires. */
         private const val EXPIRY_SKEW_MS = 60_000L
 
+        /**
+         * Attempts to persist a pair the server has just MINTED (F4, 2026-11-27).
+         *
+         * Two, with [MINTED_PAIR_RETRY_MS] between them: a refresh has already
+         * consumed the old refresh token by the time this runs, so a store write
+         * that fails once has left this device holding the only live pair in the
+         * world and no durable copy of it - the previous code returned null as if
+         * the refresh itself had failed, and the next call then presented a
+         * consumed token.
+         */
+        private const val MINTED_PAIR_SAVE_ATTEMPTS = 2
+
+        /** How long to wait before re-attempting the save of a minted pair. */
+        private const val MINTED_PAIR_RETRY_MS = 150L
+
         @Volatile
         private var instance: BingeCatRepository? = null
 
@@ -254,6 +270,18 @@ class BingeCatRepository private constructor(private val context: Context?) {
      * revoked. The due-check is repeated inside the lock for that reason.
      */
     private val refreshMutex = Mutex()
+
+    /**
+     * A pair the server minted and the store refused (F4).
+     *
+     * Held here - and retried on the next BingeCat call - because the pair is
+     * the ONLY live one once a refresh has consumed its predecessor, so losing it
+     * is losing the session. Kept in memory rather than only retried in place so
+     * a store that fails for a few seconds (a re-keying KeyStore, a full disk)
+     * does not outlive the grant.
+     */
+    @Volatile
+    private var unsavedMintedPair: BingeCatToken? = null
 
     private val cacheMutex = Mutex()
 
@@ -323,6 +351,13 @@ class BingeCatRepository private constructor(private val context: Context?) {
         val reconnect = needsReconnect()
         BingeCatTrace.recordSession(usable)
         BingeCatTrace.recordNeedsReconnect(reconnect)
+        // F5 (2026-11-27): the mapping is read for the TRACE whether or not this
+        // device can call. It used to be recorded only as a side effect of the
+        // `usable` branch below, so a cold restart with a refusal marker showed
+        // `mapped=unmapped` - and that read as "the disconnect cleared the
+        // mapping" on the incident paste, when the mapping was intact on disk all
+        // along. Diagnostics must not be able to say that again.
+        BingeCatTrace.recordMapping(mapping.mappedProfileId(), mapping.mappedProfileName())
         BingeCatTrace.recordNeedsReapproval(
             reconnect || (
                 usable && mappedProfileId() != null &&
@@ -630,7 +665,12 @@ class BingeCatRepository private constructor(private val context: Context?) {
                 expiresInSeconds = granted.expiresInSeconds,
                 nowMs = System.currentTimeMillis()
             ),
-            scope = granted.scope
+            scope = granted.scope,
+            // F3: a fresh grant is NEWER than anything this device could be
+            // holding (a dead pair from a previous grant), so it is minted one
+            // past the newest pair in sight - otherwise a sibling would refuse
+            // the reconnect it is being handed.
+            generation = store.nextGeneration()
         )
         return try {
             store.save(token)
@@ -852,12 +892,28 @@ class BingeCatRepository private constructor(private val context: Context?) {
      */
     private fun publishAuthToSync() {
         val appContext = context ?: return
+        // F1 (2026-11-27): a pair this device cannot vouch for is never
+        // published. The row is account-wide and last-write-wins, so writing a
+        // REFUSED pair here overwrote the winner's live one with a fresh
+        // `updatedAt` - the step that turned one device losing a rotation race
+        // into all three needing a QR. An EXPIRED pair is refused for the same
+        // reason: it carries nothing a sibling cannot derive from its own, and
+        // the first device to use BingeCat will refresh and publish a live one.
+        // The tombstone path is untouched: it has no token and its marker is the
+        // whole message ([BingeCatAuthRules.shouldPublish]).
+        if (!PrefsPayloadBuilder.hasBingeCatAuthToPublish(appContext)) return
         runCatching {
             SupabaseSync.enqueuePrefs(
                 appContext,
                 PrefsPayloadBuilder.KEY_BINGECAT_AUTH,
                 PrefsPayloadBuilder.buildBingeCatAuth(appContext)
             )
+        }.onFailure { error ->
+            // F4: a lost publish used to be swallowed with no trace at all,
+            // which widened the window for a stale pair to win the row and left
+            // the next paste unable to see that it had happened.
+            BingeCatTrace.recordError("publish-failed")
+            Log.w(TAG, "bingecat session not published: ${error.javaClass.simpleName}")
         }
     }
 
@@ -2602,6 +2658,11 @@ class BingeCatRepository private constructor(private val context: Context?) {
      * the mapping still in place.
      */
     private suspend fun ensureFreshToken(force: Boolean = false): String? {
+        // F4: a pair that was minted but could not be persisted is retried here,
+        // under the refresh lock so it can never race a newer save.
+        if (unsavedMintedPair != null) {
+            refreshMutex.withLock { retryUnsavedMintedPairLocked() }
+        }
         val stored = store.read()
         // Nothing to call with, or a pair the server already refused: no request
         // is worth making, and the honest answer is "reconnect" - unless the
@@ -2701,18 +2762,72 @@ class BingeCatRepository private constructor(private val context: Context?) {
                     expiresInSeconds = granted.expiresInSeconds,
                     nowMs = System.currentTimeMillis()
                 ),
-                scope = granted.scope ?: latest.scope
+                scope = granted.scope ?: latest.scope,
+                generation = latest.generation + 1L
             )
             // Persisted BEFORE the token is returned: a refresh that rotated
             // the pair and never saved it leaves the next call holding a
             // refresh token BingeCat has already consumed.
-            runCatching { store.save(token) }.getOrNull() ?: return@withLock null
+            //
+            // F4 (2026-11-27): and if it cannot be persisted, this does NOT
+            // return null. The server has consumed the old refresh token, so
+            // this pair is the only live one there is; reporting a failed
+            // refresh would send the caller to `no-token` over a session that
+            // works. It is kept in memory and retried on the next call, and the
+            // access token is used right now.
+            val saved = saveMintedPair(token)
             // A refresh ROTATES the pair (and may invalidate the old refresh
             // token), so the account copy is now stale: push the new one or a
-            // sibling is signed out as soon as its own copy expires.
-            publishAuthToSync()
+            // sibling is signed out as soon as its own copy expires. Only when
+            // it was actually stored - the blob is built FROM the store, so a
+            // failed save has nothing truthful to publish.
+            if (saved) publishAuthToSync()
             token.accessToken
         }
+    }
+
+    /**
+     * Persists a pair the server has just minted, or keeps it for another try
+     * (F4, 2026-11-27).
+     *
+     * A refresh ROTATES the pair, so by the time this runs the previous refresh
+     * token is already consumed server-side and `token` is the only live one
+     * anywhere. The old code did `runCatching { store.save(token) }.getOrNull()
+     * ?: return null`, which turned a store failure into "the refresh failed":
+     * the pair was dropped, the next call presented a dead refresh token, and the
+     * grant was gone for every device. So a failed save is retried once in place
+     * and then held in [unsavedMintedPair] for [retryUnsavedMintedPairLocked].
+     *
+     * Returns whether the pair reached the store. The caller uses the token
+     * either way - it is live - but must not publish a blob it could not store.
+     */
+    private suspend fun saveMintedPair(token: BingeCatToken): Boolean {
+        repeat(MINTED_PAIR_SAVE_ATTEMPTS) { attempt ->
+            if (runCatching { store.save(token) }.isSuccess) {
+                unsavedMintedPair = null
+                return true
+            }
+            if (attempt < MINTED_PAIR_SAVE_ATTEMPTS - 1) {
+                delay(MINTED_PAIR_RETRY_MS)
+            }
+        }
+        unsavedMintedPair = token
+        BingeCatTrace.recordError("save-failed")
+        return false
+    }
+
+    /**
+     * The next-call half of [saveMintedPair], called under [refreshMutex].
+     *
+     * On success the pair is published, because the reason it was not published
+     * when it was minted is the same failure that is now over: a sibling should
+     * not wait for this device's next refresh to learn the pair.
+     */
+    private suspend fun retryUnsavedMintedPairLocked() {
+        val pending = unsavedMintedPair ?: return
+        if (runCatching { store.save(pending) }.isFailure) return
+        unsavedMintedPair = null
+        publishAuthToSync()
     }
 
     /**
@@ -2800,9 +2915,12 @@ class BingeCatRepository private constructor(private val context: Context?) {
                 expiresInSeconds = granted.expiresInSeconds,
                 nowMs = System.currentTimeMillis()
             ),
-            scope = granted.scope ?: account.scope
+            scope = granted.scope ?: account.scope,
+            generation = account.generation + 1L
         )
-        if (runCatching { store.save(token) }.isFailure) return null
+        // F4 applies here too: this pair was minted, and the adopted one is
+        // already spent.
+        if (!saveMintedPair(token)) return token
         // This refresh rotated the pair as well: the siblings are now one
         // generation behind, and the account copy has to carry the newest one.
         publishAuthToSync()

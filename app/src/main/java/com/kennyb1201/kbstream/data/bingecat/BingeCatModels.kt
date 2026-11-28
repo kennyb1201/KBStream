@@ -40,13 +40,25 @@ data class BingeCatTokenResponse(
  *
  * BingeCat answers `expires_in` and `created_at` separately, so the expiry is
  * derived once here instead of at every read ([BingeCatDeviceFlowRules.expiresAtEpochMillis]).
+ *
+ * [generation] is the pair's ordering, and it exists because EXPIRY cannot
+ * order two pairs. BingeCat rotates the pair on every refresh, so three devices
+ * sharing one grant hold pairs from different generations, and the sync row is
+ * last-write-wins: the only safe question on a pull is "is this pair newer than
+ * mine?", which an expiry timestamp cannot answer - a consumed pair and a live
+ * one can both be expired, and the loser of a rotation is exactly the device
+ * whose pair is older while looking as new (spec 2026-11-27, F3). It advances
+ * on every successful mint - a connect or a refresh - and a row without the
+ * field (an older build's) is generation 0.
  */
 data class BingeCatToken(
     val accessToken: String,
     val refreshToken: String?,
     val expiresAtEpochMillis: Long,
     /** What the grant was actually allowed, so diagnostics can name it. */
-    val scope: String? = null
+    val scope: String? = null,
+    /** How many mints this pair is from the grant's first, for ordering only. */
+    val generation: Long = 0L
 )
 
 /** `GET /api/v1/profiles` - the mapping step's list. */

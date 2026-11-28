@@ -92,7 +92,11 @@ internal class BingeCatAccountStore(
             accessToken = access,
             refreshToken = prefs?.getString(BingeCatTokenStore.KEY_REFRESH_TOKEN, null),
             expiresAtEpochMillis = prefs?.getLong(BingeCatTokenStore.KEY_EXPIRES_AT, 0L) ?: 0L,
-            scope = prefs?.getString(BingeCatTokenStore.KEY_SCOPE, null)
+            scope = prefs?.getString(BingeCatTokenStore.KEY_SCOPE, null),
+            // The pair's ordering travels with the pair, or a sibling's refresh
+            // would look like a tie to the next device that compares
+            // ([BingeCatToken.generation]).
+            generation = prefs?.getLong(BingeCatTokenStore.KEY_GENERATION, 0L) ?: 0L
         )
     }
 
@@ -110,6 +114,7 @@ internal class BingeCatAccountStore(
             .putString(BingeCatTokenStore.KEY_REFRESH_TOKEN, token.refreshToken)
             .putLong(BingeCatTokenStore.KEY_EXPIRES_AT, token.expiresAtEpochMillis)
             .putString(BingeCatTokenStore.KEY_SCOPE, token.scope)
+            .putLong(BingeCatTokenStore.KEY_GENERATION, token.generation)
             .apply()
     }
 
