@@ -39,6 +39,27 @@ class BingeCatPendingHistoryContractTest {
         return file.readText()
     }
 
+    /** The body of one function, brace-matched, so a pin can be scoped to it. */
+    private fun functionBody(source: String, signature: String): String {
+        val start = source.indexOf(signature)
+        assertTrue("missing $signature", start >= 0)
+        val open = source.indexOf('{', start)
+        assertTrue("missing body for $signature", open >= 0)
+        var depth = 0
+        var i = open
+        while (i < source.length) {
+            when (source[i]) {
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) return source.substring(open + 1, i)
+                }
+            }
+            i++
+        }
+        throw AssertionError("unterminated body for $signature")
+    }
+
     private fun squash(text: String): String = text.replace(Regex("\\s+"), " ")
 
     private val repository = squash(source("com/kennyb1201/kbstream/data/bingecat/BingeCatRepository.kt"))
@@ -177,9 +198,15 @@ class BingeCatPendingHistoryContractTest {
             "and every Home load does, on the taste queue's own reasoning",
             home.contains("bingecatRepository .schedulePendingHistoryFlush()")
         )
+        // The REPLAY path is the one that must not wait: a delay there would be
+        // a poll by another name. `delay(` exists in this class once, and it is
+        // not here - it is the one-shot backoff on re-saving a pair the server
+        // has already minted (spec 2026-11-27, F4), which cannot re-queue a
+        // play and cannot tick.
+        val flush = functionBody(repository, "internal suspend fun flushPendingHistory()")
         assertFalse(
-            "but nothing polls: no worker, no timer, no periodic replay",
-            repository.contains("PeriodicWorkRequest") || repository.contains("delay(")
+            "but nothing polls: no worker, no timer, no wait in the replay itself",
+            repository.contains("PeriodicWorkRequest") || flush.contains("delay(")
         )
         assertTrue(
             "the door is off the caller's path",
