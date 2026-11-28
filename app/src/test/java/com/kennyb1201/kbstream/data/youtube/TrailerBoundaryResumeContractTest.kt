@@ -322,7 +322,7 @@ class TrailerBoundaryResumeContractTest {
         )
         assertTrue(
             "the rebuild is the trusted source-swap path",
-            apply.contains("recreatePlayer(settleMs = SOURCE_SWITCH_SETTLE_MS)")
+            apply.contains("recreatePlayer(settleMs = DECODER_RELEASE_SETTLE_MS)")
         )
     }
 

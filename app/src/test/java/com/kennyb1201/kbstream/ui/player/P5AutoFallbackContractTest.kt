@@ -212,7 +212,7 @@ class P5AutoFallbackContractTest {
             .substringBefore("private fun onSniffedDvProfileFound")
         // Before the rebuild, so the rebuilt session cannot arm a second one.
         val latch = spend.indexOf("p5NativePrimeDoneInProcess = true")
-        val rebuild = spend.indexOf("recreatePlayer()")
+        val rebuild = spend.indexOf("recreatePlayer(settleMs = ")
         assertTrue(latch in 1 until rebuild)
         assertTrue(
             "one re-init, after the first frame's grace",
@@ -266,7 +266,7 @@ class P5AutoFallbackContractTest {
         assertTrue(handler.contains("if (profile != 5) return"))
         assertTrue(handler.contains("p5SniffedP5ForSession = true"))
         assertTrue(handler.contains("!firstFrameRendered && !p5ReroutePending"))
-        assertTrue(handler.contains("recreatePlayer()"))
+        assertTrue(handler.contains("recreatePlayer(settleMs = "))
 
         // Session state, reset with the rest of the DV identity on a new source.
         val reset = player.substringAfter("currentCodecs = null")

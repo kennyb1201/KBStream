@@ -214,7 +214,7 @@ class SpuriousPauseAndFocusResumeContractTest {
      */
     @Test
     fun `a rebuild restores the session's play intent`() {
-        val recreate = block(native, "private fun recreatePlayer(settleMs: Long = 0L) {")
+        val recreate = block(native, "private fun recreatePlayer(")
         val capture = recreate.indexOf("rebuildPlayIntent = exoPlayer?.playWhenReady ?: sessionPlayIntent")
         val release = recreate.indexOf("exoPlayer?.release()")
         assertTrue("the intent is captured", capture >= 0)

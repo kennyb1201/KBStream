@@ -299,34 +299,68 @@ private const val DECODER_EXHAUSTED_MESSAGE =
 private const val UHD_RESOLUTION_RANK = 5
 
 /**
- * How long a source switch leaves the box alone between releasing the old
- * player and building the next one. A switch reuses the same output Surface
- * for the new codec, and on this Realtek stack the outgoing 4K decoder's
- * buffers stay bound to that Surface past kWhatReleaseCompleted: the next
- * codec's setNativeWindowSizeFormatAndUsage then reconfigures a surface that
- * is still holding ~10 x 4K buffers, and the codec comes back
- * OMX_ErrorInsufficientResources (0x80001000) as soon as samples are
- * submitted. The DV-strip and resource-exhaustion rebuilds below already wait
- * 3s / 6s for this vendor behavior (their own comments say the release lands
- * ~3s after ExoPlayer lets the codec go); a source switch was the one rebuild
- * that waited nothing - and the field log shows a session's first failure
- * landing 4ms after the previous player was released, on a plain HDR10 HEVC
- * file the box decodes natively.
+ * How long EVERY mid-playback rebuild leaves the box alone between releasing
+ * the old player and building the next one.
+ *
+ * Not a source-switch value, despite the name it had: the release window it
+ * covers belongs to the vendor decoder, and a rebuild after a decoder error, a
+ * retry, a watchdog stage or an audio restate asks the same pool for the same
+ * component the outgoing one has not finished handing back. It was wired only
+ * to the two source-replacement paths, so every other rebuild configured ~0ms
+ * after the release, inside this window - which is how a TCL session hit
+ * 0x80001000 twice mid-playback (DIG S1E2 at 99.5s, Engineering from Above
+ * S1E2 at ~6m38s, build 0.9.580) and handed to MPV both times.
+ *
+ * A rebuild reuses the same output Surface for the new codec, and on this
+ * Realtek stack the outgoing 4K decoder's buffers stay bound to that Surface
+ * past kWhatReleaseCompleted: the next codec's
+ * setNativeWindowSizeFormatAndUsage then reconfigures a surface that is still
+ * holding ~10 x 4K buffers, and the codec comes back
+ * OMX_ErrorInsufficientResources (0x80001000) as soon as samples are submitted.
+ * The field log shows a session's first failure landing 4ms after the previous
+ * player was released, on a plain HDR10 HEVC file the box decodes natively.
+ *
+ * THE CODE HAS THREE NUMBERS FOR THE SAME VENDOR BEHAVIOUR, and they were never
+ * reconciled, so this one is not silently "the" answer:
+ *
+ *  - the platform teardown's own latency is ~3s ([DV_STRIP_REBUILD_DELAY_MS]):
+ *    `ACodec: forcing the release of codec` lands about 3s after release;
+ *  - [DecoderPoolHealth] claims ~15s for a 4K decoder to be released
+ *    process-wide, which is the number behind its 120s exhaustion window and
+ *    behind [DECODER_FULL_WINDOW_MS] below - a retry that waits this long;
+ *  - 6s here, because 3s is the release latency rather than something on top of
+ *    it: a request landing exactly as the component finished came back with the
+ *    same 0x80001000, while 6s is the timing the field session showed rebuilds
+ *    succeeding at.
+ *
+ * 6s stays the common-case settle: it is field-proven, and putting 15s of splash
+ * on every manual source switch to cover the worst case would trade a rare
+ * exhaustion for a guaranteed wait. The worst case gets its own bounded retry
+ * instead (see [DECODER_FULL_WINDOW_MS]).
  *
  * The window is counted from the release, not from the rebuild that asks for
- * it: a second switch inside it - the viewer picking another source, or the
- * next-source ladder firing while they do - waits out the remainder instead of
- * asking for a decoder a second after the last one was handed back.
+ * it: a second rebuild inside it - the viewer picking another source, the
+ * next-source ladder firing, a watchdog stage - waits out the remainder instead
+ * of asking for a decoder a second after the last one was handed back.
  *
- * It is [DECODER_RESOURCE_RETRY_DELAY_MS]'s 6s rather than the 3s the other
- * rebuilds use, because 3s is the vendor's own release latency rather than
- * something on top of it: the request landed exactly as the component was
- * finishing and the box answered the same 0x80001000. 6s clears it with
- * margin, which is the timing the field session showed a rebuild succeeding
- * at. The cost is splash, not black screen - [switchToSource] raises the
- * backdrop before this runs.
+ * The cost is splash, not black screen: [recreatePlayer] raises the backdrop for
+ * the wait whenever one of the existing notices is not already up.
  */
-private const val SOURCE_SWITCH_SETTLE_MS = 6_000L
+private const val DECODER_RELEASE_SETTLE_MS = 6_000L
+
+/**
+ * The conservative FULL vendor release window, for the one retry that follows a
+ * settled rebuild which still came back 0x80001000.
+ *
+ * Taken from [DecoderPoolHealth]'s ~15s claim rather than from the 3s teardown
+ * latency: the point of this wait is to be the longest the box could plausibly
+ * still be holding the decoder, so a retry after it is a genuine second chance
+ * rather than a third attempt inside the same window. It is only ever waited
+ * once per source (see `decoderFullWindowRetryDone`) and only after the pool has
+ * already proven it can decode in this process, so a viewer never pays it on a
+ * normal switch.
+ */
+private const val DECODER_FULL_WINDOW_MS = 15_000L
 
 // How much the buffered position OR the playhead must advance between the
 // black-video watchdog's arm and its fire for the wait to count as a healthy
@@ -807,7 +841,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         if (firstFrameRendered) {
             carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
         }
-        recreatePlayer()
+        recreatePlayer(settleMs = DECODER_RELEASE_SETTLE_MS)
     }
 
     /**
@@ -868,7 +902,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         if (firstFrameRendered) {
             carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
         }
-        recreatePlayer()
+        recreatePlayer(settleMs = DECODER_RELEASE_SETTLE_MS)
     }
 
     /**
@@ -1861,7 +1895,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         PlaybackRecoveryRules.failureCauseKey(lastPlaybackError)
             ?.let { rebuildBudget.record(it) }
         errorMessageStr = null
-        recreatePlayer()
+        recreatePlayer(settleMs = DECODER_RELEASE_SETTLE_MS)
     }
     /**
      * The ladder has rolled over instead of parking on the error card (see
@@ -1871,6 +1905,25 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      */
     private var liveRetryLooping = false
     private var decoderResourceFallbackDone = false
+
+    /**
+     * True once the session has spent its ONE same-source retry after the full
+     * vendor release window ([DECODER_FULL_WINDOW_MS]) for the current source.
+     *
+     * The settle every rebuild now pays ([DECODER_RELEASE_SETTLE_MS]) is the
+     * common case; this is the answer to a settled rebuild that STILL came back
+     * OMX_ErrorInsufficientResources, which is the shape the field session hit.
+     * Per source, like [decoderResourceFallbackDone] and reset with it, so a
+     * source the box genuinely cannot decode cannot spend it on every attempt -
+     * and a source that succeeds gets a fresh one if the viewer switches back.
+     */
+    private var decoderFullWindowRetryDone = false
+
+    /**
+     * Guards the ONE recovery line a successful full-window retry writes (see
+     * [markFirstFrameRendered]). Reset with [decoderFullWindowRetryDone].
+     */
+    private var decoderFullWindowRetryRecovered = false
     /**
      * True once a decoder failure has had the ladder's one meaningful retry,
      * the raw-extractor probe (see [RAW_EXTRACTOR_PROBE_ATTEMPT]).
@@ -3687,7 +3740,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         if (firstFrameRendered) {
             carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
         }
-        recreatePlayer()
+        recreatePlayer(settleMs = DECODER_RELEASE_SETTLE_MS)
     }
 
     /**
@@ -5621,7 +5674,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             PlaybackRecoveryRules.failureCauseKey(lastPlaybackError)
                 ?.let { rebuildBudget.record(it) }
             manualRetryToken++
-            recreatePlayer()
+            // The rebuild below waits out the vendor's decoder release window
+            // before it configures a new codec, so the card is swapped for the
+            // reconnecting notice the ladder uses - the same single indicator,
+            // not a second one beside it. Without this the press would look
+            // dead for six seconds on a card that is already the failure
+            // message.
+            errorContainer.visibility = View.GONE
+            reconnectingContainer.visibility = View.VISIBLE
+            hideBufferingSpinner()
+            reconnectingText.text = "Reconnecting…"
+            recreatePlayer(settleMs = DECODER_RELEASE_SETTLE_MS)
         }
 
         // Change source
@@ -5800,7 +5863,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             enableTunneling = !enableTunneling
             AppPreferences.setEnableTunneling(this, enableTunneling)
             updateSettingsPanelState()
-            recreatePlayer()
+            recreatePlayer(settleMs = DECODER_RELEASE_SETTLE_MS)
         }
         btnAutoplay.setOnClickListener {
             autoPlayNext = !autoPlayNext
@@ -7897,12 +7960,21 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     /**
-     * Rebuilds the player for the current source. [settleMs] is the
-     * source-switch path: detach the shared output Surface from the outgoing
-     * player, release it, and only then build the next one, leaving the vendor
-     * decoder [settleMs] to hand its 4K buffers back (see
-     * [SOURCE_SWITCH_SETTLE_MS]). Every other caller keeps the immediate
-     * rebuild by passing nothing.
+     * Rebuilds the player for the current source. [settleMs] is the decoder
+     * release window this rebuild must leave the vendor (see
+     * [DECODER_RELEASE_SETTLE_MS]): detach the shared output Surface from the
+     * outgoing player, release it, and only then build the next one.
+     *
+     * EVERY caller that rebuilds while a decoder is (or may be) allocated passes
+     * it - the retry ladder, the black-video watchdog, the P5 rebuilds, the
+     * subtitle and audio restates, the DV strip, a source switch, the
+     * foreground return. It is not a source-switch value: the window belongs to
+     * the vendor component, and the callers that passed nothing configured a new
+     * codec ~0ms after the old one was released (see the constant).
+     *
+     * 0 is still meaningful and still means "no waiting": a first build has no
+     * release to wait out ([rebuildSettleRemainingMs] answers 0 for
+     * `releasedAtMs = 0`), and that is the only case that wants it.
      *
      * The wait is measured from the release rather than from this call, so a
      * second rebuild landing inside the window waits out what is left of it
@@ -7910,8 +7982,19 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * ([rebuildSettleRemainingMs]). Only the newest rebuild's queued create
      * runs: an earlier one would build a second player, and the second one is
      * what the box refuses.
+     *
+     * The Surface detach happens for every settled rebuild, not just a switch -
+     * a dying codec still holding the SurfaceView's Surface is what the next
+     * codec configures onto - so the picture is gone for the wait, and the
+     * backdrop is raised for it below (splash, or whichever notice a recovery
+     * path already has up).
+     *
+     * @return the settle wait this rebuild actually applied, 0 when it built at
+     *   once. Only the full-window retry reads it: its report line has to say
+     *   how long it waited, because that wait is what tells 3s from 6s from 15s
+     *   on the next paste.
      */
-    private fun recreatePlayer(settleMs: Long = 0L) {
+    private fun recreatePlayer(settleMs: Long = 0L): Long {
         // Counted for the diagnostics report: a rebuild throws away the whole
         // read-ahead buffer, so "it stalled just after starting" is a rebuild
         // as often as it is a slow source, and the two want opposite fixes.
@@ -7956,6 +8039,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 "Waiting ${wait}ms for the previous decoder to release its " +
                     "buffers before rebuilding the player"
             )
+            // The picture is gone for the wait (the Surface was detached above),
+            // so something has to be behind it. Exactly one thing: the notice a
+            // recovery path already raised stays as it is - the retry ladder and
+            // both watchdog stages own their own wording - and only a rebuild
+            // that would otherwise be a black screen (an audio restate, the
+            // tunneling toggle, a sidecar attach) raises the splash.
+            val backdropUp =
+                splashContainer.visibility == View.VISIBLE ||
+                    reconnectingContainer.visibility == View.VISIBLE ||
+                    errorContainer.visibility == View.VISIBLE
+            if (!backdropUp) showSplash()
             handler.postDelayed(
                 {
                     if (generation != playerGeneration) return@postDelayed
@@ -7966,6 +8060,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         } else {
             createPlayer()
         }
+        return wait
     }
 
     private fun createPlayerListener() = object : Player.Listener {
@@ -8381,7 +8476,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                             )
                             handler.post {
                                 if (!p5GlesActive && !firstFrameRendered) {
-                                    recreatePlayer()
+                                    recreatePlayer(settleMs = DECODER_RELEASE_SETTLE_MS)
                                 } else {
                                     // State changed meanwhile (watchdog recovery,
                                     // surface reset, frame rendered) — nothing to do.
@@ -8625,7 +8720,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 handler.postDelayed(
                     {
                         errorMessageStr = null
-                        recreatePlayer()
+                        // The 3s above is a delay BEFORE the rebuild (it lets
+                        // the DV decoder stop and the notice show); it is not a
+                        // settle. The release->configure gap is enforced from
+                        // the release by the settle.
+                        recreatePlayer(settleMs = DECODER_RELEASE_SETTLE_MS)
                     },
                     DV_STRIP_REBUILD_DELAY_MS
                 )
@@ -8665,6 +8764,42 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 // session goes straight to the software engine, which needs no
                 // MediaCodec at all: zero source switches, zero rebuilds.
                 if (DecoderPoolHealth.everRenderedFirstFrame) {
+                    // F2, before the handoff: one same-source retry after the
+                    // FULL vendor window.
+                    //
+                    // The settle that was just paid is the common case (6s),
+                    // and this box's own comments put the real release window
+                    // anywhere from 3s to ~15s (see DECODER_RELEASE_SETTLE_MS).
+                    // Handing off on the first settled failure is therefore a
+                    // guess that the 6s was enough; waiting the longest figure
+                    // the code claims, once per source, is the one measurement
+                    // that can settle it - and it costs a wait on a session that
+                    // was about to change engines anyway. No ladder step, no
+                    // source switch: same source, same URL.
+                    if (!decoderFullWindowRetryDone && claimFullWindowRetryBudget()) {
+                        decoderFullWindowRetryDone = true
+                        Log.w(
+                            "PLAYER_RETRY",
+                            "Decoder resources exhausted AFTER a settled rebuild - " +
+                                "retrying the same source after the full " +
+                                "${DECODER_FULL_WINDOW_MS}ms vendor window before " +
+                                "giving up on this engine"
+                        )
+                        reconnectingContainer.visibility = View.VISIBLE
+                        hideBufferingSpinner()
+                        reconnectingText.text = "Reconnecting…"
+                        val waitedMs = recreatePlayer(settleMs = DECODER_FULL_WINDOW_MS)
+                        PlaybackEngineTrace.note(
+                            PlaybackEngineTrace.describe(
+                                cause = "decoder pool still wedged after a settled " +
+                                    "rebuild (0x80001000)",
+                                detail = "same source, no ladder step - retrying after " +
+                                    "the full ${DECODER_FULL_WINDOW_MS / 1000}s vendor " +
+                                    "window (waited ${waitedMs}ms)"
+                            )
+                        )
+                        return
+                    }
                     Log.w(
                         "PLAYER_RETRY",
                         "Decoder resources exhausted after this process already " +
@@ -8760,6 +8895,24 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // rest of the ladder. handOffToMpv refuses live TV, a DRM session,
             // a device without libmpv and an "ExoPlayer only" engine setting,
             // and those keep the old ladder.
+            // F2: the full vendor window was already waited out on this source
+            // and the pool still refused. Nothing below is a rebuild away from
+            // working - the probe asks the same wedged pool and would spend
+            // another window to learn that - so the backup engine is the only
+            // step left. Refused (live TV, DRM, an ExoPlayer-only setting, no
+            // libmpv), the card is the honest outcome.
+            if (resourceExhausted && decoderFullWindowRetryDone) {
+                Log.w(
+                    "PLAYER_RETRY",
+                    "Decoder resources exhausted again after the full vendor " +
+                        "window - going straight to the backup engine, no probe rebuild"
+                )
+                if (handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_DECODER)) return
+                retryExhausted = true
+                errorMessageStr = DECODER_EXHAUSTED_MESSAGE
+                updateUIError()
+                return
+            }
             if (decoderFailure) {
                 // A DV session that has already spent its one strip retry has
                 // no ladder step left that can help it. The raw-extractor probe
@@ -9305,6 +9458,21 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // through FFmpeg and never touches the MediaCodec pool. See
         // DecoderPoolHealth.
         DecoderPoolHealth.noteFirstFrame()
+        // The other half of the full-window retry's measurement (F2): the retry
+        // line says it waited, this says the wait WORKED. Without it a paste
+        // showing the retry and no handoff is ambiguous - a recovered session
+        // and a dead one look the same.
+        if (decoderFullWindowRetryDone && !decoderFullWindowRetryRecovered) {
+            decoderFullWindowRetryRecovered = true
+            PlaybackEngineTrace.note(
+                PlaybackEngineTrace.describe(
+                    cause = "full-window retry recovered",
+                    detail = "first frame after the ${DECODER_FULL_WINDOW_MS / 1000}s " +
+                        "window - the ${DECODER_RELEASE_SETTLE_MS / 1000}s settle was not " +
+                        "enough on this box"
+                )
+            )
+        }
         // A frame actually rendered, so THIS addon works for this title: the
         // next episode's list and the picker's own order start with it instead
         // of with whichever addon the ranker happened to put first (see
@@ -9454,7 +9622,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 }
                 p5PrimeRebuildPending = false
                 p5NativePrimeDoneInProcess = true
-                recreatePlayer()
+                recreatePlayer(settleMs = DECODER_RELEASE_SETTLE_MS)
             },
             P5AutoRecovery.PRIME_GRACE_AFTER_FIRST_FRAME_MS
         )
@@ -9487,7 +9655,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             )
             if (!p5GlesActive && !firstFrameRendered && !p5ReroutePending) {
                 p5ReroutePending = true
-                recreatePlayer()
+                recreatePlayer(settleMs = DECODER_RELEASE_SETTLE_MS)
             } else {
                 // The picture is already up (or the path is already on): a rebuild
                 // now would restart a playing file for a colour path that cannot
@@ -9790,8 +9958,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     if (blackVideoNoticeShown) return@postDelayed
                     if (firstFrameRendered) return@postDelayed
                     errorMessageStr = null
+                    // The 500ms above runs BEFORE the rebuild; the settle is
+                    // what covers the release->configure window.
                     blackVideoLadderRebuild = true
-                    recreatePlayer()
+                    recreatePlayer(settleMs = DECODER_RELEASE_SETTLE_MS)
                 },
                 500L
             )
@@ -9825,8 +9995,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     if (firstFrameRendered) return@postDelayed
                     errorMessageStr = null
                     forceDvStripForSession = true
+                    // The 500ms above runs BEFORE the rebuild; the settle is
+                    // what covers the release->configure window.
                     blackVideoLadderRebuild = true
-                    recreatePlayer()
+                    recreatePlayer(settleMs = DECODER_RELEASE_SETTLE_MS)
                 },
                 500L
             )
@@ -14771,6 +14943,32 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         )
     }
 
+    /**
+     * Takes one rebuild out of this session's budget for the failure cause on
+     * screen, for the full-window retry (see [decoderFullWindowRetryDone]).
+     *
+     * The retry is a rebuild, so it is counted exactly as the ladder's own is
+     * ([retryRunnable]): the cap bounds total rebuilds, not one path's. A retry
+     * that would exceed it is not taken at all, and the caller falls through to
+     * the backup engine. Live channels are exempt from the check for the reason
+     * [scheduleRetry] exempts them - their reconnect loop is deliberate - but the
+     * rebuild is still recorded, so the diagnostics line stays truthful.
+     */
+    private fun claimFullWindowRetryBudget(): Boolean {
+        val causeKey = PlaybackRecoveryRules.failureCauseKey(lastPlaybackError) ?: return true
+        if (!isLiveChannel && !rebuildBudget.allows(causeKey)) {
+            Log.w(
+                "PLAYER_RETRY",
+                "Rebuild budget spent for '$causeKey' " +
+                    "(${rebuildBudget.spentFor(causeKey)} of $MAX_REBUILDS_PER_CAUSE) - " +
+                    "no full-window retry, handing over instead"
+            )
+            return false
+        }
+        rebuildBudget.record(causeKey)
+        return true
+    }
+
     // --- Playback Ended ---
 
     /**
@@ -15008,7 +15206,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             ?.let { ua -> mapOf("User-Agent" to ua) }
             ?: emptyMap()
         carryPositionMs = positionMs.coerceAtLeast(0L)
-        recreatePlayer(settleMs = SOURCE_SWITCH_SETTLE_MS)
+        recreatePlayer(settleMs = DECODER_RELEASE_SETTLE_MS)
     }
 
     /**
@@ -16637,6 +16835,24 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // without resetting the player or the position, and onStop writes no
         // history for a handoff (mpvHandoffStarted), so nothing reads it after.
         runCatching { exoPlayer?.stop() }
+        // ...and hand the decoder back NOW, not at onStop.
+        //
+        // The pool is process-wide and the box hands out one 4K decode: leaving
+        // this player alive until onStop (which runs after the backup engine's
+        // onCreate, by Android's ordering) kept the decoder occupied for the
+        // whole handover - against the Home hero's pooled trailer, and against a
+        // quick return to Exo. stop() alone does not release it; release() is
+        // what starts the vendor's own release clock, which is why the timestamp
+        // is kept accurate here too (see [rebuildSettleRemainingMs]).
+        //
+        // Order is deliberate and load-bearing: position first (read above), then
+        // stop() (closes the loaders without resetting, so the backup engine can
+        // open the file), then release(), then the launch. onStop and onDestroy
+        // both tolerate a null player, and no history is written for a handoff
+        // ([mpvHandoffStarted]), so nothing below reads it.
+        runCatching { exoPlayer?.release() }
+        exoPlayer = null
+        playerReleasedAtMs = System.currentTimeMillis()
         mpvFallbackLauncher.launch(mpvHandoffIntent(launch))
         return true
     }
@@ -17407,7 +17623,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         hasPlayedOnce = false
         showSplash()
         setupIntroDb()
-        recreatePlayer()
+        // Harmless on a return longer than the window (the remaining wait is 0) -
+        // it covers the quick Home-and-back that lands inside it.
+        recreatePlayer(settleMs = DECODER_RELEASE_SETTLE_MS)
     }
 
     override fun onStart() {
@@ -17769,6 +17987,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         blackVideoLadderRebuild = false
         decoderResourceFallbackDone = false
         decoderFailureRetried = false
+        decoderFullWindowRetryDone = false
+        decoderFullWindowRetryRecovered = false
         // Per source too: left set by a previous container-parse failure, the
         // NEXT source's own parse failure skipped its one raw-extractor probe
         // and went straight to the MPV handoff.
@@ -17836,7 +18056,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // ExoPlayer, already bound to this Surface, can take the next channel's
         // MediaItem and re-init its single video renderer in place - the path
         // it runs for any playlist advance. [recreatePlayer] and its
-        // [SOURCE_SWITCH_SETTLE_MS] wait exist only because a SECOND player
+        // [DECODER_RELEASE_SETTLE_MS] wait exist only because a SECOND player
         // configuring onto a Surface the outgoing decoder still holds comes
         // back OMX_ErrorInsufficientResources on the Realtek/TCL stack; with no
         // second player there is nothing to wait out. VOD switches and the
@@ -17844,7 +18064,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         if (isLiveChannel && exoPlayer != null) {
             lightSwitchLiveChannel()
         } else {
-            recreatePlayer(settleMs = SOURCE_SWITCH_SETTLE_MS)
+            recreatePlayer(settleMs = DECODER_RELEASE_SETTLE_MS)
         }
         // The third of MPV's three repaints, and the one this engine's source
         // switch was missing entirely (spec 2026-11-23, F1): a switch is a new

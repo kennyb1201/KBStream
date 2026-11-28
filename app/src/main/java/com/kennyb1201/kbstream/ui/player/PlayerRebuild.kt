@@ -10,7 +10,8 @@ package com.kennyb1201.kbstream.ui.player
  * ExoPlayer lets it go, and a request inside that window comes back
  * OMX_ErrorInsufficientResources (0x80001000) — the failure the viewer sees as
  * "this TV has run out of video decoder resources" (see
- * [SOURCE_SWITCH_SETTLE_MS]).
+ * [NativePlayerActivity]'s `DECODER_RELEASE_SETTLE_MS`, which every
+ * mid-playback rebuild now passes rather than only a source switch).
  *
  * The grace period used to be counted from the moment a rebuild was *asked
  * for*, and only when a player existed to release. So a second switch landing

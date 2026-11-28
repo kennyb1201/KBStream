@@ -32,7 +32,7 @@ class LiveChannelSurvivalContractTest {
         const val LISTENER = "private fun createPlayerListener() = object : Player.Listener {"
         const val STATE_CHANGED = "override fun onPlaybackStateChanged"
         const val STATE_ENDED = "Player.STATE_ENDED -> {"
-        const val RECREATE = "private fun recreatePlayer(settleMs: Long = 0L) {"
+        const val RECREATE = "private fun recreatePlayer("
         const val SCHEDULE_RETRY = "private fun scheduleRetry() {"
         const val PLAYBACK_ENDED = "// --- Playback Ended ---"
         const val TICK_LIVE = "private fun tickLiveWatchdog(token: Int) {"

@@ -109,7 +109,7 @@ class BlackVideoLadderWiringContractTest {
     @Test
     fun `every ladder rebuild is marked before it starts`() {
         val lines = ladderBody.lines()
-        val rebuilds = lines.withIndex().filter { (_, line) -> line.contains("recreatePlayer()") }
+        val rebuilds = lines.withIndex().filter { (_, line) -> line.contains("recreatePlayer(") }
         assertTrue("the ladder must still rebuild on its later stages", rebuilds.size >= 2)
         rebuilds.forEach { (index, _) ->
             val previous = lines.subList(0, index).lastOrNull { it.isNotBlank() }?.trim()

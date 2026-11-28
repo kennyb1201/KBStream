@@ -62,6 +62,21 @@ class PlayerRebuildTest {
     }
 
     @Test
+    fun `the full vendor window is waited once, and counts the settle already spent`() {
+        // The one retry after a settled rebuild that STILL came back 0x80001000
+        // (NativePlayerActivity's DECODER_FULL_WINDOW_MS). It asks for 15s from
+        // the release, so a session that already waited its 6s settle owes the
+        // other 9 - not another 15, and not nothing.
+        val settled = 6_000L
+        assertEquals(15_000L, rebuildSettleRemainingMs(15_000L, releasedAtMs = released, nowMs = released))
+        assertEquals(9_000L, rebuildSettleRemainingMs(15_000L, releasedAtMs = released, nowMs = released + settled))
+        assertEquals(0L, rebuildSettleRemainingMs(15_000L, releasedAtMs = released, nowMs = released + 15_000L))
+        // And a first build still owes nothing, whatever it is asked for: the
+        // retry cannot turn a launch into a 15-second wait.
+        assertEquals(0L, rebuildSettleRemainingMs(15_000L, releasedAtMs = 0L, nowMs = released))
+    }
+
+    @Test
     fun `a shorter grace period is respected as asked`() {
         assertEquals(500L, rebuildSettleRemainingMs(500L, releasedAtMs = released, nowMs = released))
         assertEquals(0L, rebuildSettleRemainingMs(500L, releasedAtMs = released, nowMs = released + 500L))

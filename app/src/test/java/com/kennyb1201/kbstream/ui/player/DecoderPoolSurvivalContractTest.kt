@@ -96,7 +96,7 @@ class DecoderPoolSurvivalContractTest {
                 "is the move for a pool this process has wedged",
             wedged.contains("handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_DECODER)")
         )
-        listOf("tryNextSource(", "switchToSource(", "recreatePlayer()", "scheduleRetry()")
+        listOf("tryNextSource(", "switchToSource(", "scheduleRetry()")
             .forEach { call ->
                 assertFalse(
                     "a wedged pool must not be asked for a decoder again — found $call " +
@@ -104,6 +104,19 @@ class DecoderPoolSurvivalContractTest {
                     wedged.contains(call)
                 )
             }
+        // One rebuild IS allowed here since 2026-11-28 (F2), and exactly one:
+        // the same source after the full vendor window. It is not a ladder step
+        // and it is not immediate - an un-settled rebuild is what wedges the pool.
+        assertEquals(
+            "the wedged branch may rebuild exactly once, for the full-window retry",
+            1,
+            wedged.split("recreatePlayer(").size - 1
+        )
+        assertTrue(
+            "and that rebuild must wait the full vendor window, not the 6s settle " +
+                "it already spent",
+            wedged.contains("recreatePlayer(settleMs = DECODER_FULL_WINDOW_MS)")
+        )
         assertTrue(
             "and it must be the branch that runs FIRST, before the smaller-source attempt",
             exhaustionBranch.indexOf("if (DecoderPoolHealth.everRenderedFirstFrame) {") <
@@ -147,6 +160,205 @@ class DecoderPoolSurvivalContractTest {
             "the card is what is left when even that is refused",
             exhaustionBranch.indexOf("DECODER_EXHAUSTED_MESSAGE", afterSwitch) > afterSwitch
         )
+    }
+
+    // --- Every rebuild leaves the vendor decoder its window -----------------
+
+    @Test
+    fun `every mid-playback rebuild passes the decoder release settle`() {
+        // The defect this pins: the settle existed and was correct, and only the
+        // two source-replacement paths passed it. The retry ladder, both
+        // watchdog stages, the P5 rebuilds, the subtitle and audio restates, the
+        // DV strip and the foreground return all rebuilt ~0ms after releasing a
+        // decoder, inside the vendor's window - which is how a TCL session hit
+        // 0x80001000 twice mid-playback with frames already on screen.
+        val calls = native.lines()
+            .map { it.trim() }
+            .filter {
+                it.contains("recreatePlayer(") &&
+                    !it.startsWith("*") &&
+                    !it.startsWith("//") &&
+                    !it.startsWith("private fun")
+            }
+        assertTrue("the rebuild call sites are missing entirely", calls.size >= 15)
+        calls.forEach { call ->
+            assertTrue(
+                "a rebuild must leave the vendor decoder its release window - " +
+                    "this one passes no settle: $call",
+                call.contains("settleMs = ")
+            )
+        }
+        assertTrue(
+            "the common-case settle is still the field-proven 6s",
+            native.contains("private const val DECODER_RELEASE_SETTLE_MS = 6_000L")
+        )
+        assertTrue(
+            "and the full vendor window has a constant of its own",
+            native.contains("private const val DECODER_FULL_WINDOW_MS = 15_000L")
+        )
+        assertFalse(
+            "the name must no longer claim this is a source-switch value only",
+            native.contains("SOURCE_SWITCH_SETTLE_MS")
+        )
+    }
+
+    @Test
+    fun `a settled rebuild shows something, and only one thing`() {
+        val recreate = region(native, "private fun recreatePlayer(", "private fun createPlayerListener()")
+        val waitAt = recreate.indexOf("if (wait > 0L) {")
+        assertTrue("the settle wait branch must exist", waitAt >= 0)
+        // Detaching the Surface takes the picture with it, so the wait cannot be
+        // black. A recovery path's own notice (the retry ladder, both watchdog
+        // stages, the DV strip) is that thing already; everything else gets the
+        // splash rather than a second indicator beside one.
+        assertTrue(
+            "the wait must raise a backdrop when none is up",
+            recreate.contains("if (!backdropUp) showSplash()")
+        )
+        assertTrue(
+            "and it has to be up before the wait starts, not after it",
+            recreate.indexOf("if (!backdropUp) showSplash()") in waitAt until recreate.indexOf("handler.postDelayed(")
+        )
+        assertTrue(
+            "the wait is reported, because the full-window retry's line has to say what it paid",
+            recreate.contains("return wait")
+        )
+    }
+
+    // --- F2: one same-source retry after the full vendor window --------------
+
+    @Test
+    fun `a settled exhaustion retries the same source once, after the full window`() {
+        val wedged = region(
+            exhaustionBranch,
+            "if (DecoderPoolHealth.everRenderedFirstFrame) {",
+            "// A fresh pool refused the first configure"
+        )
+        assertTrue(
+            "the retry must be one-shot for the source",
+            wedged.contains("if (!decoderFullWindowRetryDone && claimFullWindowRetryBudget()) {")
+        )
+        assertTrue(
+            "the flag has to be spent before the rebuild, or a failed create would retry again",
+            wedged.indexOf("decoderFullWindowRetryDone = true") in 0 until
+                wedged.indexOf("recreatePlayer(settleMs = DECODER_FULL_WINDOW_MS)")
+        )
+        assertTrue(
+            "it waits the full vendor window, not the 6s settle that just failed",
+            wedged.contains("recreatePlayer(settleMs = DECODER_FULL_WINDOW_MS)")
+        )
+        assertFalse(
+            "it is the SAME source: no ladder step, no switch, from a branch that " +
+                "already knows another source asks the same pool the same question",
+            wedged.contains("tryNextSource(") || wedged.contains("switchToSource(")
+        )
+        // The retry is a rebuild, so the cap bounds it as well (F2's budget rule).
+        assertTrue(
+            "the retry spends this session's rebuild budget",
+            wedged.contains("claimFullWindowRetryBudget()")
+        )
+        val claim = region(native, "private fun claimFullWindowRetryBudget()", "// --- Playback Ended ---")
+        assertTrue(claim.contains("rebuildBudget.allows(causeKey)"))
+        assertTrue(claim.contains("rebuildBudget.record(causeKey)"))
+        // The measurement: a paste shows the wait that was applied, so 3s vs 6s vs
+        // 15s is answered by the next capture instead of another build.
+        assertTrue(
+            "the retry's trace line must record the wait it applied",
+            wedged.contains("(waited \${waitedMs}ms)")
+        )
+        assertTrue(
+            "and the notice stays up across the wait",
+            wedged.contains("reconnectingContainer.visibility = View.VISIBLE")
+        )
+        // The other half of the measurement: a paste with the retry line and no
+        // handoff must be able to say whether the session came back.
+        val firstFrame = region(
+            native,
+            "private fun markFirstFrameRendered() {",
+            "private fun scheduleP5PrimeRebuild() {"
+        )
+        assertTrue(
+            "a recovered full-window retry must say so, once",
+            firstFrame.contains("if (decoderFullWindowRetryDone && !decoderFullWindowRetryRecovered) {") &&
+                firstFrame.contains("cause = \"full-window retry recovered\"")
+        )
+    }
+
+    @Test
+    fun `the retry is per source, reset with the other one-shot decoder flags`() {
+        val switch = region(
+            native,
+            "fun switchToSource(stream: Stream, isAutoRecovery: Boolean = false) {",
+            "private fun lightSwitchLiveChannel()"
+        )
+        assertTrue(
+            "a new source has not spent its retry",
+            switch.contains("decoderFullWindowRetryDone = false")
+        )
+        assertEquals(
+            "only one place may spend it",
+            1,
+            native.split("decoderFullWindowRetryDone = true").size - 1
+        )
+    }
+
+    @Test
+    fun `a second exhaustion after the full window goes straight to the backup engine`() {
+        val guard = region(
+            native,
+            "if (resourceExhausted && decoderFullWindowRetryDone) {",
+            "if (decoderFailure) {"
+        )
+        assertFalse(
+            "the window has been waited out; the probe below asks the same wedged pool",
+            guard.contains("decoderFailureRetried = true")
+        )
+        assertFalse(
+            "no further rebuild may be part of this outcome",
+            guard.contains("recreatePlayer(")
+        )
+        assertTrue(
+            "the backup engine is the step that is left",
+            guard.contains("handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_DECODER)")
+        )
+        assertTrue(
+            "and the card is what is left when even that is refused",
+            guard.contains("DECODER_EXHAUSTED_MESSAGE")
+        )
+        assertTrue(
+            "it must be checked before the decoder-failure ladder, not after it",
+            native.indexOf("if (resourceExhausted && decoderFullWindowRetryDone) {") <
+                native.indexOf("if (decoderFailure) {", native.indexOf("if (resourceExhausted && decoderFullWindowRetryDone) {"))
+        )
+    }
+
+    // --- F3: the handoff frees the decoder it is leaving ---------------------
+
+    @Test
+    fun `the handoff releases the Exo player before the backup engine opens the file`() {
+        val handoff = region(native, "private fun handOffToMpv(", "private fun switchPlayerManually()")
+        val positionAt = handoff.indexOf("val position = carriedPositionMs()")
+        val stopAt = handoff.indexOf("runCatching { exoPlayer?.stop() }")
+        val releaseAt = handoff.indexOf("runCatching { exoPlayer?.release() }")
+        val launchAt = handoff.indexOf("mpvFallbackLauncher.launch(")
+
+        assertTrue("the position is carried first", positionAt in 0 until stopAt)
+        assertTrue("stop() closes the loaders so the other engine can open the file", stopAt in 0 until releaseAt)
+        assertTrue("and release() starts the vendor's release clock before the launch", releaseAt in 0 until launchAt)
+        val between = handoff.substring(releaseAt, launchAt)
+        assertTrue(
+            "the field must be cleared, or onStop would see a live player again",
+            between.contains("exoPlayer = null")
+        )
+        assertTrue(
+            "and the release time is what a quick return's settle counts from",
+            between.contains("playerReleasedAtMs = System.currentTimeMillis()")
+        )
+        // onStop still runs after the handoff, and must find nothing to release
+        // twice: `exoPlayer?.release()` survives a null player.
+        val stop = region(native, "override fun onStop() {", "override fun onDestroy() {")
+        assertTrue(stop.contains("exoPlayer?.release()"))
+        assertTrue(stop.contains("exoPlayer = null"))
     }
 
     // --- Rebuffer downshift ---
@@ -248,7 +460,7 @@ class DecoderPoolSurvivalContractTest {
         val create = region(
             native,
             "private fun createPlayer(",
-            "private fun recreatePlayer(settleMs: Long = 0L) {"
+            "private fun recreatePlayer("
         )
         assertTrue(
             "the lane gate must read the bitrate the session knows",
@@ -274,7 +486,7 @@ class DecoderPoolSurvivalContractTest {
         val create = region(
             native,
             "private fun createPlayer(",
-            "private fun recreatePlayer(settleMs: Long = 0L) {"
+            "private fun recreatePlayer("
         )
         assertTrue(
             "a rebuild replaces the previous session's lanes instead of stacking pools",
@@ -282,7 +494,7 @@ class DecoderPoolSurvivalContractTest {
         )
         val recreate = region(
             native,
-            "private fun recreatePlayer(settleMs: Long = 0L) {",
+            "private fun recreatePlayer(",
             "private fun createPlayerListener()"
         )
         assertTrue(

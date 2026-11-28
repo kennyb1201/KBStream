@@ -9,7 +9,7 @@ import org.junit.Test
  * The live-zap light path, pinned at the source.
  *
  * Every channel change used to funnel through `recreatePlayer` with a
- * `SOURCE_SWITCH_SETTLE_MS` wait: a full ExoPlayer teardown, up to six seconds
+ * `DECODER_RELEASE_SETTLE_MS` wait: a full ExoPlayer teardown, up to six seconds
  * of decoder grace, then a rebuild. The fix runs the change on the player that
  * is already bound to the Surface - no teardown, no settle.
  *
@@ -70,7 +70,7 @@ class LiveZapLightPathContractTest {
         assertTrue(body.contains("lightSwitchLiveChannel()"))
         // The rebuild branch must survive for VOD and for a live switch with no
         // player yet (the very first load still builds one).
-        assertTrue(body.contains("recreatePlayer(settleMs = SOURCE_SWITCH_SETTLE_MS)"))
+        assertTrue(body.contains("recreatePlayer(settleMs = DECODER_RELEASE_SETTLE_MS)"))
     }
 
     @Test

@@ -101,11 +101,12 @@ class PlayerBackgroundReturnContractTest {
 
     @Test
     fun `the return path rebuilds through the one path that builds a player`() {
-        val rebuild = sliceFrom(source("NativePlayerActivity"), "private fun $RESUME")
+        val rebuild = sliceFrom(source("NativePlayerActivity"), "private fun $RESUME", length = 2_000)
         assertTrue(
             "the return path must build a player with recreatePlayer(), the same " +
-                "one a source switch uses",
-            rebuild.contains("recreatePlayer()")
+                "one a source switch uses (settle included: a quick Home-and-back " +
+                "lands inside the vendor's decoder release window)",
+            rebuild.contains("recreatePlayer(settleMs = ")
         )
         assertTrue(
             "the return path must take the guide-write gate back, or bulk " +

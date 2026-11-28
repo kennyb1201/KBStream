@@ -387,7 +387,7 @@ class FrameRateProbeWiringContractTest {
         val nativeSwitch = window(
             native,
             "fun switchToSource(stream: Stream",
-            "recreatePlayer(settleMs = SOURCE_SWITCH_SETTLE_MS)"
+            "recreatePlayer(settleMs = DECODER_RELEASE_SETTLE_MS)"
         )
         assertTrue(
             "the native player restarts the per-source state before the rebuild",
