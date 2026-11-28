@@ -426,11 +426,18 @@ class StaleDetailRefetchTest {
                 merge.contains("Collections.synchronizedMap(")
         )
         assertTrue(
+            // F1 (2026-11-28): the walk's answer is held aside so its null (a
+            // failed walk) can leave the rail's carried `nextup:` slot alone,
+            // while an empty answer clears it.
             "handed to the local pass...",
             squash.contains(
-                "val localCards = localProgress.cards() + loadLocalNextUpItems( " +
-                    "localItems, locallyFinishedShows )"
-            )
+                "val freshNextUp = loadLocalNextUpItems( localItems, " +
+                    "locallyFinishedShows )"
+            ) &&
+                squash.contains(
+                    "val localCards = localProgress.cards() + " +
+                        "(freshNextUp ?: emptyList())"
+                )
         )
         assertTrue(
             "...and to the tracker filter",

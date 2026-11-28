@@ -800,8 +800,12 @@ class CwLocalIncrementalPublishContractTest {
             pass.contains("arrivals.publishLocalCards(cards)")
         )
         assertTrue(
+            // F1 (2026-11-28): the final publish goes through the split helper,
+            // so the advance slot is replaced in the same breath as the resume
+            // slice instead of being cleared by a resume-only publish.
             "and the final publish replaces it once every answered row has landed",
-            pass.contains("arrivals.publishLocalCards(localCards)")
+            pass.contains("publishLocalHalves(") &&
+                pass.contains("cards = localCards,")
         )
         assertTrue(
             "the publisher is built before the rows answer - it is what they publish through",
@@ -1008,12 +1012,12 @@ class CwLocalIncrementalPublishContractTest {
         )
         assertTrue(
             "the deferred walk runs after the local slice was published",
-            pass.indexOf("arrivals.publishLocalCards(localCards)") <
+            pass.indexOf("publishLocalHalves(") <
                 pass.indexOf("resolveSeriesTargetFromSharedWatchedState(\n                                                parentId = pending.parentId")
         )
         assertTrue(
             "the upgrade republishes the local slice through the same publisher",
-            pass.contains("arrivals.publishLocalCards(upgraded)")
+            pass.contains("cards = upgraded,")
         )
         assertTrue(
             "and it only patches the cards, it does not rebuild them",

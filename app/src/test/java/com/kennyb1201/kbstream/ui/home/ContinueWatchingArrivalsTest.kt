@@ -376,6 +376,208 @@ class ContinueWatchingArrivalsTest {
             )
         }
 
+    // ── T6: the local advance slot (spec 2026-11-28, F1) ─────────────────────
+
+    @Test
+    fun `the rail's local advance cards survive the first publish`() =
+        runBlocking {
+
+            val southPark = advanceCard("tt9", "South Park", episode = 6)
+            val bradleyWalsh = advanceCard("tt10", "Bradley Walsh", episode = 4)
+
+            val published = mutableListOf<List<UpNextItem>>()
+
+            val arrivals =
+                arrivals(
+                    published = published,
+                    localCards = listOf(local),
+                    previousTrackerCards = listOf(southPark, bradleyWalsh)
+                )
+
+            assertEquals(
+                "the carry had both advance cards",
+                2,
+                arrivals.localAdvanceSeededCount
+            )
+
+            arrivals.publishLocal()
+
+            assertEquals(
+                "the first publish is the resume card PLUS the carried advance cards, " +
+                    "not the resume card alone",
+                listOf("Paused Show", "South Park", "Bradley Walsh").sorted(),
+                titles(published.single()).sorted()
+            )
+        }
+
+    @Test
+    fun `the advance card still beats the tracker twin for the same show`() =
+        runBlocking {
+
+            // Dedupe precedence must not change: the `nextup:` card sits in the
+            // local half, before the tracker cards, so it is the one that wins.
+            val simklTwin =
+                trackerCard(ResumeSource.SIMKL, "tt9", "South Park", episode = 6)
+            val advance = advanceCard("tt9", "South Park", episode = 6)
+
+            val published = mutableListOf<List<UpNextItem>>()
+
+            val arrivals =
+                arrivals(
+                    published = published,
+                    localCards = listOf(local),
+                    previousTrackerCards = listOf(advance)
+                )
+
+            arrivals.publishLocal()
+            arrivals.arrive(TrackerFeed.SIMKL, listOf(simklTwin))
+
+            assertEquals(
+                "one card for the show, and it is the local advance card",
+                1,
+                published.last().count { showDedupeKey(it) == showDedupeKey(advance) }
+            )
+            assertEquals(
+                advance,
+                published.last().single { showDedupeKey(it) == showDedupeKey(advance) }
+            )
+        }
+
+    @Test
+    fun `the walk's answer replaces the slot wholesale, and an empty one clears it`() =
+        runBlocking {
+
+            val refreshed = advanceCard("tt9", "South Park", episode = 7)
+            val dropped = advanceCard("tt10", "Bradley Walsh", episode = 4)
+
+            val published = mutableListOf<List<UpNextItem>>()
+
+            val arrivals =
+                arrivals(
+                    published = published,
+                    localCards = listOf(local),
+                    previousTrackerCards = listOf(
+                        advanceCard("tt9", "South Park", episode = 6),
+                        dropped
+                    )
+                )
+
+            arrivals.publishLocal()
+            arrivals.arriveLocalAdvance(listOf(refreshed))
+
+            assertEquals(
+                "the show the walk no longer returns is gone rather than kept forever",
+                listOf("Paused Show", "South Park"),
+                titles(published.last())
+            )
+            assertEquals(
+                "and the one it does return is the fresh card, not the carried version",
+                7,
+                published.last().single { it.title == "South Park" }.episode
+            )
+
+            arrivals.arriveLocalAdvance(emptyList())
+
+            assertEquals(
+                "an answer of nothing is an answer: the slot is cleared",
+                listOf("Paused Show"),
+                titles(published.last())
+            )
+        }
+
+    @Test
+    fun `a local card that is not an advance card still falls out of the seed`() =
+        runBlocking {
+
+            // The init rule this slot carves its exception into: a LOCAL card
+            // that is not a `nextup:` card belongs to no feed and is not carried.
+            val orphan = localCard(parentId = "tt11", title = "Orphan Local")
+            val advance = advanceCard("tt9", "South Park", episode = 6)
+
+            val published = mutableListOf<List<UpNextItem>>()
+
+            val arrivals =
+                arrivals(
+                    published = published,
+                    localCards = listOf(local),
+                    previousTrackerCards = listOf(orphan, advance)
+                )
+
+            arrivals.publishLocal()
+
+            assertEquals(
+                "only the advance card is carried, and only into its own slot",
+                1,
+                arrivals.localAdvanceSeededCount
+            )
+            assertFalse(
+                titles(published.single()).contains("Orphan Local")
+            )
+            assertTrue(
+                titles(published.single()).contains("South Park")
+            )
+        }
+
+    @Test
+    fun `the local-slice publishes leave the slot alone`() =
+        runBlocking {
+
+            val advance = advanceCard("tt9", "South Park", episode = 6)
+            val secondResume =
+                localCard(parentId = "tt12", title = "Another Resume")
+
+            val published = mutableListOf<List<UpNextItem>>()
+
+            val arrivals =
+                arrivals(
+                    published = published,
+                    localCards = listOf(local),
+                    previousTrackerCards = listOf(advance)
+                )
+
+            arrivals.publishLocal()
+
+            // The pass publishing its resume slices while the walk is still
+            // running is exactly the window the cards used to vanish in.
+            arrivals.publishLocalCards(listOf(local, secondResume))
+
+            assertEquals(
+                "the resume slice replaced the resume cards only",
+                listOf("Another Resume", "Paused Show", "South Park").sorted(),
+                titles(published.last()).sorted()
+            )
+            assertTrue(
+                "and the carried advance card is still the carried one",
+                published.last().contains(advance)
+            )
+        }
+
+    @Test
+    fun `a tracker arrival does not touch the slot`() =
+        runBlocking {
+
+            val advance = advanceCard("tt9", "South Park", episode = 6)
+
+            val published = mutableListOf<List<UpNextItem>>()
+
+            val arrivals =
+                arrivals(
+                    published = published,
+                    localCards = listOf(local),
+                    previousTrackerCards = listOf(advance)
+                )
+
+            arrivals.publishLocal()
+            arrivals.arrive(TrackerFeed.SIMKL, listOf(simklCard))
+            arrivals.arrive(TrackerFeed.TRAKT, listOf(traktCard))
+
+            assertEquals(
+                "the feeds land beside the advance cards, never instead of them",
+                listOf("Paused Show", "Simkl Show", "Trakt Show", "South Park").sorted(),
+                titles(published.last()).sorted()
+            )
+        }
+
     // ── helpers ────────────────────────────────────────────────────────────
 
     private fun arrivals(
@@ -408,6 +610,28 @@ class ContinueWatchingArrivalsTest {
         episode = 1,
         historyRowId = "$parentId:1:1",
         recencyTimestamp = 1_000L
+    )
+
+    /**
+     * A local advance card: the rail's `nextup:` pointer at a show's next
+     * unwatched episode. No source is set, exactly as the walk builds them -
+     * which is why the feed seeding could not carry them and the slot exists.
+     */
+    private fun advanceCard(
+        parentId: String,
+        title: String,
+        episode: Int
+    ): UpNextItem = UpNextItem(
+        id = "nextup:$parentId",
+        title = title,
+        poster = null,
+        badge = UpNextBadge.NEXT_UP,
+        subtitle = "Up Next - S1E$episode",
+        parentId = parentId,
+        parentType = "series",
+        season = 1,
+        episode = episode,
+        recencyTimestamp = 3_000L
     )
 
     private fun trackerCard(

@@ -6149,6 +6149,42 @@ Log.d(
         }
 
     /**
+     * The local half of the rail, published in its two parts (spec 2026-11-28, F1).
+     *
+     * The resume slices and the advance (`nextup:`) cards land at very different
+     * times: the slices publish row by row, the advance cards only after the
+     * walk has visited every finished show. Publishing the combined list through
+     * [ContinueWatchingArrivals.publishLocalCards] therefore replaced the rail's
+     * carried advance cards with resume cards alone until the walk answered -
+     * the 10-15s hole in which 14 cards vanished on every rebuild. The advance
+     * cards go through their own slot instead, which is seeded from the rail and
+     * replaced here.
+     *
+     * Slot FIRST: if the pass is interrupted between the two publishes, the newer
+     * advance cards are already on screen rather than the stale carried ones.
+     * Both publishes go through the same request-version gate in the sink, so a
+     * superseded pass publishes neither.
+     *
+     * [advanceAnswered] is false when the walk could not answer - no answer is
+     * not an empty answer, so the slot keeps what it was seeded with. The resume
+     * slice is published either way.
+     */
+    private suspend fun publishLocalHalves(
+        arrivals: ContinueWatchingArrivals,
+        cards: List<UpNextItem>,
+        advanceAnswered: Boolean
+    ) {
+        if (advanceAnswered) {
+            arrivals.arriveLocalAdvance(
+                cards.filter { card -> isLocalAdvanceCard(card) }
+            )
+        }
+        arrivals.publishLocalCards(
+            cards.filterNot { card -> isLocalAdvanceCard(card) }
+        )
+    }
+
+    /**
      * Local "next up" cards for shows that have watched episodes but nothing
      * in progress.
      *
@@ -6162,6 +6198,14 @@ Log.d(
      * A show with no unwatched AIRED episode left (finished, or merely waiting
      * on the next season) resolves to no target and is left off, so caught-up
      * shows stay off Continue Watching as before.
+     *
+     * NULL means the walk could not answer (the completed-rows read failed), and
+     * an empty list means it answered with nothing. The difference matters to the
+     * rail's carried advance slot (spec 2026-11-28, F1): no answer is not an
+     * empty answer, so a failed walk must leave the previous `nextup:` cards on
+     * screen while an empty one drops them. The two used to be one value, which
+     * made a transient DAO failure indistinguishable from "every candidate caught
+     * up" and would have emptied the slot on it.
      */
     private suspend fun loadLocalNextUpItems(
         existing: List<UpNextItem>,
@@ -6174,7 +6218,7 @@ Log.d(
          * (see trackerCardLocallyFinished).
          */
         caughtUpShows: MutableMap<String, LocallyFinishedShow>
-    ): List<UpNextItem> {
+    ): List<UpNextItem>? {
 
         val completedRows =
             try {
@@ -6185,7 +6229,7 @@ Log.d(
                     "local next-up rows failed: ${e.message}",
                     e
                 )
-                return emptyList()
+                return null
             }
 
         if (completedRows.isEmpty()) return emptyList()
@@ -9283,12 +9327,18 @@ Log.d(
                         // is already out of the slice. Only the series
                         // extension below runs on the rows that answered,
                         // because it costs a lookup per row.
+                        // The walk's answer, kept separate: null (it could not
+                        // answer) must leave the rail's carried `nextup:` slot
+                        // alone, while an empty list is a real "none left" that
+                        // clears it.
+                        val freshNextUp =
+                            loadLocalNextUpItems(
+                                localItems,
+                                locallyFinishedShows
+                            )
+
                         val localCards =
-                            localProgress.cards() +
-                                loadLocalNextUpItems(
-                                    localItems,
-                                    locallyFinishedShows
-                                )
+                            localProgress.cards() + (freshNextUp ?: emptyList())
 
                         // The publisher carries the tracker cards already on
                         // screen into the local-first publish instead of
@@ -9306,8 +9356,32 @@ Log.d(
                         // series extension below has run. The incremental
                         // publishes before it carried the partial slice.
                         if (localCards.isNotEmpty()) {
-                            arrivals.publishLocalCards(localCards)
+                            publishLocalHalves(
+                                arrivals = arrivals,
+                                cards = localCards,
+                                advanceAnswered = freshNextUp != null
+                            )
                         }
+
+                        // F2 (spec 2026-11-28): one line per build, so a paste
+                        // can tell a first publish that already carried the
+                        // advance cards from one that had to wait for the walk.
+                        // `seeded` is what the rail handed this build, `replaced`
+                        // what the walk answered; on a steady rail they match,
+                        // and a `seeded` that is large while every first
+                        // `publish cards=` line is seed-only is the bug this
+                        // slot exists to close.
+                        CwLoadTrace.note(
+                            cwBuildId,
+                            cwClockMs(),
+                            if (freshNextUp != null) {
+                                "nextupSlot seeded=${arrivals.localAdvanceSeededCount} " +
+                                    "replaced=${freshNextUp.size}"
+                            } else {
+                                "nextupSlot seeded=${arrivals.localAdvanceSeededCount} " +
+                                    "kept (step failed)"
+                            }
+                        )
 
                         // F5f (spec 2026-11-27): the counts half, off the rows'
                         // clock. Each row resolved its continue point from the
@@ -9375,7 +9449,18 @@ Log.d(
                                                     ?: card.episodesRemaining
                                         )
                                     }
-                                arrivals.publishLocalCards(upgraded)
+                                // Same two halves as the final local
+                                // publish: a counts upgrade may touch a
+                                // `nextup:` card too, and it belongs in the
+                                // slot rather than being dropped by a
+                                // resume-only publish. `advanceAnswered` is the
+                                // walk's answer from this pass, so a failed walk
+                                // still leaves the carried slot untouched.
+                                publishLocalHalves(
+                                    arrivals = arrivals,
+                                    cards = upgraded,
+                                    advanceAnswered = freshNextUp != null
+                                )
                             }
                         }
 

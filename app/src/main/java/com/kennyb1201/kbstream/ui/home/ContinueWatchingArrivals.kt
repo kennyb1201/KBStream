@@ -50,6 +50,17 @@ internal enum class TrackerFeed {
  * request version. [dismiss] is passed in as a suspending filter because it reads
  * and rewrites the viewer's preferences, and it runs on EVERY publish - a
  * dismissed title must not flash back when a tracker lands late.
+ *
+ * The LOCAL advance cards (`nextup:`) get a slot of their own (spec 2026-11-28).
+ * They are the rail's local half too, but unlike the resume cards they are not
+ * rebuilt by the pass that publishes first: the pass's resume slices land row by
+ * row, while the `nextup:` cards only exist after `loadLocalNextUpItems` has
+ * walked every finished show's seasons. Until this slot existed, every rebuild's
+ * first publishes replaced the rail with resume cards alone and the 14 local
+ * advance cards vanished for the 10-15s that walk takes. The slot is seeded from
+ * the rail already on screen and REPLACED when the walk answers, so it behaves
+ * exactly like a feed slot - one slice of the rail, carried until its own fresh
+ * answer lands.
  */
 internal class ContinueWatchingArrivals(
     private var localCards: List<UpNextItem>,
@@ -69,6 +80,28 @@ internal class ContinueWatchingArrivals(
     private val feeds = HashMap<TrackerFeed, List<UpNextItem>>()
 
     /**
+     * The rail's carried local advance cards (`nextup:`): state of the same kind
+     * as [feeds], for the one slice that is not a feed and is not in [localCards]
+     * yet - the pass's resume slices replace [localCards] long before
+     * `loadLocalNextUpItems` can answer. Seeded in `init`, replaced wholesale by
+     * [arriveLocalAdvance], never touched by the local-slice publishes.
+     */
+    private var localAdvance: List<UpNextItem> = emptyList()
+
+    private var seededLocalAdvanceCount: Int = 0
+
+    /**
+     * How many advance cards the slot was seeded with, for the build's trace line
+     * (see the `cwload:` `nextupSlot` record in HomeViewModel).
+     *
+     * A count rather than the cards themselves: the paste needs to tie a first
+     * publish's card count to the slot, and this is what says whether the carry
+     * had anything in it at all.
+     */
+    val localAdvanceSeededCount: Int
+        get() = seededLocalAdvanceCount
+
+    /**
      * Serialises arrivals, so two feeds answering within the same frame publish
      * one after the other rather than racing the snapshot they both build on.
      */
@@ -83,14 +116,25 @@ internal class ContinueWatchingArrivals(
         // its cards out on the local-first publish, and widening the same lie to
         // cover it would have put four feeds' cards in one feed's slot.
         //
-        // A card whose source matches no feed (a local card that somehow lost
-        // its history row) falls out of the seed rather than into the wrong
-        // slot: the next successful answer for it re-supplies it, and the merge
-        // would have collapsed it with its own twin anyway.
+        // The local advance cards are the EXCEPTION: they belong to no feed, but
+        // they are carried into [localAdvance] rather than dropped. They are the
+        // rail's own half, and the pass publishes its resume slices before the
+        // walk that rebuilds them - so dropping them here is exactly the 10-15s
+        // hole in which the 14 `nextup:` cards vanished on every rebuild.
+        //
+        // Any OTHER card whose source matches no feed (a local card that somehow
+        // lost its history row) still falls out of the seed rather than into the
+        // wrong slot: the next successful answer for it re-supplies it, and the
+        // merge would have collapsed it with its own twin anyway.
         previousTrackerCards.forEach { card ->
+            if (isLocalAdvanceCard(card)) {
+                localAdvance = localAdvance + card
+                return@forEach
+            }
             val feed = card.resumeSource.toTrackerFeed() ?: return@forEach
             feeds[feed] = feeds[feed].orEmpty() + card
         }
+        seededLocalAdvanceCount = localAdvance.size
     }
 
     /** Publishes the local cards plus whatever trackers already answered. */
@@ -111,6 +155,23 @@ internal class ContinueWatchingArrivals(
     suspend fun publishLocalCards(cards: List<UpNextItem>) {
         arrivals.withLock {
             localCards = cards
+            publish(snapshot())
+        }
+    }
+
+    /**
+     * The local advance walk answered (see `loadLocalNextUpItems` in HomeViewModel).
+     *
+     * Replaces the carried slot WHOLESALE, exactly as [arrive] replaces a feed:
+     * an answer that no longer carries a card - every candidate caught up, a show
+     * removed - drops it on replacement, and one whose episode or label changed
+     * is refreshed rather than frozen at the carried version. An EMPTY answer is
+     * still an answer and clears the slot; a failed walk does not call this at
+     * all (see the caller), so no answer never empties it.
+     */
+    suspend fun arriveLocalAdvance(items: List<UpNextItem>) {
+        arrivals.withLock {
+            localAdvance = items
             publish(snapshot())
         }
     }
@@ -138,9 +199,14 @@ internal class ContinueWatchingArrivals(
                 MERGE_ORDER.flatMap { feed -> feeds[feed].orEmpty() }
             )
 
+        // The advance slot sits INSIDE the local half, after the resume slices
+        // and before the tracker cards - exactly where the walk's fresh cards sit
+        // in the final publish, so the dedupe keeps the same card it always kept
+        // (a `nextup:` card still beats its `simkl:` twin) and the merged publish's
+        // contents are unchanged for the same inputs. Only the timing moved.
         val merged =
             dedupeAndSortUpNext(
-                localCards + trackerCards,
+                localCards + localAdvance + trackerCards,
                 resumeAuthority
             )
 
@@ -149,7 +215,8 @@ internal class ContinueWatchingArrivals(
         val result =
             when {
                 merged.isNotEmpty() -> merged
-                localCards.isNotEmpty() -> dedupeAndSortUpNext(localCards, resumeAuthority)
+                localCards.isNotEmpty() || localAdvance.isNotEmpty() ->
+                    dedupeAndSortUpNext(localCards + localAdvance, resumeAuthority)
                 else -> emptyList()
             }
 
@@ -176,6 +243,19 @@ internal class ContinueWatchingArrivals(
         )
     }
 }
+
+/**
+ * Whether a card is a local ADVANCE card - the rail's own "next up" pointer,
+ * built by the series extension in HomeViewModel and id'd `nextup:<parentId>`.
+ *
+ * The id prefix is the convention, the same one [isTrackerSourcedCard] uses for
+ * its feeds: these cards carry their real source in [UpNextItem.resumeSource]
+ * nowhere, and the walk that rebuilds them is the only thing that can say a show
+ * is still owed one. Case-insensitive for the same reason the tracker prefixes
+ * are - an id is compared, not parsed.
+ */
+internal fun isLocalAdvanceCard(item: UpNextItem): Boolean =
+    item.id.startsWith("nextup:", ignoreCase = true)
 
 /**
  * The feed a card's source feeds, or null for a card that belongs to no feed.
